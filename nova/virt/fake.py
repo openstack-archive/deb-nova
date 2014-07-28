@@ -31,10 +31,11 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova import db
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
+from nova.virt import diagnostics
 from nova.virt import driver
 from nova.virt import virtapi
 
@@ -208,7 +209,7 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def destroy(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, migrate_data=None):
         key = instance['name']
         if key in self.instances:
             del self.instances[key]
@@ -218,7 +219,7 @@ class FakeDriver(driver.ComputeDriver):
                          'inst': self.instances}, instance=instance)
 
     def cleanup(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, migrate_data=None):
         pass
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
@@ -228,7 +229,6 @@ class FakeDriver(driver.ComputeDriver):
         if instance_name not in self._mounts:
             self._mounts[instance_name] = {}
         self._mounts[instance_name][mountpoint] = connection_info
-        return True
 
     def detach_volume(self, connection_info, instance, mountpoint,
                       encryption=None):
@@ -237,7 +237,6 @@ class FakeDriver(driver.ComputeDriver):
             del self._mounts[instance['name']][mountpoint]
         except KeyError:
             pass
-        return True
 
     def swap_volume(self, old_connection_info, new_connection_info,
                     instance, mountpoint):
@@ -246,7 +245,6 @@ class FakeDriver(driver.ComputeDriver):
         if instance_name not in self._mounts:
             self._mounts[instance_name] = {}
         self._mounts[instance_name][mountpoint] = new_connection_info
-        return True
 
     def attach_interface(self, instance, image_meta, vif):
         if vif['id'] in self._interfaces:
@@ -286,6 +284,23 @@ class FakeDriver(driver.ComputeDriver):
                 'vnet1_tx_errors': 0,
                 'vnet1_tx_packets': 662,
         }
+
+    def get_instance_diagnostics(self, instance_name):
+        diags = diagnostics.Diagnostics(state='running', driver='fake',
+                hypervisor_os='fake-os', uptime=46664, config_drive=True)
+        diags.add_cpu(time=17300000000)
+        diags.add_nic(mac_address='01:23:45:67:89:ab',
+                      rx_packets=26701,
+                      rx_octets=2070139,
+                      tx_octets=140208,
+                      tx_packets = 662)
+        diags.add_disk(id='fake-disk-id',
+                       read_bytes=262144,
+                       read_requests=112,
+                       write_bytes=5778432,
+                       write_requests=488)
+        diags.memory_details.maximum = 524288
+        return diags
 
     def get_all_bw_counters(self, instances):
         """Return bandwidth usage counters for each interface on each
@@ -367,7 +382,7 @@ class FakeDriver(driver.ComputeDriver):
                'memory_mb_used': 0,
                'local_gb_used': 0,
                'hypervisor_type': 'fake',
-               'hypervisor_version': '1.0',
+               'hypervisor_version': utils.convert_version_to_int('1.0'),
                'hypervisor_hostname': nodename,
                'disk_available_least': 0,
                'cpu_info': '?',
@@ -455,9 +470,6 @@ class FakeDriver(driver.ComputeDriver):
             return 'enabled'
         return 'disabled'
 
-    def get_disk_available_least(self):
-        pass
-
     def get_volume_connector(self, instance):
         return {'ip': '127.0.0.1', 'initiator': 'fake', 'host': 'fakehost'}
 
@@ -471,10 +483,6 @@ class FakeDriver(driver.ComputeDriver):
 class FakeVirtAPI(virtapi.VirtAPI):
     def provider_fw_rule_get_all(self, context):
         return db.provider_fw_rule_get_all(context)
-
-    def agent_build_get_by_triple(self, context, hypervisor, os, architecture):
-        return db.agent_build_get_by_triple(context,
-                                            hypervisor, os, architecture)
 
     @contextlib.contextmanager
     def wait_for_instance_event(self, instance, event_names, deadline=300,

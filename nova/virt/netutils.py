@@ -26,10 +26,18 @@ import netaddr
 from oslo.config import cfg
 
 from nova.network import model
+from nova import paths
 
 CONF = cfg.CONF
+
+netutils_opts = [
+    cfg.StrOpt('injected_network_template',
+               default=paths.basedir_def('nova/virt/interfaces.template'),
+               help='Template file for injected network'),
+]
+
+CONF.register_opts(netutils_opts)
 CONF.import_opt('use_ipv6', 'nova.netconf')
-CONF.import_opt('injected_network_template', 'nova.virt.disk.api')
 
 
 def get_net_and_mask(cidr):
@@ -58,8 +66,8 @@ def _get_first_network(network, version):
         pass
 
 
-def get_injected_network_template(network_info, use_ipv6=CONF.use_ipv6,
-                                    template=CONF.injected_network_template):
+def get_injected_network_template(network_info, use_ipv6=None, template=None,
+                                  libvirt_virt_type=None):
     """Returns a rendered network template for the given network_info.
 
     :param network_info:
@@ -67,7 +75,15 @@ def get_injected_network_template(network_info, use_ipv6=CONF.use_ipv6,
     :param use_ipv6: If False, do not return IPv6 template information
         even if an IPv6 subnet is present in network_info.
     :param template: Path to the interfaces template file.
+    :param libvirt_virt_type: The Libvirt `virt_type`, will be `None` for
+        other hypervisors..
     """
+    if use_ipv6 is None:
+        use_ipv6 = CONF.use_ipv6
+
+    if not template:
+        template = CONF.injected_network_template
+
     if not (network_info and template):
         return
 
@@ -140,12 +156,10 @@ def get_injected_network_template(network_info, use_ipv6=CONF.use_ipv6,
     if not nets:
         return
 
-    return build_template(template, nets, ipv6_is_available)
-
-
-def build_template(template, nets, ipv6_is_available):
     tmpl_path, tmpl_file = os.path.split(CONF.injected_network_template)
-    env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path))
+    env = jinja2.Environment(loader=jinja2.FileSystemLoader(tmpl_path),
+                             trim_blocks=True)
     template = env.get_template(tmpl_file)
     return template.render({'interfaces': nets,
-                            'use_ipv6': ipv6_is_available})
+                            'use_ipv6': ipv6_is_available,
+                            'libvirt_virt_type': libvirt_virt_type})

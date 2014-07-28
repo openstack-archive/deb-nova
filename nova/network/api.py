@@ -20,15 +20,13 @@ import functools
 
 from nova.compute import flavors
 from nova import exception
+from nova.i18n import _
 from nova.network import base_api
 from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
-from nova.objects import fixed_ip as fixed_ip_obj
-from nova.objects import floating_ip as floating_ip_obj
-from nova.objects import instance as instance_obj
-from nova.objects import network as network_obj
-from nova.openstack.common.gettextutils import _
+from nova import objects
+from nova.objects import base as obj_base
 from nova.openstack.common import log as logging
 from nova import policy
 from nova import utils
@@ -107,7 +105,7 @@ class API(base_api.NetworkAPI):
 
     @wrap_check_policy
     def get_fixed_ip_by_address(self, context, address):
-        return fixed_ip_obj.FixedIP.get_by_address(context, address)
+        return objects.FixedIP.get_by_address(context, address)
 
     @wrap_check_policy
     def get_floating_ip(self, context, id):
@@ -127,14 +125,6 @@ class API(base_api.NetworkAPI):
     def get_floating_ips_by_project(self, context):
         return self.db.floating_ip_get_all_by_project(context,
                                                       context.project_id)
-
-    @wrap_check_policy
-    def get_floating_ips(self, context, all_tenants=False):
-        if all_tenants:
-            return self.db.floating_ip_get_all(context)
-        else:
-            return self.db.floating_ip_get_all_by_project(context,
-                                                          context.project_id)
 
     @wrap_check_policy
     def get_floating_ips_by_fixed_address(self, context, fixed_address):
@@ -270,9 +260,9 @@ class API(base_api.NetworkAPI):
         #             this is called from compute.manager which shouldn't
         #             have db access so we do it on the other side of the
         #             rpc.
-        if not isinstance(instance, instance_obj.Instance):
-            instance = instance_obj.Instance._from_db_object(context,
-                    instance_obj.Instance(), instance)
+        if not isinstance(instance, obj_base.NovaObject):
+            instance = objects.Instance._from_db_object(context,
+                    objects.Instance(), instance)
         self.network_rpcapi.deallocate_for_instance(context, instance=instance,
                 requested_networks=requested_networks)
 
@@ -469,17 +459,17 @@ class API(base_api.NetworkAPI):
 
     def _is_multi_host(self, context, instance):
         try:
-            fixed_ips = fixed_ip_obj.FixedIPList.get_by_instance_uuid(
+            fixed_ips = objects.FixedIPList.get_by_instance_uuid(
                 context, instance['uuid'])
         except exception.FixedIpNotFoundForInstance:
             return False
-        network = network_obj.Network.get_by_id(context,
-                                                fixed_ips[0].network_id,
-                                                project_only='allow_none')
+        network = objects.Network.get_by_id(context,
+                                            fixed_ips[0].network_id,
+                                            project_only='allow_none')
         return network.multi_host
 
     def _get_floating_ip_addresses(self, context, instance):
-        return floating_ip_obj.FloatingIP.get_addresses_by_instance(
+        return objects.FloatingIP.get_addresses_by_instance(
             context, instance)
 
     @wrap_check_policy

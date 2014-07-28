@@ -16,7 +16,7 @@ import re
 
 from nova.openstack.common import units
 from nova import test
-from nova.virt.vmwareapi import vm_util
+from nova.virt.vmwareapi import ds_util
 
 ResultSet = collections.namedtuple('ResultSet', ['objects'])
 ResultSetToken = collections.namedtuple('ResultSet', ['objects', 'token'])
@@ -25,10 +25,10 @@ DynamicProperty = collections.namedtuple('Property', ['name', 'val'])
 MoRef = collections.namedtuple('ManagedObjectReference', ['value'])
 
 
-class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
+class VMwareDSUtilDatastoreSelectionTestCase(test.NoDBTestCase):
 
     def setUp(self):
-        super(VMwareVMUtilDatastoreSelectionTestCase, self).setUp()
+        super(VMwareDSUtilDatastoreSelectionTestCase, self).setUp()
         self.data = [
             ['VMFS', 'os-some-name', True, 987654321, 12346789],
             ['NFS', 'another-name', True, 9876543210, 123467890],
@@ -60,23 +60,23 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
 
     def test_filter_datastores_simple(self):
         datastores = self.build_result_set(self.data)
-        best_match = vm_util.DSRecord(datastore=None, name=None,
-                              capacity=None, freespace=0)
-        rec = vm_util._select_datastore(datastores, best_match)
+        best_match = ds_util.Datastore(ref='fake_ref', name='ds',
+                              capacity=0, freespace=0)
+        rec = ds_util._select_datastore(datastores, best_match)
 
-        self.assertIsNotNone(rec[0], "could not find datastore!")
-        self.assertEqual('ds-001', rec[0].value,
+        self.assertIsNotNone(rec.ref, "could not find datastore!")
+        self.assertEqual('ds-001', rec.ref.value,
                          "didn't find the right datastore!")
-        self.assertEqual(123467890, rec[3],
+        self.assertEqual(123467890, rec.freespace,
                          "did not obtain correct freespace!")
 
     def test_filter_datastores_empty(self):
         data = []
         datastores = self.build_result_set(data)
 
-        best_match = vm_util.DSRecord(datastore=None, name=None,
-                              capacity=None, freespace=0)
-        rec = vm_util._select_datastore(datastores, best_match)
+        best_match = ds_util.Datastore(ref='fake_ref', name='ds',
+                              capacity=0, freespace=0)
+        rec = ds_util._select_datastore(datastores, best_match)
 
         self.assertEqual(rec, best_match)
 
@@ -84,9 +84,9 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
         datastores = self.build_result_set(self.data)
         datastore_regex = re.compile('no_match.*')
 
-        best_match = vm_util.DSRecord(datastore=None, name=None,
-                              capacity=None, freespace=0)
-        rec = vm_util._select_datastore(datastores,
+        best_match = ds_util.Datastore(ref='fake_ref', name='ds',
+                              capacity=0, freespace=0)
+        rec = ds_util._select_datastore(datastores,
                                         best_match,
                                         datastore_regex)
 
@@ -105,21 +105,21 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
         datastores = self.build_result_set(data)
         datastore_regex = re.compile('.*-good$')
 
-        best_match = vm_util.DSRecord(datastore=None, name=None,
-                              capacity=None, freespace=0)
-        rec = vm_util._select_datastore(datastores,
+        best_match = ds_util.Datastore(ref='fake_ref', name='ds',
+                              capacity=0, freespace=0)
+        rec = ds_util._select_datastore(datastores,
                                         best_match,
                                         datastore_regex)
 
         self.assertIsNotNone(rec, "could not find datastore!")
-        self.assertEqual('ds-003', rec[0].value,
+        self.assertEqual('ds-003', rec.ref.value,
                          "didn't find the right datastore!")
-        self.assertNotEqual('ds-004', rec[0].value,
+        self.assertNotEqual('ds-004', rec.ref.value,
                             "accepted an unreachable datastore!")
-        self.assertEqual('some-name-good', rec[1])
-        self.assertEqual(12346789, rec[3],
+        self.assertEqual('some-name-good', rec.name)
+        self.assertEqual(12346789, rec.freespace,
                          "did not obtain correct freespace!")
-        self.assertEqual(987654321, rec[2],
+        self.assertEqual(987654321, rec.capacity,
                          "did not obtain correct capacity!")
 
     def test_filter_datastores_missing_props(self):
@@ -131,10 +131,10 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
         prop_names = ['summary.type', 'summary.name',
                       'summary.capacity', 'summary.freeSpace']
         datastores = self.build_result_set(data, prop_names)
-        best_match = vm_util.DSRecord(datastore=None, name=None,
-                              capacity=None, freespace=0)
+        best_match = ds_util.Datastore(ref='fake_ref', name='ds',
+                              capacity=0, freespace=0)
 
-        rec = vm_util._select_datastore(datastores, best_match)
+        rec = ds_util._select_datastore(datastores, best_match)
         self.assertEqual(rec, best_match, "no matches were expected")
 
     def test_filter_datastores_best_match(self):
@@ -150,9 +150,9 @@ class VMwareVMUtilDatastoreSelectionTestCase(test.NoDBTestCase):
         datastore_regex = re.compile('.*-good$')
 
         # the current best match is better than all candidates
-        best_match = vm_util.DSRecord(datastore='ds-100', name='best-ds-good',
+        best_match = ds_util.Datastore(ref='ds-100', name='best-ds-good',
                               capacity=20 * units.Gi, freespace=19 * units.Gi)
-        rec = vm_util._select_datastore(datastores,
+        rec = ds_util._select_datastore(datastores,
                                         best_match,
                                         datastore_regex)
         self.assertEqual(rec, best_match, "did not match datastore properly")

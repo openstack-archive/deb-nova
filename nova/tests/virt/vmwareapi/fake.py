@@ -23,11 +23,12 @@ import collections
 import pprint
 
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import units
 from nova.openstack.common import uuidutils
+from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import error_util
 
 _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
@@ -43,7 +44,7 @@ LOG = logging.getLogger(__name__)
 
 def log_db_contents(msg=None):
     """Log DB Contents."""
-    LOG.debug(_("%(text)s: _db_content => %(content)s"),
+    LOG.debug("%(text)s: _db_content => %(content)s",
               {'text': msg or "", 'content': pprint.pformat(_db_content)})
 
 
@@ -265,7 +266,7 @@ class DataObject(object):
 
 
 class HostInternetScsiHba(DataObject):
-    """iSCSI Host Bus Adapter"""
+    """iSCSI Host Bus Adapter."""
 
     def __init__(self):
         super(HostInternetScsiHba, self).__init__()
@@ -383,7 +384,8 @@ class VirtualMachine(ManagedObject):
         self.set("name", kwargs.get("name", 'test-vm'))
         self.set("runtime.connectionState",
                  kwargs.get("conn_state", "connected"))
-        self.set("summary.config.guestId", kwargs.get("guest", "otherGuest"))
+        self.set("summary.config.guestId",
+                 kwargs.get("guest", constants.DEFAULT_OS_TYPE))
         ds_do = kwargs.get("ds", None)
         self.set("datastore", _convert_to_array_of_mor(ds_do))
         self.set("summary.guest.toolsStatus", kwargs.get("toolsstatus",
@@ -437,6 +439,20 @@ class VirtualMachine(ManagedObject):
             ('featureRequirement', [key1, key2])]
         self.set("summary.runtime", runtime)
 
+    def _update_extra_config(self, extra):
+        extra_config = self.get("config.extraConfig")
+        values = extra_config.OptionValue
+        for value in values:
+            if value.key == extra.key:
+                value.value = extra.value
+                return
+        kv = DataObject()
+        kv.key = extra.key
+        kv.value = extra.value
+        extra_config.OptionValue.append(kv)
+        self.set("config.extraConfig", extra_config)
+        extra_config = self.get("config.extraConfig")
+
     def reconfig(self, factory, val):
         """Called to reconfigure the VM. Actually customizes the property
         setting of the Virtual Machine object.
@@ -459,6 +475,11 @@ class VirtualMachine(ManagedObject):
         try:
             if not hasattr(val, 'deviceChange'):
                 return
+
+            if hasattr(val, 'extraConfig'):
+                # there are 2 cases - new entry or update an existing one
+                for extra in val.extraConfig:
+                    self._update_extra_config(extra)
 
             if len(val.deviceChange) < 2:
                 return
@@ -920,7 +941,7 @@ def _remove_file(file_path):
     # Check if the remove is for a single file object or for a folder
     if file_path.find(".vmdk") != -1:
         if file_path not in _db_content.get("files"):
-            raise exception.FileNotFound(file_path=file_path)
+            raise error_util.FileNotFoundException(file_path)
         _db_content.get("files").remove(file_path)
     else:
         # Removes the files in the folder and the folder too from the db
@@ -956,8 +977,8 @@ def fake_upload_image(context, image, instance, **kwargs):
 
 def fake_get_vmdk_size_and_properties(context, image_id, instance):
     """Fakes the file size and properties fetch for the image file."""
-    props = {"vmware_ostype": "otherGuest",
-            "vmware_adaptertype": "lsiLogic"}
+    props = {"vmware_ostype": constants.DEFAULT_OS_TYPE,
+             "vmware_adaptertype": constants.DEFAULT_ADAPTER_TYPE}
     return _FAKE_FILE_SIZE, props
 
 
@@ -990,6 +1011,40 @@ class FakeFactory(object):
     def create(self, obj_name):
         """Creates a namespace object."""
         return DataObject(obj_name)
+
+
+class FakeSession(object):
+    """Fake Session Class."""
+
+    def __init__(self):
+        self.vim = FakeVim()
+
+    def _get_vim(self):
+        return self.vim
+
+    def _call_method(self, module, method, *args, **kwargs):
+        raise NotImplementedError()
+
+    def _wait_for_task(self, task_ref):
+        raise NotImplementedError()
+
+
+class FakeObjectRetrievalSession(FakeSession):
+    """A session for faking object retrieval tasks.
+
+    _call_method() returns a given set of objects
+    sequentially, regardless of the method called.
+    """
+
+    def __init__(self, *ret):
+        super(FakeObjectRetrievalSession, self).__init__()
+        self.ret = ret
+        self.ind = 0
+
+    def _call_method(self, module, method, *args, **kwargs):
+        # return fake objects in a circular manner
+        self.ind = (self.ind + 1) % len(self.ret)
+        return self.ret[self.ind - 1]
 
 
 class FakeVim(object):
@@ -1043,16 +1098,6 @@ class FakeVim(object):
         _db_content['session'][self._session] = session
         return session
 
-    def _logout(self):
-        """Logs out and remove the session object ref from the db."""
-        s = self._session
-        self._session = None
-        if s not in _db_content['session']:
-            raise exception.NovaException(
-                _("Logging out a session that is invalid or already logged "
-                "out: %s") % s)
-        del _db_content['session'][s]
-
     def _terminate_session(self, *args, **kwargs):
         """Terminates a session."""
         s = kwargs.get("sessionId")[0]
@@ -1064,7 +1109,7 @@ class FakeVim(object):
         """Checks if the session is active."""
         if (self._session is None or self._session not in
                  _db_content['session']):
-            LOG.debug(_("Session is faulty"))
+            LOG.debug("Session is faulty")
             raise error_util.VimFaultException(
                                [error_util.NOT_AUTHENTICATED],
                                _("Session Invalid"))
@@ -1138,15 +1183,6 @@ class FakeVim(object):
 
     def _delete_snapshot(self, method, *args, **kwargs):
         """Deletes a VM snapshot. Here we do nothing for faking sake."""
-        task_mdo = create_task(method, "success")
-        return task_mdo.obj
-
-    def _delete_disk(self, method, *args, **kwargs):
-        """Deletes .vmdk and -flat.vmdk files corresponding to the VM."""
-        vmdk_file_path = kwargs.get("name")
-        flat_vmdk_file_path = vmdk_file_path.replace(".vmdk", "-flat.vmdk")
-        _remove_file(vmdk_file_path)
-        _remove_file(flat_vmdk_file_path)
         task_mdo = create_task(method, "success")
         return task_mdo.obj
 
@@ -1373,8 +1409,6 @@ class FakeVim(object):
             self._check_session()
         if attr_name == "Login":
             return lambda *args, **kwargs: self._login()
-        elif attr_name == "Logout":
-            self._logout()
         elif attr_name == "SessionIsActive":
             return lambda *args, **kwargs: self._session_is_active(
                                                *args, **kwargs)

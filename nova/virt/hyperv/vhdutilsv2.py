@@ -24,13 +24,14 @@ import sys
 if sys.platform == 'win32':
     import wmi
 
-from nova.openstack.common.gettextutils import _
+from xml.etree import ElementTree
+
+from nova.i18n import _
 from nova.openstack.common import units
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import vhdutils
 from nova.virt.hyperv import vmutils
 from nova.virt.hyperv import vmutilsv2
-from xml.etree import ElementTree
 
 
 VHDX_BAT_ENTRY_SIZE = 8

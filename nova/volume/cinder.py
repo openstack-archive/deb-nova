@@ -28,8 +28,9 @@ from oslo.config import cfg
 
 from nova import availability_zones as az
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
+from nova.openstack.common import strutils
 
 cinder_opts = [
     cfg.StrOpt('cinder_catalog_info',
@@ -48,6 +49,8 @@ cinder_opts = [
     cfg.IntOpt('cinder_http_retries',
                default=3,
                help='Number of cinderclient retries on failed http calls'),
+    cfg.IntOpt('cinder_http_timeout', default=None,
+               help='HTTP inactivity timeout (in seconds)'),
     cfg.BoolOpt('cinder_api_insecure',
                default=False,
                help='Allow to perform insecure SSL requests to cinder'),
@@ -99,6 +102,7 @@ def cinderclient(context):
                              auth_url=url,
                              insecure=CONF.cinder_api_insecure,
                              retries=CONF.cinder_http_retries,
+                             timeout=CONF.cinder_http_timeout,
                              cacert=CONF.cinder_ca_certificates_file)
     # noauth extracts user_id:project_id from auth_token
     c.client.auth_token = context.auth_token or '%s:%s' % (context.user_id,
@@ -137,7 +141,7 @@ def _untranslate_volume_summary_view(context, vol):
     # TODO(jdg): Information may be lost in this translation
     d['volume_type_id'] = vol.volume_type
     d['snapshot_id'] = vol.snapshot_id
-
+    d['bootable'] = strutils.bool_from_string(vol.bootable)
     d['volume_metadata'] = {}
     for key, value in vol.metadata.items():
         d['volume_metadata'][key] = value
@@ -217,7 +221,8 @@ class API(object):
         item = cinderclient(context).volumes.get(volume_id)
         return _untranslate_volume_summary_view(context, item)
 
-    def get_all(self, context, search_opts={}):
+    def get_all(self, context, search_opts=None):
+        search_opts = search_opts or {}
         items = cinderclient(context).volumes.list(detailed=True)
         rval = []
 

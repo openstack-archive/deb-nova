@@ -16,11 +16,11 @@
 
 import base64
 import re
-import stevedore
 
 from oslo.config import cfg
 from oslo import messaging
 import six
+import stevedore
 import webob
 from webob import exc
 
@@ -31,10 +31,9 @@ from nova.api.openstack import wsgi
 from nova import compute
 from nova.compute import flavors
 from nova import exception
+from nova.i18n import _
 from nova.image import glance
 from nova import objects
-from nova.objects import instance as instance_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
@@ -240,7 +239,7 @@ class ServersController(wsgi.Controller):
         # disabled. Note that the tenant_id parameter is filtered out
         # by remove_invalid_options above unless the requestor is an
         # admin.
-        if 'tenant_id' in search_opts and not 'all_tenants' in search_opts:
+        if 'tenant_id' in search_opts and 'all_tenants' not in search_opts:
             # We do not need to add the all_tenants flag if the tenant
             # id associated with the token is the tenant id
             # specified. This is done so a request that does not need
@@ -284,7 +283,7 @@ class ServersController(wsgi.Controller):
             log_msg = _("Flavor '%s' could not be found ")
             LOG.debug(log_msg, search_opts['flavor'])
             # TODO(mriedem): Move to ObjectListBase.__init__ for empty lists.
-            instance_list = instance_obj.InstanceList(objects=[])
+            instance_list = objects.InstanceList(objects=[])
 
         if is_detail:
             instance_list.fill_faults()
@@ -517,7 +516,9 @@ class ServersController(wsgi.Controller):
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
+                exception.InvalidFixedIpAndMaxCountRequest,
                 exception.InstanceUserDataMalformed,
+                exception.InstanceUserDataTooLarge,
                 exception.PortNotFound,
                 exception.FixedIpAlreadyInUse,
                 exception.SecurityGroupNotFound,
@@ -959,8 +960,8 @@ class ServersController(wsgi.Controller):
     def _get_instance(self, context, instance_uuid):
         try:
             attrs = ['system_metadata', 'metadata']
-            return instance_obj.Instance.get_by_uuid(context, instance_uuid,
-                                                     expected_attrs=attrs)
+            return objects.Instance.get_by_uuid(context, instance_uuid,
+                                                expected_attrs=attrs)
         except exception.InstanceNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 

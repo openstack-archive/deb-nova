@@ -18,7 +18,7 @@ import webob
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 
 ALIAS = "os-console-auth-tokens"
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
@@ -62,7 +62,6 @@ class ConsoleAuthTokens(extensions.V3APIExtensionBase):
     """Console token authentication support."""
     name = "ConsoleAuthTokens"
     alias = ALIAS
-    namespace = "http://docs.openstack.org/compute/ext/%s/api/v3" % ALIAS
     version = 1
 
     def get_resources(self):

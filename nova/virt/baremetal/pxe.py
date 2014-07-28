@@ -26,10 +26,10 @@ from oslo.config import cfg
 
 from nova.compute import flavors
 from nova import exception
-from nova.objects import flavor as flavor_obj
+from nova.i18n import _
+from nova import objects
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import fileutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
 from nova.openstack.common import timeutils
@@ -107,7 +107,7 @@ def build_pxe_config(deployment_id, deployment_key, deployment_iscsi_iqn,
     to the two phases of booting. This may be extended later.
 
     """
-    LOG.debug(_("Building PXE config for deployment %s.") % deployment_id)
+    LOG.debug("Building PXE config for deployment %s.", deployment_id)
 
     network_config = None
     if network_info and CONF.baremetal.pxe_network_config:
@@ -245,8 +245,8 @@ class PXE(base.NodeDriver):
         fileutils.ensure_tree(
                 os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
 
-        LOG.debug(_("Fetching kernel and ramdisk for instance %s") %
-                        instance['name'])
+        LOG.debug("Fetching kernel and ramdisk for instance %s",
+                  instance['name'])
         for label in image_info.keys():
             (uuid, path) = image_info[label]
             bm_utils.cache_image(
@@ -277,8 +277,8 @@ class PXE(base.NodeDriver):
         fileutils.ensure_tree(get_image_dir_path(instance))
         image_path = get_image_file_path(instance)
 
-        LOG.debug(_("Fetching image %(ami)s for instance %(name)s") %
-                        {'ami': image_meta['id'], 'name': instance['name']})
+        LOG.debug("Fetching image %(ami)s for instance %(name)s",
+                  {'ami': image_meta['id'], 'name': instance['name']})
         bm_utils.cache_image(context=context,
                              target=image_path,
                              image_id=image_meta['id'],
@@ -318,8 +318,8 @@ class PXE(base.NodeDriver):
         if instance['hostname']:
             injected_files.append(('/etc/hostname', instance['hostname']))
 
-        LOG.debug(_("Injecting files into image for instance %(name)s") %
-                        {'name': instance['name']})
+        LOG.debug("Injecting files into image for instance %(name)s",
+                  {'name': instance['name']})
 
         bm_utils.inject_into_image(
                     image=get_image_file_path(instance),
@@ -334,8 +334,8 @@ class PXE(base.NodeDriver):
     def cache_images(self, context, node, instance,
             admin_password, image_meta, injected_files, network_info):
         """Prepare all the images for this instance."""
-        flavor = flavor_obj.Flavor.get_by_id(context,
-                                             instance['instance_type_id'])
+        flavor = objects.Flavor.get_by_id(context,
+                                          instance['instance_type_id'])
         tftp_image_info = get_tftp_image_info(instance, flavor)
         self._cache_tftp_images(context, instance, tftp_image_info)
 
@@ -379,8 +379,8 @@ class PXE(base.NodeDriver):
             ./pxelinux.cfg/
                  {mac} -> ../{uuid}/config
         """
-        flavor = flavor_obj.Flavor.get_by_id(context,
-                                             instance['instance_type_id'])
+        flavor = objects.Flavor.get_by_id(context,
+                                          instance['instance_type_id'])
         image_info = get_tftp_image_info(instance, flavor)
         (root_mb, swap_mb, ephemeral_mb) = get_partition_sizes(instance)
         pxe_config_file_path = get_pxe_config_file_path(instance)
@@ -468,7 +468,7 @@ class PXE(base.NodeDriver):
 
                 status = row.get('task_state')
                 if (status == baremetal_states.DEPLOYING
-                        and locals['started'] == False):
+                        and locals['started'] is False):
                     LOG.info(_("PXE deploy started for instance %s")
                                 % instance['uuid'])
                     locals['started'] = True

@@ -27,7 +27,7 @@ from nova import db
 from nova import exception
 from nova.network import driver
 from nova.network import linux_net
-from nova.objects import fixed_ip as fixed_ip_obj
+from nova import objects
 from nova.openstack.common import fileutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -38,6 +38,8 @@ from nova import utils
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
+CONF.import_opt('share_dhcp_address', 'nova.objects.network')
+CONF.import_opt('network_device_mtu', 'nova.objects.network')
 
 HOST = "testhost"
 
@@ -427,10 +429,10 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             self.assertTrue(data['allocated'])
             self.assertTrue(data['leased'])
             self.assertTrue(lease[0] > seconds_since_epoch)
-            self.assertTrue(lease[1] == data['vif_address'])
-            self.assertTrue(lease[2] == data['address'])
-            self.assertTrue(lease[3] == data['instance_hostname'])
-            self.assertTrue(lease[4] == '*')
+            self.assertEqual(data['vif_address'], lease[1])
+            self.assertEqual(data['address'], lease[2])
+            self.assertEqual(data['instance_hostname'], lease[3])
+            self.assertEqual('*', lease[4])
 
     def test_get_dhcp_leases_for_nw01(self):
         self.flags(host='fake_instance01')
@@ -444,15 +446,15 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             data = get_associated(self.context, 1, address=lease[2])[0]
             self.assertTrue(data['leased'])
             self.assertTrue(lease[0] > seconds_since_epoch)
-            self.assertTrue(lease[1] == data['vif_address'])
-            self.assertTrue(lease[2] == data['address'])
-            self.assertTrue(lease[3] == data['instance_hostname'])
-            self.assertTrue(lease[4] == '*')
+            self.assertEqual(data['vif_address'], lease[1])
+            self.assertEqual(data['address'], lease[2])
+            self.assertEqual(data['instance_hostname'], lease[3])
+            self.assertEqual('*', lease[4])
 
     def test_dhcp_opts_not_default_gateway_network(self):
         expected = "NW-0,3"
-        fixedip = fixed_ip_obj.FixedIPList.get_by_network(self.context,
-                                                          {'id': 0})[0]
+        fixedip = objects.FixedIPList.get_by_network(self.context,
+                                                     {'id': 0})[0]
         actual = self.driver._host_dhcp_opts(fixedip)
         self.assertEqual(actual, expected)
 
@@ -460,15 +462,15 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         expected = ','.join(['DE:AD:BE:EF:00:00',
                              'fake_instance00.novalocal',
                              '192.168.0.100'])
-        fixedip = fixed_ip_obj.FixedIPList.get_by_network(self.context,
-                                                          {'id': 0})[0]
+        fixedip = objects.FixedIPList.get_by_network(self.context,
+                                                     {'id': 0})[0]
         actual = self.driver._host_dhcp(fixedip)
         self.assertEqual(actual, expected)
 
     def test_host_dns_without_default_gateway_network(self):
         expected = "192.168.0.100\tfake_instance00.novalocal"
-        fixedip = fixed_ip_obj.FixedIPList.get_by_network(self.context,
-                                                          {'id': 0})[0]
+        fixedip = objects.FixedIPList.get_by_network(self.context,
+                                                     {'id': 0})[0]
         actual = self.driver._host_dns(fixedip)
         self.assertEqual(actual, expected)
 
@@ -488,8 +490,8 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         self.stubs.Set(linux_net.iptables_manager.ipv4['filter'],
                        'add_rule', verify_add_rule)
         driver = linux_net.LinuxBridgeInterfaceDriver()
-        driver.plug({"bridge": "br100", "bridge_interface": "eth0"},
-                    "fakemac")
+        driver.plug({"bridge": "br100", "bridge_interface": "eth0",
+                     "share_address": False}, "fakemac")
 
     def test_linux_ovs_driver_plug_exception(self):
         self.flags(fake_network=False)
@@ -518,7 +520,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         info = {}
 
         @staticmethod
-        def test_ensure(vlan, bridge, interface, network, mac_address):
+        def test_ensure(vlan, bridge, interface, network, mac_address, mtu):
             info['passed_interface'] = interface
 
         self.stubs.Set(linux_net.LinuxBridgeInterfaceDriver,
@@ -527,6 +529,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         network = {
                 "bridge": "br100",
                 "bridge_interface": "base_interface",
+                "share_address": False,
                 "vlan": "fake"
         }
         self.flags(vlan_interface="")
@@ -557,6 +560,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         network = {
                 "bridge": "br100",
                 "bridge_interface": "base_interface",
+                "share_address": False,
         }
         driver.plug(network, "fakemac")
         self.assertEqual(info['passed_interface'], "base_interface")
@@ -651,13 +655,9 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
                        linux_net.IptablesManager())
         self.stubs.Set(linux_net, 'binary_name', 'test')
         executes = []
-        inputs = []
 
         def fake_execute(*args, **kwargs):
             executes.append(args)
-            process_input = kwargs.get('process_input')
-            if process_input:
-                inputs.append(process_input)
             return "", ""
 
         self.stubs.Set(utils, 'execute', fake_execute)
@@ -674,6 +674,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         iface = 'eth0'
         dhcp = '192.168.1.1'
         network = {'dhcp_server': dhcp,
+                   'share_address': False,
                    'bridge': 'br100',
                    'bridge_interface': iface}
         driver.plug(network, 'fakemac')
@@ -686,27 +687,26 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
              iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
             ('ebtables', '-t', 'filter', '-I', 'OUTPUT', '-p', 'ARP', '-o',
              iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-D', 'FORWARD', '-p', 'IPv4', '-i',
+             iface, '--ip-protocol', 'udp', '--ip-destination-port', '67:68',
+             '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-I', 'FORWARD', '-p', 'IPv4', '-i',
+             iface, '--ip-protocol', 'udp', '--ip-destination-port', '67:68',
+             '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-D', 'FORWARD', '-p', 'IPv4', '-o',
+             iface, '--ip-protocol', 'udp', '--ip-destination-port', '67:68',
+             '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-I', 'FORWARD', '-p', 'IPv4', '-o',
+             iface, '--ip-protocol', 'udp', '--ip-destination-port', '67:68',
+             '-j', 'DROP'),
             ('iptables-save', '-c'),
             ('iptables-restore', '-c'),
             ('ip6tables-save', '-c'),
             ('ip6tables-restore', '-c'),
         ]
         self.assertEqual(executes, expected)
-        expected_inputs = [
-             '-A test-FORWARD -m physdev --physdev-in %s '
-             '-d 255.255.255.255 -p udp --dport 67 -j DROP' % iface,
-             '-A test-FORWARD -m physdev --physdev-out %s '
-             '-d 255.255.255.255 -p udp --dport 67 -j DROP' % iface,
-             '-A test-FORWARD -m physdev --physdev-in %s '
-             '-d 192.168.1.1 -j DROP' % iface,
-             '-A test-FORWARD -m physdev --physdev-out %s '
-             '-s 192.168.1.1 -j DROP' % iface,
-        ]
-        for inp in expected_inputs:
-            self.assertIn(inp, inputs[0])
 
         executes = []
-        inputs = []
 
         @staticmethod
         def fake_remove(bridge, gateway):
@@ -721,105 +721,14 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
              iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
             ('ebtables', '-t', 'filter', '-D', 'OUTPUT', '-p', 'ARP', '-o',
              iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('iptables-save', '-c'),
-            ('iptables-restore', '-c'),
-            ('ip6tables-save', '-c'),
-            ('ip6tables-restore', '-c'),
+            ('ebtables', '-t', 'filter', '-D', 'FORWARD', '-p', 'IPv4', '-i',
+             iface, '--ip-protocol', 'udp', '--ip-destination-port', '67:68',
+             '-j', 'DROP'),
+            ('ebtables', '-t', 'filter', '-D', 'FORWARD', '-p', 'IPv4', '-o',
+             iface, '--ip-protocol', 'udp', '--ip-destination-port', '67:68',
+             '-j', 'DROP'),
         ]
         self.assertEqual(executes, expected)
-        for inp in expected_inputs:
-            self.assertNotIn(inp, inputs[0])
-
-    def test_isolated_host_iptables_logdrop(self):
-        # Ensure that a different drop action for iptables doesn't change
-        # the drop action for ebtables.
-        self.flags(fake_network=False,
-                   share_dhcp_address=True,
-                   iptables_drop_action='LOGDROP')
-
-        # NOTE(vish): use a fresh copy of the manager for each test
-        self.stubs.Set(linux_net, 'iptables_manager',
-                       linux_net.IptablesManager())
-        self.stubs.Set(linux_net, 'binary_name', 'test')
-        executes = []
-        inputs = []
-
-        def fake_execute(*args, **kwargs):
-            executes.append(args)
-            process_input = kwargs.get('process_input')
-            if process_input:
-                inputs.append(process_input)
-            return "", ""
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-
-        driver = linux_net.LinuxBridgeInterfaceDriver()
-
-        @staticmethod
-        def fake_ensure(bridge, interface, network, gateway):
-            return bridge
-
-        self.stubs.Set(linux_net.LinuxBridgeInterfaceDriver,
-                       'ensure_bridge', fake_ensure)
-
-        iface = 'eth0'
-        dhcp = '192.168.1.1'
-        network = {'dhcp_server': dhcp,
-                   'bridge': 'br100',
-                   'bridge_interface': iface}
-        driver.plug(network, 'fakemac')
-        expected = [
-            ('ebtables', '-t', 'filter', '-D', 'INPUT', '-p', 'ARP', '-i',
-             iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
-            ('ebtables', '-t', 'filter', '-I', 'INPUT', '-p', 'ARP', '-i',
-             iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
-            ('ebtables', '-t', 'filter', '-D', 'OUTPUT', '-p', 'ARP', '-o',
-             iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('ebtables', '-t', 'filter', '-I', 'OUTPUT', '-p', 'ARP', '-o',
-             iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('iptables-save', '-c'),
-            ('iptables-restore', '-c'),
-            ('ip6tables-save', '-c'),
-            ('ip6tables-restore', '-c'),
-        ]
-        self.assertEqual(executes, expected)
-        expected_inputs = [
-             ('-A test-FORWARD -m physdev --physdev-in %s '
-              '-d 255.255.255.255 -p udp --dport 67 -j LOGDROP' % iface),
-             ('-A test-FORWARD -m physdev --physdev-out %s '
-              '-d 255.255.255.255 -p udp --dport 67 -j LOGDROP' % iface),
-             ('-A test-FORWARD -m physdev --physdev-in %s '
-              '-d 192.168.1.1 -j LOGDROP' % iface),
-             ('-A test-FORWARD -m physdev --physdev-out %s '
-              '-s 192.168.1.1 -j LOGDROP' % iface),
-        ]
-        for inp in expected_inputs:
-            self.assertIn(inp, inputs[0])
-
-        executes = []
-        inputs = []
-
-        @staticmethod
-        def fake_remove(bridge, gateway):
-            return
-
-        self.stubs.Set(linux_net.LinuxBridgeInterfaceDriver,
-                       'remove_bridge', fake_remove)
-
-        driver.unplug(network)
-        expected = [
-            ('ebtables', '-t', 'filter', '-D', 'INPUT', '-p', 'ARP', '-i',
-             iface, '--arp-ip-dst', dhcp, '-j', 'DROP'),
-            ('ebtables', '-t', 'filter', '-D', 'OUTPUT', '-p', 'ARP', '-o',
-             iface, '--arp-ip-src', dhcp, '-j', 'DROP'),
-            ('iptables-save', '-c'),
-            ('iptables-restore', '-c'),
-            ('ip6tables-save', '-c'),
-            ('ip6tables-restore', '-c'),
-        ]
-        self.assertEqual(executes, expected)
-        for inp in expected_inputs:
-            self.assertNotIn(inp, inputs[0])
 
     def _test_initialize_gateway(self, existing, expected, routes=''):
         self.flags(fake_network=False)
@@ -1030,6 +939,22 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             driver.ensure_bridge('bridge', 'eth0')
             device_exists.assert_has_calls(calls['device_exists'])
             _execute.assert_has_calls(calls['_execute'])
+
+    def test_ensure_bridge_brclt_addif_exception(self):
+        def fake_execute(*cmd, **kwargs):
+            if ('brctl', 'addif', 'bridge', 'eth0') == cmd:
+                return ('', 'some error happens')
+            else:
+                return ('', '')
+
+        with contextlib.nested(
+            mock.patch.object(linux_net, 'device_exists', return_value=True),
+            mock.patch.object(linux_net, '_execute', fake_execute)
+        ) as (device_exists, _):
+            driver = linux_net.LinuxBridgeInterfaceDriver()
+            self.assertRaises(exception.NovaException,
+                              driver.ensure_bridge, 'bridge', 'eth0')
+            device_exists.assert_called_once_with('bridge')
 
     def test_set_device_mtu_configured(self):
         self.flags(network_device_mtu=10000)

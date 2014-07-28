@@ -18,19 +18,20 @@
 
 import os.path
 import tempfile
-import testtools
+import urllib2
 
 import eventlet
 import eventlet.wsgi
+import mock
+from oslo.config import cfg
 import requests
+import testtools
+import webob
 
 import nova.exception
 from nova import test
 from nova.tests import utils
 import nova.wsgi
-from oslo.config import cfg
-import urllib2
-import webob
 
 SSL_CERT_DIR = os.path.normpath(os.path.join(
                                 os.path.dirname(os.path.abspath(__file__)),
@@ -126,24 +127,49 @@ class TestWSGIServer(test.NoDBTestCase):
         server.stop()
         server.wait()
 
+    def test_server_pool_waitall(self):
+        # test pools waitall method gets called while stopping server
+        server = nova.wsgi.Server("test_server", None,
+            host="127.0.0.1", port=4444)
+        server.start()
+        with mock.patch.object(server._pool,
+                              'waitall') as mock_waitall:
+            server.stop()
+            server.wait()
+            mock_waitall.assert_called_once_with()
+
     def test_uri_length_limit(self):
         server = nova.wsgi.Server("test_uri_length_limit", None,
             host="127.0.0.1", max_url_len=16384)
         server.start()
 
         uri = "http://127.0.0.1:%d/%s" % (server.port, 10000 * 'x')
-        resp = requests.get(uri)
+        resp = requests.get(uri, proxies={"http": ""})
         eventlet.sleep(0)
         self.assertNotEqual(resp.status_code,
                             requests.codes.REQUEST_URI_TOO_LARGE)
 
         uri = "http://127.0.0.1:%d/%s" % (server.port, 20000 * 'x')
-        resp = requests.get(uri)
+        resp = requests.get(uri, proxies={"http": ""})
         eventlet.sleep(0)
         self.assertEqual(resp.status_code,
                          requests.codes.REQUEST_URI_TOO_LARGE)
         server.stop()
         server.wait()
+
+    def test_reset_pool_size_to_default(self):
+        server = nova.wsgi.Server("test_resize", None,
+            host="127.0.0.1", max_url_len=16384)
+        server.start()
+
+        # Stopping the server, which in turn sets pool size to 0
+        server.stop()
+        self.assertEqual(server._pool.size, 0)
+
+        # Resetting pool size to default
+        server.reset()
+        server.start()
+        self.assertEqual(server._pool.size, CONF.wsgi_default_pool_size)
 
 
 class TestWSGIServerWithSSL(test.NoDBTestCase):

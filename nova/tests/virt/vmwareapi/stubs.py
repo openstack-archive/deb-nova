@@ -21,9 +21,9 @@ import contextlib
 
 import mock
 
+from nova.tests.virt.vmwareapi import fake
 from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import error_util
-from nova.virt.vmwareapi import fake
 from nova.virt.vmwareapi import network_util
 from nova.virt.vmwareapi import vmware_images
 
@@ -73,13 +73,15 @@ def set_stubs(stubs):
               fake_is_vim_object)
 
 
-def fake_suds_context(calls={}):
+def fake_suds_context(calls=None):
     """Generate a suds client which automatically mocks all SOAP method calls.
 
     Calls are stored in <calls>, indexed by the name of the call. If you need
     to mock the behaviour of specific API calls you can pre-populate <calls>
     with appropriate Mock objects.
     """
+
+    calls = calls or {}
 
     class fake_factory:
         def create(self, name):

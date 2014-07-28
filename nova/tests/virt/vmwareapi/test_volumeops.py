@@ -13,12 +13,13 @@
 #    under the License.
 
 import contextlib
+
 import mock
 
 from nova import test
+from nova.tests.virt.vmwareapi import fake as vmwareapi_fake
 from nova.tests.virt.vmwareapi import stubs
 from nova.virt.vmwareapi import driver
-from nova.virt.vmwareapi import fake as vmwareapi_fake
 from nova.virt.vmwareapi import volumeops
 
 

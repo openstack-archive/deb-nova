@@ -18,7 +18,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 
 
 authorize = extensions.extension_authorizer('compute', 'consoles')
@@ -102,16 +102,6 @@ class ConsolesController(wsgi.Controller):
             raise webob.exc.HTTPNotImplemented(explanation=msg)
 
         return {'console': {'type': console_type, 'url': output['url']}}
-
-    def get_actions(self):
-        """Return the actions the extension adds, as required by contract."""
-        actions = [extensions.ActionExtension("servers", "os-getVNCConsole",
-                                              self.get_vnc_console),
-                   extensions.ActionExtension("servers", "os-getSPICEConsole",
-                                              self.get_spice_console),
-                   extensions.ActionExtension("servers", "os-getRDPConsole",
-                                              self.get_rdp_console)]
-        return actions
 
 
 class Consoles(extensions.ExtensionDescriptor):

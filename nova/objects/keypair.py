@@ -14,6 +14,7 @@
 
 from nova import db
 from nova import exception
+from nova import objects
 from nova.objects import base
 from nova.objects import fields
 
@@ -54,7 +55,6 @@ class KeyPair(base.NovaPersistentObject, base.NovaObject):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
         updates = self.obj_get_changes()
-        updates.pop('id', None)
         db_keypair = db.key_pair_create(context, updates)
         self._from_db_object(context, self, db_keypair)
 
@@ -79,7 +79,8 @@ class KeyPairList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_by_user(cls, context, user_id):
         db_keypairs = db.key_pair_get_all_by_user(context, user_id)
-        return base.obj_make_list(context, KeyPairList(), KeyPair, db_keypairs)
+        return base.obj_make_list(context, cls(context), objects.KeyPair,
+                                  db_keypairs)
 
     @base.remotable_classmethod
     def get_count_by_user(cls, context, user_id):

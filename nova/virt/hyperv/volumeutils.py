@@ -28,7 +28,7 @@ import time
 
 from oslo.config import cfg
 
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.hyperv import basevolumeutils
@@ -94,9 +94,9 @@ class VolumeUtils(basevolumeutils.BaseVolumeUtils):
                 else:
                     return
             except vmutils.HyperVException as exc:
-                LOG.debug(_("Attempt %(attempt)d to connect to target  "
-                            "%(target_iqn)s failed. Retrying. "
-                            "Exceptipn: %(exc)s ") %
+                LOG.debug("Attempt %(attempt)d to connect to target  "
+                          "%(target_iqn)s failed. Retrying. "
+                          "Exceptipn: %(exc)s ",
                           {'target_iqn': target_iqn,
                            'exc': exc,
                            'attempt': attempt})

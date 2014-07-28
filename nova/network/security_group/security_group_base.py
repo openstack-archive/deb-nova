@@ -22,7 +22,7 @@ import urllib
 from oslo.config import cfg
 
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova import utils
 
 CONF = cfg.CONF
@@ -143,13 +143,11 @@ class SecurityGroupBase(object):
            defined in the given security group.
         """
         for rule in security_group['rules']:
-            is_duplicate = True
             keys = ('group_id', 'cidr', 'from_port', 'to_port', 'protocol')
             for key in keys:
                 if rule.get(key) != new_rule.get(key):
-                    is_duplicate = False
                     break
-            if is_duplicate:
+            else:
                 return rule.get('id') or True
         return False
 

@@ -53,8 +53,8 @@ import sqlalchemy.exc
 
 import nova.db.sqlalchemy.migrate_repo
 from nova.db.sqlalchemy import utils as db_utils
+from nova.i18n import _
 from nova.openstack.common.db.sqlalchemy import utils as oslodbutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import test
@@ -119,6 +119,9 @@ class CommonTestsMixIn(object):
     BaseMigrationTestCase.
     """
     def test_walk_versions(self):
+        if not self.engines:
+            self.skipTest("No engines initialized")
+
         for key, engine in self.engines.items():
             # We start each walk with a completely blank slate.
             self._reset_database(key)
@@ -680,6 +683,40 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
             engine, 'volume_usage_cache')
         self.assertEqual(36, volume_usage_cache.c.user_id.type.length)
 
+    def _pre_upgrade_245(self, engine):
+        # create a fake network
+        networks = oslodbutils.get_table(engine, 'networks')
+        fake_network = {'id': 1}
+        networks.insert().execute(fake_network)
+
+    def _check_245(self, engine, data):
+        networks = oslodbutils.get_table(engine, 'networks')
+        network = networks.select(networks.c.id == 1).execute().first()
+        # mtu should default to None
+        self.assertIsNone(network.mtu)
+        # dhcp_server should default to None
+        self.assertIsNone(network.dhcp_server)
+        # enable dhcp should default to true
+        self.assertTrue(network.enable_dhcp)
+        # share address should default to false
+        self.assertFalse(network.share_address)
+
+    def _post_downgrade_245(self, engine):
+        self.assertColumnNotExists(engine, 'networks', 'mtu')
+        self.assertColumnNotExists(engine, 'networks', 'dhcp_server')
+        self.assertColumnNotExists(engine, 'networks', 'enable_dhcp')
+        self.assertColumnNotExists(engine, 'networks', 'share_address')
+
+    def _check_246(self, engine, data):
+        pci_devices = oslodbutils.get_table(engine, 'pci_devices')
+        self.assertEqual(1, len([fk for fk in pci_devices.foreign_keys
+                                 if fk.parent.name == 'compute_node_id']))
+
+    def _post_downgrade_246(self, engine):
+        pci_devices = oslodbutils.get_table(engine, 'pci_devices')
+        self.assertEqual(0, len([fk for fk in pci_devices.foreign_keys
+                                 if fk.parent.name == 'compute_node_id']))
+
 
 class TestBaremetalMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
     """Test sqlalchemy-migrate migrations."""
@@ -838,4 +875,4 @@ class ProjectTestCase(test.NoDBTestCase):
 
         helpful_msg = (_("The following migrations are missing a downgrade:"
                          "\n\t%s") % '\n\t'.join(sorted(missing_downgrade)))
-        self.assertTrue(not missing_downgrade, helpful_msg)
+        self.assertFalse(missing_downgrade, helpful_msg)

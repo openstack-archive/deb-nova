@@ -25,8 +25,8 @@ from oslo.config import cfg
 
 from nova import context
 from nova import exception
+from nova.i18n import _
 from nova import objects
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 from nova import utils
@@ -39,13 +39,9 @@ LOG = logging.getLogger(__name__)
 xenapi_session_opts = [
     cfg.IntOpt('login_timeout',
                default=10,
-               deprecated_name='xenapi_login_timeout',
-               deprecated_group='DEFAULT',
                help='Timeout in seconds for XenAPI login.'),
     cfg.IntOpt('connection_concurrent',
                default=5,
-               deprecated_name='xenapi_connection_concurrent',
-               deprecated_group='DEFAULT',
                help='Maximum number of concurrent XenAPI connections. '
                     'Used only if compute_driver=xenapi.XenAPIDriver'),
     ]
@@ -221,8 +217,8 @@ class XenAPISession(object):
                 if callback:
                     callback_result = callback(kwargs)
 
-                msg = _('%(plugin)s.%(fn)s attempt %(attempt)d/%(attempts)d, '
-                        'callback_result: %(callback_result)s')
+                msg = ('%(plugin)s.%(fn)s attempt %(attempt)d/%(attempts)d, '
+                       'callback_result: %(callback_result)s')
                 LOG.debug(msg,
                           {'plugin': plugin, 'fn': fn, 'attempt': attempt,
                            'attempts': attempts,
@@ -247,11 +243,11 @@ class XenAPISession(object):
     def _is_retryable_exception(self, exc, fn):
         _type, method, error = exc.details[:3]
         if error == 'RetryableError':
-            LOG.debug(_("RetryableError, so retrying %(fn)s"), {'fn': fn},
+            LOG.debug("RetryableError, so retrying %(fn)s", {'fn': fn},
                       exc_info=True)
             return True
         elif "signal" in method:
-            LOG.debug(_("Error due to a signal, retrying %(fn)s"), {'fn': fn},
+            LOG.debug("Error due to a signal, retrying %(fn)s", {'fn': fn},
                       exc_info=True)
             return True
         else:
@@ -269,7 +265,7 @@ class XenAPISession(object):
         try:
             return func(*args, **kwargs)
         except self.XenAPI.Failure as exc:
-            LOG.debug(_("Got exception: %s"), exc)
+            LOG.debug("Got exception: %s", exc)
             if (len(exc.details) == 4 and
                 exc.details[0] == 'XENAPI_PLUGIN_EXCEPTION' and
                     exc.details[2] == 'Failure'):
@@ -283,7 +279,7 @@ class XenAPISession(object):
             else:
                 raise
         except xmlrpclib.ProtocolError as exc:
-            LOG.debug(_("Got exception: %s"), exc)
+            LOG.debug("Got exception: %s", exc)
             raise
 
     def get_rec(self, record_type, ref):

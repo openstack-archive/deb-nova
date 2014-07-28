@@ -17,8 +17,8 @@ from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
 from nova import db
 from nova import exception
-from nova.image import glance
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
+from nova import image
 from nova.openstack.common import log as logging
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova.scheduler import utils as scheduler_utils
@@ -49,7 +49,7 @@ class LiveMigrationTask(object):
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.servicegroup_api = servicegroup.API()
         self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
-        self.image_service = glance.get_default_image_service()
+        self.image_api = image.API()
 
     def execute(self):
         self._check_instance_is_running()
@@ -61,13 +61,13 @@ class LiveMigrationTask(object):
             self._check_requested_destination()
 
         #TODO(johngarbutt) need to move complexity out of compute manager
+        #TODO(johngarbutt) disk_over_commit?
         return self.compute_rpcapi.live_migration(self.context,
                 host=self.source,
                 instance=self.instance,
                 dest=self.destination,
                 block_migration=self.block_migration,
                 migrate_data=self.migrate_data)
-                #TODO(johngarbutt) disk_over_commit?
 
     def rollback(self):
         #TODO(johngarbutt) need to implement the clean up operation
@@ -146,7 +146,7 @@ class LiveMigrationTask(object):
         image = None
         if self.instance.image_ref:
             image = compute_utils.get_image_metadata(self.context,
-                                                     self.image_service,
+                                                     self.image_api,
                                                      self.instance.image_ref,
                                                      self.instance)
         request_spec = scheduler_utils.build_request_spec(self.context, image,

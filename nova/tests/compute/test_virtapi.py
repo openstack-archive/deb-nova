@@ -19,7 +19,7 @@ from nova.compute import manager as compute_manager
 from nova import context
 from nova import db
 from nova import exception
-from nova.objects import external_event as external_event_obj
+from nova import objects
 from nova import test
 from nova.virt import fake
 from nova.virt import virtapi
@@ -44,10 +44,6 @@ class VirtAPIBaseTest(test.NoDBTestCase, test.APICoverage):
 
     def test_provider_fw_rule_get_all(self):
         self.assertExpected('provider_fw_rule_get_all')
-
-    def test_agent_build_get_by_triple(self):
-        self.assertExpected('agent_build_get_by_triple',
-                            'fake-hv', 'gnu/hurd', 'fake-arch')
 
     def test_wait_for_instance_event(self):
         self.assertExpected('wait_for_instance_event',
@@ -129,9 +125,9 @@ class ComputeVirtAPITest(VirtAPIBaseTest):
 
     def test_wait_for_instance_event(self):
         and_i_ran = ''
-        event_1_tag = external_event_obj.InstanceExternalEvent.make_key(
+        event_1_tag = objects.InstanceExternalEvent.make_key(
             'event1')
-        event_2_tag = external_event_obj.InstanceExternalEvent.make_key(
+        event_2_tag = objects.InstanceExternalEvent.make_key(
             'event2', 'tag')
         events = {
             'event1': event_1_tag,

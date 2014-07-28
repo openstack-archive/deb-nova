@@ -19,20 +19,21 @@ Management class for host-related functions (start, reboot, etc).
 
 import re
 
+from oslo.config import cfg
+
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import exception
+from nova.i18n import _
 from nova import objects
-from nova.objects import instance as instance_obj
-from nova.objects import service as service_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.pci import pci_whitelist
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 
+CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
@@ -75,7 +76,7 @@ class Host(object):
                                        ' ping migration to a new host'),
                                      {'name': name, 'host': host})
                             continue
-                    instance = instance_obj.Instance.get_by_uuid(ctxt, uuid)
+                    instance = objects.Instance.get_by_uuid(ctxt, uuid)
                     vm_counter = vm_counter + 1
 
                     aggregate = objects.AggregateList.get_by_host(
@@ -113,12 +114,13 @@ class Host(object):
             raise exception.NoValidHost(reason='Unable to find suitable '
                                                    'host for VMs evacuation')
 
-    def set_host_enabled(self, host, enabled):
-        """Sets the specified host's ability to accept new instances."""
+    def set_host_enabled(self, enabled):
+        """Sets the compute host's ability to accept new instances."""
         # Since capabilities are gone, use service table to disable a node
         # in scheduler
         cntxt = context.get_admin_context()
-        service = service_obj.Service.get_by_args(cntxt, host, 'nova-compute')
+        service = objects.Service.get_by_args(cntxt, CONF.host,
+                                              'nova-compute')
         service.disabled = not enabled
         service.disabled_reason = 'set by xenapi host_state'
         service.save()
@@ -229,7 +231,7 @@ class HostState(object):
         """Since under Xenserver, a compute node runs on a given host,
         we can get host status information using xenapi.
         """
-        LOG.debug(_("Updating host stats"))
+        LOG.debug("Updating host stats")
         data = call_xenhost(self._session, "host_data", {})
         if data:
             sr_ref = vm_utils.scan_default_sr(self._session)
@@ -305,7 +307,7 @@ def call_xenhost(session, method, arg_dict):
 
 def _uuid_find(context, host, name_label):
     """Return instance uuid by name_label."""
-    for i in instance_obj.InstanceList.get_by_host(context, host):
+    for i in objects.InstanceList.get_by_host(context, host):
         if i.name == name_label:
             return i.uuid
     return None

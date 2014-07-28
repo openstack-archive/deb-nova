@@ -18,7 +18,45 @@ from nova.objects import base
 from nova.objects import fields
 
 
-class VolumeMapping(base.NovaPersistentObject, base.NovaObject):
+class EC2InstanceMapping(base.NovaPersistentObject, base.NovaObject):
+    # Version 1.0: Initial version
+    VERSION = '1.0'
+
+    fields = {
+        'id': fields.IntegerField(),
+        'uuid': fields.UUIDField(),
+    }
+
+    @staticmethod
+    def _from_db_object(context, imap, db_imap):
+        for field in imap.fields:
+            imap[field] = db_imap[field]
+        imap._context = context
+        imap.obj_reset_changes()
+        return imap
+
+    @base.remotable
+    def create(self, context):
+        if self.obj_attr_is_set('id'):
+            raise exception.ObjectActionError(action='create',
+                                              reason='already created')
+        db_imap = db.ec2_instance_create(context, self.uuid)
+        self._from_db_object(context, self, db_imap)
+
+    @base.remotable_classmethod
+    def get_by_uuid(cls, context, instance_uuid):
+        db_imap = db.ec2_instance_get_by_uuid(context, instance_uuid)
+        if db_imap:
+            return cls._from_db_object(context, cls(), db_imap)
+
+    @base.remotable_classmethod
+    def get_by_id(cls, context, ec2_id):
+        db_imap = db.ec2_instance_get_by_id(context, ec2_id)
+        if db_imap:
+            return cls._from_db_object(context, cls(), db_imap)
+
+
+class EC2VolumeMapping(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
     VERSION = '1.0'
 
@@ -47,10 +85,10 @@ class VolumeMapping(base.NovaPersistentObject, base.NovaObject):
     def get_by_uuid(cls, context, volume_uuid):
         db_vmap = db.ec2_volume_get_by_uuid(context, volume_uuid)
         if db_vmap:
-            return cls._from_db_object(context, cls(), db_vmap)
+            return cls._from_db_object(context, cls(context), db_vmap)
 
     @base.remotable_classmethod
     def get_by_id(cls, context, ec2_id):
         db_vmap = db.ec2_volume_get_by_id(context, ec2_id)
         if db_vmap:
-            return cls._from_db_object(context, cls(), db_vmap)
+            return cls._from_db_object(context, cls(context), db_vmap)

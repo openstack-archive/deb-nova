@@ -21,8 +21,8 @@ from oslo.config import cfg
 
 from nova import context as nova_context
 from nova import exception
+from nova.i18n import _
 from nova import network
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
@@ -218,15 +218,6 @@ class LibvirtVolumeDriver(VolumeDriver):
             driver_class = importutils.import_class(driver)
             self.volume_drivers[driver_type] = driver_class(self)
 
-    def _volume_driver_method(self, method_name, connection_info,
-                             *args, **kwargs):
-        driver_type = connection_info.get('driver_volume_type')
-        if driver_type not in self.volume_drivers:
-            raise exception.VolumeDriverNotFound(driver_type=driver_type)
-        driver = self.volume_drivers[driver_type]
-        method = getattr(driver, method_name)
-        return method(connection_info, *args, **kwargs)
-
     def attach_volume(self, connection_info, instance, mountpoint):
         fixed_ips = _get_fixed_ips(instance)
         if not fixed_ips:
@@ -245,9 +236,11 @@ class LibvirtVolumeDriver(VolumeDriver):
                             conf.source_path)
 
     def _connect_volume(self, connection_info, disk_info):
-        return self._volume_driver_method('connect_volume',
-                                          connection_info,
-                                          disk_info)
+        driver_type = connection_info.get('driver_volume_type')
+        if driver_type not in self.volume_drivers:
+            raise exception.VolumeDriverNotFound(driver_type=driver_type)
+        driver = self.volume_drivers[driver_type]
+        return driver.connect_volume(connection_info, disk_info)
 
     def _publish_iscsi(self, instance, mountpoint, fixed_ips, device_path):
         iqn = _get_iqn(instance['name'], mountpoint)
@@ -275,9 +268,11 @@ class LibvirtVolumeDriver(VolumeDriver):
             self._disconnect_volume(connection_info, mount_device)
 
     def _disconnect_volume(self, connection_info, disk_dev):
-        return self._volume_driver_method('disconnect_volume',
-                                          connection_info,
-                                          disk_dev)
+        driver_type = connection_info.get('driver_volume_type')
+        if driver_type not in self.volume_drivers:
+            raise exception.VolumeDriverNotFound(driver_type=driver_type)
+        driver = self.volume_drivers[driver_type]
+        return driver.connect_volume(connection_info, disk_dev)
 
     def _depublish_iscsi(self, instance, mountpoint):
         iqn = _get_iqn(instance['name'], mountpoint)
@@ -288,10 +283,10 @@ class LibvirtVolumeDriver(VolumeDriver):
             LOG.warn(_('detach volume could not find tid for %s'), iqn,
                      instance=instance)
 
-    def get_all_block_devices(self):
+    def _get_all_block_devices(self):
         """Return all block devices in use on this node."""
         return _list_backingstore_path()
 
-    def get_hypervisor_version(self):
+    def _get_hypervisor_version(self):
         """A dummy method for LibvirtBaseVolumeDriver.connect_volume."""
         return 1

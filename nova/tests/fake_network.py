@@ -25,11 +25,11 @@ from nova.network import manager as network_manager
 from nova.network import model as network_model
 from nova.network import nova_ipam_lib
 from nova.network import rpcapi as network_rpcapi
+from nova import objects
 from nova.objects import base as obj_base
-from nova.objects import instance_info_cache
-from nova.objects import pci_device
 from nova.objects import virtual_interface as vif_obj
 from nova.openstack.common import jsonutils
+from nova.pci import pci_device
 from nova.tests.objects import test_fixed_ip
 from nova.tests.objects import test_instance_info_cache
 from nova.tests.objects import test_pci_device
@@ -188,7 +188,8 @@ class FakeNetworkManager(network_manager.NetworkManager):
         # TODO(matelakat) use the deallocate_fixed_ip_calls instead
         self.deallocate_called = address
 
-    def _create_fixed_ips(self, context, network_id, fixed_cidr=None):
+    def _create_fixed_ips(self, context, network_id, fixed_cidr=None,
+                          extra_reserved=None):
         pass
 
     def get_instance_nw_info(context, instance_id, rxtx_factor,
@@ -228,7 +229,11 @@ def fake_network(network_id, ipv6=None):
              'deleted': False,
              'created_at': None,
              'updated_at': None,
-             'deleted_at': None}
+             'deleted_at': None,
+             'mtu': None,
+             'dhcp_server': '192.168.%d.1' % network_id,
+             'enable_dhcp': True,
+             'share_address': False}
     if ipv6:
         fake_network['cidr_v6'] = '2001:db8:0:%x::/64' % network_id
         fake_network['gateway_v6'] = '2001:db8:0:%x::1' % network_id
@@ -510,29 +515,28 @@ def _get_instances_with_cached_ips(orig_func, *args, **kwargs):
     """
     instances = orig_func(*args, **kwargs)
     context = args[0]
-    fake_device = pci_device.PciDevice.get_by_dev_addr(context, 1, 'a')
+    fake_device = objects.PciDevice.get_by_dev_addr(context, 1, 'a')
 
     def _info_cache_for(instance):
         info_cache = dict(test_instance_info_cache.fake_info_cache,
                           network_info=_get_fake_cache(),
                           instance_uuid=instance['uuid'])
         if isinstance(instance, obj_base.NovaObject):
-            _info_cache = instance_info_cache.InstanceInfoCache()
-            instance_info_cache.InstanceInfoCache._from_db_object(context,
-                                                                  _info_cache,
-                                                                  info_cache)
+            _info_cache = objects.InstanceInfoCache(context)
+            objects.InstanceInfoCache._from_db_object(context, _info_cache,
+                                                      info_cache)
             info_cache = _info_cache
         instance['info_cache'] = info_cache
 
     if isinstance(instances, (list, obj_base.ObjectListBase)):
         for instance in instances:
             _info_cache_for(instance)
-            fake_device.claim(instance)
-            fake_device.allocate(instance)
+            pci_device.claim(fake_device, instance)
+            pci_device.allocate(fake_device, instance)
     else:
         _info_cache_for(instances)
-        fake_device.claim(instances)
-        fake_device.allocate(instances)
+        pci_device.claim(fake_device, instances)
+        pci_device.allocate(fake_device, instances)
     return instances
 
 

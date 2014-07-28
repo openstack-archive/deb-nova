@@ -27,8 +27,8 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova import context as nova_context
 from nova import exception
+from nova.i18n import _
 from nova.openstack.common import excutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import lockutils
@@ -53,8 +53,7 @@ opts = [
                help='A list of additional capabilities corresponding to '
                'flavor_extra_specs for this compute '
                'host to advertise. Valid entries are name=value, pairs '
-               'For example, "key1:val1, key2:val2"',
-               deprecated_name='instance_type_extra_specs'),
+               'For example, "key1:val1, key2:val2"'),
     cfg.StrOpt('driver',
                default='nova.virt.baremetal.pxe.PXE',
                help='Baremetal driver back-end (pxe or tilera)'),
@@ -116,8 +115,15 @@ class BareMetalDriver(driver.ComputeDriver):
         "supports_recreate": False,
         }
 
+    def _do_deprecation_warning(self):
+        LOG.warning(_('The baremetal driver is deprecated, untested, '
+                      'unmaintained and will be replaced by an Ironic '
+                      'driver in the future.'))
+
     def __init__(self, virtapi, read_only=False):
         super(BareMetalDriver, self).__init__(virtapi)
+
+        self._do_deprecation_warning()
 
         self.driver = importutils.import_object(
                 CONF.baremetal.driver, virtapi)
@@ -360,7 +366,8 @@ class BareMetalDriver(driver.ComputeDriver):
                 "for instance %r") % instance['uuid'])
         _update_state(ctx, node, instance, state)
 
-    def destroy(self, context, instance, network_info, block_device_info=None):
+    def destroy(self, context, instance, network_info, block_device_info=None,
+                destroy_disks=True, migrate_data=None):
         context = nova_context.get_admin_context()
 
         try:
@@ -393,7 +400,7 @@ class BareMetalDriver(driver.ComputeDriver):
                                 "baremetal database: %s") % e)
 
     def cleanup(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, migrate_data=None):
         """Cleanup after instance being destroyed."""
         pass
 

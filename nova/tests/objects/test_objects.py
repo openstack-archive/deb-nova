@@ -16,6 +16,8 @@ import contextlib
 import datetime
 import hashlib
 import inspect
+import os
+import pprint
 
 import mock
 import six
@@ -302,6 +304,12 @@ class _BaseTestCase(test.TestCase):
         # json-ify an object field for comparison with its db str
         #equivalent
         self.assertEqual(expected, jsonutils.dumps(obj_val))
+
+    def str_comparator(self, expected, obj_val):
+        """Compare an object field to a string in the db by performing
+        a simple coercion on the object field value.
+        """
+        self.assertEqual(expected, str(obj_val))
 
     def assertNotIsInstance(self, obj, cls, msg=None):
         """Python < v2.7 compatibility.  Assert 'not isinstance(obj, cls)."""
@@ -700,6 +708,12 @@ class _TestObject(object):
         self.assertRaises(exception.ReadOnlyFieldError, setattr,
                           obj, 'readonly', 2)
 
+    def test_obj_repr(self):
+        obj = MyObj(foo=123)
+        self.assertEqual('MyObj(bar=<?>,created_at=<?>,deleted=<?>,'
+                         'deleted_at=<?>,foo=123,missing=<?>,readonly=<?>,'
+                         'updated_at=<?>)', repr(obj))
+
 
 class TestObject(_LocalTest, _TestObject):
     pass
@@ -810,6 +824,27 @@ class TestObjectListBase(test.TestCase):
         # This should now look clean because the child is clean
         self.assertEqual(set(), obj.obj_what_changed())
 
+    def test_initialize_objects(self):
+        class Foo(base.ObjectListBase, base.NovaObject):
+            fields = {'objects': fields.ListOfObjectsField('Bar')}
+
+        class Bar(base.NovaObject):
+            fields = {'foo': fields.StringField()}
+
+        obj = Foo()
+        self.assertEqual([], obj.objects)
+        self.assertEqual(set(), obj.obj_what_changed())
+
+    def test_obj_repr(self):
+        class Foo(base.ObjectListBase, base.NovaObject):
+            fields = {'objects': fields.ListOfObjectsField('Bar')}
+
+        class Bar(base.NovaObject):
+            fields = {'uuid': fields.StringField()}
+
+        obj = Foo(objects=[Bar(uuid='fake-uuid')])
+        self.assertEqual('Foo(objects=[Bar(fake-uuid)])', repr(obj))
+
 
 class TestObjectSerializer(_BaseTestCase):
     def test_serialize_entity_primitive(self):
@@ -863,74 +898,79 @@ class TestObjectSerializer(_BaseTestCase):
 # they come with a corresponding version bump in the affected
 # objects
 object_data = {
-    'Aggregate': '1.1-1d96b82d2f0ad66ad1d49313f08eca71',
-    'AggregateList': '1.1-dbb5bafde58c263c1fd132c33d68ba77',
-    'BlockDeviceMapping': '1.1-d44030deca25ebf8efcb4f3d12429677',
-    'BlockDeviceMappingList': '1.2-d0f559a2510ea2beab5478e5118a69f9',
-    'ComputeNode': '1.3-da09be1ff8b43f9889f2bb4e43b5686e',
-    'ComputeNodeList': '1.2-be44294fa7d0deef6146863836adb1e5',
-    'DNSDomain': '1.0-f0467d23e2c8b567469cdcd6a9708615',
-    'DNSDomainList': '1.0-47ffa72c29119d19fc8d3854ae49f094',
-    'FixedIP': '1.1-121f5e17f0e1a2115a6d93b80a158292',
-    'FixedIPList': '1.1-c944566e2e21af32432d7b7c35018831',
-    'Flavor': '1.0-4f0c857e5bf5627a40d04ba249f9e31b',
-    'FlavorList': '1.0-47ffa72c29119d19fc8d3854ae49f094',
-    'FloatingIP': '1.1-ee1245f7df59fcd081e3bffe3411e822',
-    'FloatingIPList': '1.1-a5c220af1c55f2aa3d2d14771bbca668',
-    'Instance': '1.13-552999d3072d5aa7b31493d3c2ee551e',
-    'InstanceAction': '1.1-abef7ec3247d587bdef78bf47744c6ee',
-    'InstanceActionEvent': '1.1-7c8b9daaf15615c90d6dcc2d26c2c3af',
-    'InstanceActionEventList': '1.0-6f8bfe29181b175400069c8a47f6e618',
-    'InstanceActionList': '1.0-d0f559a2510ea2beab5478e5118a69f9',
-    'InstanceExternalEvent': '1.0-c1b2be346d0ee670ebc0146c65859b1e',
-    'InstanceFault': '1.2-c85a5ecc4f4a82a26c9da95d947a719d',
-    'InstanceFaultList': '1.1-6e250b18ac45ea63a3478a4b365b009f',
-    'InstanceGroup': '1.6-c17ebff3c3453108370362a8f22b8d48',
-    'InstanceGroupList': '1.2-176452f4f090408eb1b9d631957f996b',
-    'InstanceInfoCache': '1.5-04937dde0e8409eb87bc04f3514736ba',
-    'InstanceList': '1.6-086b5de1c23af9e023fa10dd2e8c6a69',
-    'KeyPair': '1.1-30e67207cd4d0a3a044b5805f252a60c',
-    'KeyPairList': '1.0-ab564b050224c1945febb24ce84c9524',
-    'Migration': '1.1-c90e531ec87739decb31026c05100964',
-    'MigrationList': '1.1-add1d472f38ee759f9d717b9824e07a4',
-    'MyObj': '1.6-f441a9b820e323c45b92d66d2f9ebbf2',
-    'Network': '1.1-faba26d0290395456f9a040584c4364b',
-    'NetworkList': '1.1-eaafb55cf6b571581df685127cd687c1',
-    'OtherTestableObject': '1.0-b43ae164bcf53764db6a54270af71b86',
-    'PciDevice': '1.1-637f3dddb48197d2a69e41bd1144a3c5',
-    'PciDeviceList': '1.0-80491949ec8ac90cbbd1ea153adcb4ef',
-    'Quotas': '1.0-759987de0abbb6e4428bba7c6bdf8e9e',
-    'QuotasNoOp': '1.0-c25493f36b5df1d1f0a1077a610495cd',
-    'SecurityGroup': '1.1-0a71e19e0b5bd790e6bf882afcb71d4c',
-    'SecurityGroupList': '1.0-ae82c19e66b17d506e25f8d49576db1f',
-    'SecurityGroupRule': '1.0-96cdebd0294fd834e3e4249238c76eb9',
-    'SecurityGroupRuleList': '1.0-790df2265ff6d41794f60decdf9dd080',
-    'Service': '1.2-16a7d0f0d41e423deefb804ca2aeb51d',
-    'ServiceList': '1.0-35c5e3a116de08c1655d5fc3ecbe6549',
-    'TestableObject': '1.0-b43ae164bcf53764db6a54270af71b86',
-    'TestSubclassedObject': '1.6-cd6574f48c2bc3ccebe7306a06dfaa1c',
-    'VirtualInterface': '1.0-022c3e84a172f8302a0f8c4407bc92a2',
-    'VirtualInterfaceList': '1.0-59568968ee1ac0e796c7ebbf8354d65d',
-    'VolumeMapping': '1.0-b97464d4e338688d04a46d5c1740423d',
-    }
+    'Agent': '1.0-c4ff8a833aee8ae44ab8aed1a171273d',
+    'AgentList': '1.0-f8b860e1f2ce80e676ba1a37ddf86e4f',
+    'Aggregate': '1.1-f5d477be06150529a9b2d27cc49030b5',
+    'AggregateList': '1.2-504137b7ec3855b00d01f165dcebc23e',
+    'BlockDeviceMapping': '1.1-9968ffe513e7672484b0f528b034cd0f',
+    'BlockDeviceMappingList': '1.2-d6d7df540ca149dda78b22b4b10bdef3',
+    'ComputeNode': '1.4-ed20e7a7c1a4612fe7d2836d5887c726',
+    'ComputeNodeList': '1.3-ff59187056eaa96f6fd3fb70693d818c',
+    'DNSDomain': '1.0-5bdc288d7c3b723ce86ede998fd5c9ba',
+    'DNSDomainList': '1.0-6e3cc498d89dd7e90f9beb021644221c',
+    'EC2InstanceMapping': '1.0-627baaf4b12c9067200979bdc4558a99',
+    'EC2VolumeMapping': '1.0-2f8c3bf077c65a425294ec2b361c9143',
+    'FixedIP': '1.1-082fb26772ce2db783ce4934edca4652',
+    'FixedIPList': '1.1-8ea5cfca611598f1242fd4095e49e58b',
+    'Flavor': '1.1-096cfd023c35d07542cf732fb29b45e4',
+    'FlavorList': '1.1-d559595f55936a6d602721c3bdff6fff',
+    'FloatingIP': '1.1-27eb68b7c9c620dd5f0561b5a3be0e82',
+    'FloatingIPList': '1.2-1b77acb3523d16e3282624f51fee60d8',
+    'Instance': '1.13-c9cfd71ddc9d6e7e7c72879f4d5982ee',
+    'InstanceAction': '1.1-6b1d0a6dbd522b5a83c20757ec659663',
+    'InstanceActionEvent': '1.1-f144eaa9fb22f248fc41ed8401a3a1be',
+    'InstanceActionEventList': '1.0-937f4ed414ff2354de416834b948fbd6',
+    'InstanceActionList': '1.0-d46ade45deeba63c55821e22c164bd1b',
+    'InstanceExternalEvent': '1.0-f1134523654407a875fd59b80f759ee7',
+    'InstanceFault': '1.2-313438e37e9d358f3566c85f6ddb2d3e',
+    'InstanceFaultList': '1.1-bd578be60d045629ca7b3ce1a2493ae4',
+    'InstanceGroup': '1.6-c032430832b3cbaf92c99088e4b2fdc8',
+    'InstanceGroupList': '1.2-bebd07052779ae3b47311efe85428a8b',
+    'InstanceInfoCache': '1.5-ef64b604498bfa505a8c93747a9d8b2f',
+    'InstanceList': '1.6-78800140a5f9818ab00f8c052437655f',
+    'KeyPair': '1.1-3410f51950d052d861c11946a6ae621a',
+    'KeyPairList': '1.0-854cfff138dac9d5925c89cf805d1a70',
+    'Migration': '1.1-67c47726c2c71422058cd9d149d6d3ed',
+    'MigrationList': '1.1-6ca2ebb822ebfe1a660bace824b378c6',
+    'MyObj': '1.6-9039bc29de1c08943771407697c83076',
+    'Network': '1.2-2ea21ede5e45bb80e7b7ac7106915c4e',
+    'NetworkList': '1.2-16510568c6e64cb8b358cb2b11333196',
+    'PciDevice': '1.1-523c46f960d93f78db55f0280b09441e',
+    'PciDeviceList': '1.0-5da7b4748a5a2594bae2cd0bd211cca2',
+    'Quotas': '1.0-1933ffdc585c205445331fe842567eb3',
+    'QuotasNoOp': '1.0-187356d5a8b8e4a3505148ea4e96cfcb',
+    'SecurityGroup': '1.1-bba0e72865e0953793e796571692453b',
+    'SecurityGroupList': '1.0-9513387aabf08c2a7961ac4da4315ed4',
+    'SecurityGroupRule': '1.0-fdd020bdd7eb8bac744ad6f9a4ef8165',
+    'SecurityGroupRuleList': '1.0-af4deeea8699ee90fb217f77d711d781',
+    'Service': '1.2-5a3df338c669e1148251431370b440ef',
+    'ServiceList': '1.0-ae64b4922df28d7cd11c59cddddf926c',
+    'TestSubclassedObject': '1.6-1629421d83f474b7fadc41d3fc0e4998',
+    'VirtualInterface': '1.0-10fdac4c704102b6d57d6936d6d790d2',
+    'VirtualInterfaceList': '1.0-dc9e9d5bce522d28f96092c49119b3e0',
+}
 
 
 class TestObjectVersions(test.TestCase):
+    def setUp(self):
+        super(TestObjectVersions, self).setUp()
+        self._fingerprints = {}
+
     def _get_fingerprint(self, obj_class):
         fields = obj_class.fields.items()
-        methods = {}
+        fields.sort()
+        methods = []
         for name in dir(obj_class):
             thing = getattr(obj_class, name)
             if inspect.ismethod(thing) and hasattr(thing, 'remotable'):
-                methods[name] = inspect.getargspec(thing)
+                methods.append((name, inspect.getargspec(thing.original_fn)))
+        methods.sort()
         # NOTE(danms): Things that need a version bump are any fields
         # and their types, or the signatures of any remotable methods.
         # Of course, these are just the mechanical changes we can detect,
         # but many other things may require a version bump (method behavior
         # and return value changes, for example).
-        relevant_data = {'fields': fields,
-                         'methods': methods,
-                         }
+        relevant_data = (fields, methods)
         return '%s-%s' % (obj_class.VERSION,
                           hashlib.md5(str(relevant_data)).hexdigest())
 
@@ -938,6 +978,11 @@ class TestObjectVersions(test.TestCase):
         obj_class = base.NovaObject._obj_classes[obj_name][0]
         expected_fingerprint = object_data.get(obj_name, 'unknown')
         actual_fingerprint = self._get_fingerprint(obj_class)
+
+        self._fingerprints[obj_name] = actual_fingerprint
+
+        if os.getenv('GENERATE_HASHES'):
+            return
 
         self.assertEqual(
             expected_fingerprint, actual_fingerprint,
@@ -947,3 +992,9 @@ class TestObjectVersions(test.TestCase):
     def test_versions(self):
         for obj_name in base.NovaObject._obj_classes:
             self._test_versions_cls(obj_name)
+
+        if os.getenv('GENERATE_HASHES'):
+            file('object_hashes.txt', 'w').write(
+                pprint.pformat(self._fingerprints))
+            raise test.TestingException(
+                'Generated hashes in object_hashes.txt')

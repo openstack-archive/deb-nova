@@ -23,9 +23,8 @@ from nova.network import model as network_model
 from nova import test
 from nova.tests import matchers
 from nova.tests import utils
-from nova.tests.virt.vmwareapi import test_vm_util
+from nova.tests.virt.vmwareapi import fake
 from nova.virt.vmwareapi import error_util
-from nova.virt.vmwareapi import fake
 from nova.virt.vmwareapi import network_util
 from nova.virt.vmwareapi import vif
 from nova.virt.vmwareapi import vim_util
@@ -54,7 +53,7 @@ class VMwareVifTestCase(test.NoDBTestCase):
                                   ovs_interfaceid=None,
                                   rxtx_cap=3)
         ])[0]
-        self.session = test_vm_util.fake_session()
+        self.session = fake.FakeSession()
         self.cluster = None
 
     def tearDown(self):
@@ -171,7 +170,7 @@ class VMwareVifTestCase(test.NoDBTestCase):
         ])[0]
         vif.get_network_ref(self.session, self.cluster, self.vif, False)
 
-    def test_get_network_ref_bridge(self):
+    def test_get_network_ref_bridge_from_opaque(self):
         opaque_networks = [{'opaqueNetworkId': 'bridge_id',
                             'opaqueNetworkName': 'name',
                             'opaqueNetworkType': 'OpaqueNetwork'}]
@@ -179,7 +178,7 @@ class VMwareVifTestCase(test.NoDBTestCase):
                 'integration_bridge', 'bridge_id')
         self.assertEqual('bridge_id', network_ref['network-id'])
 
-    def test_get_network_ref_bridges(self):
+    def test_get_network_ref_multiple_bridges_from_opaque(self):
         opaque_networks = [{'opaqueNetworkId': 'bridge_id1',
                             'opaqueNetworkName': 'name1',
                             'opaqueNetworkType': 'OpaqueNetwork'},
@@ -327,6 +326,11 @@ class VMwareVifTestCase(test.NoDBTestCase):
     def test_get_vif_info_none(self):
         vif_info = vif.get_vif_info('fake_session', 'fake_cluster',
                                     'is_neutron', 'fake_model', None)
+        self.assertEqual([], vif_info)
+
+    def test_get_vif_info_empty_list(self):
+        vif_info = vif.get_vif_info('fake_session', 'fake_cluster',
+                                    'is_neutron', 'fake_model', [])
         self.assertEqual([], vif_info)
 
     @mock.patch.object(vif, 'get_network_ref', return_value='fake_ref')

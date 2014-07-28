@@ -34,8 +34,8 @@ from nova.compute import task_states
 from nova import context
 from nova import db
 from nova import exception
+from nova.i18n import _
 from nova.image import glance
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import units
 from nova import test
 from nova.tests import fake_network
@@ -43,6 +43,7 @@ from nova.tests.image import fake as fake_image
 from nova.tests import matchers
 from nova.tests.virt.hyperv import db_fakes
 from nova.tests.virt.hyperv import fake
+from nova.tests.virt import test_driver
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import driver
@@ -163,7 +164,7 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         self._mox.StubOutWithMock(vmutils.VMUtils, 'set_nic_connection')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'get_vm_scsi_controller')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'get_vm_ide_controller')
-        self._mox.StubOutWithMock(vmutils.VMUtils, 'get_attached_disks_count')
+        self._mox.StubOutWithMock(vmutils.VMUtils, 'get_attached_disks')
         self._mox.StubOutWithMock(vmutils.VMUtils,
                                   'attach_volume_to_controller')
         self._mox.StubOutWithMock(vmutils.VMUtils,
@@ -251,8 +252,12 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         super(HyperVAPIBaseTestCase, self).tearDown()
 
 
-class HyperVAPITestCase(HyperVAPIBaseTestCase):
+class HyperVAPITestCase(HyperVAPIBaseTestCase,
+                        test_driver.DriverAPITestHelper):
     """Unit tests for Hyper-V driver calls."""
+
+    def test_public_api_signatures(self):
+        self.assertPublicAPISignatures(self._conn)
 
     def test_get_available_resource(self):
         cpu_info = {'Architecture': 'fake',
@@ -853,9 +858,9 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
                             func_call_matcher.call)
         self._mox.VerifyAll()
 
-        self.assertTrue(self._image_metadata and
-                        "disk_format" in self._image_metadata and
-                        self._image_metadata["disk_format"] == "vhd")
+        self.assertTrue(self._image_metadata)
+        self.assertIn("disk_format", self._image_metadata)
+        self.assertEqual("vhd", self._image_metadata["disk_format"])
 
         # Assert states changed in correct order
         self.assertIsNone(func_call_matcher.match())
@@ -1116,6 +1121,8 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         fake_mounted_disk = "fake_mounted_disk"
         fake_device_number = 0
         fake_controller_path = 'fake_scsi_controller_path'
+        self._mox.StubOutWithMock(self._conn._volumeops,
+                                  '_get_free_controller_slot')
 
         self._mock_login_storage_target(target_iqn, target_lun,
                                         target_portal,
@@ -1135,7 +1142,8 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             m.AndReturn(fake_controller_path)
 
             fake_free_slot = 1
-            m = vmutils.VMUtils.get_attached_disks_count(fake_controller_path)
+            m = self._conn._volumeops._get_free_controller_slot(
+                fake_controller_path)
             m.AndReturn(fake_free_slot)
 
         m = vmutils.VMUtils.attach_volume_to_controller(instance_name,
@@ -1727,3 +1735,17 @@ class VolumeOpsTestCase(HyperVAPIBaseTestCase):
                 self.assertRaises(exception.NotFound,
                                   self.volumeops._get_mounted_disk_from_lun,
                                   target_iqn, target_lun)
+
+    def test_get_free_controller_slot_exception(self):
+        fake_drive = mock.MagicMock()
+        type(fake_drive).AddressOnParent = mock.PropertyMock(
+            side_effect=xrange(constants.SCSI_CONTROLLER_SLOTS_NUMBER))
+        fake_scsi_controller_path = 'fake_scsi_controller_path'
+
+        with mock.patch.object(self.volumeops._vmutils,
+                'get_attached_disks') as fake_get_attached_disks:
+            fake_get_attached_disks.return_value = (
+                [fake_drive] * constants.SCSI_CONTROLLER_SLOTS_NUMBER)
+            self.assertRaises(vmutils.HyperVException,
+                              self.volumeops._get_free_controller_slot,
+                              fake_scsi_controller_path)

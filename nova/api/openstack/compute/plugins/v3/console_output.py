@@ -23,7 +23,7 @@ from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 
 ALIAS = "os-console-output"
 authorize = extensions.extension_authorizer('compute', "v3:" + ALIAS)
@@ -42,7 +42,8 @@ class ConsoleOutputController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        instance = common.get_instance(self.compute_api, context, id)
+        instance = common.get_instance(self.compute_api, context, id,
+                                       want_objects=True)
         length = body['get_console_output'].get('length')
         if length is not None and int(length) == -1:
             # NOTE: -1 means an unlimited length. So here translates it to None

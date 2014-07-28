@@ -24,7 +24,7 @@ import time
 from oslo.config import cfg
 
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
@@ -79,16 +79,16 @@ class Pdu(base.PowerManager):
         self.password = node['pm_password']
         self.port = node['terminal_port']
 
-        if self.node_id == None:
+        if self.node_id is None:
             raise exception.InvalidParameterValue(_("Node id not supplied "
                 "to PDU"))
-        if self.address == None:
+        if self.address is None:
             raise exception.InvalidParameterValue(_("Address not supplied "
                 "to PDU"))
-        if self.user == None:
+        if self.user is None:
             raise exception.InvalidParameterValue(_("User not supplied "
                 "to PDU"))
-        if self.password == None:
+        if self.password is None:
             raise exception.InvalidParameterValue(_("Password not supplied "
                 "to PDU"))
 

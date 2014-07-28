@@ -21,10 +21,10 @@ from nova import availability_zones
 from nova import context
 from nova import db
 from nova import exception
+from nova.i18n import _
 from nova.network import model as network_model
-from nova.objects import ec2 as ec2_obj
-from nova.objects import instance as instance_obj
-from nova.openstack.common.gettextutils import _
+from nova import objects
+from nova.objects import base as obj_base
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
 from nova.openstack.common import timeutils
@@ -160,7 +160,7 @@ def get_ip_info_for_instance_from_nw_info(nw_info):
 def get_ip_info_for_instance(context, instance):
     """Return a dictionary of IP information for an instance."""
 
-    if isinstance(instance, instance_obj.Instance):
+    if isinstance(instance, obj_base.NovaObject):
         nw_info = instance.info_cache.network_info
     else:
         # FIXME(comstud): Temporary as we transition to objects.
@@ -202,7 +202,8 @@ def ec2_inst_id_to_uuid(context, ec2_id):
 
 @memoize
 def get_instance_uuid_from_int_id(context, int_id):
-    return db.get_instance_uuid_by_ec2_id(context, int_id)
+    imap = objects.EC2InstanceMapping.get_by_id(context, int_id)
+    return imap.uuid
 
 
 def id_to_ec2_snap_id(snapshot_id):
@@ -300,9 +301,13 @@ def get_int_id_from_instance_uuid(context, instance_uuid):
     if instance_uuid is None:
         return
     try:
-        return db.get_ec2_instance_id_by_uuid(context, instance_uuid)
+        imap = objects.EC2InstanceMapping.get_by_uuid(context, instance_uuid)
+        return imap.id
     except exception.NotFound:
-        return db.ec2_instance_create(context, instance_uuid)['id']
+        imap = objects.EC2InstanceMapping(context)
+        imap.uuid = instance_uuid
+        imap.create()
+        return imap.id
 
 
 @memoize
@@ -310,18 +315,18 @@ def get_int_id_from_volume_uuid(context, volume_uuid):
     if volume_uuid is None:
         return
     try:
-        vmap = ec2_obj.VolumeMapping.get_by_uuid(context, volume_uuid)
+        vmap = objects.EC2VolumeMapping.get_by_uuid(context, volume_uuid)
         return vmap.id
     except exception.NotFound:
-        vmap = ec2_obj.VolumeMapping()
+        vmap = objects.EC2VolumeMapping(context)
         vmap.uuid = volume_uuid
-        vmap.create(context)
+        vmap.create()
         return vmap.id
 
 
 @memoize
 def get_volume_uuid_from_int_id(context, int_id):
-    vmap = ec2_obj.VolumeMapping.get_by_id(context, int_id)
+    vmap = objects.EC2VolumeMapping.get_by_id(context, int_id)
     return vmap.uuid
 
 

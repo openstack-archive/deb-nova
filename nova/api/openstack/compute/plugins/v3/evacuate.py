@@ -23,7 +23,7 @@ from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova import utils
@@ -55,7 +55,7 @@ class EvacuateController(wsgi.Controller):
         authorize(context)
 
         evacuate_body = body["evacuate"]
-        host = evacuate_body["host"]
+        host = evacuate_body.get("host")
         on_shared_storage = strutils.bool_from_string(
                                         evacuate_body["on_shared_storage"])
 
@@ -71,13 +71,19 @@ class EvacuateController(wsgi.Controller):
         elif not on_shared_storage:
             password = utils.generate_password()
 
-        try:
-            self.host_api.service_get_by_compute_host(context, host)
-        except exception.NotFound:
-            msg = _("Compute host %s not found.") % host
-            raise exc.HTTPNotFound(explanation=msg)
+        if host is not None:
+            try:
+                self.host_api.service_get_by_compute_host(context, host)
+            except exception.NotFound:
+                msg = _("Compute host %s not found.") % host
+                raise exc.HTTPNotFound(explanation=msg)
 
-        instance = common.get_instance(self.compute_api, context, id)
+        instance = common.get_instance(self.compute_api, context, id,
+                                       want_objects=True)
+        if instance.host == host:
+            msg = _("The target host can't be the same one.")
+            raise exc.HTTPBadRequest(explanation=msg)
+
         try:
             self.compute_api.evacuate(context, instance, host,
                                       on_shared_storage, password)

@@ -17,7 +17,6 @@ import datetime
 import functools
 import hashlib
 import importlib
-import multiprocessing
 import os
 import os.path
 import StringIO
@@ -309,20 +308,6 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertEqual(
             value, utils.get_hash_str(base_str))
 
-    def test_cpu_count(self):
-        def fake_cpu_count():
-            return 8
-        self.stubs.Set(multiprocessing, 'cpu_count', fake_cpu_count)
-
-        self.assertEqual(8, utils.cpu_count())
-
-    def test_cpu_count_not_implemented_returns_1(self):
-        def fake_cpu_count():
-            raise NotImplementedError()
-        self.stubs.Set(multiprocessing, 'cpu_count', fake_cpu_count)
-
-        self.assertEqual(1, utils.cpu_count())
-
 
 class MonkeyPatchTestCase(test.NoDBTestCase):
     """Unit test for utils.monkey_patch()."""
@@ -353,20 +338,20 @@ class MonkeyPatchTestCase(test.NoDBTestCase):
 
         self.assertEqual(ret_b, 8)
         package_a = self.example_package + 'example_a.'
-        self.assertTrue(package_a + 'example_function_a'
-            in nova.tests.monkey_patch_example.CALLED_FUNCTION)
+        self.assertIn(package_a + 'example_function_a',
+                      nova.tests.monkey_patch_example.CALLED_FUNCTION)
 
-        self.assertTrue(package_a + 'ExampleClassA.example_method'
-            in nova.tests.monkey_patch_example.CALLED_FUNCTION)
-        self.assertTrue(package_a + 'ExampleClassA.example_method_add'
-            in nova.tests.monkey_patch_example.CALLED_FUNCTION)
+        self.assertIn(package_a + 'ExampleClassA.example_method',
+                        nova.tests.monkey_patch_example.CALLED_FUNCTION)
+        self.assertIn(package_a + 'ExampleClassA.example_method_add',
+                        nova.tests.monkey_patch_example.CALLED_FUNCTION)
         package_b = self.example_package + 'example_b.'
-        self.assertFalse(package_b + 'example_function_b'
-            in nova.tests.monkey_patch_example.CALLED_FUNCTION)
-        self.assertFalse(package_b + 'ExampleClassB.example_method'
-            in nova.tests.monkey_patch_example.CALLED_FUNCTION)
-        self.assertFalse(package_b + 'ExampleClassB.example_method_add'
-            in nova.tests.monkey_patch_example.CALLED_FUNCTION)
+        self.assertNotIn(package_b + 'example_function_b',
+                         nova.tests.monkey_patch_example.CALLED_FUNCTION)
+        self.assertNotIn(package_b + 'ExampleClassB.example_method',
+                         nova.tests.monkey_patch_example.CALLED_FUNCTION)
+        self.assertNotIn(package_b + 'ExampleClassB.example_method_add',
+                         nova.tests.monkey_patch_example.CALLED_FUNCTION)
 
 
 class MonkeyPatchDefaultTestCase(test.NoDBTestCase):
@@ -977,3 +962,10 @@ class VersionTestCase(test.NoDBTestCase):
 
     def test_convert_version_to_tuple(self):
         self.assertEqual(utils.convert_version_to_tuple('6.7.0'), (6, 7, 0))
+
+
+class ConstantTimeCompareTestCase(test.NoDBTestCase):
+    def test_constant_time_compare(self):
+        self.assertTrue(utils.constant_time_compare("abcd1234", "abcd1234"))
+        self.assertFalse(utils.constant_time_compare("abcd1234", "a"))
+        self.assertFalse(utils.constant_time_compare("abcd1234", "ABCD234"))

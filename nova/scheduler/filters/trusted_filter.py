@@ -50,7 +50,7 @@ from oslo.config import cfg
 
 from nova import context
 from nova import db
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -176,7 +176,7 @@ class AttestationService(object):
         result = None
 
         status, data = self._request("POST", "PollHosts", hosts)
-        if data != None:
+        if data is not None:
             result = data.get('hosts')
 
         return result
@@ -281,8 +281,8 @@ class TrustedFilter(filters.BaseHostFilter):
         self.compute_attestation = ComputeAttestation()
 
     def host_passes(self, host_state, filter_properties):
-        instance = filter_properties.get('instance_type', {})
-        extra = instance.get('extra_specs', {})
+        instance_type = filter_properties.get('instance_type', {})
+        extra = instance_type.get('extra_specs', {})
         trust = extra.get('trust:trusted_host')
         host = host_state.host
         if trust:

@@ -19,23 +19,22 @@ Unit Tests for remote procedure calls using queue
 """
 
 import sys
-import testtools
 
 import mock
 import mox
 from oslo.config import cfg
+import testtools
 
 from nova import context
 from nova import db
 from nova import exception
 from nova import manager
+from nova.openstack.common import service as _service
 from nova import rpc
 from nova import service
 from nova import test
 from nova.tests import utils
 from nova import wsgi
-
-from nova.openstack.common import service as _service
 
 test_service_opts = [
     cfg.StrOpt("fake_manager",
@@ -104,7 +103,7 @@ class ServiceFlagsTestCase(test.TestCase):
         app.stop()
         ref = db.service_get(context.get_admin_context(), app.service_id)
         db.service_destroy(context.get_admin_context(), app.service_id)
-        self.assertTrue(not ref['disabled'])
+        self.assertFalse(ref['disabled'])
 
     def test_service_disabled_on_create_based_on_flag(self):
         self.flags(enable_new_services=False)
@@ -186,7 +185,7 @@ class ServiceTestCase(test.TestCase):
                                'nova.tests.test_service.FakeManager')
         serv.start()
 
-    def test_service_check_create_race(self):
+    def _test_service_check_create_race(self, ex):
         self.manager_mock = self.mox.CreateMock(FakeManager)
         self.mox.StubOutWithMock(sys.modules[__name__], 'FakeManager',
                                  use_mock_anything=True)
@@ -201,7 +200,6 @@ class ServiceTestCase(test.TestCase):
 
         db.service_get_by_args(mox.IgnoreArg(), self.host, self.binary
                                ).AndRaise(exception.NotFound)
-        ex = exception.ServiceTopicExists(host='foo', topic='bar')
         db.service_create(mox.IgnoreArg(), mox.IgnoreArg()
                           ).AndRaise(ex)
 
@@ -218,6 +216,14 @@ class ServiceTestCase(test.TestCase):
                                self.topic,
                                'nova.tests.test_service.FakeManager')
         self.assertRaises(TestException, serv.start)
+
+    def test_service_check_create_race_topic_exists(self):
+        ex = exception.ServiceTopicExists(host='foo', topic='bar')
+        self._test_service_check_create_race(ex)
+
+    def test_service_check_create_race_binary_exists(self):
+        ex = exception.ServiceBinaryExists(host='foo', binary='bar')
+        self._test_service_check_create_race(ex)
 
     def test_parent_graceful_shutdown(self):
         self.manager_mock = self.mox.CreateMock(FakeManager)
@@ -319,6 +325,20 @@ class TestWSGIService(test.TestCase):
         self.assertEqual("::1", test_service.host)
         self.assertNotEqual(0, test_service.port)
         test_service.stop()
+
+    def test_reset_pool_size_to_default(self):
+        test_service = service.WSGIService("test_service")
+        test_service.start()
+
+        # Stopping the service, which in turn sets pool size to 0
+        test_service.stop()
+        self.assertEqual(test_service.server._pool.size, 0)
+
+        # Resetting pool size to default
+        test_service.reset()
+        test_service.start()
+        self.assertEqual(test_service.server._pool.size,
+                         CONF.wsgi_default_pool_size)
 
 
 class TestLauncher(test.TestCase):

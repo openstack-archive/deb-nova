@@ -13,9 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import mock
+
 from nova.conductor import manager as conductor_manager
 from nova import db
 from nova.tests.integrated.v3 import test_servers
+from nova import utils
 
 
 class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
@@ -30,7 +33,8 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
         super(MigrateServerSamplesJsonTest, self).setUp()
         self.uuid = self._post_server()
 
-    def test_post_migrate(self):
+    @mock.patch('nova.conductor.manager.ComputeTaskManager._cold_migrate')
+    def test_post_migrate(self, mock_cold_migrate):
         # Get api samples to migrate server request.
         response = self._do_post('servers/%s/action' % self.uuid,
                                  'migrate-server', {})
@@ -55,7 +59,8 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
                            report_count=1,
                            updated_at='foo',
                            hypervisor_type='bar',
-                           hypervisor_version='1',
+                           hypervisor_version=utils.convert_version_to_int(
+                               '1.0'),
                            disabled=False)
             return {'compute_node': [service]}
         self.stubs.Set(db, "service_get_by_compute_host", fake_get_compute)

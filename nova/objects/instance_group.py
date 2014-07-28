@@ -14,9 +14,9 @@
 
 from nova import db
 from nova import exception
+from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova.objects import instance as instance_obj
 from nova.openstack.common import uuidutils
 
 
@@ -72,8 +72,8 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
         # db.api method for this yet.  Come back and optimize this by
         # adding a new query by name.  This is unnecessarily expensive if a
         # tenant has lots of groups.
-        igs = InstanceGroupList.get_by_project_id(context,
-                                                  context.project_id)
+        igs = objects.InstanceGroupList.get_by_project_id(context,
+                                                          context.project_id)
         for ig in igs:
             if ig.name == name:
                 return ig
@@ -154,8 +154,8 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
         if exclude:
             filter_uuids = set(filter_uuids) - set(exclude)
         filters = {'uuid': filter_uuids, 'deleted': False}
-        instances = instance_obj.InstanceList.get_by_filters(context,
-                                                             filters=filters)
+        instances = objects.InstanceList.get_by_filters(context,
+                                                        filters=filters)
         return list(set([instance.host for instance in instances
                          if instance.host]))
 
@@ -181,11 +181,11 @@ class InstanceGroupList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_by_project_id(cls, context, project_id):
         groups = db.instance_group_get_all_by_project_id(context, project_id)
-        return base.obj_make_list(context, InstanceGroupList(), InstanceGroup,
+        return base.obj_make_list(context, cls(context), objects.InstanceGroup,
                                   groups)
 
     @base.remotable_classmethod
     def get_all(cls, context):
         groups = db.instance_group_get_all(context)
-        return base.obj_make_list(context, InstanceGroupList(), InstanceGroup,
+        return base.obj_make_list(context, cls(context), objects.InstanceGroup,
                                   groups)

@@ -11,12 +11,13 @@
 #    under the License.
 
 import inspect
+
 import webob
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import exception
-from nova.openstack.common import gettextutils
+from nova import i18n
 from nova import test
 from nova.tests.api.openstack import fakes
 from nova.tests import utils
@@ -131,7 +132,7 @@ class RequestTest(test.NoDBTestCase):
                  'id2': compute_nodes[2]})
 
     def test_from_request(self):
-        self.stubs.Set(gettextutils, 'get_available_languages',
+        self.stubs.Set(i18n, 'get_available_languages',
                        fakes.fake_get_available_languages)
 
         request = wsgi.Request.blank('/')
@@ -142,7 +143,7 @@ class RequestTest(test.NoDBTestCase):
     def test_asterisk(self):
         # asterisk should match first available if there
         # are not any other available matches
-        self.stubs.Set(gettextutils, 'get_available_languages',
+        self.stubs.Set(i18n, 'get_available_languages',
                        fakes.fake_get_available_languages)
 
         request = wsgi.Request.blank('/')
@@ -151,7 +152,7 @@ class RequestTest(test.NoDBTestCase):
         self.assertEqual(request.best_match_language(), 'en_GB')
 
     def test_prefix(self):
-        self.stubs.Set(gettextutils, 'get_available_languages',
+        self.stubs.Set(i18n, 'get_available_languages',
                        fakes.fake_get_available_languages)
 
         request = wsgi.Request.blank('/')
@@ -160,7 +161,7 @@ class RequestTest(test.NoDBTestCase):
         self.assertEqual(request.best_match_language(), 'zh_CN')
 
     def test_secondary(self):
-        self.stubs.Set(gettextutils, 'get_available_languages',
+        self.stubs.Set(i18n, 'get_available_languages',
                        fakes.fake_get_available_languages)
 
         request = wsgi.Request.blank('/')
@@ -169,7 +170,7 @@ class RequestTest(test.NoDBTestCase):
         self.assertEqual(request.best_match_language(), 'en_GB')
 
     def test_none_found(self):
-        self.stubs.Set(gettextutils, 'get_available_languages',
+        self.stubs.Set(i18n, 'get_available_languages',
                        fakes.fake_get_available_languages)
 
         request = wsgi.Request.blank('/')
@@ -178,7 +179,7 @@ class RequestTest(test.NoDBTestCase):
         self.assertIs(request.best_match_language(), None)
 
     def test_no_lang_header(self):
-        self.stubs.Set(gettextutils, 'get_available_languages',
+        self.stubs.Set(i18n, 'get_available_languages',
                        fakes.fake_get_available_languages)
 
         request = wsgi.Request.blank('/')
@@ -279,7 +280,7 @@ class JSONDeserializerTest(test.NoDBTestCase):
         self.assertEqual(deserializer.deserialize(data), as_dict)
 
     def test_json_invalid_utf8(self):
-        """ Send invalid utf-8 to JSONDeserializer"""
+        """Send invalid utf-8 to JSONDeserializer."""
         data = """{"server": {"min_count": 1, "flavorRef": "1",
                 "name": "\xf0\x28\x8c\x28",
                 "imageRef": "10bab10c-1304-47d",
@@ -327,7 +328,7 @@ class XMLDeserializerTest(test.NoDBTestCase):
         self.assertEqual(deserializer.deserialize(xml), as_dict)
 
     def test_xml_invalid_utf8(self):
-        """ Send invalid utf-8 to XMLDeserializer"""
+        """Send invalid utf-8 to XMLDeserializer."""
         xml = """ <a><name>\xf0\x28\x8c\x28</name></a> """
         deserializer = wsgi.XMLDeserializer()
         self.assertRaises(exception.MalformedRequestBody,

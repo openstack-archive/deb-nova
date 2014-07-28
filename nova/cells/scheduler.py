@@ -30,10 +30,9 @@ from nova.compute import vm_states
 from nova import conductor
 from nova.db import base
 from nova import exception
+from nova.i18n import _
+from nova import objects
 from nova.objects import base as obj_base
-from nova.objects import instance as instance_obj
-from nova.objects import instance_action as instance_action_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.scheduler import utils as scheduler_utils
 from nova import utils
@@ -101,7 +100,7 @@ class CellsScheduler(base.Base):
         instances = []
         num_instances = len(instance_uuids)
         for i, instance_uuid in enumerate(instance_uuids):
-            instance = instance_obj.Instance()
+            instance = objects.Instance()
             instance.update(instance_values)
             instance.uuid = instance_uuid
             instance = self.compute_api.create_db_entry_for_new_instance(
@@ -120,7 +119,7 @@ class CellsScheduler(base.Base):
 
     def _create_action_here(self, ctxt, instance_uuids):
         for instance_uuid in instance_uuids:
-            instance_action_obj.InstanceAction.action_start(
+            objects.InstanceAction.action_start(
                     ctxt,
                     instance_uuid,
                     instance_actions.CREATE,

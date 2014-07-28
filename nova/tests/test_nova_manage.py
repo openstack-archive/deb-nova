@@ -13,15 +13,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import fixtures
 import StringIO
 import sys
+
+import fixtures
 
 from nova.cmd import manage
 from nova import context
 from nova import db
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova import test
 from nova.tests.db import fakes as db_fakes
 from nova.tests.objects import test_network
@@ -55,7 +56,7 @@ class FixedIpCommandsTestCase(test.TestCase):
         self.useFixture(fixtures.MonkeyPatch('sys.stdout',
                                              StringIO.StringIO()))
         self.commands.list()
-        self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
+        self.assertNotEqual(1, sys.stdout.getvalue().find('192.168.0.100'))
 
     def test_list_just_one_host(self):
         def fake_fixed_ip_get_by_host(*args, **kwargs):
@@ -67,7 +68,7 @@ class FixedIpCommandsTestCase(test.TestCase):
         self.useFixture(fixtures.MonkeyPatch('sys.stdout',
                                              StringIO.StringIO()))
         self.commands.list('banana')
-        self.assertTrue(sys.stdout.getvalue().find('192.168.0.100') != -1)
+        self.assertNotEqual(1, sys.stdout.getvalue().find('192.168.0.100'))
 
 
 class FloatingIpCommandsTestCase(test.TestCase):
@@ -90,21 +91,21 @@ class FloatingIpCommandsTestCase(test.TestCase):
         # /30
         expected = ["192.168.100.%s" % i for i in range(1, 3)]
         result = address_to_hosts('192.168.100.0/30')
-        self.assertTrue(len(list(result)) == 2)
+        self.assertEqual(2, len(list(result)))
         assert_loop(result, expected)
         # /29
         expected = ["192.168.100.%s" % i for i in range(1, 7)]
         result = address_to_hosts('192.168.100.0/29')
-        self.assertTrue(len(list(result)) == 6)
+        self.assertEqual(6, len(list(result)))
         assert_loop(result, expected)
         # /28
         expected = ["192.168.100.%s" % i for i in range(1, 15)]
         result = address_to_hosts('192.168.100.0/28')
-        self.assertTrue(len(list(result)) == 14)
+        self.assertEqual(14, len(list(result)))
         assert_loop(result, expected)
         # /16
         result = address_to_hosts('192.168.100.0/16')
-        self.assertTrue(len(list(result)) == 65534)
+        self.assertEqual(65534, len(list(result)))
         # NOTE(dripton): I don't test /13 because it makes the test take 3s.
         # /12 gives over a million IPs, which is ridiculous.
         self.assertRaises(exception.InvalidInput, address_to_hosts,
@@ -131,6 +132,7 @@ class NetworkCommandsTestCase(test.TestCase):
                     'dns1': '8.8.8.8',
                     'dns2': '8.8.4.4',
                     'vlan': 200,
+                    'vlan_start': 201,
                     'vpn_public_address': '10.0.0.2',
                     'vpn_public_port': '2222',
                     'vpn_private_address': '192.168.0.2',
@@ -168,7 +170,8 @@ class NetworkCommandsTestCase(test.TestCase):
             self.assertEqual(kwargs['multi_host'], False)
             self.assertEqual(kwargs['num_networks'], 1)
             self.assertEqual(kwargs['network_size'], 256)
-            self.assertEqual(kwargs['vlan_start'], 200)
+            self.assertEqual(kwargs['vlan'], 200)
+            self.assertEqual(kwargs['vlan_start'], 201)
             self.assertEqual(kwargs['vpn_start'], 2000)
             self.assertEqual(kwargs['cidr_v6'], 'fd00:2::/120')
             self.assertEqual(kwargs['gateway'], '10.2.0.1')
@@ -187,7 +190,8 @@ class NetworkCommandsTestCase(test.TestCase):
                             num_networks=1,
                             network_size=256,
                             multi_host='F',
-                            vlan_start=200,
+                            vlan=200,
+                            vlan_start=201,
                             vpn_start=2000,
                             cidr_v6='fd00:2::/120',
                             gateway='10.2.0.1',

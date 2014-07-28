@@ -38,17 +38,12 @@ from nova.compute import api as compute_api
 from nova.compute import vm_states
 from nova import db
 from nova import exception
+from nova.i18n import _
 from nova.image import s3
 from nova import network
 from nova.network.security_group import neutron_driver
 from nova import objects
 from nova.objects import base as obj_base
-from nova.objects import ec2 as ec2_obj
-from nova.objects import flavor as flavor_obj
-from nova.objects import instance as instance_obj
-from nova.objects import security_group as sec_group_obj
-from nova.objects import service as service_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova import quota
@@ -281,7 +276,7 @@ class CloudController(object):
             availability_zones.get_availability_zones(ctxt)
 
         # Available services
-        enabled_services = service_obj.ServiceList.get_all(context,
+        enabled_services = objects.ServiceList.get_all(context,
                 disabled=False, set_zones=True)
         zone_hosts = {}
         host_services = {}
@@ -584,7 +579,7 @@ class CloudController(object):
             source_project_id = self._get_source_project_id(context,
                 source_security_group_owner_id)
 
-            source_security_group = sec_group_obj.SecurityGroup.get_by_name(
+            source_security_group = objects.SecurityGroup.get_by_name(
                     context.elevated(),
                     source_project_id,
                     source_security_group_name)
@@ -689,7 +684,7 @@ class CloudController(object):
 
     def _get_source_project_id(self, context, source_security_group_owner_id):
         if source_security_group_owner_id:
-        # Parse user:project for source group.
+            # Parse user:project for source group.
             source_parts = source_security_group_owner_id.split(':')
 
             # If no project name specified, assume it's same as user name.
@@ -771,7 +766,8 @@ class CloudController(object):
             ec2_id = instance_id
         validate_ec2_id(ec2_id)
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-        instance = self.compute_api.get(context, instance_uuid)
+        instance = self.compute_api.get(context, instance_uuid,
+                                        want_objects=True)
         output = self.compute_api.get_console_output(context, instance)
         now = timeutils.utcnow()
         return {"InstanceId": ec2_id,
@@ -801,8 +797,7 @@ class CloudController(object):
         if volume.get('instance_uuid', None):
             instance_uuid = volume['instance_uuid']
             # Make sure instance exists
-            instance_obj.Instance.get_by_uuid(context.elevated(),
-                    instance_uuid)
+            objects.Instance.get_by_uuid(context.elevated(), instance_uuid)
 
             instance_ec2_id = ec2utils.id_to_ec2_inst_id(instance_uuid)
 
@@ -853,9 +848,9 @@ class CloudController(object):
                                         kwargs.get('description'),
                                         **create_kwargs)
 
-        vmap = ec2_obj.VolumeMapping()
+        vmap = objects.EC2VolumeMapping(context)
         vmap.uuid = volume['id']
-        vmap.create(context)
+        vmap.create()
 
         # TODO(vish): Instance should be None at db layer instead of
         #             trying to lazy load, but for now we turn it into
@@ -900,7 +895,7 @@ class CloudController(object):
         if volume.get('instance_uuid'):
             try:
                 inst_uuid = volume['instance_uuid']
-                return instance_obj.Instance.get_by_uuid(context, inst_uuid)
+                return objects.Instance.get_by_uuid(context, inst_uuid)
             except exception.InstanceNotFound:
                 pass
         raise exception.VolumeUnattached(volume_id=volume['id'])
@@ -1215,7 +1210,7 @@ class CloudController(object):
                                                                        address)
                 floatings.append(floating)
         else:
-            floatings = self.network_api.get_floating_ips(context)
+            floatings = self.network_api.get_floating_ips_by_project(context)
         addresses = [self._format_address(context, f) for f in floatings]
         return {'addressesSet': addresses}
 
@@ -1333,9 +1328,8 @@ class CloudController(object):
             msg = _('Image must be available')
             raise exception.ImageNotActive(message=msg)
 
-        flavor = flavor_obj.Flavor.get_by_name(context,
-                                               kwargs.get('instance_type',
-                                                          None))
+        flavor = objects.Flavor.get_by_name(context,
+                                            kwargs.get('instance_type', None))
 
         (instances, resv_id) = self.compute_api.create(context,
             instance_type=obj_base.obj_to_primitive(flavor),
@@ -1362,7 +1356,7 @@ class CloudController(object):
         if client_token:
             for ec2_id in instance_ids:
                 instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-                instance = instance_obj.Instance.get_by_uuid(context,
+                instance = objects.Instance.get_by_uuid(context,
                         instance_uuid, expected_attrs=['system_metadata'])
                 instance.system_metadata.update(
                         {'EC2_client_token': client_token})
@@ -1370,7 +1364,7 @@ class CloudController(object):
 
     def _get_client_token(self, context, instance_uuid):
         """Get client token for a given instance."""
-        instance = instance_obj.Instance.get_by_uuid(context,
+        instance = objects.Instance.get_by_uuid(context,
                 instance_uuid, expected_attrs=['system_metadata'])
         return instance.system_metadata.get('EC2_client_token')
 
@@ -1379,7 +1373,7 @@ class CloudController(object):
 
         for ec2_id in instance_ids:
             instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-            instance = instance_obj.Instance.get_by_uuid(context,
+            instance = objects.Instance.get_by_uuid(context,
                     instance_uuid, expected_attrs=['system_metadata'])
             instance.system_metadata.pop('EC2_client_token', None)
             instance.save()
@@ -1393,24 +1387,21 @@ class CloudController(object):
 
         for sys_meta in sys_metas:
             if sys_meta and sys_meta.get('value') == client_token:
-                instance = instance_obj.Instance.get_by_uuid(
+                instance = objects.Instance.get_by_uuid(
                     context, sys_meta['instance_id'], expected_attrs=None)
                 resv_id = instance.get('reservation_id')
                 break
         return resv_id
 
-    def _ec2_ids_to_instances(self, context, instance_id, objects=False):
+    def _ec2_ids_to_instances(self, context, instance_id):
         """Get all instances first, to prevent partial executions."""
         instances = []
         extra = ['system_metadata', 'metadata', 'info_cache']
         for ec2_id in instance_id:
             validate_ec2_id(ec2_id)
             instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, ec2_id)
-            if objects:
-                instance = instance_obj.Instance.get_by_uuid(
+            instance = objects.Instance.get_by_uuid(
                     context, instance_uuid, expected_attrs=extra)
-            else:
-                instance = self.compute_api.get(context, instance_uuid)
             instances.append(instance)
         return instances
 
@@ -1418,8 +1409,7 @@ class CloudController(object):
         """Terminate each instance in instance_id, which is a list of ec2 ids.
         instance_id is a kwarg so its name cannot be modified.
         """
-        previous_states = self._ec2_ids_to_instances(context, instance_id,
-                                                     objects=True)
+        previous_states = self._ec2_ids_to_instances(context, instance_id)
         self._remove_client_token(context, instance_id)
         LOG.debug("Going to start terminating instances")
         for instance in previous_states:
@@ -1430,8 +1420,7 @@ class CloudController(object):
 
     def reboot_instances(self, context, instance_id, **kwargs):
         """instance_id is a list of instance ids."""
-        instances = self._ec2_ids_to_instances(context, instance_id,
-                                               objects=True)
+        instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.audit(_("Reboot instance %r"), instance_id, context=context)
         for instance in instances:
             self.compute_api.reboot(context, instance, 'HARD')
@@ -1441,7 +1430,7 @@ class CloudController(object):
         """Stop each instances in instance_id.
         Here instance_id is a list of instance ids
         """
-        instances = self._ec2_ids_to_instances(context, instance_id, True)
+        instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.debug("Going to stop instances")
         for instance in instances:
             extensions.check_compute_policy(context, 'stop', instance)
@@ -1452,7 +1441,7 @@ class CloudController(object):
         """Start each instances in instance_id.
         Here instance_id is a list of instance ids
         """
-        instances = self._ec2_ids_to_instances(context, instance_id, True)
+        instances = self._ec2_ids_to_instances(context, instance_id)
         LOG.debug("Going to start instances")
         for instance in instances:
             extensions.check_compute_policy(context, 'start', instance)
@@ -1676,6 +1665,10 @@ class CloudController(object):
     # manipulating instances/volumes/snapshots.
     # As other code doesn't take it into consideration, here we don't
     # care of it for now. Ostrich algorithm
+    # TODO(mriedem): Consider auto-locking the instance when stopping it and
+    # doing the snapshot, then unlock it when that is done. Locking the
+    # instance in the database would prevent other APIs from changing the state
+    # of the instance during this operation for non-admin users.
     def create_image(self, context, instance_id, **kwargs):
         # NOTE(yamahata): name/description are ignored by register_image(),
         #                 do so here
@@ -1691,14 +1684,14 @@ class CloudController(object):
         if not self.compute_api.is_volume_backed_instance(context, instance):
             msg = _("Invalid value '%(ec2_instance_id)s' for instanceId. "
                     "Instance does not have a volume attached at root "
-                    "(%(root)s)") % {'root': instance['root_device_name'],
+                    "(%(root)s)") % {'root': instance.root_device_name,
                                      'ec2_instance_id': ec2_instance_id}
             raise exception.InvalidParameterValue(err=msg)
 
         # stop the instance if necessary
         restart_instance = False
         if not no_reboot:
-            vm_state = instance['vm_state']
+            vm_state = instance.vm_state
 
             # if the instance is in subtle state, refuse to proceed.
             if vm_state not in (vm_states.ACTIVE, vm_states.STOPPED):
@@ -1706,24 +1699,31 @@ class CloudController(object):
 
             if vm_state == vm_states.ACTIVE:
                 restart_instance = True
-                self.compute_api.stop(context, instance)
+                # NOTE(mriedem): We do a call here so that we're sure the
+                # stop request is complete before we begin polling the state.
+                self.compute_api.stop(context, instance, do_cast=False)
 
-            # wait instance for really stopped
+            # wait instance for really stopped (and not transitioning tasks)
             start_time = time.time()
-            while vm_state != vm_states.STOPPED:
+            while (vm_state != vm_states.STOPPED and
+                   instance.task_state is not None):
                 time.sleep(1)
-                instance = self.compute_api.get(context, instance_uuid,
-                                                want_objects=True)
-                vm_state = instance['vm_state']
+                instance.refresh()
+                vm_state = instance.vm_state
                 # NOTE(yamahata): timeout and error. 1 hour for now for safety.
                 #                 Is it too short/long?
                 #                 Or is there any better way?
                 timeout = 1 * 60 * 60
                 if time.time() > start_time + timeout:
-                    err = _("Couldn't stop instance within %d sec") % timeout
+                    err = (_("Couldn't stop instance %(instance)s within "
+                             "1 hour. Current vm_state: %(vm_state)s, "
+                             "current task_state: %(task_state)s") %
+                             {'instance': instance_uuid,
+                              'vm_state': vm_state,
+                              'task_state': instance.task_state})
                     raise exception.InternalError(message=err)
 
-        glance_uuid = instance['image_ref']
+        glance_uuid = instance.image_ref
         ec2_image_id = ec2utils.glance_id_to_ec2_id(context, glance_uuid)
         src_image = self._get_image(context, ec2_image_id)
         image_meta = dict(src_image)
@@ -1738,7 +1738,7 @@ class CloudController(object):
         _unmap_id_property(image_meta['properties'], 'ramdisk_id')
 
         # meaningful image name
-        name_map = dict(instance=instance['uuid'], now=timeutils.isotime())
+        name_map = dict(instance=instance_uuid, now=timeutils.isotime())
         name = name or _('image of %(instance)s at %(now)s') % name_map
 
         new_image = self.compute_api.snapshot_volume_backed(context,

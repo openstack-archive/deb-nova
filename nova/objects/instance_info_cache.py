@@ -16,9 +16,9 @@ from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
 from nova import db
 from nova import exception
+from nova.i18n import _
 from nova.objects import base
 from nova.objects import fields
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ class InstanceInfoCache(base.NovaPersistentObject, base.NovaObject):
         if not db_obj:
             raise exception.InstanceInfoCacheNotFound(
                     instance_uuid=instance_uuid)
-        return InstanceInfoCache._from_db_object(context, cls(), db_obj)
+        return cls._from_db_object(context, cls(context), db_obj)
 
     @staticmethod
     def _info_cache_cells_update(ctxt, info_cache):

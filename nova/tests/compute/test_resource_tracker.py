@@ -15,19 +15,20 @@
 
 """Tests for compute resource tracking."""
 
-import mock
 import uuid
 
+import mock
 from oslo.config import cfg
 
 from nova.compute import flavors
 from nova.compute import resource_tracker
+from nova.compute import resources
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import db
+from nova import objects
 from nova.objects import base as obj_base
-from nova.objects import migration as migration_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova import rpc
@@ -45,6 +46,7 @@ ROOT_GB = 5
 EPHEMERAL_GB = 1
 FAKE_VIRT_LOCAL_GB = ROOT_GB + EPHEMERAL_GB
 FAKE_VIRT_VCPUS = 1
+RESOURCE_NAMES = ['vcpu']
 CONF = cfg.CONF
 
 
@@ -160,8 +162,10 @@ class BaseTestCase(test.TestCase):
             "current_workload": 1,
             "running_vms": 0,
             "cpu_info": None,
-            "stats": [{"key": "num_instances", "value": "1"}],
-           "hypervisor_hostname": "fakenode",
+            "stats": {
+                "num_instances": "1",
+            },
+            "hypervisor_hostname": "fakenode",
         }
         if values:
             compute.update(values)
@@ -314,6 +318,8 @@ class BaseTestCase(test.TestCase):
         driver = self._driver()
 
         tracker = resource_tracker.ResourceTracker(host, driver, node)
+        tracker.ext_resources_handler = \
+            resources.ResourceHandler(RESOURCE_NAMES, True)
         return tracker
 
 
@@ -425,6 +431,7 @@ class BaseTrackerTestCase(BaseTestCase):
 
         self.updated = False
         self.deleted = False
+        self.update_call_count = 0
 
         self.tracker = self._tracker()
         self._migrations = {}
@@ -450,9 +457,8 @@ class BaseTrackerTestCase(BaseTestCase):
 
     def _fake_compute_node_update(self, ctx, compute_node_id, values,
             prune_stats=False):
+        self.update_call_count += 1
         self.updated = True
-        values['stats'] = [{"key": "num_instances", "value": "1"}]
-
         self.compute.update(values)
         return self.compute
 
@@ -564,6 +570,38 @@ class TrackerPciStatsTestCase(BaseTrackerTestCase):
 
     def _driver(self):
         return FakeVirtDriver(pci_support=True)
+
+
+class TrackerExtraResourcesTestCase(BaseTrackerTestCase):
+
+    def setUp(self):
+        super(TrackerExtraResourcesTestCase, self).setUp()
+        self.driver = self._driver()
+
+    def _driver(self):
+        return FakeVirtDriver()
+
+    def test_set_empty_ext_resources(self):
+        resources = self.driver.get_available_resource(self.tracker.nodename)
+        self.assertNotIn('stats', resources)
+        self.tracker._write_ext_resources(resources)
+        self.assertIn('stats', resources)
+
+    def test_set_extra_resources(self):
+        def fake_write_resources(resources):
+            resources['stats']['resA'] = '123'
+            resources['stats']['resB'] = 12
+
+        self.stubs.Set(self.tracker.ext_resources_handler,
+                       'write_resources',
+                       fake_write_resources)
+
+        resources = self.driver.get_available_resource(self.tracker.nodename)
+        self.tracker._write_ext_resources(resources)
+
+        expected = {"resA": "123", "resB": 12}
+        self.assertEqual(sorted(expected),
+                         sorted(resources['stats']))
 
 
 class InstanceClaimTestCase(BaseTrackerTestCase):
@@ -802,7 +840,7 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
             self._migrations[mig_self.instance_uuid] = mig_self
             mig_self.obj_reset_changes()
 
-        self.stubs.Set(migration_obj.Migration, 'create',
+        self.stubs.Set(objects.Migration, 'create',
                        _fake_migration_create)
 
         self.instance = self._fake_instance()
@@ -827,7 +865,7 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
         if values:
             mig_dict.update(values)
 
-        migration = migration_obj.Migration()
+        migration = objects.Migration()
         migration.update(mig_dict)
         # This hits the stub in setUp()
         migration.create('fake')
@@ -1042,6 +1080,13 @@ class NoInstanceTypesInSysMetadata(ResizeClaimTestCase):
         super(NoInstanceTypesInSysMetadata, self).setUp()
         self.instance = self._fake_instance(stash=False)
 
+    def test_get_instance_type_stash_false(self):
+        with (mock.patch.object(objects.Flavor, 'get_by_id',
+                                return_value=self.instance_type)):
+            flavor = self.tracker._get_instance_type(self.context,
+                                                     self.instance, "new_")
+            self.assertEqual(self.instance_type, flavor)
+
 
 class OrphanTestCase(BaseTrackerTestCase):
     def _driver(self):
@@ -1137,3 +1182,20 @@ class ComputeMonitorTestCase(BaseTestCase):
             self.context, 'compute.metrics.update', payload)
 
         self.assertEqual(metrics, expected_metrics)
+
+
+class TrackerPeriodicTestCase(BaseTrackerTestCase):
+
+    def test_periodic_status_update(self):
+        # verify update called on instantiation
+        self.assertEqual(1, self.update_call_count)
+
+        # verify update not called if no change to resources
+        self.tracker.update_available_resource(self.context)
+        self.assertEqual(1, self.update_call_count)
+
+        # verify update is called when resources change
+        driver = self.tracker.driver
+        driver.memory_mb += 1
+        self.tracker.update_available_resource(self.context)
+        self.assertEqual(2, self.update_call_count)

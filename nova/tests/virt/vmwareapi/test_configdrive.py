@@ -14,21 +14,21 @@
 #    under the License.
 
 import contextlib
-import copy
-import fixtures
 
+import fixtures
 import mock
 import mox
 
 from nova import context
 from nova.image import glance
 from nova import test
+from nova.tests import fake_instance
 import nova.tests.image.fake
 from nova.tests import utils
+from nova.tests.virt.vmwareapi import fake as vmwareapi_fake
 from nova.tests.virt.vmwareapi import stubs
 from nova.virt import fake
 from nova.virt.vmwareapi import driver
-from nova.virt.vmwareapi import fake as vmwareapi_fake
 from nova.virt.vmwareapi import read_write_util
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
@@ -56,29 +56,29 @@ class ConfigDriveTestCase(test.NoDBTestCase):
         self.node_name = '%s(%s)' % (self.conn.dict_mors.keys()[0],
                                      cluster_name)
         image_ref = nova.tests.image.fake.get_valid_image_id()
-        self.test_instance = {'node': 'test_url',
-                              'vm_state': 'building',
-                              'project_id': 'fake',
-                              'user_id': 'fake',
-                              'name': '1',
-                              'kernel_id': '1',
-                              'ramdisk_id': '1',
-                              'mac_addresses': [
-                                  {'address': 'de:ad:be:ef:be:ef'}
-                              ],
-                              'memory_mb': 8192,
-                              'flavor': 'm1.large',
-                              'vcpus': 4,
-                              'root_gb': 80,
-                              'image_ref': image_ref,
-                              'host': 'fake_host',
-                              'task_state':
-                                  'scheduling',
-                              'reservation_id': 'r-3t8muvr0',
-                              'id': 1,
-                              'uuid': 'fake-uuid',
-                              'node': self.node_name,
-                              'metadata': []}
+        instance_values = {
+            'vm_state': 'building',
+            'project_id': 'fake',
+            'user_id': 'fake',
+            'name': '1',
+            'kernel_id': '1',
+            'ramdisk_id': '1',
+            'mac_addresses': [{'address': 'de:ad:be:ef:be:ef'}],
+            'memory_mb': 8192,
+            'flavor': 'm1.large',
+            'vcpus': 4,
+            'root_gb': 80,
+            'image_ref': image_ref,
+            'host': 'fake_host',
+            'task_state': 'scheduling',
+            'reservation_id': 'r-3t8muvr0',
+            'id': 1,
+            'uuid': 'fake-uuid',
+            'node': self.node_name,
+            'metadata': []
+        }
+        self.test_instance = fake_instance.fake_instance_obj(self.context,
+                                                             **instance_values)
 
         (image_service, image_id) = glance.get_remote_image_service(context,
                                     image_ref)
@@ -118,12 +118,13 @@ class ConfigDriveTestCase(test.NoDBTestCase):
         vmwareapi_fake.cleanup()
         nova.tests.image.fake.FakeImageService_reset()
 
-    def _spawn_vm(self, injected_files=[], admin_password=None,
+    def _spawn_vm(self, injected_files=None, admin_password=None,
                   block_device_info=None):
 
+        injected_files = injected_files or []
         read_file_handle = mock.MagicMock()
         write_file_handle = mock.MagicMock()
-        self.image_ref = self.instance['image_ref']
+        self.image_ref = self.test_instance.image_ref
 
         def fake_read_handle(read_iter):
             return read_file_handle
@@ -149,7 +150,7 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                                 side_effect=fake_read_handle),
              mock.patch.object(vmware_images, 'start_transfer')
         ) as (fake_http_write, fake_glance_read, fake_start_transfer):
-            self.conn.spawn(self.context, self.instance, self.image,
+            self.conn.spawn(self.context, self.test_instance, self.image,
                         injected_files=injected_files,
                         admin_password=admin_password,
                         network_info=self.network_info,
@@ -159,17 +160,17 @@ class ConfigDriveTestCase(test.NoDBTestCase):
                 write_file_handle=write_file_handle)
 
     def test_create_vm_with_config_drive_verify_method_invocation(self):
-        self.instance = copy.deepcopy(self.test_instance)
-        self.instance['config_drive'] = True
+        self.test_instance.config_drive = 'True'
         self.mox.StubOutWithMock(vmops.VMwareVMOps, '_create_config_drive')
         self.mox.StubOutWithMock(vmops.VMwareVMOps, '_attach_cdrom_to_vm')
-        self.conn._vmops._create_config_drive(self.instance,
+        self.conn._vmops._create_config_drive(self.test_instance,
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
-                                               mox.IgnoreArg())
+                                               mox.IgnoreArg()
+                                               ).AndReturn('[ds1] fake.iso')
         self.conn._vmops._attach_cdrom_to_vm(mox.IgnoreArg(),
                                                mox.IgnoreArg(),
                                                mox.IgnoreArg(),
@@ -182,8 +183,7 @@ class ConfigDriveTestCase(test.NoDBTestCase):
         self._spawn_vm()
 
     def test_create_vm_without_config_drive(self):
-        self.instance = copy.deepcopy(self.test_instance)
-        self.instance['config_drive'] = False
+        self.test_instance.config_drive = None
         self.mox.StubOutWithMock(vmops.VMwareVMOps, '_create_config_drive')
         self.mox.StubOutWithMock(vmops.VMwareVMOps, '_attach_cdrom_to_vm')
         self.mox.ReplayAll()
@@ -193,6 +193,5 @@ class ConfigDriveTestCase(test.NoDBTestCase):
         self._spawn_vm()
 
     def test_create_vm_with_config_drive(self):
-        self.instance = copy.deepcopy(self.test_instance)
-        self.instance['config_drive'] = True
+        self.test_instance.config_drive = 'True'
         self._spawn_vm()

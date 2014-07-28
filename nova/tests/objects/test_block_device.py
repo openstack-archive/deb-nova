@@ -21,7 +21,6 @@ from nova import db
 from nova import exception
 from nova import objects
 from nova.objects import block_device as block_device_obj
-from nova.objects import instance as instance_obj
 from nova.tests import fake_block_device
 from nova.tests import fake_instance
 from nova.tests.objects import test_objects
@@ -44,7 +43,12 @@ class _TestBlockDeviceMappingObject(object):
             fake_bdm['instance'] = instance
         return fake_bdm
 
-    def test_save(self):
+    def _test_save(self, cell_type=None):
+        if cell_type:
+            self.flags(enable=True, cell_type=cell_type, group='cells')
+        else:
+            self.flags(enable=False, group='cells')
+
         fake_bdm = self.fake_bdm()
         with contextlib.nested(
             mock.patch.object(
@@ -60,11 +64,27 @@ class _TestBlockDeviceMappingObject(object):
             bdm_update_mock.assert_called_once_with(
                     self.context, 123, {'volume_id': 'fake_volume_id'},
                     legacy=False)
-            cells_update_mock.assert_called_once_with(self.context, fake_bdm)
+            if cell_type != 'compute':
+                self.assertFalse(cells_update_mock.called)
+            else:
+                self.assertEqual(1, cells_update_mock.call_count)
+                self.assertTrue(len(cells_update_mock.call_args[0]) > 1)
+                self.assertIsInstance(cells_update_mock.call_args[0][1],
+                                      block_device_obj.BlockDeviceMapping)
+                self.assertEqual(cells_update_mock.call_args[1], {})
+
+    def test_save_nocells(self):
+        self._test_save()
+
+    def test_save_apicell(self):
+        self._test_save(cell_type='api')
+
+    def test_save_computecell(self):
+        self._test_save(cell_type='compute')
 
     def test_save_instance_changed(self):
         bdm_object = objects.BlockDeviceMapping()
-        bdm_object.instance = instance_obj.Instance()
+        bdm_object.instance = objects.Instance()
         self.assertRaises(exception.ObjectActionError,
                           bdm_object.save, self.context)
 
@@ -109,7 +129,11 @@ class _TestBlockDeviceMappingObject(object):
                                               ['instance'])
         self.assertRemotes()
 
-    def test_create_mocked(self):
+    def _test_create_mocked(self, cell_type=None):
+        if cell_type:
+            self.flags(enable=True, cell_type=cell_type, group='cells')
+        else:
+            self.flags(enable=False, group='cells')
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
                   'destination_type': 'volume',
                   'instance_uuid': 'fake-instance'}
@@ -122,11 +146,34 @@ class _TestBlockDeviceMappingObject(object):
                               'bdm_update_or_create_at_top')
         ) as (bdm_create_mock, cells_update_mock):
             bdm = objects.BlockDeviceMapping(**values)
-            bdm.create(self.context)
-            bdm_create_mock.assert_called_once_with(
+
+            if cell_type == 'api':
+                self.assertRaises(exception.ObjectActionError,
+                                  bdm.create, self.context)
+            elif cell_type == 'compute':
+                bdm.create(self.context)
+                bdm_create_mock.assert_called_once_with(
                     self.context, values, legacy=False)
-            cells_update_mock.assert_called_once_with(
-                    self.context, fake_bdm, create=True)
+                self.assertEqual(1, cells_update_mock.call_count)
+                self.assertTrue(len(cells_update_mock.call_args[0]) > 1)
+                self.assertIsInstance(cells_update_mock.call_args[0][1],
+                                      block_device_obj.BlockDeviceMapping)
+                self.assertEqual(cells_update_mock.call_args[1],
+                                 {'create': True})
+            else:
+                bdm.create(self.context)
+                self.assertFalse(cells_update_mock.called)
+                bdm_create_mock.assert_called_once_with(
+                    self.context, values, legacy=False)
+
+    def test_create_nocells(self):
+        self._test_create_mocked()
+
+    def test_create_apicell(self):
+        self._test_create_mocked(cell_type='api')
+
+    def test_create_computecell(self):
+        self._test_create_mocked(cell_type='compute')
 
     def test_create(self):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
@@ -154,15 +201,19 @@ class _TestBlockDeviceMappingObject(object):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
                   'destination_type': 'volume',
                   'instance_uuid': 'fake-instance',
-                  'instance': instance_obj.Instance()}
+                  'instance': objects.Instance()}
         bdm = objects.BlockDeviceMapping(**values)
         self.assertRaises(exception.ObjectActionError,
                           bdm.create, self.context)
 
-    def test_destroy_mocked(self):
+    def _test_destroy_mocked(self, cell_type=None):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
                   'destination_type': 'volume', 'id': 1,
                   'instance_uuid': 'fake-instance', 'device_name': 'fake'}
+        if cell_type:
+            self.flags(enable=True, cell_type=cell_type, group='cells')
+        else:
+            self.flags(enable=False, group='cells')
         with contextlib.nested(
             mock.patch.object(db, 'block_device_mapping_destroy'),
             mock.patch.object(cells_rpcapi.CellsAPI, 'bdm_destroy_at_top')
@@ -170,10 +221,22 @@ class _TestBlockDeviceMappingObject(object):
             bdm = objects.BlockDeviceMapping(**values)
             bdm.destroy(self.context)
             bdm_del.assert_called_once_with(self.context, values['id'])
-            cells_destroy.assert_called_once_with(
-                self.context, values['instance_uuid'],
-                device_name=values['device_name'],
-                volume_id=values['volume_id'])
+            if cell_type != 'compute':
+                self.assertFalse(cells_destroy.called)
+            else:
+                cells_destroy.assert_called_once_with(
+                    self.context, values['instance_uuid'],
+                    device_name=values['device_name'],
+                    volume_id=values['volume_id'])
+
+    def test_destroy_nocells(self):
+        self._test_destroy_mocked()
+
+    def test_destroy_apicell(self):
+        self._test_destroy_mocked(cell_type='api')
+
+    def test_destroy_computecell(self):
+        self._test_destroy_mocked(cell_type='compute')
 
 
 class TestBlockDeviceMappingObject(test_objects._LocalTest,

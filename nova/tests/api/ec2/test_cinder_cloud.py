@@ -30,7 +30,7 @@ from nova.compute import utils as compute_utils
 from nova import context
 from nova import db
 from nova import exception
-from nova.objects import instance as instance_obj
+from nova import objects
 from nova import test
 from nova.tests import cast_as_call
 from nova.tests import fake_network
@@ -515,9 +515,9 @@ class CinderCloudTestCase(test.TestCase):
     def _tearDownBlockDeviceMapping(self, inst1, inst2, volumes):
         for vol in volumes:
             self.volume_api.delete(self.context, vol['id'])
-        for uuid in (inst1['uuid'], inst2['uuid']):
+        for instance_uuid in (inst1['uuid'], inst2['uuid']):
             for bdm in db.block_device_mapping_get_all_by_instance(
-                    self.context, uuid):
+                    self.context, instance_uuid):
                 db.block_device_mapping_destroy(self.context, bdm['id'])
         db.instance_destroy(self.context, inst2['uuid'])
         db.instance_destroy(self.context, inst1['uuid'])
@@ -557,7 +557,7 @@ class CinderCloudTestCase(test.TestCase):
          'ebs': {'status': 'attached',
                  'deleteOnTermination': False,
                  'volumeId': 'vol-0000000b', }}]
-        # NOTE(yamahata): swap/ephemeral device case isn't supported yet.
+    # NOTE(yamahata): swap/ephemeral device case isn't supported yet.
 
     _expected_instance_bdm2 = {
         'instanceId': 'i-00000002',
@@ -815,8 +815,7 @@ class CinderCloudTestCase(test.TestCase):
 
         self.assertEqual(len(vols), 2)
         for vol in vols:
-            self.assertTrue(str(vol['id']) == str(vol1_uuid) or
-                str(vol['id']) == str(vol2_uuid))
+            self.assertIn(str(vol['id']), [str(vol1_uuid), str(vol2_uuid)])
             if str(vol['id']) == str(vol1_uuid):
                 self.volume_api.attach(self.context, vol['id'],
                                        instance_uuid, '/dev/sdb')
@@ -847,10 +846,8 @@ class CinderCloudTestCase(test.TestCase):
         vols = [v for v in vols if v['instance_uuid'] == instance_uuid]
         self.assertEqual(len(vols), 2)
         for vol in vols:
-            self.assertTrue(str(vol['id']) == str(vol1_uuid) or
-                            str(vol['id']) == str(vol2_uuid))
-            self.assertTrue(vol['mountpoint'] == '/dev/sdb' or
-                            vol['mountpoint'] == '/dev/sdc')
+            self.assertIn(str(vol['id']), [str(vol1_uuid), str(vol2_uuid)])
+            self.assertIn(vol['mountpoint'], ['/dev/sdb', '/dev/sdc'])
             self.assertEqual(vol['instance_uuid'], instance_uuid)
             self.assertEqual(vol['status'], "in-use")
             self.assertEqual(vol['attach_status'], "attached")
@@ -898,8 +895,7 @@ class CinderCloudTestCase(test.TestCase):
         vol = self.volume_api.get(self.context, vol2_uuid)
         self._assert_volume_detached(vol)
 
-        inst_obj = instance_obj.Instance.get_by_uuid(self.context,
-                                                         instance_uuid)
+        inst_obj = objects.Instance.get_by_uuid(self.context, instance_uuid)
         self.cloud.compute_api.attach_volume(self.context,
                                              inst_obj,
                                              volume_id=vol2_uuid,

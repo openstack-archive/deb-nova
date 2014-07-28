@@ -77,8 +77,8 @@ from oslo.config import cfg
 from nova import block_device
 from nova.compute import flavors
 from nova import exception
+from nova.i18n import _
 from nova.objects import base as obj_base
-from nova.openstack.common.gettextutils import _
 from nova.virt import block_device as driver_block_device
 from nova.virt import configdrive
 from nova.virt import driver
@@ -345,9 +345,10 @@ def get_config_drive_type():
     return config_drive_type
 
 
-def get_info_from_bdm(virt_type, bdm, mapping={}, disk_bus=None,
+def get_info_from_bdm(virt_type, bdm, mapping=None, disk_bus=None,
                       dev_type=None, allowed_types=None,
                       assigned_devices=None):
+    mapping = mapping or {}
     allowed_types = allowed_types or SUPPORTED_DEVICE_TYPES
     device_name = block_device.strip_dev(get_device_name(bdm))
 

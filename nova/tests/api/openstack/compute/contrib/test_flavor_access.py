@@ -84,7 +84,7 @@ def _has_flavor_access(flavorid, projectid):
 def fake_get_all_flavors_sorted_list(context, inactive=False,
                                      filters=None, sort_key='flavorid',
                                      sort_dir='asc', limit=None, marker=None):
-    if filters == None or filters['is_public'] == None:
+    if filters is None or filters['is_public'] is None:
         return sorted(INSTANCE_TYPES.values(), key=lambda item: item[sort_key])
 
     res = {}
@@ -285,6 +285,18 @@ class FlavorAccessTest(test.NoDBTestCase):
                           self.flavor_action_controller._addTenantAccess,
                           req, '2', body)
 
+    def test_add_tenant_access_with_no_tenant(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/flavors/2/action',
+                                      use_admin_context=True)
+        body = {'addTenantAccess': {'foo': 'proj2'}}
+        self.assertRaises(exc.HTTPBadRequest,
+                          self.flavor_action_controller._addTenantAccess,
+                          req, '2', body)
+        body = {'addTenantAccess': {'tenant': ''}}
+        self.assertRaises(exc.HTTPBadRequest,
+                          self.flavor_action_controller._addTenantAccess,
+                          req, '2', body)
+
     def test_add_tenant_access_with_already_added_access(self):
         def stub_add_flavor_access(context, flavorid, projectid):
             raise exception.FlavorAccessExists(flavor_id=flavorid,
@@ -306,6 +318,18 @@ class FlavorAccessTest(test.NoDBTestCase):
         self.assertRaises(exc.HTTPNotFound,
                           self.flavor_action_controller._removeTenantAccess,
                           self.req, '3', body)
+
+    def test_delete_tenant_access_with_no_tenant(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/flavors/2/action',
+                                      use_admin_context=True)
+        body = {'removeTenantAccess': {'foo': 'proj2'}}
+        self.assertRaises(exc.HTTPBadRequest,
+                          self.flavor_action_controller._removeTenantAccess,
+                          req, '2', body)
+        body = {'removeTenantAccess': {'tenant': ''}}
+        self.assertRaises(exc.HTTPBadRequest,
+                          self.flavor_action_controller._removeTenantAccess,
+                          req, '2', body)
 
     def test_remove_tenant_access_with_no_admin_user(self):
         req = fakes.HTTPRequest.blank('/v2/fake/flavors/2/action',

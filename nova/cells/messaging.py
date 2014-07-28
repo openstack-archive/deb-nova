@@ -44,12 +44,11 @@ from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
 from nova.db import base
 from nova import exception
+from nova.i18n import _
 from nova.network import model as network_model
+from nova import objects
 from nova.objects import base as objects_base
-from nova.objects import instance as instance_obj
-from nova.objects import instance_fault as instance_fault_obj
 from nova.openstack.common import excutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -683,10 +682,17 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         # FIXME(comstud): This is temporary/transitional until I can
         # work out a better way to pass full objects down.
         EXPECTS_OBJECTS = ['start', 'stop', 'delete_instance_metadata',
-                           'update_instance_metadata']
+                           'update_instance_metadata', 'shelve', 'unshelve']
         if method in EXPECTS_OBJECTS:
-            inst_obj = instance_obj.Instance()
-            inst_obj._from_db_object(message.ctxt, inst_obj, instance)
+            inst_obj = objects.Instance()
+            expected_attrs = None
+            # shelve and unshelve requires 'info_cache' and 'metadata',
+            # because of this fetching same from database.
+            if method in ['shelve', 'unshelve']:
+                expected_attrs = ['metadata', 'info_cache']
+
+            inst_obj._from_db_object(message.ctxt, inst_obj, instance,
+                                     expected_attrs=expected_attrs)
             instance = inst_obj
         args[0] = instance
         return fn(message.ctxt, *args, **method_info['method_kwargs'])
@@ -1096,7 +1102,7 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         log_str = _("Got message to create instance fault: "
                     "%(instance_fault)s")
         LOG.debug(log_str, {'instance_fault': instance_fault})
-        fault = instance_fault_obj.InstanceFault(context=message.ctxt)
+        fault = objects.InstanceFault(context=message.ctxt)
         fault.update(instance_fault)
         fault.create()
 

@@ -18,6 +18,7 @@
 Manage hosts in the current zone.
 """
 
+from nova.openstack.common import jsonutils
 from nova.scheduler import host_manager
 
 
@@ -40,24 +41,26 @@ class BaremetalNodeState(host_manager.HostState):
         self.vcpus_total = compute['vcpus']
         self.vcpus_used = compute['vcpus_used']
 
+        stats = compute.get('stats', '{}')
+        self.stats = jsonutils.loads(stats)
+
     def consume_from_instance(self, instance):
         self.free_ram_mb = 0
         self.free_disk_mb = 0
         self.vcpus_used = self.vcpus_total
 
 
-def new_host_state(self, host, node, capabilities=None, service=None):
-    """Returns an instance of BaremetalHostState or HostState according to
-    capabilities. If 'baremetal_driver' is in capabilities, it returns an
-    instance of BaremetalHostState. If not, returns an instance of HostState.
+def new_host_state(self, host, node, **kwargs):
+    """Returns an instance of BaremetalNodeState or HostState according to
+    compute['cpu_info']. If 'cpu_info' equals 'baremetal cpu', it returns an
+    instance of BaremetalNodeState. If not, returns an instance of HostState.
     """
-    if capabilities is None:
-        capabilities = {}
-    cap = capabilities.get('compute', {})
-    if bool(cap.get('baremetal_driver')):
-        return BaremetalNodeState(host, node, capabilities, service)
+    compute = kwargs.get('compute')
+
+    if compute and compute.get('cpu_info') == 'baremetal cpu':
+        return BaremetalNodeState(host, node, **kwargs)
     else:
-        return host_manager.HostState(host, node, capabilities, service)
+        return host_manager.HostState(host, node, **kwargs)
 
 
 class BaremetalHostManager(host_manager.HostManager):

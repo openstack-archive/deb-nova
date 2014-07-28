@@ -33,9 +33,8 @@ from nova import block_device
 from nova import compute
 from nova.compute import flavors
 from nova import exception
+from nova.i18n import _
 from nova import objects
-from nova.objects import instance as instance_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
@@ -607,7 +606,7 @@ class Controller(wsgi.Controller):
             log_msg = _("Flavor '%s' could not be found ")
             LOG.debug(log_msg, search_opts['flavor'])
             # TODO(mriedem): Move to ObjectListBase.__init__ for empty lists.
-            instance_list = instance_obj.InstanceList(objects=[])
+            instance_list = objects.InstanceList(objects=[])
 
         if is_detail:
             instance_list.fill_faults()
@@ -987,6 +986,7 @@ class Controller(wsgi.Controller):
                 exception.InvalidMetadata,
                 exception.InvalidRequest,
                 exception.MultiplePortsNotApplicable,
+                exception.InvalidFixedIpAndMaxCountRequest,
                 exception.NetworkNotFound,
                 exception.PortNotFound,
                 exception.FixedIpAlreadyInUse,
@@ -994,6 +994,7 @@ class Controller(wsgi.Controller):
                 exception.InvalidBDM,
                 exception.PortRequiresFixedIP,
                 exception.NetworkRequiresSubnet,
+                exception.InstanceUserDataTooLarge,
                 exception.InstanceUserDataMalformed) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
@@ -1188,6 +1189,8 @@ class Controller(wsgi.Controller):
         except exception.Invalid:
             msg = _("Invalid instance image.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.NoValidHost as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return webob.Response(status_int=202)
 
@@ -1263,7 +1266,7 @@ class Controller(wsgi.Controller):
     @wsgi.action('changePassword')
     def _action_change_password(self, req, id, body):
         context = req.environ['nova.context']
-        if (not 'changePassword' in body
+        if ('changePassword' not in body
                 or 'adminPass' not in body['changePassword']):
             msg = _("No adminPass was specified")
             raise exc.HTTPBadRequest(explanation=msg)

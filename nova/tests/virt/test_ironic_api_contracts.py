@@ -30,7 +30,7 @@ class IronicAPIContractsTestCase(test.NoDBTestCase):
     def test_HostState_signatures(self):
         self._check_method(host_manager.HostState.__init__,
                            "HostState.__init__",
-                           ['self', 'host', 'node', 'capabilities', 'service'])
+                           ['self', 'host', 'node', 'compute'])
 
     def test_HostManager_signatures(self):
         self._check_method(host_manager.HostManager.__init__,
@@ -92,7 +92,8 @@ class IronicAPIContractsTestCase(test.NoDBTestCase):
         self._check_method(driver.ComputeDriver.destroy,
                            "ComputeDriver.destroy",
                            ['self', 'context', 'instance', 'network_info',
-                            'block_device_info', 'destroy_disks'])
+                            'block_device_info', 'destroy_disks',
+                            'migrate_data'])
 
         self._check_method(driver.ComputeDriver.reboot,
                            "ComputeDriver.reboot",

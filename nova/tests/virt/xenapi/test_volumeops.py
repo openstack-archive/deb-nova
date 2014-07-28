@@ -43,7 +43,7 @@ class VolumeDetachTestCase(VolumeOpsTestBase):
 
         ops = volumeops.VolumeOps('session')
         self.mox.StubOutWithMock(volumeops.vm_utils, 'lookup')
-        self.mox.StubOutWithMock(volumeops.vm_utils, 'find_vbd_by_number')
+        self.mox.StubOutWithMock(volumeops.volume_utils, 'find_vbd_by_number')
         self.mox.StubOutWithMock(volumeops.vm_utils, 'is_vm_shutdown')
         self.mox.StubOutWithMock(volumeops.vm_utils, 'unplug_vbd')
         self.mox.StubOutWithMock(volumeops.vm_utils, 'destroy_vbd')
@@ -57,7 +57,7 @@ class VolumeDetachTestCase(VolumeOpsTestBase):
         volumeops.volume_utils.get_device_number('mountpoint').AndReturn(
             'devnumber')
 
-        volumeops.vm_utils.find_vbd_by_number(
+        volumeops.volume_utils.find_vbd_by_number(
             'session', 'vmref', 'devnumber').AndReturn('vbdref')
 
         volumeops.vm_utils.is_vm_shutdown('session', 'vmref').AndReturn(
@@ -84,7 +84,7 @@ class VolumeDetachTestCase(VolumeOpsTestBase):
             ['find_sr_from_vbd', 'destroy_vbd'], registered_calls)
 
     @mock.patch.object(volumeops.VolumeOps, "_detach_vbds_and_srs")
-    @mock.patch.object(vm_utils, "find_vbd_by_number")
+    @mock.patch.object(volume_utils, "find_vbd_by_number")
     @mock.patch.object(vm_utils, "vm_ref_or_raise")
     def test_detach_volume(self, mock_vm, mock_vbd, mock_detach):
         mock_vm.return_value = "vm_ref"
@@ -97,19 +97,19 @@ class VolumeDetachTestCase(VolumeOpsTestBase):
         mock_detach.assert_called_once_with("vm_ref", ["vbd_ref"])
 
     @mock.patch.object(volumeops.VolumeOps, "_detach_vbds_and_srs")
-    @mock.patch.object(vm_utils, "find_vbd_by_number")
+    @mock.patch.object(volume_utils, "find_vbd_by_number")
     @mock.patch.object(vm_utils, "vm_ref_or_raise")
     def test_detach_volume_skips_error_skip_attach(self, mock_vm, mock_vbd,
                                                    mock_detach):
         mock_vm.return_value = "vm_ref"
-        mock_vbd.side_effect = exception.StorageError(reason="")
+        mock_vbd.return_value = None
 
         self.ops.detach_volume({}, "name", "/dev/xvdd")
 
         self.assertFalse(mock_detach.called)
 
     @mock.patch.object(volumeops.VolumeOps, "_detach_vbds_and_srs")
-    @mock.patch.object(vm_utils, "find_vbd_by_number")
+    @mock.patch.object(volume_utils, "find_vbd_by_number")
     @mock.patch.object(vm_utils, "vm_ref_or_raise")
     def test_detach_volume_raises(self, mock_vm, mock_vbd,
                                   mock_detach):
@@ -236,7 +236,7 @@ class AttachVolumeTestCase(VolumeOpsTestBase):
                                             False)
 
     @mock.patch.object(volumeops.VolumeOps, "_attach_volume")
-    def test_attach_volume_default_hotplug(self, mock_attach):
+    def test_attach_volume_default_hotplug_connect_volume(self, mock_attach):
         self.ops.connect_volume({})
         mock_attach.assert_called_once_with({})
 
@@ -311,7 +311,7 @@ class AttachVolumeTestCase(VolumeOpsTestBase):
         conn_info = {"driver_volume_type": "xensm"}
         self.ops._check_is_supported_driver_type(conn_info)
 
-    def test_check_is_supported_driver_type_pass_iscsi(self):
+    def test_check_is_supported_driver_type_pass_bad(self):
         conn_info = {"driver_volume_type": "bad"}
         self.assertRaises(exception.VolumeDriverNotFound,
                           self.ops._check_is_supported_driver_type, conn_info)
@@ -498,3 +498,52 @@ class FindBadVolumeTestCase(VolumeOpsTestBase):
                 self.assertRaises(FakeException,
                                   self.ops.find_bad_volumes, "vm_ref")
                 mock_scan.assert_called_once_with("sr_ref")
+
+
+class CleanupFromVDIsTestCase(VolumeOpsTestBase):
+    def _check_find_purge_calls(self, find_sr_from_vdi, purge_sr, vdi_refs,
+            sr_refs):
+        find_sr_calls = [mock.call(self.ops._session, vdi_ref) for vdi_ref
+                in vdi_refs]
+        find_sr_from_vdi.assert_has_calls(find_sr_calls)
+        purge_sr_calls = [mock.call(self.ops._session, sr_ref) for sr_ref
+                in sr_refs]
+        purge_sr.assert_has_calls(purge_sr_calls)
+
+    @mock.patch.object(volume_utils, 'find_sr_from_vdi')
+    @mock.patch.object(volume_utils, 'purge_sr')
+    def test_safe_cleanup_from_vdis(self, purge_sr, find_sr_from_vdi):
+        vdi_refs = ['vdi_ref1', 'vdi_ref2']
+        sr_refs = ['sr_ref1', 'sr_ref2']
+        find_sr_from_vdi.side_effect = sr_refs
+        self.ops.safe_cleanup_from_vdis(vdi_refs)
+
+        self._check_find_purge_calls(find_sr_from_vdi, purge_sr, vdi_refs,
+                sr_refs)
+
+    @mock.patch.object(volume_utils, 'find_sr_from_vdi',
+            side_effect=[exception.StorageError(reason=''), 'sr_ref2'])
+    @mock.patch.object(volume_utils, 'purge_sr')
+    def test_safe_cleanup_from_vdis_handles_find_sr_exception(self, purge_sr,
+            find_sr_from_vdi):
+        vdi_refs = ['vdi_ref1', 'vdi_ref2']
+        sr_refs = ['sr_ref2']
+        find_sr_from_vdi.side_effect = [exception.StorageError(reason=''),
+                sr_refs[0]]
+        self.ops.safe_cleanup_from_vdis(vdi_refs)
+
+        self._check_find_purge_calls(find_sr_from_vdi, purge_sr, vdi_refs,
+                sr_refs)
+
+    @mock.patch.object(volume_utils, 'find_sr_from_vdi')
+    @mock.patch.object(volume_utils, 'purge_sr')
+    def test_safe_cleanup_from_vdis_handles_purge_sr_exception(self, purge_sr,
+            find_sr_from_vdi):
+        vdi_refs = ['vdi_ref1', 'vdi_ref2']
+        sr_refs = ['sr_ref1', 'sr_ref2']
+        find_sr_from_vdi.side_effect = sr_refs
+        purge_sr.side_effects = [test.TestingException, None]
+        self.ops.safe_cleanup_from_vdis(vdi_refs)
+
+        self._check_find_purge_calls(find_sr_from_vdi, purge_sr, vdi_refs,
+                sr_refs)

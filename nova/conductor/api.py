@@ -20,7 +20,7 @@ from oslo import messaging
 from nova import baserpc
 from nova.conductor import manager
 from nova.conductor import rpcapi
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova import utils
 
@@ -66,17 +66,13 @@ class LocalAPI(object):
         return self._manager.instance_update(context, instance_uuid,
                                              updates, 'compute')
 
-    def instance_get_by_uuid(self, context, instance_uuid,
-                             columns_to_join=None):
-        return self._manager.instance_get_by_uuid(context, instance_uuid,
-                columns_to_join)
-
     def instance_get_all_by_host(self, context, host, columns_to_join=None):
         return self._manager.instance_get_all_by_host(
-            context, host, columns_to_join=columns_to_join)
+            context, host, None, columns_to_join=columns_to_join)
 
     def instance_get_all_by_host_and_node(self, context, host, node):
-        return self._manager.instance_get_all_by_host(context, host, node)
+        return self._manager.instance_get_all_by_host(context, host, node,
+                None)
 
     def instance_info_cache_delete(self, context, instance):
         return self._manager.instance_info_cache_delete(context, instance)
@@ -92,7 +88,8 @@ class LocalAPI(object):
                                                             key)
 
     def bw_usage_get(self, context, uuid, start_period, mac):
-        return self._manager.bw_usage_update(context, uuid, mac, start_period)
+        return self._manager.bw_usage_update(context, uuid, mac, start_period,
+                None, None, None, None, None, False)
 
     def bw_usage_update(self, context, uuid, mac, start_period,
                         bw_in, bw_out, last_ctr_in, last_ctr_out,
@@ -105,10 +102,6 @@ class LocalAPI(object):
 
     def provider_fw_rule_get_all(self, context):
         return self._manager.provider_fw_rule_get_all(context)
-
-    def agent_build_get_by_triple(self, context, hypervisor, os, architecture):
-        return self._manager.agent_build_get_by_triple(context, hypervisor,
-                                                       os, architecture)
 
     def block_device_mapping_create(self, context, values):
         return self._manager.block_device_mapping_update_or_create(context,
@@ -123,7 +116,8 @@ class LocalAPI(object):
 
     def block_device_mapping_update_or_create(self, context, values):
         return self._manager.block_device_mapping_update_or_create(context,
-                                                                   values)
+                                                                   values,
+                                                                   create=None)
 
     def block_device_mapping_get_all_by_instance(self, context, instance,
                                                  legacy=True):
@@ -143,26 +137,31 @@ class LocalAPI(object):
                                               update_totals)
 
     def service_get_all(self, context):
-        return self._manager.service_get_all_by(context)
+        return self._manager.service_get_all_by(context, host=None, topic=None,
+                binary=None)
 
     def service_get_all_by_topic(self, context, topic):
-        return self._manager.service_get_all_by(context, topic=topic)
+        return self._manager.service_get_all_by(context, topic=topic,
+                host=None, binary=None)
 
     def service_get_all_by_host(self, context, host):
-        return self._manager.service_get_all_by(context, host=host)
+        return self._manager.service_get_all_by(context, host=host, topic=None,
+                binary=None)
 
     def service_get_by_host_and_topic(self, context, host, topic):
-        return self._manager.service_get_all_by(context, topic, host)
+        return self._manager.service_get_all_by(context, topic, host,
+                binary=None)
 
     def service_get_by_compute_host(self, context, host):
-        result = self._manager.service_get_all_by(context, 'compute', host)
+        result = self._manager.service_get_all_by(context, 'compute', host,
+                binary=None)
         # FIXME(comstud): A major revision bump to 2.0 should return a
         # single entry, so we should just return 'result' at that point.
         return result[0]
 
     def service_get_by_args(self, context, host, binary):
         return self._manager.service_get_all_by(context, host=host,
-                                                binary=binary)
+                                                binary=binary, topic=None)
 
     def service_create(self, context, values):
         return self._manager.service_create(context, values)
@@ -261,6 +260,24 @@ class LocalComputeTaskAPI(object):
         utils.spawn_n(self._manager.unshelve_instance, context,
                 instance=instance)
 
+    def rebuild_instance(self, context, instance, orig_image_ref, image_ref,
+                         injected_files, new_pass, orig_sys_metadata,
+                         bdms, recreate=False, on_shared_storage=False,
+                         preserve_ephemeral=False, host=None, kwargs=None):
+        # kwargs unused but required for cell compatibility.
+        utils.spawn_n(self._manager.rebuild_instance, context,
+                instance=instance,
+                new_pass=new_pass,
+                injected_files=injected_files,
+                image_ref=image_ref,
+                orig_image_ref=orig_image_ref,
+                orig_sys_metadata=orig_sys_metadata,
+                bdms=bdms,
+                recreate=recreate,
+                on_shared_storage=on_shared_storage,
+                host=host,
+                preserve_ephemeral=preserve_ephemeral)
+
 
 class API(LocalAPI):
     """Conductor API that does updates via RPC to the ConductorManager."""
@@ -279,6 +296,10 @@ class API(LocalAPI):
         '''
         attempt = 0
         timeout = early_timeout
+        # if we show the timeout message, make sure we show a similar
+        # message saying that everything is now working to avoid
+        # confusion
+        has_timedout = False
         while True:
             # NOTE(danms): Try ten times with a short timeout, and then punt
             # to the configured RPC timeout after that
@@ -293,11 +314,17 @@ class API(LocalAPI):
             try:
                 self.base_rpcapi.ping(context, '1.21 GigaWatts',
                                       timeout=timeout)
+                if has_timedout:
+                    LOG.info(_('nova-conductor connection '
+                               'established successfully'))
                 break
             except messaging.MessagingTimeout:
-                LOG.warning(_('Timed out waiting for nova-conductor. '
-                                'Is it running? Or did this service start '
-                                'before nova-conductor?'))
+                has_timedout = True
+                LOG.warning(_('Timed out waiting for nova-conductor.  '
+                              'Is it running? Or did this service start '
+                              'before nova-conductor?  '
+                              'Reattempting establishment of '
+                              'nova-conductor connection...'))
 
     def instance_update(self, context, instance_uuid, **updates):
         """Perform an instance update in the database."""
@@ -342,3 +369,21 @@ class ComputeTaskAPI(object):
     def unshelve_instance(self, context, instance):
         self.conductor_compute_rpcapi.unshelve_instance(context,
                 instance=instance)
+
+    def rebuild_instance(self, context, instance, orig_image_ref, image_ref,
+                         injected_files, new_pass, orig_sys_metadata,
+                         bdms, recreate=False, on_shared_storage=False,
+                         preserve_ephemeral=False, host=None, kwargs=None):
+        # kwargs unused but required for cell compatibility
+        self.conductor_compute_rpcapi.rebuild_instance(context,
+                instance=instance,
+                new_pass=new_pass,
+                injected_files=injected_files,
+                image_ref=image_ref,
+                orig_image_ref=orig_image_ref,
+                orig_sys_metadata=orig_sys_metadata,
+                bdms=bdms,
+                recreate=recreate,
+                on_shared_storage=on_shared_storage,
+                preserve_ephemeral=preserve_ephemeral,
+                host=host)

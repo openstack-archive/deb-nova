@@ -26,7 +26,7 @@ from nova.compute import task_states
 from nova.compute import vm_states
 from nova import db
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -109,10 +109,9 @@ class HostState(object):
     previously used and lock down access.
     """
 
-    def __init__(self, host, node, capabilities=None, service=None):
+    def __init__(self, host, node, compute=None):
         self.host = host
         self.nodename = node
-        self.update_capabilities(capabilities, service)
 
         # Mutable available resources.
         # These will change as resources are virtually "consumed".
@@ -125,11 +124,7 @@ class HostState(object):
         self.vcpus_used = 0
 
         # Additional host information from the compute node stats:
-        self.vm_states = {}
-        self.task_states = {}
         self.num_instances = 0
-        self.num_instances_by_project = {}
-        self.num_instances_by_os_type = {}
         self.num_io_ops = 0
 
         # Other information
@@ -147,15 +142,10 @@ class HostState(object):
         self.metrics = {}
 
         self.updated = None
+        if compute:
+            self.update_from_compute_node(compute)
 
-    def update_capabilities(self, capabilities=None, service=None):
-        # Read-only capability dicts
-
-        if capabilities is None:
-            capabilities = {}
-        self.capabilities = ReadOnlyDict(capabilities)
-        if service is None:
-            service = {}
+    def update_service(self, service):
         self.service = ReadOnlyDict(service)
 
     def _update_metrics_from_compute_node(self, compute):
@@ -231,34 +221,6 @@ class HostState(object):
         # Track number of instances on host
         self.num_instances = int(self.stats.get('num_instances', 0))
 
-        # Track number of instances by project_id
-        project_id_keys = [k for k in self.stats.keys() if
-                k.startswith("num_proj_")]
-        for key in project_id_keys:
-            project_id = key[9:]
-            self.num_instances_by_project[project_id] = int(self.stats[key])
-
-        # Track number of instances in certain vm_states
-        vm_state_keys = [k for k in self.stats.keys() if
-                k.startswith("num_vm_")]
-        for key in vm_state_keys:
-            vm_state = key[7:]
-            self.vm_states[vm_state] = int(self.stats[key])
-
-        # Track number of instances in certain task_states
-        task_state_keys = [k for k in self.stats.keys() if
-                k.startswith("num_task_")]
-        for key in task_state_keys:
-            task_state = key[9:]
-            self.task_states[task_state] = int(self.stats[key])
-
-        # Track number of instances by host_type
-        os_keys = [k for k in self.stats.keys() if
-                k.startswith("num_os_type_")]
-        for key in os_keys:
-            os = key[12:]
-            self.num_instances_by_os_type[os] = int(self.stats[key])
-
         self.num_io_ops = int(self.stats.get('io_workload', 0))
 
         # update metrics
@@ -277,34 +239,12 @@ class HostState(object):
         # Track number of instances on host
         self.num_instances += 1
 
-        # Track number of instances by project_id
-        project_id = instance.get('project_id')
-        if project_id not in self.num_instances_by_project:
-            self.num_instances_by_project[project_id] = 0
-        self.num_instances_by_project[project_id] += 1
-
-        # Track number of instances in certain vm_states
-        vm_state = instance.get('vm_state', vm_states.BUILDING)
-        if vm_state not in self.vm_states:
-            self.vm_states[vm_state] = 0
-        self.vm_states[vm_state] += 1
-
-        # Track number of instances in certain task_states
-        task_state = instance.get('task_state')
-        if task_state not in self.task_states:
-            self.task_states[task_state] = 0
-        self.task_states[task_state] += 1
-
-        # Track number of instances by host_type
-        os_type = instance.get('os_type')
-        if os_type not in self.num_instances_by_os_type:
-            self.num_instances_by_os_type[os_type] = 0
-        self.num_instances_by_os_type[os_type] += 1
-
         pci_requests = pci_request.get_instance_pci_requests(instance)
         if pci_requests and self.pci_stats:
             self.pci_stats.apply_requests(pci_requests)
 
+        vm_state = instance.get('vm_state', vm_states.BUILDING)
+        task_state = instance.get('task_state')
         if vm_state == vm_states.BUILDING or task_state in [
                 task_states.RESIZE_MIGRATING, task_states.REBUILDING,
                 task_states.RESIZE_PREP, task_states.IMAGE_SNAPSHOT,
@@ -325,8 +265,6 @@ class HostManager(object):
     host_state_cls = HostState
 
     def __init__(self):
-        # { (host, hypervisor_hostname) : { <service> : { cap k : v }}}
-        self.service_states = {}
         self.host_state_map = {}
         self.filter_handler = filters.HostFilterHandler()
         self.filter_classes = self.filter_handler.get_matching_classes(
@@ -454,17 +392,13 @@ class HostManager(object):
             host = service['host']
             node = compute.get('hypervisor_hostname')
             state_key = (host, node)
-            capabilities = self.service_states.get(state_key, None)
             host_state = self.host_state_map.get(state_key)
             if host_state:
-                host_state.update_capabilities(capabilities,
-                                               dict(service.iteritems()))
+                host_state.update_from_compute_node(compute)
             else:
-                host_state = self.host_state_cls(host, node,
-                        capabilities=capabilities,
-                        service=dict(service.iteritems()))
+                host_state = self.host_state_cls(host, node, compute=compute)
                 self.host_state_map[state_key] = host_state
-            host_state.update_from_compute_node(compute)
+            host_state.update_service(dict(service.iteritems()))
             seen_nodes.add(state_key)
 
         # remove compute nodes from host_state_map if they are not active

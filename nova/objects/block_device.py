@@ -13,13 +13,14 @@
 #    under the License.
 
 from nova import block_device
+from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
 from nova import db
 from nova import exception
+from nova.i18n import _
+from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova.objects import instance
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 
@@ -70,9 +71,9 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
                 continue
             block_device_obj[key] = db_block_device[key]
         if 'instance' in expected_attrs:
-            my_inst = instance.Instance()
-            instance.Instance._from_db_object(
-                    context, my_inst, db_block_device['instance'])
+            my_inst = objects.Instance(context)
+            my_inst._from_db_object(context, my_inst,
+                                    db_block_device['instance'])
             block_device_obj.instance = my_inst
 
         block_device_obj._context = context
@@ -81,6 +82,13 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
 
     @base.remotable
     def create(self, context):
+        cell_type = cells_opts.get_cell_type()
+        if cell_type == 'api':
+            raise exception.ObjectActionError(
+                    action='create',
+                    reason='BlockDeviceMapping cannot be '
+                           'created in the API cell.')
+
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
@@ -88,12 +96,12 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
         if 'instance' in updates:
             raise exception.ObjectActionError(action='create',
                                               reason='instance assigned')
-        updates.pop('id', None)
 
         db_bdm = db.block_device_mapping_create(context, updates, legacy=False)
-        cells_api = cells_rpcapi.CellsAPI()
-        cells_api.bdm_update_or_create_at_top(context, db_bdm, create=True)
         self._from_db_object(context, self, db_bdm)
+        if cell_type == 'compute':
+            cells_api = cells_rpcapi.CellsAPI()
+            cells_api.bdm_update_or_create_at_top(context, self, create=True)
 
     @base.remotable
     def destroy(self, context):
@@ -102,10 +110,13 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
                                               reason='already destroyed')
         db.block_device_mapping_destroy(context, self.id)
         delattr(self, base.get_attrname('id'))
-        cells_api = cells_rpcapi.CellsAPI()
-        cells_api.bdm_destroy_at_top(context, self.instance_uuid,
-                                     device_name=self.device_name,
-                                     volume_id=self.volume_id)
+
+        cell_type = cells_opts.get_cell_type()
+        if cell_type == 'compute':
+            cells_api = cells_rpcapi.CellsAPI()
+            cells_api.bdm_destroy_at_top(context, self.instance_uuid,
+                                         device_name=self.device_name,
+                                         volume_id=self.volume_id)
 
     @base.remotable
     def save(self, context):
@@ -116,9 +127,11 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
         updates.pop('id', None)
         updated = db.block_device_mapping_update(self._context, self.id,
                                                  updates, legacy=False)
-        cells_api = cells_rpcapi.CellsAPI()
-        cells_api.bdm_update_or_create_at_top(context, updated)
         self._from_db_object(context, self, updated)
+        cell_type = cells_opts.get_cell_type()
+        if cell_type == 'compute':
+            cells_api = cells_rpcapi.CellsAPI()
+            cells_api.bdm_update_or_create_at_top(context, self)
 
     @base.remotable_classmethod
     def get_by_volume_id(cls, context, volume_id,
@@ -167,8 +180,8 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
                    'name': self.obj_name(),
                    'uuid': self.uuid,
                    })
-        self.instance = instance.Instance.get_by_uuid(self._context,
-                                                      self.instance_uuid)
+        self.instance = objects.Instance.get_by_uuid(self._context,
+                                                     self.instance_uuid)
         self.obj_reset_changes(fields=['instance'])
 
 
@@ -192,7 +205,7 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
         db_bdms = db.block_device_mapping_get_all_by_instance(
                 context, instance_uuid, use_slave=use_slave)
         return base.obj_make_list(
-                context, cls(), BlockDeviceMapping, db_bdms or [])
+                context, cls(), objects.BlockDeviceMapping, db_bdms or [])
 
     def root_bdm(self):
         try:
@@ -222,5 +235,7 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
 
 
 def block_device_make_list(context, db_list, **extra_args):
-    return base.obj_make_list(context, BlockDeviceMappingList(),
-                              BlockDeviceMapping, db_list, **extra_args)
+    return base.obj_make_list(context,
+                              objects.BlockDeviceMappingList(context),
+                              objects.BlockDeviceMapping, db_list,
+                              **extra_args)

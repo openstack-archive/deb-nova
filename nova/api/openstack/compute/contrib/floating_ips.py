@@ -24,17 +24,14 @@ from nova.api.openstack import xmlutil
 from nova import compute
 from nova.compute import utils as compute_utils
 from nova import exception
+from nova.i18n import _
 from nova import network
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
 from nova.openstack.common import uuidutils
 
 
 LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'floating_ips')
-authorize_all_tenants = extensions.extension_authorizer(
-    'compute', 'floating_ips:all_tenants')
 
 
 def make_float_ip(elem):
@@ -138,19 +135,11 @@ class FloatingIPController(object):
 
     @wsgi.serializers(xml=FloatingIPsTemplate)
     def index(self, req):
-        """Return a list of floating ips."""
+        """Return a list of floating ips allocated to a project."""
         context = req.environ['nova.context']
         authorize(context)
-        all_tenants = False
-        if 'all_tenants' in req.GET:
-            try:
-                if strutils.bool_from_string(req.GET['all_tenants'], True):
-                    authorize_all_tenants(context)
-                    all_tenants = True
-            except ValueError as err:
-                raise webob.exc.HTTPBadRequest(explanation=str(err))
 
-        floating_ips = self.network_api.get_floating_ips(context, all_tenants)
+        floating_ips = self.network_api.get_floating_ips_by_project(context)
 
         for floating_ip in floating_ips:
             self._normalize_ip(floating_ip)
@@ -174,6 +163,12 @@ class FloatingIPController(object):
             else:
                 msg = _("No more floating ips available.")
             raise webob.exc.HTTPNotFound(explanation=msg)
+        except exception.FloatingIpLimitExceeded:
+            if pool:
+                msg = _("IP allocation over quota in pool %s.") % pool
+            else:
+                msg = _("IP allocation over quota.")
+            raise webob.exc.HTTPForbidden(explanation=msg)
 
         return _translate_floating_ip_view(ip)
 
@@ -204,10 +199,6 @@ class FloatingIPController(object):
         # release ip from project
         self.network_api.release_floating_ip(context, address)
         return webob.Response(status_int=202)
-
-    def _get_ip_by_id(self, context, value):
-        """Checks that value is id and then returns its address."""
-        return self.network_api.get_floating_ip(context, value)['address']
 
 
 class FloatingIPActionController(wsgi.Controller):

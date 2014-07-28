@@ -25,8 +25,8 @@ import webob
 
 from nova.api.openstack import xmlutil
 from nova import exception
-from nova.openstack.common import gettextutils
-from nova.openstack.common.gettextutils import _
+from nova import i18n
+from nova.i18n import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import utils
@@ -193,7 +193,7 @@ class Request(webob.Request):
         if not self.accept_language:
             return None
         return self.accept_language.best_match(
-                gettextutils.get_available_languages('nova'))
+                i18n.get_available_languages())
 
 
 class ActionDispatcher(object):
@@ -438,17 +438,6 @@ class XMLDictSerializer(DictSerializer):
             node = doc.createTextNode(str(data))
             result.appendChild(node)
         return result
-
-    def _create_link_nodes(self, xml_doc, links):
-        link_nodes = []
-        for link in links:
-            link_node = xml_doc.createElement('atom:link')
-            link_node.setAttribute('rel', link['rel'])
-            link_node.setAttribute('href', link['href'])
-            if 'type' in link:
-                link_node.setAttribute('type', link['type'])
-            link_nodes.append(link_node)
-        return link_nodes
 
     def _to_xml(self, root):
         """Convert the xml object to an xml string."""
@@ -1208,8 +1197,7 @@ class Fault(webob.exc.HTTPException):
         LOG.debug("Returning %(code)s to user: %(explanation)s",
                   {'code': code, 'explanation': explanation})
 
-        explanation = gettextutils.translate(explanation,
-                                                         user_locale)
+        explanation = i18n.translate(explanation, user_locale)
         fault_data = {
             fault_name: {
                 'code': code,
@@ -1272,13 +1260,9 @@ class RateLimitFault(webob.exc.HTTPException):
         metadata = {"attributes": {"overLimit": ["code", "retryAfter"]}}
 
         self.content['overLimit']['message'] = \
-                gettextutils.translate(
-                        self.content['overLimit']['message'],
-                        user_locale)
+            i18n.translate(self.content['overLimit']['message'], user_locale)
         self.content['overLimit']['details'] = \
-                gettextutils.translate(
-                        self.content['overLimit']['details'],
-                        user_locale)
+            i18n.translate(self.content['overLimit']['details'], user_locale)
 
         xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
         serializer = {

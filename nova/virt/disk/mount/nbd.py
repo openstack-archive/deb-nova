@@ -20,7 +20,7 @@ import time
 
 from oslo.config import cfg
 
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk.mount import api
@@ -82,7 +82,7 @@ class NbdMount(api.Mount):
 
         # NOTE(mikal): qemu-nbd will return an error if the device file is
         # already in use.
-        LOG.debug(_('Get nbd device %(dev)s for %(imgfile)s'),
+        LOG.debug('Get nbd device %(dev)s for %(imgfile)s',
                   {'dev': device, 'imgfile': self.image})
         _out, err = utils.trycmd('qemu-nbd', '-c', device, self.image,
                                  run_as_root=True)
@@ -122,7 +122,7 @@ class NbdMount(api.Mount):
     def unget_dev(self):
         if not self.linked:
             return
-        LOG.debug(_('Release nbd device %s'), self.device)
+        LOG.debug('Release nbd device %s', self.device)
         utils.execute('qemu-nbd', '-d', self.device, run_as_root=True)
         self.linked = False
         self.device = None

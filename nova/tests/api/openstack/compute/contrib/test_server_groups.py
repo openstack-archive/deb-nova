@@ -21,8 +21,7 @@ from nova.api.openstack import wsgi
 from nova import context
 import nova.db
 from nova import exception
-from nova.objects import instance as instance_obj
-from nova.objects import instance_group as instance_group_obj
+from nova import objects
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.api.openstack import fakes
@@ -107,14 +106,14 @@ class ServerGroupTest(test.TestCase):
         self.assertEqual(res_dict['server_group']['policies'], policies)
 
     def _create_instance(self, context):
-        instance = instance_obj.Instance(image_ref=1, node='node1',
+        instance = objects.Instance(image_ref=1, node='node1',
                 reservation_id='a', host='host1', project_id='fake',
                 vm_state='fake', system_metadata={'key': 'value'})
         instance.create(context)
         return instance
 
     def _create_instance_group(self, context, members):
-        ig = instance_group_obj.InstanceGroup(name='fake_name',
+        ig = objects.InstanceGroup(name='fake_name',
                   user_id='fake_user', project_id='fake',
                   members=members)
         ig.create(context)
@@ -145,7 +144,7 @@ class ServerGroupTest(test.TestCase):
         instances[1].destroy(ctx)
         # check that the instance does not exist
         self.assertRaises(exception.InstanceNotFound,
-                          instance_obj.Instance.get_by_uuid,
+                          objects.Instance.get_by_uuid,
                           ctx, instances[1].uuid)
         res_dict = self.controller.show(req, ig_uuid)
         result_members = res_dict['server_group']['members']
@@ -222,6 +221,14 @@ class ServerGroupTest(test.TestCase):
     def test_create_server_group_conflicting_policies(self):
         sgroup = server_group_template()
         policies = ['anti-affinity', 'affinity']
+        sgroup['policies'] = policies
+        req = fakes.HTTPRequest.blank('/v2/fake/os-server-groups')
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+                          req, {'server_group': sgroup})
+
+    def test_create_server_group_with_duplicate_policies(self):
+        sgroup = server_group_template()
+        policies = ['affinity', 'affinity']
         sgroup['policies'] = policies
         req = fakes.HTTPRequest.blank('/v2/fake/os-server-groups')
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
@@ -446,7 +453,7 @@ class TestServerGroupXMLSerializer(test.TestCase):
                 for idx, gr_child in enumerate(child):
                     self.assertEqual(self._tag(gr_child), 'meta')
                     key = gr_child.get('key')
-                    self.assertTrue(key in ['key1', 'key2'])
+                    self.assertIn(key, ['key1', 'key2'])
                     metas[key] = gr_child.text
                 self.assertEqual(len(metas), len(metadata))
                 for k in metadata:

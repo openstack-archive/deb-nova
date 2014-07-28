@@ -25,9 +25,9 @@ from oslo.config import cfg
 
 from nova.compute import flavors
 from nova import exception
+from nova.i18n import _
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import fileutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.baremetal import baremetal_states
@@ -128,8 +128,8 @@ class Tilera(base.NodeDriver):
         fileutils.ensure_tree(
                 os.path.join(CONF.baremetal.tftp_root, instance['uuid']))
 
-        LOG.debug(_("Fetching kernel and ramdisk for instance %s") %
-                        instance['name'])
+        LOG.debug("Fetching kernel and ramdisk for instance %s",
+                  instance['name'])
         for label in image_info.keys():
             (uuid, path) = image_info[label]
             bm_utils.cache_image(
@@ -159,8 +159,8 @@ class Tilera(base.NodeDriver):
         fileutils.ensure_tree(get_image_dir_path(instance))
         image_path = get_image_file_path(instance)
 
-        LOG.debug(_("Fetching image %(ami)s for instance %(name)s") %
-                        {'ami': image_meta['id'], 'name': instance['name']})
+        LOG.debug("Fetching image %(ami)s for instance %(name)s",
+                  {'ami': image_meta['id'], 'name': instance['name']})
         bm_utils.cache_image(context=context,
                              target=image_path,
                              image_id=image_meta['id'],
@@ -196,8 +196,8 @@ class Tilera(base.NodeDriver):
         if instance['hostname']:
             injected_files.append(('/etc/hostname', instance['hostname']))
 
-        LOG.debug(_("Injecting files into image for instance %(name)s") %
-                        {'name': instance['name']})
+        LOG.debug("Injecting files into image for instance %(name)s",
+                  {'name': instance['name']})
 
         bm_utils.inject_into_image(
                     image=get_image_file_path(instance),
@@ -319,7 +319,7 @@ class Tilera(base.NodeDriver):
 
             status = row.get('task_state')
             if (status == baremetal_states.DEPLOYING and
-                    locals['started'] == False):
+                    locals['started'] is False):
                 LOG.info(_('Tilera deploy started for instance %s')
                            % instance['uuid'])
                 locals['started'] = True

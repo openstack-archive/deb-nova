@@ -27,8 +27,8 @@ from oslo.config import cfg
 from oslo import messaging
 
 from nova import exception
+from nova.i18n import _
 from nova.objects import base as objects_base
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import rpc
@@ -94,6 +94,8 @@ class CellsAPI(object):
         ... Icehouse supports message version 1.27.  So, any changes to
         existing methods in 1.x after that point should be done such that they
         can handle the version_cap being set to 1.27.
+
+        1.28 - Make bdm_update_or_create_at_top and use bdm objects
     '''
 
     VERSION_ALIASES = {
@@ -361,7 +363,14 @@ class CellsAPI(object):
         """
         if not CONF.cells.enable:
             return
-        cctxt = self.client.prepare(version='1.10')
+
+        if self.client.can_send_version('1.28'):
+            version = '1.28'
+        else:
+            version = '1.10'
+            bdm = objects_base.obj_to_primitive(bdm)
+        cctxt = self.client.prepare(version=version)
+
         try:
             cctxt.cast(ctxt, 'bdm_update_or_create_at_top',
                        bdm=bdm, create=create)

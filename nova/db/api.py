@@ -31,8 +31,8 @@ from eventlet import tpool
 from oslo.config import cfg
 
 from nova.cells import rpcapi as cells_rpcapi
+from nova.i18n import _
 from nova.openstack.common.db import api as db_api
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 
@@ -1457,8 +1457,8 @@ def console_get(context, console_id, instance_uuid=None):
     """Get a specific console (possibly on a given instance)."""
     return IMPL.console_get(context, console_id, instance_uuid)
 
+##################
 
-    ##################
 
 def flavor_create(context, values, projects=None):
     """Create a new instance type."""
@@ -1767,6 +1767,10 @@ def aggregate_host_get_by_metadata_key(context, key):
     return value:  {machine: set( az1, az2 )}
     """
     return IMPL.aggregate_host_get_by_metadata_key(context, key)
+
+
+def aggregate_get_by_metadata_key(context, key):
+    return IMPL.aggregate_get_by_metadata_key(context, key)
 
 
 def aggregate_update(context, aggregate_id, values):

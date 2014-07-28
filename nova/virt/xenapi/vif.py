@@ -19,16 +19,13 @@
 
 from oslo.config import cfg
 
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.virt.xenapi import network_utils
 from nova.virt.xenapi import vm_utils
 
 
 xenapi_ovs_integration_bridge_opt = cfg.StrOpt('ovs_integration_bridge',
                         default='xapi1',
-                        #Deprecated in Icehouse
-                        deprecated_name='xenapi_ovs_integration_bridge',
-                        deprecated_group='DEFAULT',
                         help='Name of Integration Bridge used by Open vSwitch')
 
 CONF = cfg.CONF

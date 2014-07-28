@@ -30,9 +30,7 @@ from nova import db
 from nova import exception
 from nova.network import model as network_model
 from nova import objects
-from nova.objects import external_event as external_event_obj
-from nova.objects import instance_action as instance_action_obj
-from nova.objects import migration as migration_obj
+from nova.objects import block_device as block_device_obj
 from nova.openstack.common import importutils
 from nova.openstack.common import uuidutils
 from nova import test
@@ -61,7 +59,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(self.compute, '_instance_update')
         self.mox.StubOutWithMock(time, 'sleep')
 
-        instance = fake_instance.fake_db_instance(system_metadata={})
+        instance = fake_instance.fake_instance_obj(
+                       self.context, expected_attrs=['system_metadata'])
+
         is_vpn = 'fake-is-vpn'
         req_networks = 'fake-req-networks'
         macs = 'fake-macs'
@@ -301,8 +301,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.compute.driver.resume_state_on_host_boot(mox.IgnoreArg(),
                 instance, mox.IgnoreArg(),
                 'fake-bdm').AndRaise(test.TestingException)
-        self.compute._set_instance_error_state(mox.IgnoreArg(),
-                instance['uuid'])
+        self.compute._set_instance_error_state(mox.IgnoreArg(), instance)
         self.mox.ReplayAll()
         self.compute._init_instance('fake-context', instance)
 
@@ -324,7 +323,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         instance.obj_load_attr('system_metadata')
         objects.BlockDeviceMappingList.get_by_instance_uuid(
                 self.context, instance.uuid).AndReturn(bdms)
-        self.compute._delete_instance(self.context, instance, bdms)
+        self.compute._delete_instance(self.context, instance, bdms,
+                                      mox.IgnoreArg())
 
         self.mox.ReplayAll()
         self.compute._init_instance(self.context, instance)
@@ -497,7 +497,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         instance.obj_load_attr('system_metadata')
         objects.BlockDeviceMappingList.get_by_instance_uuid(
                 self.context, instance.uuid).AndReturn(bdms)
-        self.compute._delete_instance(self.context, instance, bdms)
+        self.compute._delete_instance(self.context, instance, bdms,
+                                      mox.IgnoreArg())
         self.mox.ReplayAll()
 
         self.compute._init_instance(self.context, instance)
@@ -798,6 +799,35 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                 self._test_sync_to_stop(power_state.RUNNING, vs, ps,
                                         stop=False)
 
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_sync_instance_power_state')
+    def test_query_driver_power_state_and_sync_pending_task(
+            self, mock_sync_power_state):
+        with mock.patch.object(self.compute.driver,
+                               'get_info') as mock_get_info:
+            db_instance = objects.Instance(uuid='fake-uuid',
+                                           task_state=task_states.POWERING_OFF)
+            self.compute._query_driver_power_state_and_sync(self.context,
+                                                            db_instance)
+            self.assertFalse(mock_get_info.called)
+            self.assertFalse(mock_sync_power_state.called)
+
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_sync_instance_power_state')
+    def test_query_driver_power_state_and_sync_not_found_driver(
+            self, mock_sync_power_state):
+        error = exception.InstanceNotFound(instance_id=1)
+        with mock.patch.object(self.compute.driver,
+                               'get_info', side_effect=error) as mock_get_info:
+            db_instance = objects.Instance(uuid='fake-uuid', task_state=None)
+            self.compute._query_driver_power_state_and_sync(self.context,
+                                                            db_instance)
+            mock_get_info.assert_called_once_with(db_instance)
+            mock_sync_power_state.assert_called_once_with(self.context,
+                                                          db_instance,
+                                                          power_state.NOSTATE,
+                                                          use_slave=True)
+
     def test_run_pending_deletes(self):
         self.flags(instance_delete_interval=10)
 
@@ -1061,7 +1091,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                 self._test_check_can_live_migrate_destination,
                 do_raise=True)
 
-    def test_prepare_for_instance_event(self):
+    @mock.patch('nova.compute.manager.InstanceEvents._lock_name')
+    def test_prepare_for_instance_event(self, lock_name_mock):
         inst_obj = objects.Instance(uuid='foo')
         result = self.compute.instance_events.prepare_for_instance_event(
             inst_obj, 'test-event')
@@ -1072,6 +1103,42 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             result,
             self.compute.instance_events._events['foo']['test-event'])
         self.assertTrue(hasattr(result, 'send'))
+        lock_name_mock.assert_called_once_with(inst_obj)
+
+    @mock.patch('nova.compute.manager.InstanceEvents._lock_name')
+    def test_pop_instance_event(self, lock_name_mock):
+        event = eventlet_event.Event()
+        self.compute.instance_events._events = {
+            'foo': {
+                'test-event': event,
+                }
+            }
+        inst_obj = objects.Instance(uuid='foo')
+        event_obj = objects.InstanceExternalEvent(name='test-event',
+                                                  tag=None)
+        result = self.compute.instance_events.pop_instance_event(inst_obj,
+                                                                 event_obj)
+        self.assertEqual(result, event)
+        lock_name_mock.assert_called_once_with(inst_obj)
+
+    @mock.patch('nova.compute.manager.InstanceEvents._lock_name')
+    def test_clear_events_for_instance(self, lock_name_mock):
+        event = eventlet_event.Event()
+        self.compute.instance_events._events = {
+            'foo': {
+                'test-event': event,
+                }
+            }
+        inst_obj = objects.Instance(uuid='foo')
+        result = self.compute.instance_events.clear_events_for_instance(
+            inst_obj)
+        self.assertEqual(result, {'test-event': event})
+        lock_name_mock.assert_called_once_with(inst_obj)
+
+    def test_instance_events_lock_name(self):
+        inst_obj = objects.Instance(uuid='foo')
+        result = self.compute.instance_events._lock_name(inst_obj)
+        self.assertEqual(result, 'foo-events')
 
     def test_prepare_for_instance_event_again(self):
         inst_obj = objects.Instance(uuid='foo')
@@ -1097,8 +1164,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                 }
             }
         inst_obj = objects.Instance(uuid='foo')
-        event_obj = external_event_obj.InstanceExternalEvent(name='test-event',
-                                                             tag=None)
+        event_obj = objects.InstanceExternalEvent(name='test-event', tag=None)
         self.compute._process_instance_event(inst_obj, event_obj)
         self.assertTrue(event.ready())
         self.assertEqual(event_obj, event.wait())
@@ -1109,10 +1175,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             objects.Instance(uuid='uuid1'),
             objects.Instance(uuid='uuid2')]
         events = [
-            external_event_obj.InstanceExternalEvent(name='network-changed',
-                                                     instance_uuid='uuid1'),
-            external_event_obj.InstanceExternalEvent(name='foo',
-                                                     instance_uuid='uuid2')]
+            objects.InstanceExternalEvent(name='network-changed',
+                                          instance_uuid='uuid1'),
+            objects.InstanceExternalEvent(name='foo', instance_uuid='uuid2')]
 
         @mock.patch.object(self.compute.network_api, 'get_instance_nw_info')
         @mock.patch.object(self.compute, '_process_instance_event')
@@ -1195,7 +1260,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
 
     @mock.patch('nova.objects.BlockDeviceMapping.get_by_volume_id')
     @mock.patch('nova.compute.manager.ComputeManager._detach_volume')
-    @mock.patch('nova.objects.instance.Instance._from_db_object')
+    @mock.patch('nova.objects.Instance._from_db_object')
     def test_remove_volume_connection(self, inst_from_db, detach, bdm_get):
         bdm = mock.sentinel.bdm
         inst_obj = mock.sentinel.inst_obj
@@ -1203,7 +1268,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         inst_from_db.return_value = inst_obj
         with mock.patch.object(self.compute, 'volume_api'):
             self.compute.remove_volume_connection(self.context, 'vol',
-                                                  {'uuid': 'fake-inst'})
+                                                  inst_obj)
         detach.assert_called_once_with(self.context, inst_obj, bdm)
 
     def test_rescue(self):
@@ -1212,9 +1277,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         fake_nw_info = network_model.NetworkInfo()
         rescue_image_meta = {'id': 'fake', 'name': 'fake'}
         with contextlib.nested(
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
-                              'event_start'),
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
+            mock.patch.object(objects.InstanceActionEvent, 'event_start'),
+            mock.patch.object(objects.InstanceActionEvent,
                               'event_finish_with_failure'),
             mock.patch.object(self.context, 'elevated',
                               return_value=self.context),
@@ -1275,9 +1339,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.context, vm_state=vm_states.RESCUED)
         fake_nw_info = network_model.NetworkInfo()
         with contextlib.nested(
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
-                              'event_start'),
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
+            mock.patch.object(objects.InstanceActionEvent, 'event_start'),
+            mock.patch.object(objects.InstanceActionEvent,
                               'event_finish_with_failure'),
             mock.patch.object(self.context, 'elevated',
                               return_value=self.context),
@@ -1316,6 +1379,269 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             instance_save.assert_called_once_with(
                 expected_task_state=task_states.UNRESCUING)
 
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    @mock.patch('nova.compute.manager.ComputeManager._get_power_state',
+                return_value=power_state.RUNNING)
+    @mock.patch.object(objects.Instance, 'save')
+    @mock.patch('nova.utils.generate_password', return_value='fake-pass')
+    def test_set_admin_password(self, gen_password_mock,
+                                instance_save_mock, power_state_mock,
+                                event_finish_mock, event_start_mock):
+        # Ensure instance can have its admin password set.
+        instance = fake_instance.fake_instance_obj(
+            self.context,
+            vm_state=vm_states.ACTIVE,
+            task_state=task_states.UPDATING_PASSWORD)
+
+        @mock.patch.object(self.context, 'elevated', return_value=self.context)
+        @mock.patch.object(self.compute.driver, 'set_admin_password')
+        def do_test(driver_mock, elevated_mock):
+            # call the manager method
+            self.compute.set_admin_password(self.context, instance, None)
+            # make our assertions
+            self.assertEqual(vm_states.ACTIVE, instance.vm_state)
+            self.assertIsNone(instance.task_state)
+
+            power_state_mock.assert_called_once_with(self.context, instance)
+            driver_mock.assert_called_once_with(instance, 'fake-pass')
+            instance_save_mock.assert_called_once_with(
+                expected_task_state=task_states.UPDATING_PASSWORD)
+
+        do_test()
+
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    @mock.patch('nova.compute.manager.ComputeManager._get_power_state',
+                return_value=power_state.NOSTATE)
+    @mock.patch.object(objects.Instance, 'save')
+    @mock.patch.object(compute_utils, 'add_instance_fault_from_exc')
+    def test_set_admin_password_bad_state(self, add_fault_mock,
+                                          instance_save_mock, power_state_mock,
+                                          event_finish_mock, event_start_mock):
+        # Test setting password while instance is rebuilding.
+        instance = fake_instance.fake_instance_obj(self.context)
+        with mock.patch.object(self.context, 'elevated',
+                               return_value=self.context):
+            # call the manager method
+            self.assertRaises(exception.InstancePasswordSetFailed,
+                              self.compute.set_admin_password,
+                              self.context, instance, None)
+
+        # make our assertions
+        power_state_mock.assert_called_once_with(self.context, instance)
+        instance_save_mock.assert_called_once_with(
+            expected_task_state=task_states.UPDATING_PASSWORD)
+        add_fault_mock.assert_called_once_with(
+            self.context, instance, mock.ANY, mock.ANY)
+
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    @mock.patch('nova.utils.generate_password', return_value='fake-pass')
+    @mock.patch('nova.compute.manager.ComputeManager._get_power_state',
+                return_value=power_state.RUNNING)
+    @mock.patch('nova.compute.manager.ComputeManager._instance_update')
+    @mock.patch.object(objects.Instance, 'save')
+    @mock.patch.object(compute_utils, 'add_instance_fault_from_exc')
+    def _do_test_set_admin_password_driver_error(self, exc,
+                                                 expected_vm_state,
+                                                 expected_task_state,
+                                                 expected_exception,
+                                                 add_fault_mock,
+                                                 instance_save_mock,
+                                                 update_mock,
+                                                 power_state_mock,
+                                                 gen_password_mock,
+                                                 event_finish_mock,
+                                                 event_start_mock):
+        # Ensure expected exception is raised if set_admin_password fails.
+        instance = fake_instance.fake_instance_obj(
+            self.context,
+            vm_state=vm_states.ACTIVE,
+            task_state=task_states.UPDATING_PASSWORD)
+
+        @mock.patch.object(self.context, 'elevated', return_value=self.context)
+        @mock.patch.object(self.compute.driver, 'set_admin_password',
+                           side_effect=exc)
+        def do_test(driver_mock, elevated_mock):
+            # error raised from the driver should not reveal internal
+            # information so a new error is raised
+            self.assertRaises(expected_exception,
+                              self.compute.set_admin_password,
+                              self.context,
+                              instance=instance,
+                              new_pass=None)
+
+            if expected_exception == NotImplementedError:
+                instance_save_mock.assert_called_once_with(
+                    expected_task_state=task_states.UPDATING_PASSWORD)
+            else:
+                # setting the instance to error state
+                instance_save_mock.assert_called_once_with()
+
+            self.assertEqual(expected_vm_state, instance.vm_state)
+            # check revert_task_state decorator
+            update_mock.assert_called_once_with(
+                self.context, instance.uuid,
+                task_state=expected_task_state)
+            # check wrap_instance_fault decorator
+            add_fault_mock.assert_called_once_with(
+                self.context, instance, mock.ANY, mock.ANY)
+
+        do_test()
+
+    def test_set_admin_password_driver_not_authorized(self):
+        # Ensure expected exception is raised if set_admin_password not
+        # authorized.
+        exc = exception.Forbidden('Internal error')
+        expected_exception = exception.InstancePasswordSetFailed
+        self._do_test_set_admin_password_driver_error(
+            exc, vm_states.ERROR, None, expected_exception)
+
+    def test_set_admin_password_driver_not_implemented(self):
+        # Ensure expected exception is raised if set_admin_password not
+        # implemented by driver.
+        exc = NotImplementedError()
+        expected_exception = NotImplementedError
+        self._do_test_set_admin_password_driver_error(
+            exc, vm_states.ACTIVE, None, expected_exception)
+
+    def test_init_host_with_partial_migration(self):
+        our_host = self.compute.host
+        instance_1 = objects.Instance(self.context)
+        instance_1.uuid = 'foo'
+        instance_1.task_state = task_states.MIGRATING
+        instance_1.host = 'not-' + our_host
+        instance_2 = objects.Instance(self.context)
+        instance_2.uuid = 'bar'
+        instance_2.task_state = None
+        instance_2.host = 'not-' + our_host
+
+        with contextlib.nested(
+            mock.patch.object(self.compute, '_get_instances_on_driver',
+                               return_value=[instance_1,
+                                             instance_2]),
+            mock.patch.object(self.compute, '_get_instance_nw_info',
+                               return_value=None),
+            mock.patch.object(self.compute, '_get_instance_block_device_info',
+                               return_value={}),
+            mock.patch.object(self.compute, '_is_instance_storage_shared',
+                               return_value=False),
+            mock.patch.object(self.compute.driver, 'destroy')
+        ) as (_get_instances_on_driver, _get_instance_nw_info,
+              _get_instance_block_device_info, _is_instance_storage_shared,
+              destroy):
+            self.compute._destroy_evacuated_instances(self.context)
+            destroy.assert_called_once_with(self.context, instance_2, None,
+                                            {}, True)
+
+    @mock.patch('nova.compute.manager.ComputeManager._instance_update')
+    def test_error_out_instance_on_exception_not_implemented_err(self,
+                                                        inst_update_mock):
+        instance = fake_instance.fake_instance_obj(self.context)
+
+        def do_test():
+            with self.compute._error_out_instance_on_exception(
+                    self.context, instance, instance_state=vm_states.STOPPED):
+                raise NotImplementedError('test')
+
+        self.assertRaises(NotImplementedError, do_test)
+        inst_update_mock.assert_called_once_with(
+            self.context, instance.uuid,
+            vm_state=vm_states.STOPPED, task_state=None)
+
+    @mock.patch('nova.compute.manager.ComputeManager._instance_update')
+    def test_error_out_instance_on_exception_inst_fault_rollback(self,
+                                                        inst_update_mock):
+        instance = fake_instance.fake_instance_obj(self.context)
+
+        def do_test():
+            with self.compute._error_out_instance_on_exception(self.context,
+                                                               instance):
+                raise exception.InstanceFaultRollback(
+                    inner_exception=test.TestingException('test'))
+
+        self.assertRaises(test.TestingException, do_test)
+        inst_update_mock.assert_called_once_with(
+            self.context, instance.uuid,
+            vm_state=vm_states.ACTIVE, task_state=None)
+
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_set_instance_error_state')
+    def test_error_out_instance_on_exception_unknown_with_quotas(self,
+                                                                 set_error):
+        instance = fake_instance.fake_instance_obj(self.context)
+        quotas = mock.create_autospec(objects.Quotas, spec_set=True)
+
+        def do_test():
+            with self.compute._error_out_instance_on_exception(
+                    self.context, instance, quotas):
+                raise test.TestingException('test')
+
+        self.assertRaises(test.TestingException, do_test)
+        self.assertEqual(1, len(quotas.method_calls))
+        self.assertEqual(mock.call.rollback(), quotas.method_calls[0])
+        set_error.assert_called_once_with(self.context, instance)
+
+    def test_cleanup_volumes(self):
+        instance = fake_instance.fake_instance_obj(self.context)
+        bdm_do_not_delete_dict = fake_block_device.FakeDbBlockDeviceDict(
+            {'volume_id': 'fake-id1', 'source_type': 'image',
+                'delete_on_termination': False})
+        bdm_delete_dict = fake_block_device.FakeDbBlockDeviceDict(
+            {'volume_id': 'fake-id2', 'source_type': 'image',
+                'delete_on_termination': True})
+        bdms = block_device_obj.block_device_make_list(self.context,
+            [bdm_do_not_delete_dict, bdm_delete_dict])
+
+        with mock.patch.object(self.compute.volume_api,
+                'delete') as volume_delete:
+            self.compute._cleanup_volumes(self.context, instance.uuid, bdms)
+            volume_delete.assert_called_once_with(self.context,
+                    bdms[1].volume_id)
+
+    def test_cleanup_volumes_exception_do_not_raise(self):
+        instance = fake_instance.fake_instance_obj(self.context)
+        bdm_dict1 = fake_block_device.FakeDbBlockDeviceDict(
+            {'volume_id': 'fake-id1', 'source_type': 'image',
+                'delete_on_termination': True})
+        bdm_dict2 = fake_block_device.FakeDbBlockDeviceDict(
+            {'volume_id': 'fake-id2', 'source_type': 'image',
+                'delete_on_termination': True})
+        bdms = block_device_obj.block_device_make_list(self.context,
+            [bdm_dict1, bdm_dict2])
+
+        with mock.patch.object(self.compute.volume_api,
+                'delete',
+                side_effect=[test.TestingException(), None]) as volume_delete:
+            self.compute._cleanup_volumes(self.context, instance.uuid, bdms,
+                    raise_exc=False)
+            calls = [mock.call(self.context, bdm.volume_id) for bdm in bdms]
+            self.assertEqual(calls, volume_delete.call_args_list)
+
+    def test_cleanup_volumes_exception_raise(self):
+        instance = fake_instance.fake_instance_obj(self.context)
+        bdm_dict1 = fake_block_device.FakeDbBlockDeviceDict(
+            {'volume_id': 'fake-id1', 'source_type': 'image',
+                'delete_on_termination': True})
+        bdm_dict2 = fake_block_device.FakeDbBlockDeviceDict(
+            {'volume_id': 'fake-id2', 'source_type': 'image',
+                'delete_on_termination': True})
+        bdms = block_device_obj.block_device_make_list(self.context,
+            [bdm_dict1, bdm_dict2])
+
+        with mock.patch.object(self.compute.volume_api,
+                'delete',
+                side_effect=[test.TestingException(), None]) as volume_delete:
+            self.assertRaises(test.TestingException,
+                    self.compute._cleanup_volumes, self.context, instance.uuid,
+                    bdms)
+            calls = [mock.call(self.context, bdm.volume_id) for bdm in bdms]
+            self.assertEqual(calls, volume_delete.call_args_list)
+
 
 class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     def setUp(self):
@@ -1333,7 +1659,9 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.requested_networks = []
         self.security_groups = []
         self.block_device_mapping = []
-        self.filter_properties = {}
+        self.filter_properties = {'retry': {'num_attempts': 1,
+                                            'hosts': [[self.compute.host,
+                                                       'fake-node']]}}
 
         def fake_network_info():
             return network_model.NetworkInfo()
@@ -1375,14 +1703,13 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 event, **kwargs)
 
     def _instance_action_events(self):
-        self.mox.StubOutWithMock(instance_action_obj.InstanceActionEvent,
-                                 'event_start')
-        self.mox.StubOutWithMock(instance_action_obj.InstanceActionEvent,
+        self.mox.StubOutWithMock(objects.InstanceActionEvent, 'event_start')
+        self.mox.StubOutWithMock(objects.InstanceActionEvent,
                                  'event_finish_with_failure')
-        instance_action_obj.InstanceActionEvent.event_start(
+        objects.InstanceActionEvent.event_start(
                 self.context, self.instance['uuid'], mox.IgnoreArg(),
                 want_result=False)
-        instance_action_obj.InstanceActionEvent.event_finish_with_failure(
+        objects.InstanceActionEvent.event_finish_with_failure(
                 self.context, self.instance['uuid'], mox.IgnoreArg(),
                 exc_val=mox.IgnoreArg(), exc_tb=mox.IgnoreArg(),
                 want_result=False)
@@ -1424,8 +1751,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                             instance_uuid=self.instance['uuid']))
         self.compute._cleanup_allocated_networks(self.context, self.instance,
                 self.requested_networks)
-        self.compute._set_instance_error_state(self.context,
-                self.instance['uuid'])
+        self.compute._set_instance_error_state(self.context, self.instance)
         self._instance_action_events()
         self.mox.ReplayAll()
 
@@ -1469,6 +1795,35 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 block_device_mapping=self.block_device_mapping, node=self.node,
                 limits=self.limits)
 
+    def test_rescheduled_exception_without_retry(self):
+        self.mox.StubOutWithMock(self.compute, '_build_and_run_instance')
+        self.mox.StubOutWithMock(self.compute, '_set_instance_error_state')
+        self.mox.StubOutWithMock(self.compute, '_cleanup_allocated_networks')
+        self._do_build_instance_update()
+        self.compute._build_and_run_instance(self.context, self.instance,
+                self.image, self.injected_files, self.admin_pass,
+                self.requested_networks, self.security_groups,
+                self.block_device_mapping, self.node, self.limits,
+                {}).AndRaise(
+                        exception.RescheduledException(reason='',
+                            instance_uuid=self.instance['uuid']))
+        self.compute._cleanup_allocated_networks(self.context, self.instance,
+            self.requested_networks)
+        self.compute._set_instance_error_state(self.context,
+                                               self.instance['uuid'])
+        self._instance_action_events()
+        self.mox.ReplayAll()
+
+        self.compute.build_and_run_instance(self.context, self.instance,
+                self.image, request_spec={},
+                filter_properties={},
+                injected_files=self.injected_files,
+                admin_password=self.admin_pass,
+                requested_networks=self.requested_networks,
+                security_groups=self.security_groups,
+                block_device_mapping=self.block_device_mapping, node=self.node,
+                limits=self.limits)
+
     def test_rescheduled_exception_do_not_deallocate_network(self):
         self.mox.StubOutWithMock(self.compute, '_build_and_run_instance')
         self.mox.StubOutWithMock(self.compute, '_cleanup_allocated_networks')
@@ -1502,7 +1857,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     def test_rescheduled_exception_deallocate_network_if_dhcp(self):
         self.mox.StubOutWithMock(self.compute, '_build_and_run_instance')
         self.mox.StubOutWithMock(self.compute.driver,
-                'dhcp_options_for_instance')
+                'macs_for_instance')
         self.mox.StubOutWithMock(self.compute, '_cleanup_allocated_networks')
         self.mox.StubOutWithMock(self.compute.compute_task_api,
                 'build_instances')
@@ -1514,7 +1869,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 self.filter_properties).AndRaise(
                         exception.RescheduledException(reason='',
                             instance_uuid=self.instance['uuid']))
-        self.compute.driver.dhcp_options_for_instance(self.instance).AndReturn(
+        self.compute.driver.macs_for_instance(self.instance).AndReturn(
                 {'fake': 'options'})
         self.compute._cleanup_allocated_networks(self.context, self.instance,
                 self.requested_networks)
@@ -1550,8 +1905,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 self.requested_networks)
         if set_error:
             self.mox.StubOutWithMock(self.compute, '_set_instance_error_state')
-            self.compute._set_instance_error_state(self.context,
-                    self.instance['uuid'])
+            self.compute._set_instance_error_state(self.context, self.instance)
         self._instance_action_events()
         self.mox.ReplayAll()
 
@@ -1586,9 +1940,13 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(conductor_rpcapi.ConductorAPI,
                                  'instance_update')
         self.mox.StubOutWithMock(self.compute, '_build_networks_for_instance')
+        self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
         self.compute._build_networks_for_instance(self.context, self.instance,
                 self.requested_networks, self.security_groups).AndReturn(
                         self.network_info)
+        self.compute._shutdown_instance(self.context, self.instance,
+                self.block_device_mapping, self.requested_networks,
+                try_deallocate_networks=False)
         self._notify_about_instance_usage('create.start',
             extra_usage_info={'image_name': self.image.get('name')})
         self._build_and_run_instance_update()
@@ -1614,9 +1972,13 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(conductor_rpcapi.ConductorAPI,
                                  'instance_update')
         self.mox.StubOutWithMock(self.compute, '_build_networks_for_instance')
+        self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
         self.compute._build_networks_for_instance(self.context, self.instance,
                 self.requested_networks, self.security_groups).AndReturn(
                         self.network_info)
+        self.compute._shutdown_instance(self.context, self.instance,
+                self.block_device_mapping, self.requested_networks,
+                try_deallocate_networks=False)
         self._notify_about_instance_usage('create.start',
             extra_usage_info={'image_name': self.image.get('name')})
         self._build_and_run_instance_update()
@@ -1641,7 +2003,26 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     def test_spawn_network_alloc_failure(self):
         # Because network allocation is asynchronous, failures may not present
         # themselves until the virt spawn method is called.
-        exc = exception.NoMoreNetworks()
+        self._test_build_and_run_spawn_exceptions(exception.NoMoreNetworks())
+
+    def test_build_and_run_flavor_disk_too_small_exception(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.FlavorDiskTooSmall())
+
+    def test_build_and_run_flavor_memory_too_small_exception(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.FlavorMemoryTooSmall())
+
+    def test_build_and_run_image_not_active_exception(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.ImageNotActive(image_id=self.image.get('id')))
+
+    def test_build_and_run_image_unacceptable_exception(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.ImageUnacceptable(image_id=self.image.get('id'),
+                                        reason=""))
+
+    def _test_build_and_run_spawn_exceptions(self, exc):
         with contextlib.nested(
                 mock.patch.object(self.compute.driver, 'spawn',
                     side_effect=exc),
@@ -1653,9 +2034,14 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     '_build_networks_for_instance',
                     return_value=self.network_info),
                 mock.patch.object(self.compute,
-                    '_notify_about_instance_usage')
+                    '_notify_about_instance_usage'),
+                mock.patch.object(self.compute,
+                    '_shutdown_instance'),
+                mock.patch.object(self.compute,
+                    '_validate_instance_group_policy')
         ) as (spawn, instance_update, save,
-                _build_networks_for_instance, _notify_about_instance_usage):
+                _build_networks_for_instance, _notify_about_instance_usage,
+                _shutdown_instance, _validate_instance_group_policy):
 
             self.assertRaises(exception.BuildAbortException,
                     self.compute._build_and_run_instance, self.context,
@@ -1664,6 +2050,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     self.security_groups, self.block_device_mapping, self.node,
                     self.limits, self.filter_properties)
 
+            _validate_instance_group_policy.assert_called_once_with(
+                    self.context, self.instance, self.filter_properties)
             _build_networks_for_instance.assert_has_calls(
                     mock.call(self.context, self.instance,
                         self.requested_networks, self.security_groups))
@@ -1686,6 +2074,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
 
             instance_update.assert_has_calls(mock.call(self.context,
                 self.instance['uuid'], mock.ANY, 'conductor'))
+
+            _shutdown_instance.assert_called_once_with(self.context,
+                    self.instance, self.block_device_mapping,
+                    self.requested_networks, try_deallocate_networks=False)
 
     @mock.patch('nova.compute.manager.ComputeManager._get_power_state')
     def test_spawn_waits_for_network_and_saves_info_cache(self, gps):
@@ -1835,12 +2227,44 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     mock.call(self.context, self.instance,
                         self.requested_networks, self.security_groups))
 
+    def test_build_resources_with_network_info_obj_on_spawn_failure(self):
+        self.mox.StubOutWithMock(self.compute, '_cleanup_build_resources')
+        self.mox.StubOutWithMock(self.compute, '_build_networks_for_instance')
+        self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
+        self.compute._build_networks_for_instance(self.context, self.instance,
+                self.requested_networks, self.security_groups).AndReturn(
+                        network_model.NetworkInfo())
+        self.compute._shutdown_instance(self.context, self.instance,
+                self.block_device_mapping, self.requested_networks,
+                try_deallocate_networks=False)
+        self._build_resources_instance_update()
+        self.compute._cleanup_build_resources(self.context, self.instance,
+                self.block_device_mapping)
+        self.mox.ReplayAll()
+
+        test_exception = test.TestingException()
+
+        def fake_spawn():
+            raise test_exception
+
+        try:
+            with self.compute._build_resources(self.context, self.instance,
+                    self.requested_networks, self.security_groups,
+                    self.image, self.block_device_mapping):
+                fake_spawn()
+        except Exception as e:
+            self.assertEqual(test_exception, e)
+
     def test_build_resources_cleans_up_and_reraises_on_spawn_failure(self):
         self.mox.StubOutWithMock(self.compute, '_cleanup_build_resources')
         self.mox.StubOutWithMock(self.compute, '_build_networks_for_instance')
+        self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
         self.compute._build_networks_for_instance(self.context, self.instance,
                 self.requested_networks, self.security_groups).AndReturn(
                         self.network_info)
+        self.compute._shutdown_instance(self.context, self.instance,
+                self.block_device_mapping, self.requested_networks,
+                try_deallocate_networks=False)
         self._build_resources_instance_update()
         self.compute._cleanup_build_resources(self.context, self.instance,
                 self.block_device_mapping)
@@ -1862,9 +2286,13 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     def test_build_resources_aborts_on_cleanup_failure(self):
         self.mox.StubOutWithMock(self.compute, '_cleanup_build_resources')
         self.mox.StubOutWithMock(self.compute, '_build_networks_for_instance')
+        self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
         self.compute._build_networks_for_instance(self.context, self.instance,
                 self.requested_networks, self.security_groups).AndReturn(
                         self.network_info)
+        self.compute._shutdown_instance(self.context, self.instance,
+                self.block_device_mapping, self.requested_networks,
+                try_deallocate_networks=False)
         self._build_resources_instance_update()
         self.compute._cleanup_build_resources(self.context, self.instance,
                 self.block_device_mapping).AndRaise(test.TestingException())
@@ -1968,7 +2396,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
         self.instance = fake_instance.fake_instance_obj(self.context,
                 vm_state=vm_states.ACTIVE,
                 expected_attrs=['metadata', 'system_metadata', 'info_cache'])
-        self.migration = migration_obj.Migration()
+        self.migration = objects.Migration()
         self.migration.status = 'migrating'
 
     def test_finish_resize_failure(self):
@@ -1976,9 +2404,8 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
         with contextlib.nested(
             mock.patch.object(self.compute, '_finish_resize',
                               side_effect=exception.ResizeError(reason='')),
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
-                              'event_start'),
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
+            mock.patch.object(objects.InstanceActionEvent, 'event_start'),
+            mock.patch.object(objects.InstanceActionEvent,
                               'event_finish_with_failure'),
             mock.patch.object(db, 'instance_fault_create'),
             mock.patch.object(self.compute, '_instance_update'),
@@ -2005,9 +2432,8 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
             mock.patch.object(self.compute.driver,
                               'migrate_disk_and_power_off',
                               side_effect=exception.ResizeError(reason='')),
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
-                              'event_start'),
-            mock.patch.object(instance_action_obj.InstanceActionEvent,
+            mock.patch.object(objects.InstanceActionEvent, 'event_start'),
+            mock.patch.object(objects.InstanceActionEvent,
                               'event_finish_with_failure'),
             mock.patch.object(db, 'instance_fault_create'),
             mock.patch.object(self.compute, '_instance_update'),

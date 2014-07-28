@@ -18,7 +18,7 @@ from nova.api.openstack.compute.plugins.v3 import admin_actions
 from nova.compute import vm_states
 import nova.context
 from nova import exception
-from nova.objects import instance as instance_obj
+from nova import objects
 from nova.openstack.common import jsonutils
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -58,8 +58,8 @@ class CommonMixin(object):
         instance = fake_instance.fake_db_instance(
                 id=1, uuid=uuid, vm_state=vm_states.ACTIVE,
                 task_state=None, launched_at=timeutils.utcnow())
-        instance = instance_obj.Instance._from_db_object(
-                self.context, instance_obj.Instance(), instance)
+        instance = objects.Instance._from_db_object(
+                self.context, objects.Instance(), instance)
         self.compute_api.get(self.context, uuid, expected_attrs=None,
                              want_objects=True).AndReturn(instance)
         return instance
@@ -196,16 +196,16 @@ class ResetStateTests(test.NoDBTestCase):
         self.context = self.request.environ['nova.context']
 
     def test_no_state(self):
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(exception.ValidationError,
                           self.admin_api._reset_state,
                           self.request, self.uuid,
-                          {"reset_state": None})
+                          body={"reset_state": None})
 
     def test_bad_state(self):
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(exception.ValidationError,
                           self.admin_api._reset_state,
                           self.request, self.uuid,
-                          {"reset_state": {"state": "spam"}})
+                          body={"reset_state": {"state": "spam"}})
 
     def test_no_instance(self):
         self.mox.StubOutWithMock(self.compute_api, 'get')
@@ -218,10 +218,10 @@ class ResetStateTests(test.NoDBTestCase):
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.admin_api._reset_state,
                           self.request, self.uuid,
-                          {"reset_state": {"state": "active"}})
+                          body={"reset_state": {"state": "active"}})
 
     def _setup_mock(self, expected):
-        instance = instance_obj.Instance()
+        instance = objects.Instance()
         instance.uuid = self.uuid
         instance.vm_state = 'fake'
         instance.task_state = 'fake'
@@ -248,8 +248,8 @@ class ResetStateTests(test.NoDBTestCase):
         self.mox.ReplayAll()
 
         body = {"reset_state": {"state": "active"}}
-        result = self.admin_api._reset_state(self.request, self.uuid, body)
-
+        result = self.admin_api._reset_state(self.request, self.uuid,
+                                             body=body)
         self.assertEqual(202, result.status_int)
 
     def test_reset_error(self):
@@ -257,6 +257,6 @@ class ResetStateTests(test.NoDBTestCase):
                               task_state=None))
         self.mox.ReplayAll()
         body = {"reset_state": {"state": "error"}}
-        result = self.admin_api._reset_state(self.request, self.uuid, body)
-
+        result = self.admin_api._reset_state(self.request, self.uuid,
+                                             body=body)
         self.assertEqual(202, result.status_int)

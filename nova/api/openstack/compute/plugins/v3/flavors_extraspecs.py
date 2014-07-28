@@ -15,13 +15,13 @@
 
 import webob
 
+from nova.api.openstack.compute.schemas.v3 import flavors_extraspecs
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.compute import flavors
-from nova import db
+from nova.api import validation
 from nova import exception
-from nova.openstack.common.db import exception as db_exc
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
+from nova import objects
 
 
 class FlavorExtraSpecsController(object):
@@ -34,19 +34,8 @@ class FlavorExtraSpecsController(object):
                                                          'v3:' + self.ALIAS)
 
     def _get_extra_specs(self, context, flavor_id):
-        extra_specs = db.flavor_extra_specs_get(context, flavor_id)
-        return dict(extra_specs=extra_specs)
-
-    def _check_body(self, body):
-        if body is None or body == "":
-            expl = _('No Request Body')
-            raise webob.exc.HTTPBadRequest(explanation=expl)
-
-    def _check_key_names(self, keys):
-        try:
-            flavors.validate_extra_spec_keys(keys)
-        except exception.InvalidInput as error:
-            raise webob.exc.HTTPBadRequest(explanation=error.format_message())
+        flavor = objects.Flavor.get_by_flavor_id(context, flavor_id)
+        return dict(extra_specs=flavor.extra_specs)
 
     @extensions.expected_errors(())
     def index(self, req, flavor_id):
@@ -57,41 +46,37 @@ class FlavorExtraSpecsController(object):
 
     @extensions.expected_errors((400, 404, 409))
     @wsgi.response(201)
+    @validation.schema(flavors_extraspecs.create)
     def create(self, req, flavor_id, body):
         context = req.environ['nova.context']
         self.authorize(context, action='create')
-        self._check_body(body)
-        specs = body.get('extra_specs', {})
-        if not specs or type(specs) is not dict:
-            raise webob.exc.HTTPBadRequest(_('No or bad extra_specs provided'))
-        self._check_key_names(specs.keys())
+
+        specs = body['extra_specs']
         try:
-            db.flavor_extra_specs_update_or_create(context, flavor_id,
-                                                          specs)
-        except db_exc.DBDuplicateEntry:
-            msg = _("Concurrent transaction has been committed, try again")
-            raise webob.exc.HTTPConflict(explanation=msg)
+            flavor = objects.Flavor.get_by_flavor_id(context, flavor_id)
+            flavor.extra_specs = dict(flavor.extra_specs, **specs)
+            flavor.save()
+        except exception.FlavorExtraSpecUpdateCreateFailed as e:
+            raise webob.exc.HTTPConflict(explanation=e.format_message())
         except exception.FlavorNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         return body
 
     @extensions.expected_errors((400, 404, 409))
+    @validation.schema(flavors_extraspecs.update)
     def update(self, req, flavor_id, id, body):
         context = req.environ['nova.context']
         self.authorize(context, action='update')
-        self._check_body(body)
+
         if id not in body:
             expl = _('Request body and URI mismatch')
             raise webob.exc.HTTPBadRequest(explanation=expl)
-        if len(body) > 1:
-            expl = _('Request body contains too many items')
-            raise webob.exc.HTTPBadRequest(explanation=expl)
         try:
-            db.flavor_extra_specs_update_or_create(context, flavor_id,
-                                                          body)
-        except db_exc.DBDuplicateEntry:
-            msg = _("Concurrent transaction has been committed, try again")
-            raise webob.exc.HTTPConflict(explanation=msg)
+            flavor = objects.Flavor.get_by_flavor_id(context, flavor_id)
+            flavor.extra_specs = dict(flavor.extra_specs, **body)
+            flavor.save()
+        except exception.FlavorExtraSpecUpdateCreateFailed as e:
+            raise webob.exc.HTTPConflict(explanation=e.format_message())
         except exception.FlavorNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         return body
@@ -102,11 +87,16 @@ class FlavorExtraSpecsController(object):
         context = req.environ['nova.context']
         self.authorize(context, action='show')
         try:
-            extra_spec = db.flavor_extra_specs_get_item(context,
-                                                               flavor_id, id)
-            return extra_spec
-        except exception.FlavorExtraSpecsNotFound as e:
+            flavor = objects.Flavor.get_by_flavor_id(context, flavor_id)
+            return {id: flavor.extra_specs[id]}
+        except (exception.FlavorExtraSpecsNotFound,
+                exception.FlavorNotFound) as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
+        except KeyError:
+            msg = _("Flavor %(flavor_id)s has no extra specs with "
+                    "key %(key)s.") % dict(flavor_id=flavor_id,
+                                           key=id)
+            raise webob.exc.HTTPNotFound(explanation=msg)
 
     @wsgi.response(204)
     @extensions.expected_errors(404)
@@ -115,9 +105,17 @@ class FlavorExtraSpecsController(object):
         context = req.environ['nova.context']
         self.authorize(context, action='delete')
         try:
-            db.flavor_extra_specs_delete(context, flavor_id, id)
-        except exception.FlavorExtraSpecsNotFound as e:
+            flavor = objects.Flavor.get_by_flavor_id(context, flavor_id)
+            del flavor.extra_specs[id]
+            flavor.save()
+        except (exception.FlavorExtraSpecsNotFound,
+                exception.FlavorNotFound) as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
+        except KeyError:
+            msg = _("Flavor %(flavor_id)s has no extra specs with "
+                    "key %(key)s.") % dict(flavor_id=flavor_id,
+                                           key=id)
+            raise webob.exc.HTTPNotFound(explanation=msg)
 
 
 class FlavorsExtraSpecs(extensions.V3APIExtensionBase):

@@ -13,11 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import copy
-import functools
-
 from nova import db
-from nova import exception
+from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.openstack.common import jsonutils
@@ -25,28 +22,6 @@ from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
-
-
-def check_device_status(dev_status=None):
-    """Decorator to check device status before changing it."""
-
-    if dev_status is not None and not isinstance(dev_status, set):
-        dev_status = set(dev_status)
-
-    def outer(f):
-        @functools.wraps(f)
-        def inner(self, instance=None):
-            if self['status'] not in dev_status:
-                raise exception.PciDeviceInvalidStatus(
-                    compute_node_id=self.compute_node_id,
-                    address=self.address, status=self.status,
-                    hopestatus=dev_status)
-            if instance:
-                return f(self, instance)
-            else:
-                return f(self)
-        return inner
-    return outer
 
 
 class PciDevice(base.NovaPersistentObject, base.NovaObject):
@@ -132,8 +107,8 @@ class PciDevice(base.NovaPersistentObject, base.NovaObject):
                 extra_info.update({k: v})
                 self.extra_info = extra_info
 
-    def __init__(self):
-        super(PciDevice, self).__init__()
+    def __init__(self, *args, **kwargs):
+        super(PciDevice, self).__init__(*args, **kwargs)
         self.obj_reset_changes()
         self.extra_info = {}
 
@@ -172,56 +147,6 @@ class PciDevice(base.NovaPersistentObject, base.NovaObject):
         pci_device.status = 'available'
         return pci_device
 
-    @check_device_status(dev_status=['available'])
-    def claim(self, instance):
-        self.status = 'claimed'
-        self.instance_uuid = instance['uuid']
-
-    @check_device_status(dev_status=['available', 'claimed'])
-    def allocate(self, instance):
-        if self.status == 'claimed' and self.instance_uuid != instance['uuid']:
-            raise exception.PciDeviceInvalidOwner(
-                compute_node_id=self.compute_node_id,
-                address=self.address, owner=self.instance_uuid,
-                hopeowner=instance['uuid'])
-
-        self.status = 'allocated'
-        self.instance_uuid = instance['uuid']
-
-        # Notes(yjiang5): remove this check when instance object for
-        # compute manager is finished
-        if isinstance(instance, dict):
-            if 'pci_devices' not in instance:
-                instance['pci_devices'] = []
-            instance['pci_devices'].append(copy.copy(self))
-        else:
-            instance.pci_devices.objects.append(copy.copy(self))
-
-    @check_device_status(dev_status=['available'])
-    def remove(self):
-        self.status = 'removed'
-        self.instance_uuid = None
-
-    @check_device_status(dev_status=['claimed', 'allocated'])
-    def free(self, instance=None):
-        if instance and self.instance_uuid != instance['uuid']:
-            raise exception.PciDeviceInvalidOwner(
-                compute_node_id=self.compute_node_id,
-                address=self.address, owner=self.instance_uuid,
-                hopeowner=instance['uuid'])
-        old_status = self.status
-        self.status = 'available'
-        self.instance_uuid = None
-        if old_status == 'allocated' and instance:
-            # Notes(yjiang5): remove this check when instance object for
-            # compute manager is finished
-            existed = next((dev for dev in instance['pci_devices']
-                if dev.id == self.id))
-            if isinstance(instance, dict):
-                instance['pci_devices'].remove(existed)
-            else:
-                instance.pci_devices.objects.remove(existed)
-
     @base.remotable
     def save(self, context):
         if self.status == 'removed':
@@ -250,19 +175,19 @@ class PciDeviceList(base.ObjectListBase, base.NovaObject):
         # NOTE(danms): PciDevice was at 1.1 before we added this
         }
 
-    def __init__(self):
-        super(PciDeviceList, self).__init__()
+    def __init__(self, *args, **kwargs):
+        super(PciDeviceList, self).__init__(*args, **kwargs)
         self.objects = []
         self.obj_reset_changes()
 
     @base.remotable_classmethod
     def get_by_compute_node(cls, context, node_id):
         db_dev_list = db.pci_device_get_all_by_node(context, node_id)
-        return base.obj_make_list(context, PciDeviceList(), PciDevice,
+        return base.obj_make_list(context, cls(context), objects.PciDevice,
                                   db_dev_list)
 
     @base.remotable_classmethod
     def get_by_instance_uuid(cls, context, uuid):
         db_dev_list = db.pci_device_get_all_by_instance_uuid(context, uuid)
-        return base.obj_make_list(context, PciDeviceList(), PciDevice,
+        return base.obj_make_list(context, cls(context), objects.PciDevice,
                                   db_dev_list)

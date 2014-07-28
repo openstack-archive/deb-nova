@@ -55,10 +55,10 @@
 from __future__ import print_function
 
 import argparse
-import decorator
 import os
 import sys
 
+import decorator
 import netaddr
 from oslo.config import cfg
 from oslo import messaging
@@ -72,10 +72,10 @@ from nova import context
 from nova import db
 from nova.db import migration
 from nova import exception
+from nova.i18n import _
 from nova import objects
 from nova.openstack.common import cliutils
 from nova.openstack.common.db import exception as db_exc
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import quota
@@ -508,7 +508,9 @@ class NetworkCommands(object):
             help='Number of networks to create')
     @args('--network_size', metavar='<number>',
             help='Number of IPs per network')
-    @args('--vlan', dest='vlan_start', metavar='<vlan id>', help='vlan id')
+    @args('--vlan', metavar='<vlan id>', help='vlan id')
+    @args('--vlan_start', dest='vlan_start', metavar='<vlan start id>',
+          help='vlan start id')
     @args('--vpn', dest='vpn_start', help='vpn start')
     @args('--fixed_range_v6', dest='cidr_v6',
           help='IPv6 subnet (ex: fe80::/64')
@@ -529,8 +531,8 @@ class NetworkCommands(object):
           help='Project id')
     @args('--priority', metavar="<number>", help='Network interface priority')
     def create(self, label=None, cidr=None, num_networks=None,
-               network_size=None, multi_host=None, vlan_start=None,
-               vpn_start=None, cidr_v6=None, gateway=None,
+               network_size=None, multi_host=None, vlan=None,
+               vlan_start=None, vpn_start=None, cidr_v6=None, gateway=None,
                gateway_v6=None, bridge=None, bridge_interface=None,
                dns1=None, dns2=None, project_id=None, priority=None,
                uuid=None, fixed_cidr=None):

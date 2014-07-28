@@ -42,11 +42,12 @@ from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
+from nova.i18n import _
 from nova.image import glance
 from nova.network import manager
 from nova.network.neutronv2 import api as neutron_api
+from nova import objects
 from nova.objects import instance as instance_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import policy as common_policy
 from nova.openstack.common import timeutils
@@ -192,7 +193,7 @@ class ServersControllerTest(ControllerTest):
 
     def setUp(self):
         super(ServersControllerTest, self).setUp()
-        CONF.set_override('glance_host', 'localhost')
+        CONF.set_override('host', 'localhost', group='glance')
 
     def test_requested_networks_prefix(self):
         uuid = 'br-00000000-0000-0000-0000-000000000000'
@@ -651,10 +652,10 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -670,13 +671,13 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('image', search_opts)
             self.assertEqual(search_opts['image'], '12345')
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -690,7 +691,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(filters)
             self.assertEqual(filters['project_id'], 'newfake')
             self.assertFalse(filters.get('tenant_id'))
@@ -710,7 +711,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotEqual(filters, None)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -720,13 +721,13 @@ class ServersControllerTest(ControllerTest):
 
         req = fakes.HTTPRequestV3.blank('/servers?tenant_id=newfake')
         res = self.controller.index(req)
-        self.assertTrue('servers' in res)
+        self.assertIn('servers', res)
 
     def test_tenant_id_filter_implies_all_tenants(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotEqual(filters, None)
             # The project_id assertion checks that the project_id
             # filter is set to that specified in the request url and
@@ -742,13 +743,13 @@ class ServersControllerTest(ControllerTest):
         req = fakes.HTTPRequestV3.blank('/servers?tenant_id=newfake',
                                       use_admin_context=True)
         res = self.controller.index(req)
-        self.assertTrue('servers' in res)
+        self.assertIn('servers', res)
 
     def test_all_tenants_param_normal(self):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotIn('project_id', filters)
             return [fakes.stub_instance(100)]
 
@@ -765,7 +766,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotIn('project_id', filters)
             return [fakes.stub_instance(100)]
 
@@ -782,7 +783,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotIn('all_tenants', filters)
             return [fakes.stub_instance(100)]
 
@@ -799,7 +800,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotIn('all_tenants', filters)
             return [fakes.stub_instance(100)]
 
@@ -816,7 +817,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertNotIn('all_tenants', filters)
             return [fakes.stub_instance(100)]
 
@@ -832,7 +833,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(filters)
             self.assertEqual(filters['project_id'], 'fake')
             return [fakes.stub_instance(100)]
@@ -850,7 +851,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(context, filters=None, sort_key=None,
                          sort_dir='desc', limit=None, marker=None,
                          columns_to_join=None, use_slave=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(filters)
             self.assertNotIn('project_id', filters)
             return [fakes.stub_instance(100)]
@@ -900,14 +901,14 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('flavor', search_opts)
             # flavor is an integer ID
             self.assertEqual(search_opts['flavor'], '12345')
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -935,13 +936,13 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('vm_state', search_opts)
             self.assertEqual(search_opts['vm_state'], [vm_states.ACTIVE])
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -958,7 +959,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('task_state', search_opts)
             self.assertEqual([task_states.REBOOT_PENDING,
@@ -968,7 +969,7 @@ class ServersControllerTest(ControllerTest):
             db_list = [fakes.stub_instance(100, uuid=server_uuid,
                                                 task_state=task_state)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -985,14 +986,14 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIn('vm_state', search_opts)
             self.assertEqual(search_opts['vm_state'],
                              [vm_states.ACTIVE, vm_states.STOPPED])
 
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1021,13 +1022,13 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIn('vm_state', search_opts)
             self.assertEqual(search_opts['vm_state'], ['deleted'])
 
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1044,13 +1045,13 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('name', search_opts)
             self.assertEqual(search_opts['name'], 'whee.*')
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1066,7 +1067,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('changes-since', search_opts)
             changes_since = datetime.datetime(2011, 1, 24, 17, 8, 1,
@@ -1075,7 +1076,7 @@ class ServersControllerTest(ControllerTest):
             self.assertNotIn('deleted', search_opts)
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1101,7 +1102,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             # Allowed by user
             self.assertIn('name', search_opts)
@@ -1112,7 +1113,7 @@ class ServersControllerTest(ControllerTest):
             self.assertNotIn('unknown_option', search_opts)
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1133,7 +1134,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             # Allowed by user
             self.assertIn('name', search_opts)
@@ -1144,7 +1145,7 @@ class ServersControllerTest(ControllerTest):
             self.assertIn('unknown_option', search_opts)
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1164,13 +1165,13 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('ip', search_opts)
             self.assertEqual(search_opts['ip'], '10\..*')
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1189,13 +1190,13 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.assertIsNotNone(search_opts)
             self.assertIn('ip6', search_opts)
             self.assertEqual(search_opts['ip6'], 'ffff.*')
             db_list = [fakes.stub_instance(100, uuid=server_uuid)]
             return instance_obj._make_instance_list(
-                context, instance_obj.InstanceList(), db_list, FIELDS)
+                context, objects.InstanceList(), db_list, FIELDS)
 
         self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
 
@@ -1271,7 +1272,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get_all(compute_self, context, search_opts=None,
                          sort_key=None, sort_dir='desc',
                          limit=None, marker=None, want_objects=False,
-                         expected_attrs=[]):
+                         expected_attrs=None):
             self.expected_attrs = expected_attrs
             return []
 
@@ -2093,6 +2094,15 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self._test_create_extra, params)
 
+    @mock.patch.object(compute_api.API, 'create')
+    def test_create_instance_raise_user_data_too_large(self, mock_create):
+        mock_create.side_effect = exception.InstanceUserDataTooLarge(
+            maxsize=1, length=2)
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, self.body)
+
     def test_create_instance_with_network_with_no_subnet(self):
         network = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         requested_networks = [{'uuid': network}]
@@ -2448,6 +2458,21 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict,
                           self._test_create_extra, params)
 
+    @mock.patch.object(compute_api.API, 'create')
+    def test_create_multiple_instance_with_specified_ip_neutronv2(self,
+                                                                  _api_mock):
+        _api_mock.side_effect = exception.InvalidFixedIpAndMaxCountRequest(
+            reason="")
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        address = '10.0.0.1'
+        requested_networks = [{'uuid': network, 'fixed_ip': address,
+                               'port': port}]
+        params = {'networks': requested_networks}
+        self.body['server']['max_count'] = 2
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self._test_create_extra, params)
+
     def test_create_multiple_instance_with_neutronv2_port(self):
         network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
@@ -2537,7 +2562,7 @@ class ServersControllerCreateTestWithMock(test.TestCase):
             create_mock):
         network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         address = '10.0.2.3'
-        requested_networks = [{'uuid': network, 'fixed-ip': address}]
+        requested_networks = [{'uuid': network, 'fixed_ip': address}]
         params = {'networks': requested_networks}
         create_mock.side_effect = exception.FixedIpAlreadyInUse(
             address=address,
@@ -2551,7 +2576,7 @@ class ServersViewBuilderTest(test.TestCase):
 
     def setUp(self):
         super(ServersViewBuilderTest, self).setUp()
-        CONF.set_override('glance_host', 'localhost')
+        CONF.set_override('host', 'localhost', group='glance')
         self.flags(use_ipv6=True)
         db_inst = fakes.stub_instance(
             id=1,

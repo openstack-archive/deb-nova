@@ -43,7 +43,10 @@ from sqlalchemy.schema import Table
 from sqlalchemy.sql.expression import asc
 from sqlalchemy.sql.expression import desc
 from sqlalchemy.sql.expression import select
+from sqlalchemy.sql import false
 from sqlalchemy.sql import func
+from sqlalchemy.sql import null
+from sqlalchemy.sql import true
 from sqlalchemy import String
 
 from nova import block_device
@@ -52,11 +55,11 @@ from nova.compute import vm_states
 import nova.context
 from nova.db.sqlalchemy import models
 from nova import exception
+from nova.i18n import _
 from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common.db.sqlalchemy import session as db_session
 from nova.openstack.common.db.sqlalchemy import utils as sqlalchemyutils
 from nova.openstack.common import excutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
@@ -262,7 +265,7 @@ def model_query(context, model, *args, **kwargs):
         if project_only == 'allow_none':
             query = query.\
                 filter(or_(base_model.project_id == context.project_id,
-                           base_model.project_id == None))
+                           base_model.project_id == null()))
         else:
             query = query.filter_by(project_id=context.project_id)
 
@@ -684,7 +687,12 @@ def compute_node_statistics(context):
                          func.sum(models.ComputeNode.running_vms),
                          func.sum(models.ComputeNode.disk_available_least),
                          base_model=models.ComputeNode,
-                         read_deleted="no").first()
+                         read_deleted="no").\
+                         filter(models.Service.disabled == false()).\
+                         filter(
+                            models.Service.id ==
+                            models.ComputeNode.service_id).\
+                         first()
 
     # Build a dict of the info--making no assumptions about result
     fields = ('count', 'vcpus', 'memory_mb', 'local_gb', 'vcpus_used',
@@ -783,10 +791,12 @@ def floating_ip_allocate_address(context, project_id, pool,
 @require_context
 def floating_ip_bulk_create(context, ips):
     session = get_session()
+    result = []
     with session.begin():
         for ip in ips:
             model = models.FloatingIp()
             model.update(ip)
+            result.append(model)
             try:
                 # NOTE(boris-42): To get existing address we have to do each
                 #                  time session.flush()..
@@ -794,6 +804,7 @@ def floating_ip_bulk_create(context, ips):
                 session.flush()
             except db_exc.DBDuplicateEntry:
                 raise exception.FloatingIpExists(address=ip['address'])
+    return result
 
 
 def _ip_range_splitter(ips, block_size=256):
@@ -899,7 +910,7 @@ def floating_ip_deallocate(context, address):
         floating_ip_ref = model_query(context, models.FloatingIp,
                                       session=session).\
                           filter_by(address=address).\
-                          filter(models.FloatingIp.project_id != None).\
+                          filter(models.FloatingIp.project_id != null()).\
                           with_lockmode('update').\
                           first()
 
@@ -1121,7 +1132,7 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
     session = get_session()
     with session.begin():
         network_or_none = or_(models.FixedIp.network_id == network_id,
-                              models.FixedIp.network_id == None)
+                              models.FixedIp.network_id == null())
         fixed_ip_ref = model_query(context, models.FixedIp, session=session,
                                    read_deleted="no").\
                                filter(network_or_none).\
@@ -1154,7 +1165,7 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
     session = get_session()
     with session.begin():
         network_or_none = or_(models.FixedIp.network_id == network_id,
-                              models.FixedIp.network_id == None)
+                              models.FixedIp.network_id == null())
         fixed_ip_ref = model_query(context, models.FixedIp, session=session,
                                    read_deleted="no").\
                                filter(network_or_none).\
@@ -1226,12 +1237,12 @@ def fixed_ip_disassociate_all_by_timeout(context, host, time):
     #             join with update doesn't work.
     with session.begin():
         host_filter = or_(and_(models.Instance.host == host,
-                               models.Network.multi_host == True),
+                               models.Network.multi_host == true()),
                           models.Network.host == host)
         result = model_query(context, models.FixedIp.id,
                              base_model=models.FixedIp, read_deleted="no",
                              session=session).\
-                filter(models.FixedIp.allocated == False).\
+                filter(models.FixedIp.allocated == false()).\
                 filter(models.FixedIp.updated_at < time).\
                 join((models.Network,
                       models.Network.id == models.FixedIp.network_id)).\
@@ -1664,6 +1675,7 @@ def _instance_data_get_for_user(context, project_id, user_id, session=None):
 
 
 @require_context
+@_retry_on_deadlock
 def instance_destroy(context, instance_uuid, constraint=None):
     session = get_session()
     with session.begin():
@@ -1921,7 +1933,7 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
                 # but until then we test it explicitly as a workaround.
                 not_soft_deleted = or_(
                     models.Instance.vm_state != vm_states.SOFT_DELETED,
-                    models.Instance.vm_state == None
+                    models.Instance.vm_state == null()
                     )
                 query_prefix = query_prefix.filter(not_soft_deleted)
 
@@ -2070,7 +2082,7 @@ def instance_get_active_by_window_joined(context, begin, end=None,
 
     query = query.options(joinedload('info_cache')).\
                   options(joinedload('security_groups')).\
-                  filter(or_(models.Instance.terminated_at == None,
+                  filter(or_(models.Instance.terminated_at == null(),
                              models.Instance.terminated_at > begin))
     if end:
         query = query.filter(models.Instance.launched_at < end)
@@ -2603,12 +2615,10 @@ def network_get_all_by_uuids(context, network_uuids, project_only):
     #check if the result contains all the networks
     #we are looking for
     for network_uuid in network_uuids:
-        found = False
         for network in result:
             if network['uuid'] == network_uuid:
-                found = True
                 break
-        if not found:
+        else:
             if project_only:
                 raise exception.NetworkNotFoundForProject(
                       network_uuid=network_uuid, project_id=context.project_id)
@@ -2648,8 +2658,8 @@ def network_get_associated_fixed_ips(context, network_id, host=None):
                           filter(models.FixedIp.network_id == network_id).\
                           join((models.VirtualInterface, vif_and)).\
                           join((models.Instance, inst_and)).\
-                          filter(models.FixedIp.instance_uuid != None).\
-                          filter(models.FixedIp.virtual_interface_id != None)
+                          filter(models.FixedIp.instance_uuid != null()).\
+                          filter(models.FixedIp.virtual_interface_id != null())
     if host:
         query = query.filter(models.Instance.host == host)
     result = query.all()
@@ -2797,8 +2807,8 @@ def quota_get_all_by_project_and_user(context, project_id, user_id):
                    all()
 
     result = {'project_id': project_id, 'user_id': user_id}
-    for quota in user_quotas:
-        result[quota.resource] = quota.hard_limit
+    for user_quota in user_quotas:
+        result[user_quota.resource] = user_quota.hard_limit
 
     return result
 
@@ -2957,7 +2967,7 @@ def _quota_usage_get_all(context, project_id, user_id=None):
     result = {'project_id': project_id}
     if user_id:
         query = query.filter(or_(models.QuotaUsage.user_id == user_id,
-                                 models.QuotaUsage.user_id == None))
+                                 models.QuotaUsage.user_id == null()))
         result['user_id'] = user_id
 
     rows = query.all()
@@ -3011,7 +3021,7 @@ def quota_usage_update(context, project_id, user_id, resource, **kwargs):
                      filter_by(project_id=project_id).\
                      filter_by(resource=resource).\
                      filter(or_(models.QuotaUsage.user_id == user_id,
-                                models.QuotaUsage.user_id == None)).\
+                                models.QuotaUsage.user_id == null())).\
                      update(updates)
 
     if not result:
@@ -4277,7 +4287,7 @@ def _flavor_get_query(context, session=None, read_deleted=None):
                        read_deleted=read_deleted).\
                        options(joinedload('extra_specs'))
     if not context.is_admin:
-        the_filter = [models.InstanceTypes.is_public == True]
+        the_filter = [models.InstanceTypes.is_public == true()]
         the_filter.extend([
             models.InstanceTypes.projects.any(project_id=context.project_id)
         ])
@@ -4534,7 +4544,8 @@ def flavor_extra_specs_update_or_create(context, flavor_id, specs,
             # a concurrent transaction has been committed,
             # try again unless this was the last attempt
             if attempt == max_retries - 1:
-                raise
+                raise exception.FlavorExtraSpecUpdateCreateFailed(
+                                    id=flavor_id, retries=max_retries)
 
 
 ####################
@@ -4832,9 +4843,9 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
 def vol_get_usage_by_time(context, begin):
     """Return volumes usage that have been updated after a specified time."""
     return model_query(context, models.VolumeUsage, read_deleted="yes").\
-                   filter(or_(models.VolumeUsage.tot_last_refreshed == None,
+                   filter(or_(models.VolumeUsage.tot_last_refreshed == null(),
                               models.VolumeUsage.tot_last_refreshed > begin,
-                              models.VolumeUsage.curr_last_refreshed == None,
+                              models.VolumeUsage.curr_last_refreshed == null(),
                               models.VolumeUsage.curr_last_refreshed > begin,
                               )).\
                               all()
@@ -5093,18 +5104,25 @@ def aggregate_metadata_get_by_metadata_key(context, aggregate_id, key):
 
 
 def aggregate_host_get_by_metadata_key(context, key):
-    query = model_query(context, models.Aggregate)
-    query = query.join("_metadata")
-    query = query.filter(models.AggregateMetadata.key == key)
-    query = query.options(contains_eager("_metadata"))
-    query = query.options(joinedload("_hosts"))
-    rows = query.all()
-
+    rows = aggregate_get_by_metadata_key(context, key)
     metadata = collections.defaultdict(set)
     for agg in rows:
         for agghost in agg._hosts:
             metadata[agghost.host].add(agg._metadata[0]['value'])
     return dict(metadata)
+
+
+def aggregate_get_by_metadata_key(context, key):
+    """Return rows that match metadata key.
+
+    :param key Matches metadata key.
+    """
+    query = model_query(context, models.Aggregate)
+    query = query.join("_metadata")
+    query = query.filter(models.AggregateMetadata.key == key)
+    query = query.options(contains_eager("_metadata"))
+    query = query.options(joinedload("_hosts"))
+    return query.all()
 
 
 def aggregate_update(context, aggregate_id, values):

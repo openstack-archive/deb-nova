@@ -19,7 +19,7 @@ import mock
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
-from nova.objects import instance as instance_obj
+from nova import objects
 from nova.pci import pci_manager
 from nova import test
 from nova.tests import fake_instance
@@ -213,6 +213,8 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.StubOutWithMock(vm_utils, 'determine_disk_image_type')
         self.mox.StubOutWithMock(vm_utils, 'get_vdis_for_instance')
         self.mox.StubOutWithMock(vm_utils, 'safe_destroy_vdis')
+        self.mox.StubOutWithMock(self.vmops._volumeops,
+                                 'safe_cleanup_from_vdis')
         self.mox.StubOutWithMock(self.vmops, '_resize_up_vdis')
         self.mox.StubOutWithMock(vm_utils,
                                  'create_kernel_and_ramdisk')
@@ -370,6 +372,7 @@ class SpawnTestCase(VMOpsTestBase):
             vm_utils.destroy_kernel_ramdisk(self.vmops._session, instance,
                                             kernel_file, ramdisk_file)
             vm_utils.safe_destroy_vdis(self.vmops._session, ["fake_ref"])
+            self.vmops._volumeops.safe_cleanup_from_vdis(["fake_ref_2"])
 
         self.mox.ReplayAll()
         self.vmops.spawn(context, instance, image_meta, injected_files,
@@ -782,7 +785,7 @@ class CreateVMRecordTestCase(VMOpsTestBase):
             mock_get_vm_device_id, mock_determine_vm_mode):
 
         context = "context"
-        instance = instance_obj.Instance(vm_mode="vm_mode", uuid="uuid123")
+        instance = objects.Instance(vm_mode="vm_mode", uuid="uuid123")
         name_label = "dummy"
         disk_image_type = "vhd"
         kernel_file = "kernel"

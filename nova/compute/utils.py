@@ -15,7 +15,6 @@
 """Compute-related Utilities and helpers."""
 
 import itertools
-import re
 import string
 import traceback
 
@@ -26,12 +25,11 @@ from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
+from nova.i18n import _
 from nova.network import model as network_model
 from nova import notifications
+from nova import objects
 from nova.objects import base as obj_base
-from nova.objects import instance_action as instance_action_obj
-from nova.objects import instance_fault as instance_fault_obj
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log
 from nova import rpc
 from nova import utils
@@ -86,7 +84,7 @@ def _get_fault_details(exc_info, error_code):
 def add_instance_fault_from_exc(context, instance, fault, exc_info=None):
     """Adds the specified fault to the database."""
 
-    fault_obj = instance_fault_obj.InstanceFault(context=context)
+    fault_obj = objects.InstanceFault(context=context)
     fault_obj.host = CONF.host
     fault_obj.instance_uuid = instance['uuid']
     fault_obj.update(exception_to_dict(fault))
@@ -164,10 +162,7 @@ def get_next_device_name(instance, device_name_list,
 
     used_letters = set()
     for device_path in device_name_list:
-        letter = block_device.strip_prefix(device_path)
-        # NOTE(vish): delete numbers in case we have something like
-        #             /dev/sda1
-        letter = re.sub("\d+", "", letter)
+        letter = block_device.get_device_letter(device_path)
         used_letters.add(letter)
 
     # NOTE(vish): remove this when xenapi is properly setting
@@ -203,7 +198,9 @@ def get_image_metadata(context, image_api, image_id_or_uri, instance):
     # If the base image is still available, get its metadata
     try:
         image = image_api.get(context, image_id_or_uri)
-    except Exception as e:
+    except (exception.ImageNotAuthorized,
+            exception.ImageNotFound,
+            exception.Invalid) as e:
         LOG.warning(_("Can't access image %(image_id)s: %(error)s"),
                     {"image_id": image_id_or_uri, "error": e},
                     instance=instance)
@@ -424,14 +421,14 @@ class EventReporter(object):
 
     def __enter__(self):
         for uuid in self.instance_uuids:
-            instance_action_obj.InstanceActionEvent.event_start(
+            objects.InstanceActionEvent.event_start(
                 self.context, uuid, self.event_name, want_result=False)
 
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         for uuid in self.instance_uuids:
-            instance_action_obj.InstanceActionEvent.event_finish_with_failure(
+            objects.InstanceActionEvent.event_finish_with_failure(
                 self.context, uuid, self.event_name, exc_val=exc_val,
                 exc_tb=exc_tb, want_result=False)
         return False

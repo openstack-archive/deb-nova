@@ -22,7 +22,7 @@ import six.moves.urllib.parse as urlparse
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt.xenapi import pool_states
@@ -32,9 +32,6 @@ LOG = logging.getLogger(__name__)
 
 xenapi_pool_opts = [
     cfg.BoolOpt('use_join_force',
-                #Deprecated in Icehouse
-                deprecated_name='use_join_force',
-                deprecated_group='DEFAULT',
                 default=True,
                 help='To use for hosts with different CPUs'),
     ]

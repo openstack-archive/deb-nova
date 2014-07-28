@@ -16,6 +16,7 @@
 import base64
 import uuid
 
+import mock
 import mox
 from oslo.config import cfg
 import webob
@@ -28,8 +29,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.image import glance
-from nova.objects import instance as instance_obj
-from nova.openstack.common import importutils
+from nova import objects
 from nova.openstack.common import jsonutils
 from nova.openstack.common import uuidutils
 from nova import test
@@ -87,14 +87,9 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(db, 'instance_update_and_get_original',
                        instance_update_and_get_original)
 
-        fakes.stub_out_glance(self.stubs)
         fakes.stub_out_nw_api(self.stubs)
         fakes.stub_out_compute_api_snapshot(self.stubs)
         fake.stub_out_image_service(self.stubs)
-        service_class = 'nova.image.glance.GlanceImageService'
-        self.service = importutils.import_object(service_class)
-        self.sent_to_glance = {}
-        fakes.stub_out_glanceclient_create(self.stubs, self.sent_to_glance)
         self.flags(allow_instance_snapshots=True,
                    enable_instance_password=True)
         self.uuid = FAKE_UUID
@@ -124,8 +119,8 @@ class ServerActionsControllerTest(test.TestCase):
             uuid = uuidutils.generate_uuid()
         instance = fake_instance.fake_db_instance(
             id=1, uuid=uuid, vm_state=vm_states.ACTIVE, task_state=None)
-        instance = instance_obj.Instance._from_db_object(
-            self.context, instance_obj.Instance(), instance)
+        instance = objects.Instance._from_db_object(
+            self.context, objects.Instance(), instance)
 
         self.compute_api.get(self.context, uuid,
                              want_objects=True).AndReturn(instance)
@@ -682,7 +677,7 @@ class ServerActionsControllerTest(test.TestCase):
             data['changes'].update(data['instance'].obj_get_changes())
 
         self.stubs.Set(compute_api.API, 'get', wrap_get)
-        self.stubs.Set(instance_obj.Instance, 'save', fake_save)
+        self.stubs.Set(objects.Instance, 'save', fake_save)
         req = fakes.HTTPRequest.blank(self.url)
 
         self.controller._action_rebuild(req, FAKE_UUID, body)
@@ -757,7 +752,7 @@ class ServerActionsControllerTest(test.TestCase):
 
         self.stubs.Set(fake._FakeImageService, 'show', return_image_meta)
         self.stubs.Set(compute_api.API, 'get', wrap_get)
-        self.stubs.Set(instance_obj.Instance, 'save', fake_save)
+        self.stubs.Set(objects.Instance, 'save', fake_save)
         body = {
             "rebuild": {
                 "imageRef": "155d900f-4e14-4e4c-a73d-069cbf4541e6",
@@ -863,6 +858,16 @@ class ServerActionsControllerTest(test.TestCase):
 
         req = fakes.HTTPRequest.blank(self.url)
         self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller._action_resize,
+                          req, FAKE_UUID, body)
+
+    @mock.patch('nova.compute.api.API.resize',
+                side_effect=exception.NoValidHost(reason=''))
+    def test_resize_raises_no_valid_host(self, mock_resize):
+        body = dict(resize=dict(flavorRef="http://localhost/3"))
+
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._action_resize,
                           req, FAKE_UUID, body)
 
@@ -1090,7 +1095,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertEqual(bdms[0]['snapshot_id'], snapshot['id'])
         for fld in ('connection_info', 'id',
                     'instance_uuid', 'device_name'):
-            self.assertTrue(fld not in bdms[0])
+            self.assertNotIn(fld, bdms[0])
         for k in extra_properties.keys():
             self.assertEqual(properties[k], extra_properties[k])
 

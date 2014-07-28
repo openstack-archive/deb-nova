@@ -24,9 +24,9 @@ import six
 
 from nova import context
 from nova import exception
+from nova.i18n import _
 from nova import objects
 from nova.objects import fields
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 
@@ -143,8 +143,6 @@ class NovaObjectMetaclass(type):
 # requested action and the result will be returned here.
 def remotable_classmethod(fn):
     """Decorator for remotable classmethods."""
-    fn.remotable = True
-
     @functools.wraps(fn)
     def wrapper(cls, context, *args, **kwargs):
         if NovaObject.indirection_api:
@@ -156,6 +154,10 @@ def remotable_classmethod(fn):
             if isinstance(result, NovaObject):
                 result._context = context
         return result
+
+    # NOTE(danms): Make this discoverable
+    wrapper.remotable = True
+    wrapper.original_fn = fn
     return classmethod(wrapper)
 
 
@@ -166,8 +168,6 @@ def remotable_classmethod(fn):
 # "orphaned" and remotable methods cannot be called.
 def remotable(fn):
     """Decorator for remotable object methods."""
-    fn.remotable = True
-
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
         ctxt = self._context
@@ -194,6 +194,9 @@ def remotable(fn):
             return result
         else:
             return fn(self, ctxt, *args, **kwargs)
+
+    wrapper.remotable = True
+    wrapper.original_fn = fn
     return wrapper
 
 
@@ -229,6 +232,15 @@ class NovaObject(object):
         self._context = context
         for key in kwargs.keys():
             self[key] = kwargs[key]
+
+    def __repr__(self):
+        return '%s(%s)' % (
+            self.obj_name(),
+            ','.join(['%s=%s' % (name,
+                                 (self.obj_attr_is_set(name) and
+                                  field.stringify(getattr(self, name)) or
+                                  '<?>'))
+                      for name, field in sorted(self.fields.items())]))
 
     @classmethod
     def obj_name(cls):
@@ -501,6 +513,12 @@ class ObjectListBase(object):
     # we can support backleveling our contents based on the version
     # requested of the list object.
     child_versions = {}
+
+    def __init__(self, *args, **kwargs):
+        super(ObjectListBase, self).__init__(*args, **kwargs)
+        if 'objects' not in kwargs:
+            self.objects = []
+            self._changed_fields.discard('objects')
 
     def __iter__(self):
         """List iterator interface."""

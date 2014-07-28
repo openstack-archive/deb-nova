@@ -22,7 +22,7 @@ from webob import exc
 from nova.api.openstack import extensions
 from nova.compute import api as compute_api
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova import utils
 
@@ -37,10 +37,19 @@ def _get_context(req):
 def get_host_from_body(fn):
     """Makes sure that the host exists."""
     def wrapped(self, req, id, body, *args, **kwargs):
-        if len(body) == 1 and "host" in body:
-            host = body['host']
-        else:
-            raise exc.HTTPBadRequest()
+        if len(body) != 1:
+            msg = _('Only host parameter can be specified')
+            raise exc.HTTPBadRequest(explanation=msg)
+        elif 'host' not in body:
+            msg = _('Host parameter must be specified')
+            raise exc.HTTPBadRequest(explanation=msg)
+        try:
+            utils.check_string_length(body['host'], 'host', 1, 255)
+        except exception.InvalidInput as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
+
+        host = body['host']
+
         return fn(self, req, id, host, *args, **kwargs)
     return wrapped
 
@@ -75,17 +84,18 @@ class AggregateController(object):
         avail_zone = host_aggregate.get("availability_zone")
         try:
             utils.check_string_length(name, "Aggregate name", 1, 255)
+            if avail_zone is not None:
+                utils.check_string_length(avail_zone, "Availability_zone", 1,
+                                          255)
         except exception.InvalidInput as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
         try:
             aggregate = self.api.create_aggregate(context, name, avail_zone)
         except exception.AggregateNameExists as e:
-            LOG.info(e)
-            raise exc.HTTPConflict()
+            raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InvalidAggregateAction as e:
-            LOG.info(e)
-            raise
+            raise exc.HTTPBadRequest(explanation=e.format_message())
         return self._marshall_aggregate(aggregate)
 
     def show(self, req, id):
@@ -94,9 +104,8 @@ class AggregateController(object):
         authorize(context)
         try:
             aggregate = self.api.get_aggregate(context, id)
-        except exception.AggregateNotFound:
-            LOG.info(_("Cannot show aggregate: %s"), id)
-            raise exc.HTTPNotFound()
+        except exception.AggregateNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         return self._marshall_aggregate(aggregate)
 
     def update(self, req, id, body):
@@ -118,20 +127,22 @@ class AggregateController(object):
             if key not in ["name", "availability_zone"]:
                 raise exc.HTTPBadRequest()
 
-        if 'name' in updates:
-            try:
+        try:
+            if 'name' in updates:
                 utils.check_string_length(updates['name'], "Aggregate name", 1,
                                           255)
-            except exception.InvalidInput as e:
-                raise exc.HTTPBadRequest(explanation=e.format_message())
+            if updates.get("availability_zone") is not None:
+                utils.check_string_length(updates['availability_zone'],
+                                          "Availability_zone", 1, 255)
+        except exception.InvalidInput as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         try:
             aggregate = self.api.update_aggregate(context, id, updates)
         except exception.AggregateNameExists as e:
             raise exc.HTTPConflict(explanation=e.format_message())
-        except exception.AggregateNotFound:
-            LOG.info(_('Cannot update aggregate: %s'), id)
-            raise exc.HTTPNotFound()
+        except exception.AggregateNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.InvalidAggregateAction as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
@@ -143,9 +154,10 @@ class AggregateController(object):
         authorize(context)
         try:
             self.api.delete_aggregate(context, id)
-        except exception.AggregateNotFound:
-            LOG.info(_('Cannot delete aggregate: %s'), id)
-            raise exc.HTTPNotFound()
+        except exception.AggregateNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.InvalidAggregateAction as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
     def action(self, req, id, body):
         _actions = {
@@ -169,14 +181,14 @@ class AggregateController(object):
         try:
             aggregate = self.api.add_host_to_aggregate(context, id, host)
         except (exception.AggregateNotFound, exception.ComputeHostNotFound):
-            LOG.info(_('Cannot add host %(host)s in aggregate %(id)s'),
-                     {'host': host, 'id': id})
-            raise exc.HTTPNotFound()
+            msg = _('Cannot add host %(host)s in aggregate'
+                    ' %(id)s') % {'host': host, 'id': id}
+            raise exc.HTTPNotFound(explanation=msg)
         except (exception.AggregateHostExists,
-                exception.InvalidAggregateAction) as e:
-            LOG.info(_('Cannot add host %(host)s in aggregate %(id)s'),
-                     {'host': host, 'id': id})
-            raise exc.HTTPConflict(explanation=e.format_message())
+                exception.InvalidAggregateAction):
+            msg = _('Cannot add host %(host)s in aggregate'
+                    ' %(id)s') % {'host': host, 'id': id}
+            raise exc.HTTPConflict(explanation=msg)
         return self._marshall_aggregate(aggregate)
 
     @get_host_from_body
@@ -188,13 +200,13 @@ class AggregateController(object):
             aggregate = self.api.remove_host_from_aggregate(context, id, host)
         except (exception.AggregateNotFound, exception.AggregateHostNotFound,
                 exception.ComputeHostNotFound):
-            LOG.info(_('Cannot remove host %(host)s in aggregate %(id)s'),
-                     {'host': host, 'id': id})
-            raise exc.HTTPNotFound()
+            msg = _('Cannot remove host %(host)s in aggregate'
+                    ' %(id)s') % {'host': host, 'id': id}
+            raise exc.HTTPNotFound(explanation=msg)
         except exception.InvalidAggregateAction:
-            LOG.info(_('Cannot remove host %(host)s in aggregate %(id)s'),
-                     {'host': host, 'id': id})
-            raise exc.HTTPConflict()
+            msg = _('Cannot remove host %(host)s in aggregate'
+                    ' %(id)s') % {'host': host, 'id': id}
+            raise exc.HTTPConflict(explanation=msg)
         return self._marshall_aggregate(aggregate)
 
     def _set_metadata(self, req, id, body):
@@ -208,13 +220,24 @@ class AggregateController(object):
             metadata = body["metadata"]
         except KeyError:
             raise exc.HTTPBadRequest()
+
+        # The metadata should be a dict
+        if not isinstance(metadata, dict):
+            msg = _('The value of metadata must be a dict')
+            raise exc.HTTPBadRequest(explanation=msg)
+        try:
+            for key, value in metadata.items():
+                utils.check_string_length(key, "metadata.key", 1, 255)
+                utils.check_string_length(value, "metadata.value", 0, 255)
+        except exception.InvalidInput as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
         try:
             aggregate = self.api.update_aggregate_metadata(context,
                                                            id, metadata)
         except exception.AggregateNotFound:
-            LOG.info(_('Cannot set metadata %(metadata)s in aggregate %(id)s'),
-                     {'metadata': metadata, 'id': id})
-            raise exc.HTTPNotFound()
+            msg = _('Cannot set metadata %(metadata)s in aggregate'
+                    ' %(id)s') % {'metadata': metadata, 'id': id}
+            raise exc.HTTPNotFound(explanation=msg)
         except exception.InvalidAggregateAction as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 

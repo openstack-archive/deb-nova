@@ -19,11 +19,13 @@ import webob
 from webob import exc
 
 from nova.api.openstack import common
+from nova.api.openstack.compute.schemas.v3 import attach_interfaces
 from nova.api.openstack import extensions
+from nova.api import validation
 from nova import compute
 from nova import exception
+from nova.i18n import _
 from nova import network
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 
 
@@ -76,6 +78,7 @@ class InterfaceAttachmentController(object):
         return {'interface_attachment': _translate_interface_attachment_view(
                 port_info['port'])}
 
+    @validation.schema(attach_interfaces.create)
     def create(self, req, server_id, body):
         """Attach an interface to an instance."""
         context = req.environ['nova.context']
@@ -120,6 +123,9 @@ class InterfaceAttachmentController(object):
             LOG.exception(e)
             raise webob.exc.HTTPInternalServerError(
                 explanation=e.format_message())
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'attach_interface')
 
         return self.show(req, server_id, vif['id'])
 
@@ -146,6 +152,9 @@ class InterfaceAttachmentController(object):
             raise exc.HTTPConflict(explanation=e.format_message())
         except NotImplementedError as e:
             raise webob.exc.HTTPNotImplemented(explanation=e.format_message())
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                    'detach_interface')
 
         return webob.Response(status_int=202)
 

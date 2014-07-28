@@ -13,16 +13,17 @@
 #    under the License.
 
 import base64
-import fixtures
 import sys
 import traceback
 
+import fixtures
 import mock
 import netaddr
 import six
 
 from nova.compute import manager
 from nova import exception
+from nova import objects
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -30,6 +31,7 @@ from nova import test
 from nova.tests.image import fake as fake_image
 from nova.tests import utils as test_utils
 from nova.tests.virt.libvirt import fake_libvirt_utils
+from nova.tests.virt.libvirt import test_driver
 from nova.virt import event as virtevent
 from nova.virt import fake
 from nova.virt.libvirt import imagebackend
@@ -118,7 +120,7 @@ class _FakeDriverBackendTestCase(object):
             pass
 
         self.stubs.Set(nova.virt.libvirt.driver.LibvirtDriver,
-                       'get_instance_disk_info',
+                       '_get_instance_disk_info',
                        fake_get_instance_disk_info)
 
         self.stubs.Set(nova.virt.libvirt.driver.disk,
@@ -418,21 +420,25 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
             "driver_volume_type": "fake",
             "serial": "fake_serial",
         }
-        self.connection.attach_volume(None, connection_info, instance_ref,
-                                      '/dev/sda')
-        self.connection.detach_volume(connection_info, instance_ref,
-                                      '/dev/sda')
+        self.assertIsNone(
+            self.connection.attach_volume(None, connection_info, instance_ref,
+                                          '/dev/sda'))
+        self.assertIsNone(
+            self.connection.detach_volume(connection_info, instance_ref,
+                                      '/dev/sda'))
 
     @catch_notimplementederror
     def test_swap_volume(self):
         instance_ref, network_info = self._get_running_instance()
-        self.connection.attach_volume(None, {'driver_volume_type': 'fake'},
-                                      instance_ref,
-                                      '/dev/sda')
-        self.connection.swap_volume({'driver_volume_type': 'fake'},
-                                    {'driver_volume_type': 'fake'},
-                                    instance_ref,
-                                    '/dev/sda')
+        self.assertIsNone(
+            self.connection.attach_volume(None, {'driver_volume_type': 'fake'},
+                                          instance_ref,
+                                          '/dev/sda'))
+        self.assertIsNone(
+            self.connection.swap_volume({'driver_volume_type': 'fake'},
+                                        {'driver_volume_type': 'fake'},
+                                        instance_ref,
+                                        '/dev/sda'))
 
     @catch_notimplementederror
     def test_attach_detach_different_power_states(self):
@@ -449,17 +455,19 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
             'root_device_name': None,
             'swap': None,
             'ephemerals': [],
-            'block_device_mapping': [{
-            'instance_uuid': instance_ref['uuid'],
-            'connection_info': {'driver_volume_type': 'fake'},
-            'mount_device': '/dev/sda',
-            'delete_on_termination': False,
-            'virtual_name': None,
-            'snapshot_id': None,
-            'volume_id': 'abcdedf',
-            'volume_size': None,
-            'no_device': None
-            }]
+            'block_device_mapping': [
+                test_driver.mocked_bdm(1, {
+                        'instance_uuid': instance_ref['uuid'],
+                        'connection_info': {'driver_volume_type': 'fake'},
+                        'mount_device': '/dev/sda',
+                        'delete_on_termination': False,
+                        'virtual_name': None,
+                        'snapshot_id': None,
+                        'volume_id': 'abcdedf',
+                        'volume_size': None,
+                        'no_device': None
+                        }),
+                ]
         }
         self.connection.power_on(self.ctxt, instance_ref, network_info, bdm)
         self.connection.detach_volume(connection_info,
@@ -486,6 +494,11 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     def test_get_diagnostics(self):
         instance_ref, network_info = self._get_running_instance(obj=True)
         self.connection.get_diagnostics(instance_ref)
+
+    @catch_notimplementederror
+    def test_get_instance_diagnostics(self):
+        instance_ref, network_info = self._get_running_instance(obj=True)
+        self.connection.get_instance_diagnostics(instance_ref)
 
     @catch_notimplementederror
     def test_block_stats(self):
@@ -591,12 +604,12 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                 'supported_instances']
         for key in keys:
             self.assertIn(key, host_status)
+        self.assertIsInstance(host_status['hypervisor_version'], int)
 
     @catch_notimplementederror
     def test_get_host_stats(self):
         host_status = self.connection.get_host_stats()
         self._check_available_resource_fields(host_status)
-        self.assertIsInstance(host_status['hypervisor_version'], int)
 
     @catch_notimplementederror
     def test_get_available_resource(self):
@@ -772,8 +785,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
         # Previous status of the service: disabled: False
         service_mock.configure_mock(disabled_reason='None',
                                     disabled=False)
-        from nova.objects import service as service_obj
-        with mock.patch.object(service_obj.Service, "get_by_compute_host",
+        with mock.patch.object(objects.Service, "get_by_compute_host",
                                return_value=service_mock):
             self.connection._set_host_enabled(False, 'ERROR!')
             self.assertTrue(service_mock.disabled)
@@ -786,8 +798,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
         # Previous status of the service: disabled: True, 'AUTO: ERROR'
         service_mock.configure_mock(disabled_reason='AUTO: ERROR',
                                     disabled=True)
-        from nova.objects import service as service_obj
-        with mock.patch.object(service_obj.Service, "get_by_compute_host",
+        with mock.patch.object(objects.Service, "get_by_compute_host",
                                return_value=service_mock):
             self.connection._set_host_enabled(True)
             self.assertFalse(service_mock.disabled)
@@ -800,8 +811,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
         # Previous status of the service: disabled: True, 'Manually disabled'
         service_mock.configure_mock(disabled_reason='Manually disabled',
                                     disabled=True)
-        from nova.objects import service as service_obj
-        with mock.patch.object(service_obj.Service, "get_by_compute_host",
+        with mock.patch.object(objects.Service, "get_by_compute_host",
                                return_value=service_mock):
             self.connection._set_host_enabled(True)
             self.assertTrue(service_mock.disabled)
@@ -814,8 +824,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
         # Previous status of the service: disabled: True, 'Manually disabled'
         service_mock.configure_mock(disabled_reason='Manually disabled',
                                     disabled=True)
-        from nova.objects import service as service_obj
-        with mock.patch.object(service_obj.Service, "get_by_compute_host",
+        with mock.patch.object(objects.Service, "get_by_compute_host",
                                return_value=service_mock):
             self.connection._set_host_enabled(False, 'ERROR!')
             self.assertTrue(service_mock.disabled)

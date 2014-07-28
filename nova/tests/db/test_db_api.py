@@ -20,11 +20,11 @@
 
 import copy
 import datetime
-import iso8601
 import types
 import uuid as stdlib_uuid
 
 import eventlet
+import iso8601
 import mox
 import netaddr
 from oslo.config import cfg
@@ -60,7 +60,6 @@ from nova import quota
 from nova import test
 from nova.tests import matchers
 from nova import utils
-
 
 CONF = cfg.CONF
 CONF.import_opt('reserved_host_memory_mb', 'nova.compute.resource_tracker')
@@ -3039,8 +3038,8 @@ class InstanceTypeExtraSpecsTestCase(BaseInstanceTypeTestCase):
 
         get_id = counted()
         self.stubs.Set(sqlalchemy_api, '_flavor_get_id_from_flavor', get_id)
-        self.assertRaises(db_exc.DBDuplicateEntry, sqlalchemy_api.
-                          flavor_extra_specs_update_or_create,
+        self.assertRaises(exception.FlavorExtraSpecUpdateCreateFailed,
+                          sqlalchemy_api.flavor_extra_specs_update_or_create,
                           self.ctxt, 1, {}, 5)
         self.assertEqual(get_id.counter, 5)
 
@@ -3791,7 +3790,8 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         ips = ['1.1.1.1', '1.1.1.2', '1.1.1.3', '1.1.1.4']
         prepare_ips = lambda x: {'address': x}
 
-        db.floating_ip_bulk_create(self.ctxt, map(prepare_ips, ips))
+        result = db.floating_ip_bulk_create(self.ctxt, map(prepare_ips, ips))
+        self.assertEqual('1.1.1.1', result[0].address)
         self.assertRaises(exception.FloatingIpExists,
                           db.floating_ip_bulk_create,
                           self.ctxt, map(prepare_ips, ['1.1.1.5', '1.1.1.4']))
@@ -5682,6 +5682,13 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(stats.pop('count'), 1)
         for k, v in stats.iteritems():
             self.assertEqual(v, self.item[k])
+
+    def test_compute_node_statistics_disabled_service(self):
+        serv = db.service_get_by_host_and_topic(
+            self.ctxt, 'host1', CONF.compute_topic)
+        db.service_update(self.ctxt, serv['id'], {'disabled': True})
+        stats = db.compute_node_statistics(self.ctxt)
+        self.assertEqual(stats.pop('count'), 0)
 
     def test_compute_node_not_found(self):
         self.assertRaises(exception.ComputeHostNotFound, db.compute_node_get,

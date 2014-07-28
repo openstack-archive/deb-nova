@@ -17,14 +17,14 @@ import abc
 import contextlib
 import os
 
+from oslo.config import cfg
 import six
 
-from oslo.config import cfg
-
 from nova import exception
+from nova.i18n import _
+from nova.i18n import _LE
 from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import units
@@ -32,6 +32,7 @@ from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
+from nova.virt.libvirt import lvm
 from nova.virt.libvirt import utils as libvirt_utils
 
 
@@ -48,20 +49,14 @@ __imagebackend_opts = [
                default='default',
                help='VM Images format. Acceptable values are: raw, qcow2, lvm,'
                     ' rbd, default. If default is specified,'
-                    ' then use_cow_images flag is used instead of this one.',
-               deprecated_group='DEFAULT',
-               deprecated_name='libvirt_images_type'),
+                    ' then use_cow_images flag is used instead of this one.'),
     cfg.StrOpt('images_volume_group',
                help='LVM Volume Group that is used for VM images, when you'
-                    ' specify images_type=lvm.',
-               deprecated_group='DEFAULT',
-               deprecated_name='libvirt_images_volume_group'),
+                    ' specify images_type=lvm.'),
     cfg.BoolOpt('sparse_logical_volumes',
                 default=False,
                 help='Create sparse logical volumes (with virtualsize)'
-                     ' if this flag is set to True.',
-                deprecated_group='DEFAULT',
-                deprecated_name='libvirt_sparse_logical_volumes'),
+                     ' if this flag is set to True.'),
     cfg.StrOpt('volume_clear',
                default='zero',
                help='Method used to wipe old volumes (valid options are: '
@@ -71,14 +66,10 @@ __imagebackend_opts = [
                help='Size in MiB to wipe at start of old volumes. 0 => all'),
     cfg.StrOpt('images_rbd_pool',
                default='rbd',
-               help='The RADOS pool in which rbd volumes are stored',
-               deprecated_group='DEFAULT',
-               deprecated_name='libvirt_images_rbd_pool'),
+               help='The RADOS pool in which rbd volumes are stored'),
     cfg.StrOpt('images_rbd_ceph_conf',
                default='',  # default determined by librados
-               help='Path to the ceph configuration file to use',
-               deprecated_group='DEFAULT',
-               deprecated_name='libvirt_images_rbd_ceph_conf'),
+               help='Path to the ceph configuration file to use'),
         ]
 
 CONF = cfg.CONF
@@ -207,9 +198,9 @@ class Image(object):
             can_fallocate = not err
             self.__class__.can_fallocate = can_fallocate
             if not can_fallocate:
-                LOG.error(_('Unable to preallocate_images=%(imgs)s at path: '
-                            '%(path)s'), {'imgs': CONF.preallocate_images,
-                                           'path': self.path})
+                LOG.error(_LE('Unable to preallocate_images=%(imgs)s at path: '
+                              '%(path)s'), {'imgs': CONF.preallocate_images,
+                                            'path': self.path})
         return can_fallocate
 
     @staticmethod
@@ -235,8 +226,8 @@ class Image(object):
             base_size = disk.get_disk_size(base)
 
         if size < base_size:
-            msg = _('%(base)s virtual size %(base_size)s '
-                    'larger than flavor root disk size %(size)s')
+            msg = _LE('%(base)s virtual size %(base_size)s '
+                      'larger than flavor root disk size %(size)s')
             LOG.error(msg % {'base': base,
                               'base_size': base_size,
                               'size': size})
@@ -304,6 +295,11 @@ class Image(object):
         except OSError as e:
             raise exception.DiskInfoReadWriteFail(reason=unicode(e))
         return driver_format
+
+    @staticmethod
+    def is_shared_block_storage():
+        """True if the backend puts images on a shared block storage."""
+        return False
 
 
 class Raw(Image):
@@ -428,7 +424,7 @@ class Lvm(Image):
         super(Lvm, self).__init__("block", "raw", is_block_dev=True)
 
         if path:
-            info = libvirt_utils.logical_volume_info(path)
+            info = lvm.volume_info(path)
             self.vg = info['VG']
             self.lv = info['LV']
             self.path = path
@@ -459,8 +455,8 @@ class Lvm(Image):
             self.verify_base_size(base, size, base_size=base_size)
             resize = size > base_size
             size = size if resize else base_size
-            libvirt_utils.create_lvm_image(self.vg, self.lv,
-                                           size, sparse=self.sparse)
+            lvm.create_volume(self.vg, self.lv,
+                                         size, sparse=self.sparse)
             images.convert_image(base, self.path, 'raw', run_as_root=True)
             if resize:
                 disk.resize2fs(self.path, run_as_root=True)
@@ -469,8 +465,8 @@ class Lvm(Image):
 
         #Generate images with specified size right on volume
         if generated and size:
-            libvirt_utils.create_lvm_image(self.vg, self.lv,
-                                           size, sparse=self.sparse)
+            lvm.create_volume(self.vg, self.lv,
+                                         size, sparse=self.sparse)
             with self.remove_volume_on_error(self.path):
                 prepare_template(target=self.path, *args, **kwargs)
         else:
@@ -485,7 +481,7 @@ class Lvm(Image):
             yield
         except Exception:
             with excutils.save_and_reraise_exception():
-                libvirt_utils.remove_logical_volumes(path)
+                lvm.remove_volumes(path)
 
     def snapshot_extract(self, target, out_format):
         images.convert_image(self.path, target, out_format,
@@ -506,7 +502,7 @@ class RBDVolumeProxy(object):
         try:
             self.volume = driver.rbd.Image(ioctx, str(name), snapshot=None)
         except driver.rbd.Error:
-            LOG.exception(_("error opening rbd image %s"), name)
+            LOG.exception(_LE("error opening rbd image %s"), name)
             driver._disconnect_from_rados(client, ioctx)
             raise
         self.driver = driver
@@ -656,10 +652,8 @@ class Rbd(Image):
         return False
 
     def _resize(self, volume_name, size):
-        size = int(size) * units.Ki
-
         with RBDVolumeProxy(self, volume_name) as vol:
-            vol.resize(size)
+            vol.resize(int(size))
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         if self.rbd is None:
@@ -685,6 +679,10 @@ class Rbd(Image):
 
     def snapshot_extract(self, target, out_format):
         images.convert_image(self.path, target, out_format)
+
+    @staticmethod
+    def is_shared_block_storage():
+        return True
 
 
 class Backend(object):

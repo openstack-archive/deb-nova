@@ -24,6 +24,8 @@ from nova import exception
 from nova.openstack.common import jsonutils
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_instance
+
 
 CONF = cfg.CONF
 CONF.import_opt('password_length', 'nova.utils')
@@ -33,17 +35,14 @@ def fake_compute_api(*args, **kwargs):
     return True
 
 
-def fake_compute_api_get(self, context, instance_id):
+def fake_compute_api_get(self, context, instance_id, want_objects=False):
     # BAD_UUID is something that does not exist
     if instance_id == 'BAD_UUID':
         raise exception.InstanceNotFound(instance_id=instance_id)
     else:
-        return {
-            'id': 1,
-            'uuid': instance_id,
-            'vm_state': vm_states.ACTIVE,
-            'task_state': None, 'host': 'host1'
-        }
+        return fake_instance.fake_instance_obj(context, id=1, uuid=instance_id,
+                                               task_state=None, host='host1',
+                                               vm_state=vm_states.ACTIVE)
 
 
 def fake_service_get_by_compute_host(self, context, host):
@@ -69,6 +68,11 @@ class EvacuateTest(test.NoDBTestCase):
         self.UUID = uuid.uuid4()
         for _method in self._methods:
             self.stubs.Set(compute_api.API, _method, fake_compute_api)
+
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Evacuate'])
 
     def _get_admin_context(self, user_id='fake', project_id='fake'):
         ctxt = context.get_admin_context()
@@ -315,3 +319,19 @@ class EvacuateTest(test.NoDBTestCase):
         req.content_type = 'application/json'
         res = req.get_response(app)
         self.assertEqual(res.status_int, 403)
+
+    def test_evacuate_to_same_host(self):
+        ctxt = self._get_admin_context()
+        app = fakes.wsgi_app(fake_auth_context=ctxt)
+        req = webob.Request.blank('/v2/fake/servers/%s/action' % self.UUID)
+        req.method = 'POST'
+        req.body = jsonutils.dumps({
+            'evacuate': {
+                'host': 'host1',
+                'onSharedStorage': 'false',
+                'adminPass': 'MyNewPass'
+                }
+            })
+        req.content_type = 'application/json'
+        res = req.get_response(app)
+        self.assertEqual(res.status_int, 400)

@@ -16,10 +16,10 @@ import functools
 import operator
 
 from nova import block_device
+from nova.i18n import _
 from nova import objects
 from nova.objects import base as obj_base
 from nova.openstack.common import excutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.volume import encryptors
@@ -101,15 +101,13 @@ class DriverBlockDevice(dict):
         if name in self._proxy_as_attr:
             return getattr(self._bdm_obj, name)
         else:
-            raise AttributeError("Cannot access %s on DriverBlockDevice "
-                                  "class" % name)
+            super(DriverBlockDevice, self).__getattr__(name)
 
     def __setattr__(self, name, value):
         if name in self._proxy_as_attr:
             return setattr(self._bdm_obj, name, value)
         else:
-            raise AttributeError("Cannot access %s on DriverBlockDevice "
-                                  "class" % name)
+            super(DriverBlockDevice, self).__setattr__(name, value)
 
     def _transform(self):
         """Transform bdm to the format that is passed to drivers."""

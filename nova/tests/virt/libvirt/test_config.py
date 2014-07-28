@@ -235,8 +235,30 @@ class LibvirtConfigCPUTest(LibvirtConfigBaseTest):
               <arch>x86_64</arch>
               <model>Penryn</model>
               <vendor>Intel</vendor>
-              <feature name="mtrr"/>
               <feature name="apic"/>
+              <feature name="mtrr"/>
+            </cpu>
+        """)
+
+    def test_only_uniq_cpu_featues(self):
+        obj = config.LibvirtConfigCPU()
+        obj.model = "Penryn"
+        obj.vendor = "Intel"
+        obj.arch = "x86_64"
+
+        obj.add_feature(config.LibvirtConfigCPUFeature("mtrr"))
+        obj.add_feature(config.LibvirtConfigCPUFeature("apic"))
+        obj.add_feature(config.LibvirtConfigCPUFeature("apic"))
+        obj.add_feature(config.LibvirtConfigCPUFeature("mtrr"))
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu>
+              <arch>x86_64</arch>
+              <model>Penryn</model>
+              <vendor>Intel</vendor>
+              <feature name="apic"/>
+              <feature name="mtrr"/>
             </cpu>
         """)
 
@@ -285,8 +307,8 @@ class LibvirtConfigGuestCPUTest(LibvirtConfigBaseTest):
               <arch>x86_64</arch>
               <model>Penryn</model>
               <vendor>Intel</vendor>
-              <feature name="mtrr" policy="require"/>
               <feature name="apic" policy="require"/>
+              <feature name="mtrr" policy="require"/>
             </cpu>
         """)
 
@@ -959,7 +981,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.virt_type = "lxc"
         obj.memory = 100 * units.Mi
         obj.vcpus = 2
-        obj.cpuset = "0-3,^2,4-5"
+        obj.cpuset = set([0, 1, 3, 4, 5])
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "exe"
@@ -977,7 +999,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
               <name>demo</name>
               <memory>104857600</memory>
-              <vcpu cpuset="0-3,^2,4-5">2</vcpu>
+              <vcpu cpuset="0-1,3-5">2</vcpu>
               <os>
                 <type>exe</type>
                 <init>/sbin/init</init>
@@ -995,7 +1017,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.virt_type = "xen"
         obj.memory = 100 * units.Mi
         obj.vcpus = 2
-        obj.cpuset = "0-3,^2,4-5"
+        obj.cpuset = set([0, 1, 3, 4, 5])
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "linux"
@@ -1017,7 +1039,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
               <name>demo</name>
               <memory>104857600</memory>
-              <vcpu cpuset="0-3,^2,4-5">2</vcpu>
+              <vcpu cpuset="0-1,3-5">2</vcpu>
               <os>
                 <type>linux</type>
                 <kernel>/tmp/vmlinuz</kernel>
@@ -1037,7 +1059,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.virt_type = "xen"
         obj.memory = 100 * units.Mi
         obj.vcpus = 2
-        obj.cpuset = "0-3,^2,4-5"
+        obj.cpuset = set([0, 1, 3, 4, 5])
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "hvm"
@@ -1061,7 +1083,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
               <name>demo</name>
               <memory>104857600</memory>
-              <vcpu cpuset="0-3,^2,4-5">2</vcpu>
+              <vcpu cpuset="0-1,3-5">2</vcpu>
               <os>
                 <type>hvm</type>
                 <loader>/usr/lib/xen/boot/hvmloader</loader>
@@ -1085,10 +1107,13 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.virt_type = "kvm"
         obj.memory = 100 * units.Mi
         obj.vcpus = 2
-        obj.cpuset = "0-3,^2,4-5"
-        obj.cpu_shares = 100
-        obj.cpu_quota = 50000
-        obj.cpu_period = 25000
+        obj.cpuset = set([0, 1, 3, 4, 5])
+
+        obj.cputune = config.LibvirtConfigGuestCPUTune()
+        obj.cputune.shares = 100
+        obj.cputune.quota = 50000
+        obj.cputune.period = 25000
+
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "linux"
@@ -1115,7 +1140,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
               <name>demo</name>
               <memory>104857600</memory>
-              <vcpu cpuset="0-3,^2,4-5">2</vcpu>
+              <vcpu cpuset="0-1,3-5">2</vcpu>
               <sysinfo type='smbios'>
                  <bios>
                    <entry name="vendor">Acme</entry>
@@ -1250,6 +1275,40 @@ class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):
               <disks>
                <disk name='vda' snapshot='external' type='file'>
                 <source file='source-path'/>
+               </disk>
+               <disk name='vdb' snapshot='no'/>
+              </disks>
+            </domainsnapshot>""")
+
+    def test_config_snapshot_with_network_disks(self):
+        obj = config.LibvirtConfigGuestSnapshot()
+        obj.name = "Demo"
+
+        disk = config.LibvirtConfigGuestSnapshotDisk()
+        disk.name = 'vda'
+        disk.source_name = 'source-file'
+        disk.source_type = 'network'
+        disk.source_hosts = ['host1']
+        disk.source_ports = ['12345']
+        disk.source_protocol = 'glusterfs'
+        disk.snapshot = 'external'
+        disk.driver_name = 'qcow2'
+        obj.add_disk(disk)
+
+        disk2 = config.LibvirtConfigGuestSnapshotDisk()
+        disk2.name = 'vdb'
+        disk2.snapshot = 'no'
+        obj.add_disk(disk2)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <domainsnapshot>
+              <name>Demo</name>
+              <disks>
+               <disk name='vda' snapshot='external' type='network'>
+                <source protocol='glusterfs' name='source-file'>
+                 <host name='host1' port='12345'/>
+                </source>
                </disk>
                <disk name='vdb' snapshot='no'/>
               </disks>
@@ -1659,3 +1718,72 @@ class LibvirtConfigGuestWatchdogTest(LibvirtConfigBaseTest):
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, "<watchdog model='i6300esb' action='reset'/>")
+
+
+class LibvirtConfigGuestCPUTuneTest(LibvirtConfigBaseTest):
+
+    def test_config_cputune_timeslice(self):
+        cputune = config.LibvirtConfigGuestCPUTune()
+        cputune.shares = 100
+        cputune.quota = 50000
+        cputune.period = 25000
+
+        xml = cputune.to_xml()
+        self.assertXmlEqual(xml, """
+          <cputune>
+            <shares>100</shares>
+            <quota>50000</quota>
+            <period>25000</period>
+          </cputune>""")
+
+
+class LibvirtConfigGuestMetadataNovaTest(LibvirtConfigBaseTest):
+
+    def test_config_metadata(self):
+        meta = config.LibvirtConfigGuestMetaNovaInstance()
+        meta.package = "2014.2.3"
+        meta.name = "moonbuggy"
+        meta.creationTime = 1234567890
+        meta.roottype = "image"
+        meta.rootid = "fe55c69a-8b2e-4bbc-811a-9ad2023a0426"
+
+        owner = config.LibvirtConfigGuestMetaNovaOwner()
+        owner.userid = "3472c2a6-de91-4fb5-b618-42bc781ef670"
+        owner.username = "buzz"
+        owner.projectid = "f241e906-010e-4917-ae81-53f4fb8aa021"
+        owner.projectname = "moonshot"
+
+        meta.owner = owner
+
+        flavor = config.LibvirtConfigGuestMetaNovaFlavor()
+        flavor.name = "m1.lowgravity"
+        flavor.vcpus = 8
+        flavor.memory = 2048
+        flavor.swap = 10
+        flavor.disk = 50
+        flavor.ephemeral = 10
+
+        meta.flavor = flavor
+
+        xml = meta.to_xml()
+        self.assertXmlEqual(xml, """
+    <nova:instance xmlns:nova='http://openstack.org/xmlns/libvirt/nova/1.0'>
+      <nova:package version="2014.2.3"/>
+      <nova:name>moonbuggy</nova:name>
+      <nova:creationTime>2009-02-13 23:31:30</nova:creationTime>
+      <nova:flavor name="m1.lowgravity">
+        <nova:memory>2048</nova:memory>
+        <nova:disk>50</nova:disk>
+        <nova:swap>10</nova:swap>
+        <nova:ephemeral>10</nova:ephemeral>
+        <nova:vcpus>8</nova:vcpus>
+      </nova:flavor>
+      <nova:owner>
+        <nova:user
+         uuid="3472c2a6-de91-4fb5-b618-42bc781ef670">buzz</nova:user>
+        <nova:project
+         uuid="f241e906-010e-4917-ae81-53f4fb8aa021">moonshot</nova:project>
+      </nova:owner>
+      <nova:root type="image" uuid="fe55c69a-8b2e-4bbc-811a-9ad2023a0426"/>
+    </nova:instance>
+        """)

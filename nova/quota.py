@@ -23,8 +23,8 @@ import six
 
 from nova import db
 from nova import exception
-from nova.objects import keypair as keypair_obj
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
+from nova import objects
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -1300,7 +1300,7 @@ class QuotaEngine(object):
                                             project_id=project_id,
                                             user_id=user_id)
 
-        LOG.debug(_("Created reservations %s"), reservations)
+        LOG.debug("Created reservations %s", reservations)
 
         return reservations
 
@@ -1325,7 +1325,7 @@ class QuotaEngine(object):
             # logged, however, because this is less than optimal.
             LOG.exception(_("Failed to commit reservations %s"), reservations)
             return
-        LOG.debug(_("Committed reservations %s"), reservations)
+        LOG.debug("Committed reservations %s", reservations)
 
     def rollback(self, context, reservations, project_id=None, user_id=None):
         """Roll back reservations.
@@ -1349,7 +1349,7 @@ class QuotaEngine(object):
             LOG.exception(_("Failed to roll back reservations %s"),
                           reservations)
             return
-        LOG.debug(_("Rolled back reservations %s"), reservations)
+        LOG.debug("Rolled back reservations %s", reservations)
 
     def usage_reset(self, context, resources):
         """Reset the usage records for a particular user on a list of
@@ -1405,6 +1405,11 @@ class QuotaEngine(object):
         return sorted(self._resources.keys())
 
 
+def _keypair_get_count_by_user(*args, **kwargs):
+    """Helper method to avoid referencing objects.KeyPairList on import."""
+    return objects.KeyPairList.get_count_by_user(*args, **kwargs)
+
+
 QUOTAS = QuotaEngine()
 
 
@@ -1426,7 +1431,7 @@ resources = [
     CountableResource('security_group_rules',
                       db.security_group_rule_count_by_group,
                       'quota_security_group_rules'),
-    CountableResource('key_pairs', keypair_obj.KeyPairList.get_count_by_user,
+    CountableResource('key_pairs', _keypair_get_count_by_user,
                       'quota_key_pairs'),
     ]
 

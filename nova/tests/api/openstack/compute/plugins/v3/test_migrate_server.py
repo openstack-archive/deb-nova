@@ -67,8 +67,14 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
             method_translations=method_translations)
 
     def test_actions_with_locked_instance(self):
-        method_translations = {'migrate': 'resize'}
-        self._test_actions_with_locked_instance(['migrate'],
+        method_translations = {'migrate': 'resize',
+                               'migrate_live': 'live_migrate'}
+        body_map = {'migrate_live': {'host': 'hostname',
+                                     'block_migration': False,
+                                     'disk_over_commit': False}}
+        args_map = {'migrate_live': ((False, False, 'hostname'), {})}
+        self._test_actions_with_locked_instance(
+            ['migrate', 'migrate_live'], body_map=body_map, args_map=args_map,
             method_translations=method_translations)
 
     def _test_migrate_exception(self, exc_info, expected_result):
@@ -111,11 +117,22 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
                  'disk_over_commit': "False"}
         self._test_migrate_live_succeeded(param)
 
-    def test_migrate_live_missing_dict_param(self):
+    def test_migrate_live_without_host(self):
         res = self._make_request('/servers/FAKE/action',
-                                 {'migrate_live': {'dummy': 'hostname',
-                                                   'block_migration': False,
+                                 {'migrate_live': {'block_migration': False,
                                                    'disk_over_commit': False}})
+        self.assertEqual(400, res.status_int)
+
+    def test_migrate_live_without_block_migration(self):
+        res = self._make_request('/servers/FAKE/action',
+                                 {'migrate_live': {'host': 'hostname',
+                                                   'disk_over_commit': False}})
+        self.assertEqual(400, res.status_int)
+
+    def test_migrate_live_without_disk_over_commit(self):
+        res = self._make_request('/servers/FAKE/action',
+                                 {'migrate_live': {'host': 'hostname',
+                                                   'block_migration': False}})
         self.assertEqual(400, res.status_int)
 
     def test_migrate_live_with_invalid_block_migration(self):

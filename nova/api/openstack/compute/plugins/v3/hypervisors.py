@@ -20,7 +20,8 @@ import webob.exc
 from nova.api.openstack import extensions
 from nova import compute
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
+from nova import servicegroup
 
 
 ALIAS = "os-hypervisors"
@@ -32,12 +33,17 @@ class HypervisorsController(object):
 
     def __init__(self):
         self.host_api = compute.HostAPI()
+        self.servicegroup_api = servicegroup.API()
         super(HypervisorsController, self).__init__()
 
     def _view_hypervisor(self, hypervisor, detail, servers=None, **kwargs):
+        alive = self.servicegroup_api.service_is_up(hypervisor['service'])
         hyp_dict = {
             'id': hypervisor['id'],
             'hypervisor_hostname': hypervisor['hypervisor_hostname'],
+            'state': 'up' if alive else 'down',
+            'status': ('disabled' if hypervisor['service']['disabled']
+                       else 'enabled'),
             }
 
         if detail and not servers:
@@ -52,9 +58,10 @@ class HypervisorsController(object):
             hyp_dict['service'] = {
                 'id': hypervisor['service_id'],
                 'host': hypervisor['service']['host'],
+                'disabled_reason': hypervisor['service']['disabled_reason'],
                 }
 
-        if servers != None:
+        if servers is not None:
             hyp_dict['servers'] = [dict(name=serv['name'], id=serv['uuid'])
                                    for serv in servers]
 

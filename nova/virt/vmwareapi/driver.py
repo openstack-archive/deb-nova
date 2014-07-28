@@ -20,6 +20,7 @@ A connection to the VMware ESX/vCenter platform.
 """
 
 import re
+import sys
 import time
 
 from eventlet import event
@@ -27,7 +28,7 @@ from oslo.config import cfg
 import suds
 
 from nova import exception
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _, _LC
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
@@ -160,7 +161,7 @@ class VMwareESXDriver(driver.ComputeDriver):
         try:
             vim.client.service.Logout(session_manager)
         except suds.WebFault:
-            LOG.debug(_("No vSphere session was open during cleanup_host."))
+            LOG.debug("No vSphere session was open during cleanup_host.")
 
     def list_instances(self):
         """List VM instances."""
@@ -172,9 +173,9 @@ class VMwareESXDriver(driver.ComputeDriver):
         self._vmops.spawn(context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info)
 
-    def snapshot(self, context, instance, name, update_task_state):
+    def snapshot(self, context, instance, image_id, update_task_state):
         """Create snapshot from a running VM instance."""
-        self._vmops.snapshot(context, instance, name, update_task_state)
+        self._vmops.snapshot(context, instance, image_id, update_task_state)
 
     def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None, bad_volumes_callback=None):
@@ -182,7 +183,7 @@ class VMwareESXDriver(driver.ComputeDriver):
         self._vmops.reboot(instance, network_info)
 
     def destroy(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, migrate_data=None):
         """Destroy VM instance."""
 
         # Destroy gets triggered when Resource Claim in resource_tracker
@@ -191,10 +192,10 @@ class VMwareESXDriver(driver.ComputeDriver):
         if not instance['node']:
             return
 
-        self._vmops.destroy(instance, network_info, destroy_disks)
+        self._vmops.destroy(instance, destroy_disks)
 
     def cleanup(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, migrate_data=None):
         """Cleanup after instance being destroyed by Hypervisor."""
         pass
 
@@ -264,7 +265,13 @@ class VMwareESXDriver(driver.ComputeDriver):
 
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
-        return self._vmops.get_diagnostics(instance)
+        data = self._vmops.get_diagnostics(instance)
+        return data
+
+    def get_instance_diagnostics(self, instance):
+        """Return data about VM diagnostics."""
+        data = self._vmops.get_instance_diagnostics(instance)
+        return data
 
     def get_vnc_console(self, context, instance):
         """Return link to instance's VNC console."""
@@ -328,12 +335,6 @@ class VMwareESXDriver(driver.ComputeDriver):
         # Updating host information
         return self._get_available_resources(host_stats)
 
-    def update_host_status(self):
-        """Update the status info of the host, and return those values
-           to the calling program.
-        """
-        return self.host_state.update_status()
-
     def get_host_stats(self, refresh=False):
         """Return the current state of the host.
 
@@ -358,9 +359,9 @@ class VMwareESXDriver(driver.ComputeDriver):
     def get_host_uptime(self, host):
         return 'Please refer to %s for the uptime' % CONF.vmware.host_ip
 
-    def inject_network_info(self, instance, network_info):
+    def inject_network_info(self, instance, nw_info):
         """inject network info for specified instance."""
-        self._vmops.inject_network_info(instance, network_info)
+        self._vmops.inject_network_info(instance, nw_info)
 
     def list_instance_uuids(self):
         """List VM instance UUIDs."""
@@ -370,6 +371,18 @@ class VMwareESXDriver(driver.ComputeDriver):
     def manage_image_cache(self, context, all_instances):
         """Manage the local cache of images."""
         self._vmops.manage_image_cache(context, all_instances)
+
+    def instance_exists(self, instance):
+        """Efficient override of base instance_exists method."""
+        return self._vmops.instance_exists(instance)
+
+    def attach_interface(self, instance, image_meta, vif):
+        """Attach an interface to the instance."""
+        self._vmops.attach_interface(instance, image_meta, vif)
+
+    def detach_interface(self, instance, vif):
+        """Detach an interface from the instance."""
+        self._vmops.detach_interface(instance, vif)
 
 
 class VMwareVCDriver(VMwareESXDriver):
@@ -453,7 +466,7 @@ class VMwareVCDriver(VMwareESXDriver):
                                        block_device_info, power_on)
 
     def finish_migration(self, context, migration, instance, disk_info,
-                         network_info, image_meta, resize_instance=False,
+                         network_info, image_meta, resize_instance,
                          block_device_info=None, power_on=True):
         """Completes a resize, turning on the migrated instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
@@ -461,17 +474,19 @@ class VMwareVCDriver(VMwareESXDriver):
                                 network_info, image_meta, resize_instance,
                                 block_device_info, power_on)
 
-    def live_migration(self, context, instance_ref, dest,
+    def live_migration(self, context, instance, dest,
                        post_method, recover_method, block_migration=False,
                        migrate_data=None):
         """Live migration of an instance to another host."""
-        self._vmops.live_migration(context, instance_ref, dest,
+        self._vmops.live_migration(context, instance, dest,
                                    post_method, recover_method,
                                    block_migration)
 
     def rollback_live_migration_at_destination(self, context, instance,
                                                network_info,
-                                               block_device_info):
+                                               block_device_info,
+                                               destroy_disks=True,
+                                               migrate_data=None):
         """Clean up destination node after a failed live migration."""
         self.destroy(context, instance, network_info, block_device_info)
 
@@ -609,10 +624,10 @@ class VMwareVCDriver(VMwareESXDriver):
             nodename = self._create_nodename(node,
                                           self.dict_mors.get(node)['name'])
             node_list.append(nodename)
-        LOG.debug(_("The available nodes are: %s") % node_list)
+        LOG.debug("The available nodes are: %s", node_list)
         return node_list
 
-    def get_host_stats(self, refresh=True):
+    def get_host_stats(self, refresh=False):
         """Return currently known host stats."""
         stats_list = []
         nodes = self.get_available_nodes()
@@ -648,10 +663,10 @@ class VMwareVCDriver(VMwareESXDriver):
         _volumeops = self._get_volumeops_for_compute_node(instance['node'])
         return _volumeops.get_volume_connector(instance)
 
-    def snapshot(self, context, instance, name, update_task_state):
+    def snapshot(self, context, instance, image_id, update_task_state):
         """Create snapshot from a running VM instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops.snapshot(context, instance, name, update_task_state)
+        _vmops.snapshot(context, instance, image_id, update_task_state)
 
     def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None, bad_volumes_callback=None):
@@ -660,7 +675,7 @@ class VMwareVCDriver(VMwareESXDriver):
         _vmops.reboot(instance, network_info)
 
     def destroy(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True):
+                destroy_disks=True, migrate_data=None):
         """Destroy VM instance."""
 
         # Destroy gets triggered when Resource Claim in resource_tracker
@@ -670,7 +685,7 @@ class VMwareVCDriver(VMwareESXDriver):
             return
 
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops.destroy(instance, network_info, destroy_disks)
+        _vmops.destroy(instance, destroy_disks)
 
     def pause(self, instance):
         """Pause VM instance."""
@@ -695,12 +710,12 @@ class VMwareVCDriver(VMwareESXDriver):
     def rescue(self, context, instance, network_info, image_meta,
                rescue_password):
         """Rescue the specified instance."""
-        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops = self._get_vmops_for_compute_node(instance.node)
         _vmops.rescue(context, instance, network_info, image_meta)
 
     def unrescue(self, instance, network_info):
         """Unrescue the specified instance."""
-        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops = self._get_vmops_for_compute_node(instance.node)
         _vmops.unrescue(instance)
 
     def power_off(self, instance):
@@ -728,7 +743,14 @@ class VMwareVCDriver(VMwareESXDriver):
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        return _vmops.get_diagnostics(instance)
+        data = _vmops.get_diagnostics(instance)
+        return data
+
+    def get_instance_diagnostics(self, instance):
+        """Return data about VM diagnostics."""
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        data = _vmops.get_instance_diagnostics(instance)
+        return data
 
     def host_power_action(self, host, action):
         """Host operations not supported by VC driver.
@@ -759,10 +781,10 @@ class VMwareVCDriver(VMwareESXDriver):
                 "uptime for just one host.")
         raise NotImplementedError(msg)
 
-    def inject_network_info(self, instance, network_info):
+    def inject_network_info(self, instance, nw_info):
         """inject network info for specified instance."""
         _vmops = self._get_vmops_for_compute_node(instance['node'])
-        _vmops.inject_network_info(instance, network_info)
+        _vmops.inject_network_info(instance, nw_info)
 
     def manage_image_cache(self, context, all_instances):
         """Manage the local cache of images."""
@@ -782,6 +804,21 @@ class VMwareVCDriver(VMwareESXDriver):
             instances = cluster_instances.get(resource, [])
             _vmops = self._get_vmops_for_compute_node(resource)
             _vmops.manage_image_cache(context, instances)
+
+    def instance_exists(self, instance):
+        """Efficient override of base instance_exists method."""
+        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        return _vmops.instance_exists(instance)
+
+    def attach_interface(self, instance, image_meta, vif):
+        """Attach an interface to the instance."""
+        _vmops = self._get_vmops_for_compute_node(instance.node)
+        _vmops.attach_interface(instance, image_meta, vif)
+
+    def detach_interface(self, instance, vif):
+        """Detach an interface from the instance."""
+        _vmops = self._get_vmops_for_compute_node(instance.node)
+        _vmops.detach_interface(instance, vif)
 
 
 class VMwareAPISession(object):
@@ -832,20 +869,20 @@ class VMwareAPISession(object):
                         self.vim.TerminateSession(
                                 self.vim.get_service_content().sessionManager,
                                 sessionId=[self._session.key])
-                    except Exception as excep:
+                    except Exception:
                         # This exception is something we can live with. It is
                         # just an extra caution on our side. The session may
                         # have been cleared. We could have made a call to
                         # SessionIsActive, but that is an overhead because we
                         # anyway would have to call TerminateSession.
-                        LOG.debug(excep)
+                        LOG.debug("TerminateSession failed", exc_info=True)
                 self._session = session
                 return
-            except Exception as excep:
-                LOG.critical(_("Unable to connect to server at %(server)s, "
-                    "sleeping for %(seconds)s seconds"),
-                    {'server': self._host_ip, 'seconds': delay},
-                    exc_info=True)
+            except Exception:
+                LOG.critical(_LC("Unable to connect to server at %(server)s, "
+                                 "sleeping for %(seconds)s seconds"),
+                             {'server': self._host_ip, 'seconds': delay},
+                             exc_info=True)
                 # exc_info logs the exception with the message
                 time.sleep(delay)
                 delay = min(2 * delay, 60)
@@ -861,10 +898,11 @@ class VMwareAPISession(object):
                     self.vim.get_service_content().sessionManager,
                     sessionID=self._session.key,
                     userName=self._session.userName)
-        except Exception as e:
+        except Exception:
             LOG.warning(_("Unable to validate session %s!"),
                         self._session.key)
-            LOG.debug(_("Exception: %(ex)s"), {'ex': e})
+            LOG.debug("Unable to validate session %s", self._session.key,
+                      exc_info=True)
         return active
 
     def _call_method(self, module, method, *args, **kwargs):
@@ -874,7 +912,7 @@ class VMwareAPISession(object):
         args = list(args)
         retry_count = 0
         while True:
-            exc = None
+            exc_info = False
             try:
                 if not self._is_vim_object(module):
                     # If it is not the first try, then get the latest
@@ -893,7 +931,7 @@ class VMwareAPISession(object):
                 # If it is a Session Fault Exception, it may point
                 # to a session gone bad. So we try re-creating a session
                 # and then proceeding ahead with the call.
-                exc = excep
+                exc_info = sys.exc_info()
                 if error_util.NOT_AUTHENTICATED in excep.fault_list:
                     # Because of the idle session returning an empty
                     # RetrievePropertiesResponse and also the same is returned
@@ -915,35 +953,34 @@ class VMwareAPISession(object):
                         fault = excep.fault_list[0]
                         raise error_util.get_fault_class(fault)(str(excep))
                     break
-            except error_util.SessionOverLoadException as excep:
+            except error_util.SessionOverLoadException:
                 # For exceptions which may come because of session overload,
                 # we retry
-                exc = excep
-            except error_util.SessionConnectionException as excep:
+                exc_info = sys.exc_info()
+            except error_util.SessionConnectionException:
                 # For exceptions with connections we create the session
-                exc = excep
+                exc_info = sys.exc_info()
                 self._create_session()
-            except Exception as excep:
+            except Exception:
                 # If it is a proper exception, say not having furnished
                 # proper data in the SOAP call or the retry limit having
                 # exceeded, we raise the exception
-                exc = excep
+                exc_info = sys.exc_info()
                 break
 
-            LOG.debug(_("_call_method(session=%(key)s) failed. "
-                        "Module: %(module)s. "
-                        "Method: %(method)s. "
-                        "args: %(args)s. "
-                        "kwargs: %(kwargs)s. "
-                        "Iteration: %(n)s. "
-                        "Exception: %(ex)s. "),
+            LOG.debug("_call_method(session=%(key)s) failed. "
+                      "Module: %(module)s. "
+                      "Method: %(method)s. "
+                      "args: %(args)s. "
+                      "kwargs: %(kwargs)s. "
+                      "Iteration: %(n)s. ",
                       {'key': self._session.key,
                        'module': module,
                        'method': method,
                        'args': args,
                        'kwargs': kwargs,
-                       'n': retry_count,
-                       'ex': exc})
+                       'n': retry_count},
+                      exc_info=exc_info)
 
             # If retry count has been reached then break and
             # raise the exception
@@ -951,7 +988,7 @@ class VMwareAPISession(object):
                 break
             time.sleep(TIME_BETWEEN_API_CALL_RETRIES)
 
-        LOG.critical(_("In vmwareapi: _call_method (session=%s)"),
+        LOG.critical(_LC("In vmwareapi: _call_method (session=%s)"),
                      self._session.key, exc_info=True)
         raise
 
@@ -989,8 +1026,8 @@ class VMwareAPISession(object):
             if task_info.state in ['queued', 'running']:
                 return
             elif task_info.state == 'success':
-                LOG.debug(_("Task [%(task_name)s] %(task_ref)s "
-                            "status: success"),
+                LOG.debug("Task [%(task_name)s] %(task_ref)s "
+                          "status: success",
                           {'task_name': task_name, 'task_ref': task_ref})
                 done.send(task_info)
             else:

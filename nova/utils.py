@@ -21,8 +21,8 @@ import contextlib
 import datetime
 import functools
 import hashlib
+import hmac
 import inspect
-import multiprocessing
 import os
 import pyclbr
 import random
@@ -41,9 +41,8 @@ from oslo import messaging
 import six
 
 from nova import exception
+from nova.i18n import _
 from nova.openstack.common import excutils
-from nova.openstack.common import gettextutils
-from nova.openstack.common.gettextutils import _
 from nova.openstack.common import importutils
 from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
@@ -159,14 +158,14 @@ def _get_root_helper():
 
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
-    if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
+    if 'run_as_root' in kwargs and 'root_helper' not in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     return processutils.execute(*cmd, **kwargs)
 
 
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
-    if 'run_as_root' in kwargs and not 'root_helper' in kwargs:
+    if 'run_as_root' in kwargs and 'root_helper' not in kwargs:
         kwargs['root_helper'] = _get_root_helper()
     return processutils.trycmd(*args, **kwargs)
 
@@ -444,8 +443,6 @@ def utf8(value):
     """
     if isinstance(value, unicode):
         return value.encode('utf-8')
-    elif isinstance(value, gettextutils.Message):
-        return unicode(value).encode('utf-8')
     assert isinstance(value, str)
     return value
 
@@ -659,7 +656,7 @@ def read_cached_file(filename, cache_info, reload_func=None):
     """
     mtime = os.path.getmtime(filename)
     if not cache_info or mtime != cache_info.get('mtime'):
-        LOG.debug(_("Reloading cached file %s") % filename)
+        LOG.debug("Reloading cached file %s", filename)
         with open(filename) as fap:
             cache_info['data'] = fap.read()
         cache_info['mtime'] = mtime
@@ -1146,9 +1143,19 @@ def get_hash_str(base_str):
     """returns string that represents hash of base_str (in hex format)."""
     return hashlib.md5(base_str).hexdigest()
 
+if hasattr(hmac, 'compare_digest'):
+    constant_time_compare = hmac.compare_digest
+else:
+    def constant_time_compare(first, second):
+        """Returns True if both string inputs are equal, otherwise False.
 
-def cpu_count():
-    try:
-        return multiprocessing.cpu_count()
-    except NotImplementedError:
-        return 1
+        This function should take a constant amount of time regardless of
+        how many characters in the strings match.
+
+        """
+        if len(first) != len(second):
+            return False
+        result = 0
+        for x, y in zip(first, second):
+            result |= ord(x) ^ ord(y)
+        return result == 0

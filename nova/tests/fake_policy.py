@@ -38,6 +38,7 @@ policy_data = """
 
     "compute:get_instance_faults": "",
     "compute:get_diagnostics": "",
+    "compute:get_instance_diagnostics": "",
 
     "compute:get_lock": "",
     "compute:lock": "",
@@ -57,6 +58,9 @@ policy_data = """
 
     "compute:attach_volume": "",
     "compute:detach_volume": "",
+
+    "compute:attach_interface": "",
+    "compute:detach_interface": "",
 
     "compute:set_admin_password": "",
 
@@ -199,7 +203,6 @@ policy_data = """
     "compute_extension:floating_ip_dns": "",
     "compute_extension:floating_ip_pools": "",
     "compute_extension:floating_ips": "",
-    "compute_extension:floating_ips:all_tenants": "rule:admin_api",
     "compute_extension:floating_ips_bulk": "",
     "compute_extension:fping": "",
     "compute_extension:fping:all_tenants": "is_admin:True",
@@ -347,7 +350,6 @@ policy_data = """
     "network:setup_networks_on_host": "",
 
     "network:get_floating_ip": "",
-    "network:get_floating_ips": "",
     "network:get_floating_ip_pools": "",
     "network:get_floating_ip_by_address": "",
     "network:get_floating_ips_by_project": "",

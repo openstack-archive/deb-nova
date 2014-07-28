@@ -23,9 +23,8 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 import nova.exception
-from nova.objects import instance as instance_obj
-from nova.objects import instance_group as instance_group_obj
-from nova.openstack.common.gettextutils import _
+from nova.i18n import _
+from nova import objects
 from nova import utils
 
 # NOTE(russellb) There is one other policy, 'legacy', but we don't allow that
@@ -143,7 +142,7 @@ class ServerGroupController(wsgi.Controller):
         if group.members:
             # Display the instances that are not deleted.
             filters = {'uuid': group.members, 'deleted': False}
-            instances = instance_obj.InstanceList.get_by_filters(
+            instances = objects.InstanceList.get_by_filters(
                 context, filters=filters)
             members = [instance.uuid for instance in instances]
         server_group['members'] = members
@@ -165,6 +164,11 @@ class ServerGroupController(wsgi.Controller):
                          if policy not in SUPPORTED_POLICIES]
         if not_supported:
             msg = _("Invalid policies: %s") % ', '.join(not_supported)
+            raise nova.exception.InvalidInput(reason=msg)
+
+        # Note(wingwj): It doesn't make sense to store duplicate policies.
+        if sorted(set(policies)) != sorted(policies):
+            msg = _("Duplicate policies configured!")
             raise nova.exception.InvalidInput(reason=msg)
 
     def _validate_input_body(self, body, entity_name):
@@ -204,7 +208,7 @@ class ServerGroupController(wsgi.Controller):
         """Return data about the given server group."""
         context = _authorize_context(req)
         try:
-            sg = instance_group_obj.InstanceGroup.get_by_uuid(context, id)
+            sg = objects.InstanceGroup.get_by_uuid(context, id)
         except nova.exception.InstanceGroupNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         return {'server_group': self._format_server_group(context, sg)}
@@ -213,7 +217,7 @@ class ServerGroupController(wsgi.Controller):
         """Delete an server group."""
         context = _authorize_context(req)
         try:
-            sg = instance_group_obj.InstanceGroup.get_by_uuid(context, id)
+            sg = objects.InstanceGroup.get_by_uuid(context, id)
             sg.destroy(context)
         except nova.exception.InstanceGroupNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
@@ -225,9 +229,9 @@ class ServerGroupController(wsgi.Controller):
         context = _authorize_context(req)
         project_id = context.project_id
         if 'all_projects' in req.GET and context.is_admin:
-            sgs = instance_group_obj.InstanceGroupList.get_all(context)
+            sgs = objects.InstanceGroupList.get_all(context)
         else:
-            sgs = instance_group_obj.InstanceGroupList.get_by_project_id(
+            sgs = objects.InstanceGroupList.get_by_project_id(
                     context, project_id)
         limited_list = common.limited(sgs.objects, req)
         result = [self._format_server_group(context, group)
@@ -246,13 +250,13 @@ class ServerGroupController(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
         vals = body['server_group']
-        sg = instance_group_obj.InstanceGroup()
+        sg = objects.InstanceGroup(context)
         sg.project_id = context.project_id
         sg.user_id = context.user_id
         try:
             sg.name = vals.get('name')
             sg.policies = vals.get('policies')
-            sg.create(context)
+            sg.create()
         except ValueError as e:
             raise exc.HTTPBadRequest(explanation=e)
 
