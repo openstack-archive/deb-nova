@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenStack Compute Spice HTML5 Proxy
+Documentation=http://docs.openstack.org/
+After=nova-consoleauth.service network.service
+
+[Service]
+User=nova
+Group=nova
+ExecStart=/etc/init.d/nova-spicehtml5proxy systemd-start
+ExecStop=/etc/init.d/nova-spicehtml5proxy systemd-stop
+PIDFile=/var/run/nova/nova-spicehtml5proxy.pid
+Restart=on-failure
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+
