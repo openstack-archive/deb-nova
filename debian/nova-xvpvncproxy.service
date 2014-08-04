@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenStack XVP VNC proxy
+Documentation=http://docs.openstack.org/
+After=network.service
+
+[Service]
+User=nova
+Group=nova
+ExecStart=/etc/init.d/nova-xvpvncproxy systemd-start
+ExecStop=/etc/init.d/nova-xvpvncproxy systemd-stop
+PIDFile=/var/run/nova/nova-xvpvncproxy.pid
+Restart=on-failure
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+
