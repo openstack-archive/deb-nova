@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenStack Compute Console
+Documentation=http://docs.openstack.org/
+After=postgresql.service mysql.service keystone.service rabbitmq-server.service ntp.service network.service
+
+[Service]
+User=nova
+Group=nova
+ExecStart=/etc/init.d/nova-console systemd-start
+ExecStop=/etc/init.d/nova-console systemd-stop
+PIDFile=/var/run/nova/nova-console.pid
+Restart=on-failure
+Type=forking
+
+[Install]
+WantedBy=multi-user.target
+
