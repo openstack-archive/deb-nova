@@ -19,7 +19,7 @@ DESC="OpenStack Compute Scheduler"
 NAME=nova-scheduler
 DAEMON=/usr/bin/nova-scheduler
 DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
-PIDFILE=/var/run/$NAME.pid
+PIDFILE=/var/run/nova/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
 LOCK_DIR=/var/lock/nova/
@@ -33,8 +33,8 @@ LOCK_DIR=/var/lock/nova/
 # Exit if the package is not installed
 [ -x $DAEMON ] || exit 0
 
-mkdir -p ${LOCK_DIR}
-chown ${NOVA_USER} ${LOCK_DIR}
+mkdir -p ${LOCK_DIR} /var/run/nova
+chown ${NOVA_USER} ${LOCK_DIR} /var/run/nova
 
 . /lib/lsb/init-functions
 
@@ -72,6 +72,12 @@ stop)
 ;;
 status)
 	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+;;
+systemd-start)
+    do_start
+;;
+systemd-stop)
+    do_stop
 ;;
 restart|force-reload)
 	log_daemon_msg "Restarting $DESC" "$NAME"
