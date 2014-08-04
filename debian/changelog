@@ -4,6 +4,9 @@ nova (2014.2~b2-1) experimental; urgency=medium
   * New (build-)depends for this release.
   * Removed nova-clear-rabbit-queues from nova-scheduler (gone from upstream).
 
+  [ gustavo panizzo ]
+  * Support to run nova daemons under systemd.
+
  -- Thomas Goirand <zigo@debian.org>  Thu, 03 Jul 2014 20:30:08 +0800
 
 nova (2014.1.1-4) unstable; urgency=high
