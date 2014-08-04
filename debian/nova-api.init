@@ -19,7 +19,7 @@ DESC="OpenStack Compute API"
 NAME=nova-api
 DAEMON=/usr/bin/nova-api
 DAEMON_ARGS="--config-file=/etc/nova/nova.conf"
-PIDFILE=/var/run/$NAME.pid
+PIDFILE=/var/run/nova/$NAME.pid
 SCRIPTNAME=/etc/init.d/$NAME
 NOVA_USER=nova
 LOCK_DIR=/var/lock/nova/
@@ -35,8 +35,8 @@ LOCK_DIR=/var/lock/nova/
 [ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
 [ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/$NAME.log"
 
-mkdir -p ${LOCK_DIR}
-chown ${NOVA_USER} ${LOCK_DIR}
+mkdir -p ${LOCK_DIR} /var/run/nova
+chown ${NOVA_USER} ${LOCK_DIR} /var/run/nova
 
 do_start() {
 	start-stop-daemon --start --background --quiet --chuid ${NOVA_USER}:nova --make-pidfile --pidfile $PIDFILE --startas $DAEMON --test > /dev/null \
@@ -72,6 +72,12 @@ stop)
 ;;
 status)
 	status_of_proc "$DAEMON" "$NAME" && exit 0 || exit $?
+;;
+systemd-start)
+    do_start
+;;
+systemd-stop)
+    do_stop
 ;;
 restart|force-reload)
 	log_daemon_msg "Restarting $DESC" "$NAME"
