@@ -17,15 +17,20 @@ import mock
 import contextlib
 import mock
 
+from nova.compute import power_state
+from nova import context
 from nova import exception
 from nova.network import model as network_model
 from nova import test
+from nova.tests import fake_instance
+import nova.tests.image.fake
 from nova.tests.virt.vmwareapi import stubs
 from nova import utils
 from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import fake as vmwareapi_fake
+from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vmops
 
 
@@ -37,7 +42,19 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         self._session = driver.VMwareAPISession()
 
         self._vmops = vmops.VMwareVMOps(self._session, None, None)
-        self._instance = {'name': 'fake_name', 'uuid': 'fake_uuid'}
+        self._image_id = nova.tests.image.fake.get_valid_image_id()
+        values = {
+            'name': 'fake_name',
+            'uuid': 'fake_uuid',
+            'vcpus': 1,
+            'memory_mb': 512,
+            'image_ref': self._image_id,
+            'root_gb': 1,
+            'node': 'respool-1001(MyResPoolName)',
+        }
+        self._context = context.RequestContext('fake_user', 'fake_project')
+        self._instance = fake_instance.fake_instance_obj(self._context,
+                                                         **values)
 
         subnet_4 = network_model.Subnet(cidr='192.168.0.1/24',
                                         dns=[network_model.IP('192.168.0.1')],
@@ -262,3 +279,117 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             self.assertEqual("fake_snapshot_ref", snap)
             _wait_for_task.assert_has_calls([
                    mock.call('fake_snapshot_task')])
+
+    def test_get_ds_browser(self):
+        cache = self._vmops._datastore_browser_mapping
+        ds_browser = mock.Mock()
+        moref = vmwareapi_fake.ManagedObjectReference('datastore-100')
+        self.assertIsNone(cache.get(moref.value))
+        mock_call_method = mock.Mock(return_value=ds_browser)
+        with mock.patch.object(self._session, '_call_method',
+                               mock_call_method):
+            ret = self._vmops._get_ds_browser(moref)
+            mock_call_method.assert_called_once_with(vim_util,
+                'get_dynamic_property', moref, 'Datastore', 'browser')
+            self.assertIs(ds_browser, ret)
+            self.assertIs(ds_browser, cache.get(moref.value))
+
+    @mock.patch('nova.virt.vmwareapi.vm_util.get_vm_ref',
+                return_value='fake_ref')
+    def test_get_info(self, mock_get_vm_ref):
+        props = ['summary.config.numCpu', 'summary.config.memorySizeMB',
+                 'runtime.powerState']
+        prop_cpu = vmwareapi_fake.Prop(props[0], 4)
+        prop_mem = vmwareapi_fake.Prop(props[1], 128)
+        prop_state = vmwareapi_fake.Prop(props[2], 'poweredOn')
+        prop_list = [prop_state, prop_mem, prop_cpu]
+        obj_content = vmwareapi_fake.ObjectContent(None, prop_list=prop_list)
+        result = vmwareapi_fake.FakeRetrieveResult()
+        result.add_object(obj_content)
+        mock_call_method = mock.Mock(return_value=result)
+        with mock.patch.object(self._session, '_call_method',
+                               mock_call_method):
+            info = self._vmops.get_info(self._instance)
+            mock_call_method.assert_called_once_with(vim_util,
+                'get_object_properties', None, 'fake_ref', 'VirtualMachine',
+                props)
+            mock_get_vm_ref.assert_called_once_with(self._session,
+                self._instance)
+            self.assertEqual(power_state.RUNNING, info['state'])
+            self.assertEqual(128 * 1024, info['max_mem'])
+            self.assertEqual(128 * 1024, info['mem'])
+            self.assertEqual(4, info['num_cpu'])
+            self.assertEqual(0, info['cpu_time'])
+
+    def _test_get_datacenter_ref_and_name(self, ds_ref_exists=False):
+        instance_ds_ref = mock.Mock()
+        instance_ds_ref.value = "ds-1"
+        _vcvmops = vmops.VMwareVCVMOps(self._session, None, None)
+        if ds_ref_exists:
+            ds_ref = mock.Mock()
+            ds_ref.value = "ds-1"
+        else:
+            ds_ref = None
+
+        def fake_call_method(module, method, *args, **kwargs):
+            fake_object1 = vmwareapi_fake.FakeRetrieveResult()
+            fake_object1.add_object(vmwareapi_fake.Datacenter(
+                ds_ref=ds_ref))
+            if not ds_ref:
+                # Token is set for the fake_object1, so it will continue to
+                # fetch the next object.
+                setattr(fake_object1, 'token', 'token-0')
+                if method == "continue_to_get_objects":
+                    fake_object2 = vmwareapi_fake.FakeRetrieveResult()
+                    fake_object2.add_object(vmwareapi_fake.Datacenter())
+                    return fake_object2
+
+            return fake_object1
+
+        with mock.patch.object(self._session, '_call_method',
+                               side_effect=fake_call_method) as fake_call:
+            dc_info = _vcvmops.get_datacenter_ref_and_name(instance_ds_ref)
+
+            if ds_ref:
+                self.assertEqual(1, len(_vcvmops._datastore_dc_mapping))
+                fake_call.assert_called_once_with(vim_util, "get_objects",
+                    "Datacenter", ["name", "datastore", "vmFolder"])
+                self.assertEqual("ha-datacenter", dc_info.name)
+            else:
+                calls = [mock.call(vim_util, "get_objects", "Datacenter",
+                                   ["name", "datastore", "vmFolder"]),
+                         mock.call(vim_util, "continue_to_get_objects",
+                                   "token-0")]
+                fake_call.assert_has_calls(calls)
+                self.assertIsNone(dc_info)
+
+    def test_get_datacenter_ref_and_name(self):
+        self._test_get_datacenter_ref_and_name(ds_ref_exists=True)
+
+    def test_get_datacenter_ref_and_name_with_no_datastore(self):
+        self._test_get_datacenter_ref_and_name()
+
+    def test_spawn_mask_block_device_info_password(self):
+        # Very simple test that just ensures block_device_info auth_password
+        # is masked when logged; the rest of the test just fails out early.
+        data = {'auth_password': 'scrubme'}
+        bdm = [{'connection_info': {'data': data}}]
+        bdi = {'block_device_mapping': bdm}
+
+        # Tests that the parameters to the to_xml method are sanitized for
+        # passwords when logged.
+        def fake_debug(*args, **kwargs):
+            if 'auth_password' in args[0]:
+                self.assertNotIn('scrubme', args[0])
+
+        with mock.patch.object(vmops.LOG, 'debug',
+                               side_effect=fake_debug) as debug_mock:
+            # the invalid disk format will cause an exception
+            image_meta = {'disk_format': 'fake'}
+            self.assertRaises(exception.InvalidDiskFormat, self._vmops.spawn,
+                              self._context, self._instance, image_meta,
+                              injected_files=None, admin_password=None,
+                              network_info=[], block_device_info=bdi)
+            # we don't care what the log message is, we just want to make sure
+            # our stub method is called which asserts the password is scrubbed
+            self.assertTrue(debug_mock.called)

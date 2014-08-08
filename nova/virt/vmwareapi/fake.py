@@ -654,7 +654,8 @@ class HostStorageSystem(ManagedObject):
 class HostSystem(ManagedObject):
     """Host System class."""
 
-    def __init__(self, name="ha-host", connected=True, ds_ref=None):
+    def __init__(self, name="ha-host", connected=True, ds_ref=None,
+                 maintenance_mode=False):
         super(HostSystem, self).__init__("host")
         self.set("name", name)
         if _db_content.get("HostNetworkSystem", None) is None:
@@ -689,6 +690,9 @@ class HostSystem(ManagedObject):
             runtime.connectionState = "connected"
         else:
             runtime.connectionState = "disconnected"
+
+        runtime.inMaintenanceMode = maintenance_mode
+
         summary.runtime = runtime
 
         quickstats = DataObject()
@@ -709,7 +713,6 @@ class HostSystem(ManagedObject):
 
         self.set("summary", summary)
         self.set("capability.maxHostSupportedVcpus", 600)
-        self.set("summary.runtime.inMaintenanceMode", False)
         self.set("summary.hardware", hardware)
         self.set("summary.runtime", runtime)
         self.set("config.network.pnic", net_info_pnic)
@@ -824,8 +827,11 @@ class Datacenter(ManagedObject):
         network_do = DataObject()
         network_do.ManagedObjectReference = [net_ref]
         self.set("network", network_do)
-        datastore = DataObject()
-        datastore.ManagedObjectReference = [ds_ref]
+        if ds_ref:
+            datastore = DataObject()
+            datastore.ManagedObjectReference = [ds_ref]
+        else:
+            datastore = None
         self.set("datastore", datastore)
 
 
@@ -914,7 +920,7 @@ def _remove_file(file_path):
     # Check if the remove is for a single file object or for a folder
     if file_path.find(".vmdk") != -1:
         if file_path not in _db_content.get("files"):
-            raise exception.FileNotFound(file_path=file_path)
+            raise error_util.FileNotFoundException(file_path)
         _db_content.get("files").remove(file_path)
     else:
         # Removes the files in the folder and the folder too from the db

@@ -55,6 +55,7 @@ from nova.openstack.common import units
 from nova.openstack.common import uuidutils
 from nova.pci import pci_manager
 from nova import test
+from nova.tests import fake_block_device
 from nova.tests import fake_network
 import nova.tests.image.fake
 from nova.tests import matchers
@@ -139,6 +140,14 @@ _fake_NodeDevXml = \
           </capability>
         </capability>
     </device>"""}
+
+
+def mocked_bdm(id, bdm_info):
+    bdm_mock = mock.MagicMock()
+    bdm_mock.__getitem__ = lambda s, k: bdm_info[k]
+    bdm_mock.get = lambda *k, **kw: bdm_info.get(*k, **kw)
+    bdm_mock.id = id
+    return bdm_mock
 
 
 def _concurrency(signal, wait, done, target, is_block_dev=False):
@@ -768,6 +777,33 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEqual(['fake_registerErrorHandler',
                           'fake_get_host_capabilities'], calls)
 
+    def test_sanitize_log_to_xml(self):
+        # setup fake data
+        data = {'auth_password': 'scrubme'}
+        bdm = [{'connection_info': {'data': data}}]
+        bdi = {'block_device_mapping': bdm}
+
+        # Tests that the parameters to the to_xml method are sanitized for
+        # passwords when logged.
+        def fake_debug(*args, **kwargs):
+            if 'auth_password' in args[0]:
+                self.assertNotIn('scrubme', args[0])
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        conf = mock.Mock()
+        with contextlib.nested(
+            mock.patch.object(libvirt_driver.LOG, 'debug',
+                              side_effect=fake_debug),
+            mock.patch.object(conn, 'get_guest_config', return_value=conf)
+        ) as (
+            debug_mock, conf_mock
+        ):
+            conn.to_xml(self.context, self.test_instance, network_info={},
+                        disk_info={}, image_meta={}, block_device_info=bdi)
+            # we don't care what the log message is, we just want to make sure
+            # our stub method is called which asserts the password is scrubbed
+            self.assertTrue(debug_mock.called)
+
     def test_close_callback(self):
         self.close_callback = None
 
@@ -1043,8 +1079,11 @@ class LibvirtConnTestCase(test.TestCase):
         instance_ref = db.instance_create(self.context, self.test_instance)
         conn_info = {'driver_volume_type': 'fake'}
         info = {'block_device_mapping': [
-                  {'connection_info': conn_info, 'mount_device': '/dev/vdc'},
-                  {'connection_info': conn_info, 'mount_device': '/dev/vdd'}]}
+                mocked_bdm(1, {'connection_info': conn_info,
+                               'mount_device': '/dev/vdc'}),
+                mocked_bdm(2, {'connection_info': conn_info,
+                               'mount_device': '/dev/vdd'}),
+                ]}
 
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance_ref, info)
@@ -1056,6 +1095,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertIsInstance(cfg.devices[3],
                               vconfig.LibvirtConfigGuestDisk)
         self.assertEqual(cfg.devices[3].target_dev, 'vdd')
+        self.assertTrue(info['block_device_mapping'][0].save.called)
+        self.assertTrue(info['block_device_mapping'][1].save.called)
 
     def test_get_guest_config_with_configdrive(self):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
@@ -1096,10 +1137,13 @@ class LibvirtConnTestCase(test.TestCase):
         instance_ref = db.instance_create(self.context, self.test_instance)
         conn_info = {'driver_volume_type': 'fake'}
         bd_info = {'block_device_mapping': [
-                  {'connection_info': conn_info, 'mount_device': '/dev/sdc',
-                   'disk_bus': 'scsi'},
-                  {'connection_info': conn_info, 'mount_device': '/dev/sdd',
-                   'disk_bus': 'scsi'}]}
+                mocked_bdm(1, {'connection_info': conn_info,
+                               'mount_device': '/dev/sdc',
+                               'disk_bus': 'scsi'}),
+                mocked_bdm(2, {'connection_info': conn_info,
+                               'mount_device': '/dev/sdd',
+                               'disk_bus': 'scsi'}),
+                ]}
 
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance_ref, bd_info, image_meta)
@@ -3548,6 +3592,10 @@ class LibvirtConnTestCase(test.TestCase):
                 check = (lambda t: t.find('./os/kernel'), None)
             check_list.append(check)
 
+            if expect_kernel:
+                check = (lambda t: "no_timer_check" in t.find('./os/cmdline').
+                         text, hypervisor_type == "qemu")
+                check_list.append(check)
             # Hypervisors that only support vm_mode.HVM and Xen
             # should not produce configuration that results in kernel
             # arguments
@@ -6887,19 +6935,21 @@ class LibvirtConnTestCase(test.TestCase):
                        '_lookup_by_name',
                        fake_lookup_name)
         block_device_info = {'block_device_mapping': [
-                    {'guest_format': None,
-                     'boot_index': 0,
-                     'mount_device': '/dev/vda',
-                     'connection_info':
-                        {'driver_volume_type': 'iscsi'},
-                     'disk_bus': 'virtio',
-                     'device_type': 'disk',
-                     'delete_on_termination': False}
+                mocked_bdm(1, {'guest_format': None,
+                               'boot_index': 0,
+                               'mount_device': '/dev/vda',
+                               'connection_info':
+                                   {'driver_volume_type': 'iscsi'},
+                               'disk_bus': 'virtio',
+                               'device_type': 'disk',
+                               'delete_on_termination': False}),
                     ]}
         conn.post_live_migration_at_destination(self.context, instance,
                                         network_info, True,
                                         block_device_info=block_device_info)
         self.assertTrue('fake' in self.resultXML)
+        self.assertTrue(
+            block_device_info['block_device_mapping'][0].save.called)
 
     def test_create_without_pause(self):
         self.flags(virt_type='lxc', group='libvirt')
@@ -7441,20 +7491,44 @@ class IptablesFirewallTestCase(test.TestCase):
         self.mox.StubOutWithMock(self.fw,
                                  'add_filters_for_instance',
                                  use_mock_anything=True)
+        self.mox.StubOutWithMock(self.fw.iptables.ipv4['filter'],
+                                 'has_chain')
 
         self.fw.instance_rules(instance_ref,
                                mox.IgnoreArg()).AndReturn((None, None))
         self.fw.add_filters_for_instance(instance_ref, mox.IgnoreArg(),
-                                         mox.IgnoreArg())
+                                         mox.IgnoreArg(), mox.IgnoreArg())
         self.fw.instance_rules(instance_ref,
                                mox.IgnoreArg()).AndReturn((None, None))
+        self.fw.iptables.ipv4['filter'].has_chain(mox.IgnoreArg()
+                                                  ).AndReturn(True)
         self.fw.add_filters_for_instance(instance_ref, mox.IgnoreArg(),
-                                         mox.IgnoreArg())
+                                         mox.IgnoreArg(), mox.IgnoreArg())
         self.mox.ReplayAll()
 
         self.fw.prepare_instance_filter(instance_ref, mox.IgnoreArg())
-        self.fw.instances[instance_ref['id']] = instance_ref
+        self.fw.instance_info[instance_ref['id']] = (instance_ref, None)
         self.fw.do_refresh_security_group_rules("fake")
+
+    def test_do_refresh_security_group_rules_instance_disappeared(self):
+        instance1 = {'id': 1, 'uuid': 'fake-uuid1'}
+        instance2 = {'id': 2, 'uuid': 'fake-uuid2'}
+        self.fw.instance_info = {1: (instance1, 'netinfo1'),
+                                 2: (instance2, 'netinfo2')}
+        mock_filter = mock.MagicMock()
+        with mock.patch.dict(self.fw.iptables.ipv4, {'filter': mock_filter}):
+            mock_filter.has_chain.return_value = False
+            with mock.patch.object(self.fw, 'instance_rules') as mock_ir:
+                mock_ir.return_value = (None, None)
+                self.fw.do_refresh_security_group_rules('secgroup')
+                self.assertEqual(2, mock_ir.call_count)
+            # NOTE(danms): Make sure that it is checking has_chain each time,
+            # continuing to process all the instances, and never adding the
+            # new chains back if has_chain() is False
+            mock_filter.has_chain.assert_has_calls([mock.call('inst-1'),
+                                                    mock.call('inst-2')],
+                                                   any_order=True)
+            self.assertEqual(0, mock_filter.add_chain.call_count)
 
     def test_unfilter_instance_undefines_nwfilter(self):
         admin_ctxt = context.get_admin_context()
@@ -7758,6 +7832,44 @@ class NWFilterTestCase(test.TestCase):
                                                           'in filter')
 
         db.instance_destroy(admin_ctxt, instance_ref['uuid'])
+
+    def test_multinic_base_filter_selection(self):
+        fakefilter = NWFilterFakes()
+        self.fw._conn.nwfilterDefineXML = fakefilter.filterDefineXMLMock
+        self.fw._conn.nwfilterLookupByName = fakefilter.nwfilterLookupByName
+
+        instance_ref = self._create_instance()
+        inst_id = instance_ref['id']
+        inst_uuid = instance_ref['uuid']
+
+        self.security_group = self.setup_and_return_security_group()
+
+        db.instance_add_security_group(self.context, inst_uuid,
+                                       self.security_group['id'])
+
+        instance = db.instance_get(self.context, inst_id)
+
+        network_info = _fake_network_info(self.stubs, 2)
+        network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
+            '1.1.1.1'
+
+        self.fw.setup_basic_filtering(instance, network_info)
+
+        def assert_filterref(instance, vif, expected=[]):
+            nic_id = vif['address'].replace(':', '')
+            filter_name = self.fw._instance_filter_name(instance, nic_id)
+            f = fakefilter.nwfilterLookupByName(filter_name)
+            tree = etree.fromstring(f.xml)
+            frefs = [fr.get('filter') for fr in tree.findall('filterref')]
+            self.assertTrue(set(expected) == set(frefs))
+
+        assert_filterref(instance, network_info[0], expected=['nova-base'])
+        assert_filterref(instance, network_info[1], expected=['nova-nodhcp'])
+
+        db.instance_remove_security_group(self.context, inst_uuid,
+                                          self.security_group['id'])
+        self.teardown_security_group()
+        db.instance_destroy(context.get_admin_context(), instance_ref['uuid'])
 
 
 class LibvirtUtilsTestCase(test.TestCase):
@@ -8087,6 +8199,7 @@ class LibvirtDriverTestCase(test.TestCase):
         super(LibvirtDriverTestCase, self).setUp()
         self.libvirtconnection = libvirt_driver.LibvirtDriver(
             fake.FakeVirtAPI(), read_only=True)
+        self.context = context.get_admin_context()
 
     def _create_instance(self, params=None):
         """Create a test instance."""
@@ -8114,7 +8227,7 @@ class LibvirtDriverTestCase(test.TestCase):
         inst['system_metadata'] = sys_meta
 
         inst.update(params)
-        return db.instance_create(context.get_admin_context(), inst)
+        return db.instance_create(self.context, inst)
 
     def test_migrate_disk_and_power_off_exception(self):
         """Test for nova.virt.libvirt.libvirt_driver.LivirtConnection
@@ -8681,6 +8794,87 @@ class LibvirtDriverTestCase(test.TestCase):
         ]
         self._test_inject_data(driver_params, disk_params)
 
+    def _test_attach_detach_interface(self, method, power_state,
+                                      expected_flags):
+        instance = self._create_instance()
+        network_info = _fake_network_info(self.stubs, 1)
+        domain = FakeVirtDomain()
+        self.mox.StubOutWithMock(self.libvirtconnection, '_lookup_by_name')
+        self.mox.StubOutWithMock(self.libvirtconnection.firewall_driver,
+                                 'setup_basic_filtering')
+        self.mox.StubOutWithMock(domain, 'attachDeviceFlags')
+        self.mox.StubOutWithMock(domain, 'info')
+
+        self.libvirtconnection._lookup_by_name(
+            'instance-00000001').AndReturn(domain)
+        if method == 'attach_interface':
+            self.libvirtconnection.firewall_driver.setup_basic_filtering(
+                instance, [network_info[0]])
+
+        fake_flavor = flavor_obj.Flavor.get_by_id(
+            self.context, instance['instance_type_id'])
+        if method == 'attach_interface':
+            fake_image_meta = {'id': instance['image_ref']}
+        elif method == 'detach_interface':
+            fake_image_meta = None
+        expected = self.libvirtconnection.vif_driver.get_config(
+            instance, network_info[0], fake_image_meta, fake_flavor)
+
+        self.mox.StubOutWithMock(self.libvirtconnection.vif_driver,
+                                 'get_config')
+        self.libvirtconnection.vif_driver.get_config(
+            instance, network_info[0],
+            fake_image_meta,
+            mox.IsA(flavor_obj.Flavor)).AndReturn(expected)
+        domain.info().AndReturn([power_state])
+        if method == 'attach_interface':
+            domain.attachDeviceFlags(expected.to_xml(), expected_flags)
+        elif method == 'detach_interface':
+            domain.detachDeviceFlags(expected.to_xml(), expected_flags)
+
+        self.mox.ReplayAll()
+        if method == 'attach_interface':
+            self.libvirtconnection.attach_interface(
+                instance, fake_image_meta, network_info[0])
+        elif method == 'detach_interface':
+            self.libvirtconnection.detach_interface(
+                instance, network_info[0])
+        self.mox.VerifyAll()
+
+    def test_attach_interface_with_running_instance(self):
+        self._test_attach_detach_interface(
+            'attach_interface', power_state.RUNNING,
+            expected_flags=(libvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                            libvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+    def test_attach_interface_with_pause_instance(self):
+        self._test_attach_detach_interface(
+            'attach_interface', power_state.PAUSED,
+            expected_flags=(libvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                            libvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+    def test_attach_interface_with_shutdown_instance(self):
+        self._test_attach_detach_interface(
+            'attach_interface', power_state.SHUTDOWN,
+            expected_flags=(libvirt.VIR_DOMAIN_AFFECT_CONFIG))
+
+    def test_detach_interface_with_running_instance(self):
+        self._test_attach_detach_interface(
+            'detach_interface', power_state.RUNNING,
+            expected_flags=(libvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                            libvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+    def test_detach_interface_with_pause_instance(self):
+        self._test_attach_detach_interface(
+            'detach_interface', power_state.PAUSED,
+            expected_flags=(libvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                            libvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+    def test_detach_interface_with_shutdown_instance(self):
+        self._test_attach_detach_interface(
+            'detach_interface', power_state.SHUTDOWN,
+            expected_flags=(libvirt.VIR_DOMAIN_AFFECT_CONFIG))
+
 
 class LibvirtVolumeUsageTestCase(test.TestCase):
     """Test for LibvirtDriver.get_all_volume_usage."""
@@ -8829,6 +9023,29 @@ class LibvirtVolumeSnapshotTestCase(test.TestCase):
     def tearDown(self):
         super(LibvirtVolumeSnapshotTestCase, self).tearDown()
 
+    @mock.patch('nova.virt.block_device.DriverVolumeBlockDevice.'
+                'refresh_connection_info')
+    @mock.patch('nova.objects.block_device.BlockDeviceMapping.'
+                'get_by_volume_id')
+    def test_volume_refresh_connection_info(self, mock_get_by_volume_id,
+                                            mock_refresh_connection_info):
+        fake_bdm = fake_block_device.FakeDbBlockDeviceDict({
+            'id': 123,
+            'instance_uuid': 'fake-instance',
+            'device_name': '/dev/sdb',
+            'source_type': 'volume',
+            'destination_type': 'volume',
+            'volume_id': 'fake-volume-id-1',
+            'connection_info': '{"fake": "connection_info"}'})
+        mock_get_by_volume_id.return_value = fake_bdm
+
+        self.conn._volume_refresh_connection_info(self.c, self.inst,
+                                                  self.volume_uuid)
+
+        mock_get_by_volume_id.assert_called_once_with(self.c, self.volume_uuid)
+        mock_refresh_connection_info.assert_called_once_with(self.c, self.inst,
+            self.conn._volume_api, self.conn)
+
     def test_volume_snapshot_create(self, quiesce=True):
         CONF.instance_name_template = 'instance-%s'
         self.mox.StubOutWithMock(self.conn, '_lookup_by_name')
@@ -8902,6 +9119,13 @@ class LibvirtVolumeSnapshotTestCase(test.TestCase):
 
         self.conn._volume_api.update_snapshot_status(
             self.c, self.create_info['snapshot_id'], 'creating')
+
+        self.mox.StubOutWithMock(self.conn._volume_api, 'get_snapshot')
+        self.conn._volume_api.get_snapshot(self.c,
+            self.create_info['snapshot_id']).AndReturn({'status': 'available'})
+        self.mox.StubOutWithMock(self.conn, '_volume_refresh_connection_info')
+        self.conn._volume_refresh_connection_info(self.c, instance,
+                                                  self.volume_uuid)
 
         self.mox.ReplayAll()
 
@@ -9021,6 +9245,10 @@ class LibvirtVolumeSnapshotTestCase(test.TestCase):
 
         self.conn._volume_api.update_snapshot_status(
             self.c, snapshot_id, 'deleting')
+
+        self.mox.StubOutWithMock(self.conn, '_volume_refresh_connection_info')
+        self.conn._volume_refresh_connection_info(self.c, instance,
+                                                  self.volume_uuid)
 
         self.mox.ReplayAll()
 

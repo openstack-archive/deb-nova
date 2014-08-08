@@ -3105,6 +3105,9 @@ class API(base.Base):
             events_by_host[host] = events_on_host
 
         for host in instances_by_host:
+            # TODO(salv-orlando): Handle exceptions raised by the rpc api layer
+            # in order to ensure that a failure in processing events on a host
+            # will not prevent processing events on other hosts
             self.compute_rpcapi.external_instance_event(
                 context, instances_by_host[host], events_by_host[host])
 
@@ -3918,6 +3921,7 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         groups = instance.get('security_groups')
         if groups:
             return [{'name': group['name']} for group in groups]
+        return []
 
     def populate_security_groups(self, instance, security_groups):
         if not security_groups:

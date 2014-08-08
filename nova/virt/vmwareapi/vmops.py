@@ -195,8 +195,10 @@ class VMwareVMOps(object):
         """
         ebs_root = False
         if block_device_info:
-            LOG.debug(_("Block device information present: %s")
-                      % block_device_info, instance=instance)
+            msg = "Block device information present: %s" % block_device_info
+            # NOTE(mriedem): block_device_info can contain an auth_password
+            # so we have to scrub the message before logging it.
+            LOG.debug(logging.mask_password(msg), instance=instance)
             block_device_mapping = driver.block_device_info_get_mapping(
                     block_device_info)
             if block_device_mapping:
@@ -570,21 +572,60 @@ class VMwareVMOps(object):
                                                         root_gb)
                     root_vmdk_path = ds_util.build_datastore_path(
                             data_store_name, root_vmdk_name)
-                    if not self._check_if_folder_file_exists(ds_browser,
-                                        data_store_ref, data_store_name,
-                                        upload_folder,
-                                        upload_name + ".%s.vmdk" % root_gb):
-                        LOG.debug(_("Copying root disk of size %sGb"), root_gb)
-                        try:
-                            _copy_virtual_disk(uploaded_file_path,
-                                               root_vmdk_path)
-                        except Exception as e:
-                            LOG.warning(_("Root disk file creation "
-                                          "failed - %s"), e)
-                        if root_gb_in_kb > vmdk_file_size_in_kb:
-                            self._extend_virtual_disk(instance, root_gb_in_kb,
-                                                      root_vmdk_path,
-                                                      dc_info.ref)
+
+                    # Ensure only a single thread extends the image at once.
+                    # We do this by taking a lock on the name of the extended
+                    # image. This allows multiple threads to create resized
+                    # copies simultaneously, as long as they are different
+                    # sizes. Threads attempting to create the same resized copy
+                    # will be serialized, with only the first actually creating
+                    # the copy.
+                    #
+                    # Note that the object is in a per-nova cache directory,
+                    # so inter-nova locking is not a concern. Consequently we
+                    # can safely use simple thread locks.
+
+                    with lockutils.lock(root_vmdk_path,
+                                        lock_file_prefix='nova-vmware-image'):
+                        if not self._check_if_folder_file_exists(
+                                ds_browser,
+                                data_store_ref, data_store_name,
+                                upload_folder,
+                                upload_name + ".%s.vmdk" % root_gb):
+                            LOG.debug("Copying root disk of size %sGb",
+                                      root_gb)
+
+                            # Create a copy of the base image, ensuring we
+                            # clean up on failure
+                            try:
+                                _copy_virtual_disk(uploaded_file_path,
+                                                   root_vmdk_path)
+                            except Exception as e:
+                                with excutils.save_and_reraise_exception():
+                                    LOG.error(_('Failed to copy cached '
+                                                  'image %(source)s to '
+                                                  '%(dest)s for resize: '
+                                                  '%(error)s'),
+                                              {'source': uploaded_file_path,
+                                               'dest': root_vmdk_path,
+                                               'error': e.message})
+                                    try:
+                                        ds_util.file_delete(self._session,
+                                                            root_vmdk_path,
+                                                            dc_info.ref)
+                                    except error_util.FileNotFoundException:
+                                        # File was never created: cleanup not
+                                        # required
+                                        pass
+
+                            # Resize the copy to the appropriate size. No need
+                            # for cleanup up here, as _extend_virtual_disk
+                            # already does it
+                            if root_gb_in_kb > vmdk_file_size_in_kb:
+                                self._extend_virtual_disk(instance,
+                                                          root_gb_in_kb,
+                                                          root_vmdk_path,
+                                                          dc_info.ref)
 
             # Attach the root disk to the VM.
             if root_vmdk_path:
@@ -808,6 +849,10 @@ class VMwareVMOps(object):
             (vmdk_file_path_before_snapshot, adapter_type,
              disk_type) = vm_util.get_vmdk_path_and_adapter_type(
                                         hw_devices, uuid=instance['uuid'])
+            if not vmdk_file_path_before_snapshot:
+                LOG.debug("No root disk defined. Unable to snapshot.")
+                raise error_util.NoRootDiskDefined()
+
             datastore_name = ds_util.split_datastore_path(
                                         vmdk_file_path_before_snapshot)[0]
             os_type = self._session._call_method(vim_util,
@@ -1406,8 +1451,8 @@ class VMwareVMOps(object):
         vm_props = self._session._call_method(vim_util,
                     "get_object_properties", None, vm_ref, "VirtualMachine",
                     lst_properties)
-        query = {'summary.config.numCpu': None,
-                 'summary.config.memorySizeMB': None,
+        query = {'summary.config.numCpu': 0,
+                 'summary.config.memorySizeMB': 0,
                  'runtime.powerState': None}
         self._get_values_from_object_properties(vm_props, query)
         max_mem = int(query['summary.config.memorySizeMB']) * 1024
@@ -1550,12 +1595,12 @@ class VMwareVMOps(object):
                   instance=instance)
 
     def _get_ds_browser(self, ds_ref):
-        ds_browser = self._datastore_browser_mapping.get(ds_ref)
+        ds_browser = self._datastore_browser_mapping.get(ds_ref.value)
         if not ds_browser:
             ds_browser = self._session._call_method(
                 vim_util, "get_dynamic_property", ds_ref, "Datastore",
                 "browser")
-            self._datastore_browser_mapping[ds_ref] = ds_browser
+            self._datastore_browser_mapping[ds_ref.value] = ds_browser
         return ds_browser
 
     def get_datacenter_ref_and_name(self, ds_ref):
@@ -1703,19 +1748,19 @@ class VMwareVCVMOps(VMwareVMOps):
         while dcs:
             token = vm_util._get_token(dcs)
             for dco in dcs.objects:
-                name = None
-                vmFolder = None
                 dc_ref = dco.obj
                 ds_refs = []
-                for p in dco.propSet:
-                    if p.name == 'name':
-                        name = p.val
-                    if p.name == 'datastore':
-                        datastore_refs = p.val.ManagedObjectReference
-                        for ds in datastore_refs:
-                            ds_refs.append(ds.value)
-                    if p.name == 'vmFolder':
-                        vmFolder = p.val
+                prop_dict = vm_util.propset_dict(dco.propSet)
+                name = prop_dict.get('name')
+                vmFolder = prop_dict.get('vmFolder')
+                datastore_refs = prop_dict.get('datastore')
+                if datastore_refs:
+                    datastore_refs = datastore_refs.ManagedObjectReference
+                    for ds in datastore_refs:
+                        ds_refs.append(ds.value)
+                else:
+                    LOG.debug("Datacenter %s doesn't have any datastore "
+                              "associated with it, ignoring it", name)
                 for ds_ref in ds_refs:
                     self._datastore_dc_mapping[ds_ref] = DcInfo(ref=dc_ref,
                             name=name, vmFolder=vmFolder)

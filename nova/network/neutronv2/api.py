@@ -413,6 +413,15 @@ class API(base.Base):
         requested_networks = kwargs.get('requested_networks') or {}
         ports_to_skip = [port_id for nets, fips, port_id in requested_networks]
         ports = set(ports) - set(ports_to_skip)
+        # Reset device_id and device_owner for the ports that are skipped
+        for port in ports_to_skip:
+            port_req_body = {'port': {'device_id': '', 'device_owner': ''}}
+            try:
+                neutronv2.get_client(context).update_port(port,
+                                                          port_req_body)
+            except Exception:
+                LOG.info(_('Unable to reset device ID for port %s'), port,
+                         instance=instance)
 
         for port in ports:
             try:
@@ -658,7 +667,7 @@ class API(base.Base):
 
         ports = neutron.list_ports(tenant_id=context.project_id)['ports']
         quotas = neutron.show_quota(tenant_id=context.project_id)['quota']
-        if quotas.get('port') == -1:
+        if quotas.get('port', -1) == -1:
             # Unlimited Port Quota
             return num_instances
         else:

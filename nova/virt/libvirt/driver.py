@@ -70,6 +70,7 @@ from nova.compute import vm_mode
 from nova import context as nova_context
 from nova import exception
 from nova.image import glance
+from nova.objects import block_device as block_device_obj
 from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
 from nova.objects import service as service_obj
@@ -89,6 +90,7 @@ from nova.pci import pci_whitelist
 from nova import rpc
 from nova import utils
 from nova import version
+from nova.virt import block_device as driver_block_device
 from nova.virt import configdrive
 from nova.virt import cpu
 from nova.virt.disk import api as disk
@@ -1412,7 +1414,7 @@ class LibvirtDriver(driver.ComputeDriver):
         try:
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
             state = LIBVIRT_POWER_STATE[virt_dom.info()[0]]
-            if state == power_state.RUNNING:
+            if state == power_state.RUNNING or state == power_state.PAUSED:
                 flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
             virt_dom.attachDeviceFlags(cfg.to_xml(), flags)
         except libvirt.libvirtError:
@@ -1431,7 +1433,7 @@ class LibvirtDriver(driver.ComputeDriver):
             self.vif_driver.unplug(instance, vif)
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
             state = LIBVIRT_POWER_STATE[virt_dom.info()[0]]
-            if state == power_state.RUNNING:
+            if state == power_state.RUNNING or state == power_state.PAUSED:
                 flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
             virt_dom.detachDeviceFlags(cfg.to_xml(), flags)
         except libvirt.libvirtError as ex:
@@ -1794,6 +1796,13 @@ class LibvirtDriver(driver.ComputeDriver):
 
             raise
 
+    def _volume_refresh_connection_info(self, context, instance, volume_id):
+        bdm = block_device_obj.BlockDeviceMapping.get_by_volume_id(context,
+                                                                   volume_id)
+        driver_bdm = driver_block_device.DriverVolumeBlockDevice(bdm)
+        driver_bdm.refresh_connection_info(context, instance,
+                                           self._volume_api, self)
+
     def volume_snapshot_create(self, context, instance, volume_id,
                                create_info):
         """Create snapshots of a Cinder volume via libvirt.
@@ -1839,6 +1848,17 @@ class LibvirtDriver(driver.ComputeDriver):
 
         self._volume_snapshot_update_status(
             context, snapshot_id, 'creating')
+
+        def _wait_for_snapshot():
+            snapshot = self._volume_api.get_snapshot(context, snapshot_id)
+
+            if snapshot.get('status') != 'creating':
+                self._volume_refresh_connection_info(context, instance,
+                                                     volume_id)
+                raise loopingcall.LoopingCallDone()
+
+        timer = loopingcall.FixedIntervalLoopingCall(_wait_for_snapshot)
+        timer.start(interval=0.5).wait()
 
     def _volume_snapshot_delete(self, context, instance, volume_id,
                                 snapshot_id, delete_info=None):
@@ -1974,6 +1994,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     context, snapshot_id, 'error_deleting')
 
         self._volume_snapshot_update_status(context, snapshot_id, 'deleting')
+        self._volume_refresh_connection_info(context, instance, volume_id)
 
     def reboot(self, context, instance, network_info, reboot_type='SOFT',
                block_device_info=None, bad_volumes_callback=None):
@@ -3034,6 +3055,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                     connection_info,
                                                     info)
                     devices.append(cfg)
+                    vol['connection_info'] = connection_info
+                    vol.save(nova_context.get_admin_context())
 
             if 'disk.config' in disk_mapping:
                 diskconfig = self.get_guest_disk_config(instance,
@@ -3183,6 +3206,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     else:
                         guest.os_cmdline = ("root=%s %s" % (root_device_name,
                                                             CONSOLE))
+                        if CONF.libvirt.virt_type == "qemu":
+                            guest.os_cmdline += " no_timer_check"
 
                 if rescue.get('ramdisk_id'):
                     guest.os_initrd = os.path.join(inst_path, "ramdisk.rescue")
@@ -3193,6 +3218,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 else:
                     guest.os_cmdline = ("root=%s %s" % (root_device_name,
                                                         CONSOLE))
+                    if CONF.libvirt.virt_type == "qemu":
+                        guest.os_cmdline += " no_timer_check"
                 if instance['ramdisk_id']:
                     guest.os_initrd = os.path.join(inst_path, "ramdisk")
             else:
@@ -3430,15 +3457,17 @@ class LibvirtDriver(driver.ComputeDriver):
         # this ahead of time so that we don't acquire it while also
         # holding the logging lock.
         network_info_str = str(network_info)
-        LOG.debug(_('Start to_xml '
-                    'network_info=%(network_info)s '
-                    'disk_info=%(disk_info)s '
-                    'image_meta=%(image_meta)s rescue=%(rescue)s'
-                    'block_device_info=%(block_device_info)s'),
-                  {'network_info': network_info_str, 'disk_info': disk_info,
-                   'image_meta': image_meta, 'rescue': rescue,
-                   'block_device_info': block_device_info},
-                  instance=instance)
+        msg = ('Start to_xml '
+               'network_info=%(network_info)s '
+               'disk_info=%(disk_info)s '
+               'image_meta=%(image_meta)s rescue=%(rescue)s '
+               'block_device_info=%(block_device_info)s' %
+               {'network_info': network_info_str, 'disk_info': disk_info,
+                'image_meta': image_meta, 'rescue': rescue,
+                'block_device_info': block_device_info})
+        # NOTE(mriedem): block_device_info can contain auth_password so we
+        # need to sanitize the password in the message.
+        LOG.debug(logging.mask_password(msg), instance=instance)
         conf = self.get_guest_config(instance, network_info, image_meta,
                                      disk_info, rescue, block_device_info)
         xml = conf.to_xml()
@@ -3641,6 +3670,7 @@ class LibvirtDriver(driver.ComputeDriver):
             events = []
 
         launch_flags = events and libvirt.VIR_DOMAIN_START_PAUSED or 0
+        domain = None
         try:
             with self.virtapi.wait_for_instance_event(
                     instance, events, deadline=timeout,
@@ -3660,7 +3690,8 @@ class LibvirtDriver(driver.ComputeDriver):
         except exception.NovaException:
             # Neutron reported failure and we didn't swallow it, so
             # bail here
-            domain.destroy()
+            if domain:
+                domain.destroy()
             self.cleanup(context, instance, network_info=network_info,
                          block_device_info=block_device_info)
             raise exception.VirtualInterfaceCreateException()
@@ -3669,7 +3700,8 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.warn(_('Timeout waiting for vif plugging callback for '
                        'instance %(uuid)s'), {'uuid': instance['uuid']})
             if CONF.vif_plugging_is_fatal:
-                domain.destroy()
+                if domain:
+                    domain.destroy()
                 self.cleanup(context, instance, network_info=network_info,
                              block_device_info=block_device_info)
                 raise exception.VirtualInterfaceCreateException()

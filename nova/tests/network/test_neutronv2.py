@@ -977,12 +977,26 @@ class TestNeutronv2(TestNeutronv2Base):
                           api.allocate_for_instance, self.context,
                           self.instance, requested_networks=requested_networks)
 
-    def _deallocate_for_instance(self, number):
+    def _deallocate_for_instance(self, number, requested_networks=None):
         api = neutronapi.API()
         port_data = number == 1 and self.port_data1 or self.port_data2
+        ret_data = copy.deepcopy(port_data)
+        if requested_networks:
+            for net, fip, port in requested_networks:
+                ret_data.append({'network_id': net,
+                                 'device_id': self.instance['uuid'],
+                                 'device_owner': 'compute:nova',
+                                 'id': port,
+                                 'status': 'DOWN',
+                                 'admin_state_up': True,
+                                 'fixed_ips': [],
+                                 'mac_address': 'fake_mac', })
         self.moxed_client.list_ports(
             device_id=self.instance['uuid']).AndReturn(
-                {'ports': port_data})
+                {'ports': ret_data})
+        if requested_networks:
+            for net, fip, port in requested_networks:
+                self.moxed_client.update_port(port)
         for port in reversed(port_data):
             self.moxed_client.delete_port(port['id'])
 
@@ -993,7 +1007,18 @@ class TestNeutronv2(TestNeutronv2Base):
         self.mox.ReplayAll()
 
         api = neutronapi.API()
-        api.deallocate_for_instance(self.context, self.instance)
+        api.deallocate_for_instance(self.context, self.instance,
+                                    requested_networks=requested_networks)
+
+    def test_deallocate_for_instance_1_with_requested(self):
+        requested = [('fake-net', 'fake-fip', 'fake-port')]
+        # Test to deallocate in one port env.
+        self._deallocate_for_instance(1, requested_networks=requested)
+
+    def test_deallocate_for_instance_2_with_requested(self):
+        requested = [('fake-net', 'fake-fip', 'fake-port')]
+        # Test to deallocate in one port env.
+        self._deallocate_for_instance(2, requested_networks=requested)
 
     def test_deallocate_for_instance_1(self):
         # Test to deallocate in one port env.
@@ -1093,6 +1118,22 @@ class TestNeutronv2(TestNeutronv2Base):
         self.moxed_client.show_quota(
             tenant_id='my_tenantid').AndReturn(
                     {'quota': {'port': 50}})
+        self.mox.ReplayAll()
+        api = neutronapi.API()
+        api.validate_networks(self.context, requested_networks, 1)
+
+    def test_validate_networks_without_port_quota_on_network_side(self):
+        requested_networks = [('my_netid1', None, None),
+                              ('my_netid2', None, None)]
+        ids = ['my_netid1', 'my_netid2']
+        self.moxed_client.list_networks(
+            id=mox.SameElementsAs(ids)).AndReturn(
+                {'networks': self.nets2})
+        self.moxed_client.list_ports(tenant_id='my_tenantid').AndReturn(
+                    {'ports': []})
+        self.moxed_client.show_quota(
+            tenant_id='my_tenantid').AndReturn(
+                    {'quota': {}})
         self.mox.ReplayAll()
         api = neutronapi.API()
         api.validate_networks(self.context, requested_networks, 1)
