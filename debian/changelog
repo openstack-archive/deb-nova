@@ -1,3 +1,9 @@
+nova (2014.1.2-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- gustavo panizzo <gfa@zumbi.com.ar>  Fri, 08 Aug 2014 10:44:36 -0300
+
 nova (2014.1.1-8) unstable; urgency=medium
 
   * CVE-2014-3517: analyzing response times to requests for instance metadata,
