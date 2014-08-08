@@ -3,6 +3,7 @@ nova (2014.1.2-1) unstable; urgency=medium
   * New upstream release.
   * Patches refreshed.
   * Patch for CVE-2014-3517 removed, it was applied upstream.
+  * Patch added to fix regression. https://review.openstack.org/#/c/112750/
 
  -- gustavo panizzo <gfa@zumbi.com.ar>  Fri, 08 Aug 2014 10:44:36 -0300
 

@@ -1,0 +1,72 @@
+From 1a127397ff289bea37796fa56d679bb747607875 Mon Sep 17 00:00:00 2001
+From: Chris Yeoh <cyeoh@au1.ibm.com>
+Date: Fri, 8 Aug 2014 11:48:17 +0930
+Subject: [PATCH] Allow attaching external networks based on configurable
+ policy
+
+Commit da66d50010d5b1ba1d7fc9c3d59d81b6c01bb0b0 restricted
+attaching external networks to admin clients. This patch changes
+it to a policy based check instead with the default setting being
+admin only. This allows operators to more precisely configure who
+they wish to allow to attach external networks without having to
+give them admin access
+
+Change-Id: I59e71f117f889f2abffddc36c1870ef1e0fe3711
+DocImpact: Adds network:attach_external_network policy
+Closes-Bug: #1352102
+Bug-Ubuntu: https://launchpad.net/bugs/1352102
+Author: Christopher Yeoh, <cyeoh@au1.ibm.com> 
+Origin: upstream, https://review.openstack.org/#/c/112750/
+Last-Update: 2014-08-08
+
+---
+ etc/nova/policy.json          | 3 ++-
+ nova/network/neutronv2/api.py | 8 +++++++-
+ nova/tests/fake_policy.py     | 3 ++-
+ 3 files changed, 11 insertions(+), 3 deletions(-)
+
+--- a/etc/nova/policy.json
++++ b/etc/nova/policy.json
+@@ -320,5 +320,6 @@
+     "network:get_dns_entries_by_name": "",
+     "network:create_private_dns_domain": "",
+     "network:create_public_dns_domain": "",
+-    "network:delete_dns_domain": ""
++    "network:delete_dns_domain": "",
++    "network:attach_external_network": "rule:admin_api"
+ }
+--- a/nova/network/neutronv2/api.py
++++ b/nova/network/neutronv2/api.py
+@@ -34,6 +34,7 @@
+ from nova.openstack.common.gettextutils import _
+ from nova.openstack.common import log as logging
+ from nova.openstack.common import uuidutils
++from nova import policy
+ 
+ neutron_opts = [
+     cfg.StrOpt('neutron_url',
+@@ -135,7 +136,12 @@
+             nets,
+             net_ids)
+ 
+-        if not context.is_admin:
++        target = {
++            'project_id': context.project_id,
++            'user_id': context.user_id,
++        }
++        if not policy.enforce(context, 'network:attach_external_network',
++                              target, do_raise=False):
+             for net in nets:
+                 # Perform this check here rather than in validate_networks to
+                 # ensure the check is performed everytime allocate_for_instance
+--- a/nova/tests/fake_policy.py
++++ b/nova/tests/fake_policy.py
+@@ -373,6 +373,7 @@
+     "network:get_dns_entries_by_name": "",
+     "network:create_private_dns_domain": "",
+     "network:create_public_dns_domain": "",
+-    "network:delete_dns_domain": ""
++    "network:delete_dns_domain": "",
++    "network:attach_external_network": "rule:admin_api"
+ }
+ """
