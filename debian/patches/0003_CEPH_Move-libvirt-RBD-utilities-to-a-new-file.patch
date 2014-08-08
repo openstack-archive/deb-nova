@@ -7,11 +7,9 @@ Date: Wed, 22 Jan 2014 14:44:11 -0800
 Change-Id: I5bf08da87daf1d98f326f21cf33aba68aa830785
 Signed-off-by: Josh Durgin <josh.durgin@inktank.com>
 
-diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
-index 4686fd3..1d3cbaf 100644
 --- a/nova/tests/virt/libvirt/test_imagebackend.py
 +++ b/nova/tests/virt/libvirt/test_imagebackend.py
-@@ -30,6 +30,7 @@ from nova.tests import fake_processutils
+@@ -31,6 +31,7 @@
  from nova.tests.virt.libvirt import fake_libvirt_utils
  from nova import utils
  from nova.virt.libvirt import imagebackend
@@ -19,7 +17,7 @@ index 4686fd3..1d3cbaf 100644
  
  CONF = cfg.CONF
  
-@@ -729,14 +730,8 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -730,14 +731,8 @@
                     group='libvirt')
          self.libvirt_utils = imagebackend.libvirt_utils
          self.utils = imagebackend.utils
@@ -36,7 +34,7 @@ index 4686fd3..1d3cbaf 100644
  
      def test_cache(self):
          image = self.image_class(self.INSTANCE, self.NAME)
-@@ -818,10 +813,10 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -819,10 +814,10 @@
          self.mox.VerifyAll()
  
      def test_create_image(self):
@@ -50,7 +48,7 @@ index 4686fd3..1d3cbaf 100644
  
          self.mox.StubOutWithMock(imagebackend.disk, 'get_disk_size')
          imagebackend.disk.get_disk_size(self.TEMPLATE_PATH
-@@ -834,7 +829,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -835,7 +830,7 @@
          self.mox.ReplayAll()
  
          image = self.image_class(self.INSTANCE, self.NAME)
@@ -59,7 +57,7 @@ index 4686fd3..1d3cbaf 100644
  
          self.mox.VerifyAll()
  
-@@ -843,8 +838,6 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
+@@ -844,8 +839,6 @@
  
          fake_processutils.fake_execute_clear_log()
          fake_processutils.stub_out_processutils_execute(self.stubs)
@@ -68,7 +66,7 @@ index 4686fd3..1d3cbaf 100644
          image = self.image_class(self.INSTANCE, self.NAME)
  
          def fake_fetch(target, *args, **kwargs):
-@@ -925,6 +918,8 @@ class BackendTestCase(test.NoDBTestCase):
+@@ -936,6 +929,8 @@
          pool = "FakePool"
          self.flags(images_rbd_pool=pool, group='libvirt')
          self.flags(images_rbd_ceph_conf=conf, group='libvirt')
@@ -77,9 +75,6 @@ index 4686fd3..1d3cbaf 100644
          self._test_image('rbd', imagebackend.Rbd, imagebackend.Rbd)
  
      def test_image_default(self):
-diff --git a/nova/tests/virt/libvirt/test_rbd_utils.py b/nova/tests/virt/libvirt/test_rbd_utils.py
-new file mode 100644
-index 0000000..0460337
 --- /dev/null
 +++ b/nova/tests/virt/libvirt/test_rbd_utils.py
 @@ -0,0 +1,158 @@
@@ -241,11 +236,9 @@ index 0000000..0460337
 +        self.driver.ceph_conf = '/path/bar.conf'
 +        self.assertEqual(['--id', 'foo', '--conf', '/path/bar.conf'],
 +                         self.driver.ceph_args())
-diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index 7595a89..1ca1b50 100644
 --- a/nova/virt/libvirt/imagebackend.py
 +++ b/nova/virt/libvirt/imagebackend.py
-@@ -32,17 +32,9 @@ from nova import utils
+@@ -32,17 +32,9 @@
  from nova.virt.disk import api as disk
  from nova.virt import images
  from nova.virt.libvirt import config as vconfig
@@ -264,7 +257,7 @@ index 7595a89..1ca1b50 100644
  __imagebackend_opts = [
      cfg.StrOpt('images_type',
                 default='default',
-@@ -85,6 +77,8 @@ CONF = cfg.CONF
+@@ -85,6 +77,8 @@
  CONF.register_opts(__imagebackend_opts, 'libvirt')
  CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
  CONF.import_opt('preallocate_images', 'nova.virt.driver')
@@ -273,7 +266,7 @@ index 7595a89..1ca1b50 100644
  
  LOG = logging.getLogger(__name__)
  
-@@ -497,51 +491,6 @@ class Lvm(Image):
+@@ -497,51 +491,6 @@
                               run_as_root=True)
  
  
@@ -325,7 +318,7 @@ index 7595a89..1ca1b50 100644
  class Rbd(Image):
      def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
          super(Rbd, self).__init__("block", "rbd", is_block_dev=True)
-@@ -558,10 +507,15 @@ class Rbd(Image):
+@@ -558,10 +507,15 @@
                                   ' images_rbd_pool'
                                   ' flag to use rbd images.'))
          self.pool = CONF.libvirt.images_rbd_pool
@@ -345,7 +338,7 @@ index 7595a89..1ca1b50 100644
  
          self.path = 'rbd:%s/%s' % (self.pool, self.rbd_name)
          if self.rbd_user:
-@@ -569,52 +523,6 @@ class Rbd(Image):
+@@ -569,52 +523,6 @@
          if self.ceph_conf:
              self.path += ':conf=' + self.ceph_conf
  
@@ -398,7 +391,7 @@ index 7595a89..1ca1b50 100644
      def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
              extra_specs, hypervisor_version):
          """Get `LibvirtConfigGuestDisk` filled for this image.
-@@ -627,7 +535,7 @@ class Rbd(Image):
+@@ -627,7 +535,7 @@
          """
          info = vconfig.LibvirtConfigGuestDisk()
  
@@ -407,16 +400,14 @@ index 7595a89..1ca1b50 100644
          info.device_type = device_type
          info.driver_format = 'raw'
          info.driver_cache = cache_mode
-@@ -660,16 +568,7 @@ class Rbd(Image):
+@@ -660,14 +568,8 @@
  
          return False
  
 -    def _resize(self, volume_name, size):
--        size = int(size) * units.Ki
--
 -        with RBDVolumeProxy(self, volume_name) as vol:
--            vol.resize(size)
--
+-            vol.resize(int(size))
+ 
      def create_image(self, prepare_template, base, size, *args, **kwargs):
 -        if self.rbd is None:
 -            raise RuntimeError(_('rbd python libraries not found'))
@@ -424,7 +415,7 @@ index 7595a89..1ca1b50 100644
          if not os.path.exists(base):
              prepare_template(target=base, max_size=size, *args, **kwargs)
          else:
-@@ -678,15 +577,15 @@ class Rbd(Image):
+@@ -676,15 +578,15 @@
          # keep using the command line import instead of librbd since it
          # detects zeroes to preserve sparseness in the image
          args = ['--pool', self.pool, base, self.rbd_name]
@@ -443,9 +434,6 @@ index 7595a89..1ca1b50 100644
  
      def snapshot_extract(self, target, out_format):
          images.convert_image(self.path, target, out_format)
-diff --git a/nova/virt/libvirt/rbd_utils.py b/nova/virt/libvirt/rbd_utils.py
-new file mode 100644
-index 0000000..b9fb521
 --- /dev/null
 +++ b/nova/virt/libvirt/rbd_utils.py
 @@ -0,0 +1,143 @@
@@ -592,6 +580,3 @@ index 0000000..b9fb521
 +
 +        with RBDVolumeProxy(self, volume_name) as vol:
 +            vol.resize(size)
--- 
-2.0.0.rc0
-

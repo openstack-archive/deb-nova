@@ -4,9 +4,6 @@ Author: Dmitry Borodaenko <dborodaenko@mirantis.com>
 Date: Tue, 29 Apr 2014 09:56:15 -0700
 Change-Id: I3cf8000a3e984c57441a226d3139acbf3e346825
 
-diff --git a/nova/virt/imagehandler/__init__.py b/nova/virt/imagehandler/__init__.py
-deleted file mode 100644
-index 54310a0..0000000
 --- a/nova/virt/imagehandler/__init__.py
 +++ /dev/null
 @@ -1,176 +0,0 @@
@@ -186,6 +183,3 @@ index 54310a0..0000000
 -        LOG.error(_("Can not handle image: %(image_id)s %(target_path)s"),
 -                  {'image_id': image_id, 'target_path': target_path})
 -        raise exception.NoImageHandlerAvailable(image_id=image_id)
--- 
-2.0.0.rc0
-

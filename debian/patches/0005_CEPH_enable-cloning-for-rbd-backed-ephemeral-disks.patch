@@ -32,11 +32,9 @@ Signed-off-by: Josh Durgin <josh.durgin@inktank.com>
 Signed-off-by: Zhi Yan Liu <zhiyanl@cn.ibm.com>
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 
-Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_imagebackend.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_imagebackend.py	2014-06-09 22:55:03.000000000 +0800
-@@ -397,14 +397,14 @@
+--- a/nova/tests/virt/libvirt/test_imagebackend.py
++++ b/nova/tests/virt/libvirt/test_imagebackend.py
+@@ -398,14 +398,14 @@
      def test_create_image_too_small(self):
          fn = self.prepare_mocks()
          self.mox.StubOutWithMock(os.path, 'exists')
@@ -54,7 +52,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
          self.mox.ReplayAll()
  
          image = self.image_class(self.INSTANCE, self.NAME)
-@@ -752,6 +752,7 @@
+@@ -753,6 +753,7 @@
          self.mox.VerifyAll()
  
      def test_cache_base_dir_exists(self):
@@ -62,7 +60,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
          image = self.image_class(self.INSTANCE, self.NAME)
  
          self.mox.StubOutWithMock(os.path, 'exists')
-@@ -821,22 +822,73 @@
+@@ -822,22 +823,73 @@
          fake_processutils.fake_execute_clear_log()
          fake_processutils.stub_out_processutils_execute(self.stubs)
  
@@ -141,9 +139,9 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
      def test_prealloc_image(self):
          CONF.set_override('preallocate_images', 'space')
  
-@@ -876,6 +928,67 @@
- 
-         self.assertEqual(image.path, rbd_path)
+@@ -887,6 +939,67 @@
+             image._resize(image.rbd_name, self.SIZE)
+             volume_mock.resize.assert_called_once_with(self.SIZE)
  
 +    def test_direct_fetch_success(self):
 +        location = {'url': 'rbd://a/b/c/d'}
@@ -209,11 +207,9 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
  
  class BackendTestCase(test.NoDBTestCase):
      INSTANCE = {'name': 'fake-instance',
-Index: nova/nova/tests/virt/libvirt/test_libvirt.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:55:03.000000000 +0800
-@@ -7947,7 +7947,7 @@
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -8059,7 +8059,7 @@
          user_id = 'fake'
          project_id = 'fake'
          images.fetch_to_raw(context, image_id, target, user_id, project_id,
@@ -222,10 +218,8 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt.py
  
          self.mox.ReplayAll()
          libvirt_utils.fetch_image(context, target, image_id,
-Index: nova/nova/tests/virt/libvirt/test_rbd_utils.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_rbd_utils.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_rbd_utils.py	2014-06-09 22:55:03.000000000 +0800
+--- a/nova/tests/virt/libvirt/test_rbd_utils.py
++++ b/nova/tests/virt/libvirt/test_rbd_utils.py
 @@ -13,8 +13,8 @@
  
  import mock
@@ -364,10 +358,8 @@ Index: nova/nova/tests/virt/libvirt/test_rbd_utils.py
      def test_cleanup_volumes(self):
          instance = {'uuid': '12345'}
  
-Index: nova/nova/tests/virt/test_images.py
-===================================================================
---- nova.orig/nova/tests/virt/test_images.py	2014-06-09 22:54:45.000000000 +0800
-+++ nova/nova/tests/virt/test_images.py	2014-06-09 22:55:03.000000000 +0800
+--- a/nova/tests/virt/test_images.py
++++ b/nova/tests/virt/test_images.py
 @@ -12,6 +12,7 @@
  #    License for the specific language governing permissions and limitations
  #    under the License.
@@ -413,10 +405,8 @@ Index: nova/nova/tests/virt/test_images.py
 +        images.fetch_to_raw('context', 'image', None, None, None,
 +                            backend='backend')
 +        mock_direct_fetch.assert_called_with('context', 'image', 'backend')
-Index: nova/nova/virt/images.py
-===================================================================
---- nova.orig/nova/virt/images.py	2014-06-09 22:54:45.000000000 +0800
-+++ nova/nova/virt/images.py	2014-06-09 22:55:03.000000000 +0800
+--- a/nova/virt/images.py
++++ b/nova/virt/images.py
 @@ -72,7 +72,33 @@
          image_service.download(context, image_id, dst_path=path)
  
@@ -452,11 +442,9 @@ Index: nova/nova/virt/images.py
      path_tmp = "%s.part" % path
      fetch(context, image_href, path_tmp, user_id, project_id,
            max_size=max_size)
-Index: nova/nova/virt/libvirt/driver.py
-===================================================================
---- nova.orig/nova/virt/libvirt/driver.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/virt/libvirt/driver.py	2014-06-09 22:55:03.000000000 +0800
-@@ -2616,13 +2616,15 @@
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -2637,13 +2637,15 @@
              if size == 0 or suffix == '.rescue':
                  size = None
  
@@ -479,10 +467,8 @@ Index: nova/nova/virt/libvirt/driver.py
  
          # Lookup the filesystem type if required
          os_type_with_default = disk.get_fs_type_for_os_type(
-Index: nova/nova/virt/libvirt/imagebackend.py
-===================================================================
---- nova.orig/nova/virt/libvirt/imagebackend.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/virt/libvirt/imagebackend.py	2014-06-09 22:55:03.000000000 +0800
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
 @@ -206,8 +206,7 @@
                                             'path': self.path})
          return can_fallocate
@@ -527,59 +513,7 @@ Index: nova/nova/virt/libvirt/imagebackend.py
  
  class Raw(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -561,30 +571,35 @@
-         return False
- 
-     def check_image_exists(self):
--        rbd_volumes = libvirt_utils.list_rbd_volumes(self.pool)
--        for vol in rbd_volumes:
--            if vol.startswith(self.rbd_name):
--                return True
-+        return self.driver.exists(self.rbd_name)
- 
--        return False
-+    def get_disk_size(self, name):
-+        """Returns the size of the virtual disk in bytes.
-+
-+        The name argument is ignored since this backend already knows
-+        its name, and callers may pass a non-existent local file path.
-+        """
-+        return self.driver.size(self.rbd_name)
- 
-     def create_image(self, prepare_template, base, size, *args, **kwargs):
--        if not os.path.exists(base):
-+
-+        if not self.check_image_exists():
-             prepare_template(target=base, max_size=size, *args, **kwargs)
-         else:
-             self.verify_base_size(base, size)
- 
--        # keep using the command line import instead of librbd since it
--        # detects zeroes to preserve sparseness in the image
--        args = ['--pool', self.pool, base, self.rbd_name]
--        if self.driver.supports_layering():
--            args += ['--new-format']
--        args += self.driver.ceph_args()
--        utils.execute('rbd', 'import', *args)
--
--        base_size = disk.get_disk_size(base)
-+        # prepare_template() may have cloned the image into a new rbd
-+        # image already instead of downloading it locally
-+        if not self.check_image_exists():
-+            # keep using the command line import instead of librbd since it
-+            # detects zeroes to preserve sparseness in the image
-+            args = ['--pool', self.pool, base, self.rbd_name]
-+            if self.driver.supports_layering():
-+                args += ['--new-format']
-+                args += self.driver.ceph_args()
-+                utils.execute('rbd', 'import', *args)
- 
--        if size and size > base_size:
-+        if size and size > self.get_disk_size(self.rbd_name):
-             self.driver.resize(self.rbd_name, size)
- 
-     def snapshot_extract(self, target, out_format):
-@@ -594,6 +609,23 @@
+@@ -595,6 +605,23 @@
      def is_shared_block_storage():
          return True
  
@@ -603,10 +537,8 @@ Index: nova/nova/virt/libvirt/imagebackend.py
  
  class Backend(object):
      def __init__(self, use_cow):
-Index: nova/nova/virt/libvirt/rbd_utils.py
-===================================================================
---- nova.orig/nova/virt/libvirt/rbd_utils.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/virt/libvirt/rbd_utils.py	2014-06-09 22:55:03.000000000 +0800
+--- a/nova/virt/libvirt/rbd_utils.py
++++ b/nova/virt/libvirt/rbd_utils.py
 @@ -11,6 +11,8 @@
  #    License for the specific language governing permissions and limitations
  #    under the License.
@@ -784,10 +716,8 @@ Index: nova/nova/virt/libvirt/rbd_utils.py
  
      def cleanup_volumes(self, instance):
          with RADOSClient(self, self.pool) as client:
-Index: nova/nova/virt/libvirt/utils.py
-===================================================================
---- nova.orig/nova/virt/libvirt/utils.py	2014-06-09 22:54:58.000000000 +0800
-+++ nova/nova/virt/libvirt/utils.py	2014-06-09 22:55:03.000000000 +0800
+--- a/nova/virt/libvirt/utils.py
++++ b/nova/virt/libvirt/utils.py
 @@ -607,10 +607,11 @@
              'used': used}
  

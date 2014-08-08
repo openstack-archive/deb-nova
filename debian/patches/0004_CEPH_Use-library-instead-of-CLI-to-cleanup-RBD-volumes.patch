@@ -18,11 +18,9 @@ Subject: Use library instead of CLI to cleanup RBD volumes
 Change-Id: I92cd6b16fbd93b377fe47b15d22efbbf68d02513
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 
-Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_imagebackend.py	2014-06-09 22:54:57.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_imagebackend.py	2014-06-09 22:54:58.000000000 +0800
-@@ -818,19 +818,23 @@
+--- a/nova/tests/virt/libvirt/test_imagebackend.py
++++ b/nova/tests/virt/libvirt/test_imagebackend.py
+@@ -819,19 +819,23 @@
  
          rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
  
@@ -48,11 +46,9 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
          self.mox.VerifyAll()
  
      def test_prealloc_image(self):
-Index: nova/nova/tests/virt/libvirt/test_libvirt.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:54:50.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-06-09 22:54:58.000000000 +0800
-@@ -74,6 +74,7 @@
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -75,6 +75,7 @@
  from nova.virt.libvirt import driver as libvirt_driver
  from nova.virt.libvirt import firewall
  from nova.virt.libvirt import imagebackend
@@ -60,7 +56,7 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt.py
  from nova.virt.libvirt import utils as libvirt_utils
  from nova.virt import netutils
  
-@@ -5519,38 +5520,16 @@
+@@ -5567,38 +5568,16 @@
                      "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
          conn.destroy(self.context, instance, [])
  
@@ -106,10 +102,8 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt.py
  
      def test_destroy_undefines_no_undefine_flags(self):
          mock = self.mox.CreateMock(libvirt.virDomain)
-Index: nova/nova/tests/virt/libvirt/test_libvirt_utils.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_libvirt_utils.py	2014-06-09 22:54:45.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_libvirt_utils.py	2014-06-09 22:54:58.000000000 +0800
+--- a/nova/tests/virt/libvirt/test_libvirt_utils.py
++++ b/nova/tests/virt/libvirt/test_libvirt_utils.py
 @@ -170,48 +170,6 @@
          libvirt_utils.clear_logical_volume('/dev/vd')
          self.assertEqual(expected_commands, executes)
@@ -159,10 +153,8 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt_utils.py
      @mock.patch('nova.utils.execute')
      def test_copy_image_local_cp(self, mock_execute):
          libvirt_utils.copy_image('src', 'dest')
-Index: nova/nova/tests/virt/libvirt/test_rbd_utils.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_rbd_utils.py	2014-06-09 22:54:57.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_rbd_utils.py	2014-06-09 22:54:58.000000000 +0800
+--- a/nova/tests/virt/libvirt/test_rbd_utils.py
++++ b/nova/tests/virt/libvirt/test_rbd_utils.py
 @@ -156,3 +156,17 @@
          self.driver.ceph_conf = '/path/bar.conf'
          self.assertEqual(['--id', 'foo', '--conf', '/path/bar.conf'],
@@ -181,11 +173,9 @@ Index: nova/nova/tests/virt/libvirt/test_rbd_utils.py
 +                    client.ioctx, '12345_test')
 +            client.__enter__.assert_called_once()
 +            client.__exit__.assert_called_once()
-Index: nova/nova/virt/libvirt/driver.py
-===================================================================
---- nova.orig/nova/virt/libvirt/driver.py	2014-06-09 22:54:50.000000000 +0800
-+++ nova/nova/virt/libvirt/driver.py	2014-06-09 22:54:58.000000000 +0800
-@@ -100,6 +100,7 @@
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -102,6 +102,7 @@
  from nova.virt.libvirt import firewall as libvirt_firewall
  from nova.virt.libvirt import imagebackend
  from nova.virt.libvirt import imagecache
@@ -193,7 +183,7 @@ Index: nova/nova/virt/libvirt/driver.py
  from nova.virt.libvirt import utils as libvirt_utils
  from nova.virt import netutils
  from nova.virt import watchdog_actions
-@@ -1078,17 +1079,11 @@
+@@ -1080,17 +1081,11 @@
                  self._cleanup_rbd(instance)
  
      def _cleanup_rbd(self, instance):
@@ -216,11 +206,9 @@ Index: nova/nova/virt/libvirt/driver.py
  
      def _cleanup_lvm(self, instance):
          """Delete all LVM disks for given instance object."""
-Index: nova/nova/virt/libvirt/imagebackend.py
-===================================================================
---- nova.orig/nova/virt/libvirt/imagebackend.py	2014-06-09 22:54:57.000000000 +0800
-+++ nova/nova/virt/libvirt/imagebackend.py	2014-06-09 22:54:58.000000000 +0800
-@@ -580,7 +580,7 @@
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -581,7 +581,7 @@
          if self.driver.supports_layering():
              args += ['--new-format']
          args += self.driver.ceph_args()
@@ -229,10 +217,8 @@ Index: nova/nova/virt/libvirt/imagebackend.py
  
          base_size = disk.get_disk_size(base)
  
-Index: nova/nova/virt/libvirt/rbd_utils.py
-===================================================================
---- nova.orig/nova/virt/libvirt/rbd_utils.py	2014-06-09 22:54:57.000000000 +0800
-+++ nova/nova/virt/libvirt/rbd_utils.py	2014-06-09 22:54:58.000000000 +0800
+--- a/nova/virt/libvirt/rbd_utils.py
++++ b/nova/virt/libvirt/rbd_utils.py
 @@ -141,3 +141,18 @@
  
          with RBDVolumeProxy(self, volume_name) as vol:
@@ -252,10 +238,8 @@ Index: nova/nova/virt/libvirt/rbd_utils.py
 +                    LOG.warn(_('rbd remove %(volume)s in pool %(pool)s '
 +                               'failed'),
 +                             {'volume': volume, 'pool': self.pool})
-Index: nova/nova/virt/libvirt/utils.py
-===================================================================
---- nova.orig/nova/virt/libvirt/utils.py	2014-06-09 22:54:45.000000000 +0800
-+++ nova/nova/virt/libvirt/utils.py	2014-06-09 22:54:58.000000000 +0800
+--- a/nova/virt/libvirt/utils.py
++++ b/nova/virt/libvirt/utils.py
 @@ -251,46 +251,6 @@
      execute(*cmd, run_as_root=True, attempts=3)
  
