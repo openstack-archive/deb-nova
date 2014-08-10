@@ -1,0 +1,83 @@
+Subject: count image files on NFS as shared block storage
+ If instance path is shared between compute nodes (e.g. over NFS) and image
+ backend uses files placed in the instance directory (e.g. Raw, Qcow2), live
+ migration should consider block storage of the instances shared.
+From f047dca5e8b858cb2e505d03844b0094a920822b Mon Sep 17 00:00:00 2001
+From: Dmitry Borodaenko <dborodaenko@mirantis.com>
+Date: Thu, 31 Jul 2014 13:50:00 -0700
+Change-Id: I913c57152974562765502ab57be63ccb6dfe5208
+Bug-Ubuntu: https://launchpad.net/bugs/1351002
+Origin: upstream, https://github.com/angdraug/nova/commits/rbd-ephemeral-clone-stable-icehouse
+Last-Update: 2014-08-10
+
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index f7c4a1c..ee8706a 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -4271,10 +4271,10 @@ def check_can_live_migrate_source(self, context, instance,
+         # if block migration, instances_paths should not be on shared storage.
+         source = CONF.host
+ 
+-        dest_check_data.update({'is_shared_block_storage':
+-                self._is_shared_block_storage(instance, dest_check_data)})
+         dest_check_data.update({'is_shared_instance_path':
+                 self._is_shared_instance_path(dest_check_data)})
++        dest_check_data.update({'is_shared_block_storage':
++                self._is_shared_block_storage(instance, dest_check_data)})
+ 
+         if dest_check_data['block_migration']:
+             if (dest_check_data['is_shared_block_storage'] or
+@@ -4313,6 +4313,12 @@ def _is_shared_block_storage(self, instance, dest_check_data):
+                 self.image_backend.backend().is_shared_block_storage()):
+             return True
+ 
++        if (dest_check_data.get('is_shared_instance_path') and
++                self.image_backend.backend().is_file_in_instance_path()):
++            # NOTE(angdraug): file based image backends (Raw, Qcow2)
++            # place block device files under the instance path
++            return True
++
+         if (dest_check_data.get('is_volume_backed') and
+                 not bool(jsonutils.loads(
+                     self.get_instance_disk_info(instance['name'])))):
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 5f15e30..93ac19e 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -306,6 +306,11 @@ def is_shared_block_storage():
+         '''
+         return False
+ 
++    @staticmethod
++    def is_file_in_instance_path():
++        """True if the backend stores images in files under instance path."""
++        return False
++
+     def direct_fetch(self, image_id, image_meta, image_locations):
+         """Create an image from a direct image location.
+ 
+@@ -363,6 +368,10 @@ def copy_raw_image(base, target, size):
+     def snapshot_extract(self, target, out_format):
+         images.convert_image(self.path, target, out_format)
+ 
++    @staticmethod
++    def is_file_in_instance_path():
++        return True
++
+ 
+ class Qcow2(Image):
+     def __init__(self, instance=None, disk_name=None, path=None):
+@@ -427,6 +436,10 @@ def snapshot_extract(self, target, out_format):
+                                        target,
+                                        out_format)
+ 
++    @staticmethod
++    def is_file_in_instance_path():
++        return True
++
+ 
+ class Lvm(Image):
+     @staticmethod
+-- 
+2.0.3
+

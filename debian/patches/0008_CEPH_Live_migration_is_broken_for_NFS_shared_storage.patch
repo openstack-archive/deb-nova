@@ -1,0 +1,64 @@
+From 4126f71d137d8ba2366243ef4aa20a31fa0acedc Mon Sep 17 00:00:00 2001
+From: Vladik Romanovsky <vladik.romanovsky@enovance.com>
+Date: Mon, 21 Jul 2014 08:35:22 -0400
+Description: Live migration is broken for NFS shared storage
+ One of the new checks, introduced in
+ I2755c59b4db736151000dae351fd776d3c15ca39
+ is missing a check against filebased shared storage,
+ leading to live migration being broken.
+Bug-Ubuntu: https://launchpad.net/bugs/1346385
+Change-Id: I096ecd6eadc3b13ef918ca1e6c98acdd01556c0d
+Origin: upstream, https://github.com/angdraug/nova/commits/rbd-ephemeral-clone-stable-icehouse
+Last-Update: 2014-08-10
+
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index 9314c51..b1fc9a3 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -4290,6 +4290,30 @@ def fake_plug_vifs(instance, network_info):
+         conn.pre_live_migration(self.context, instance, block_device_info=None,
+                                 network_info=[], disk_info={})
+ 
++    def test_pre_live_migration_with_shared_instance_path(self):
++        migrate_data = {'is_shared_block_storage': False,
++                        'block_migration': False}
++
++        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
++        instance = db.instance_create(self.context, self.test_instance)
++        # creating mocks
++        with contextlib.nested(
++            mock.patch.object(conn,
++                              '_create_images_and_backing'),
++            mock.patch.object(conn,
++                              'ensure_filtering_rules_for_instance'),
++            mock.patch.object(conn, 'plug_vifs'),
++        ) as (
++            create_image_mock,
++            rules_mock,
++            plug_mock,
++        ):
++            conn.pre_live_migration(self.context, instance,
++                                    block_device_info=None,
++                                    network_info=[], disk_info={},
++                                    migrate_data=migrate_data)
++            self.assertFalse(create_image_mock.called)
++
+     def test_get_instance_disk_info_works_correctly(self):
+         # Test data
+         instance_ref = db.instance_create(self.context, self.test_instance)
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 122a05e..f7c4a1c 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -4618,7 +4618,7 @@ def pre_live_migration(self, context, instance, block_device_info,
+                 raise exception.DestinationDiskExists(path=instance_dir)
+             os.mkdir(instance_dir)
+ 
+-        if not is_shared_block_storage:
++        if not (is_shared_block_storage or is_shared_instance_path):
+             # Ensure images and backing files are present.
+             self._create_images_and_backing(context, instance, instance_dir,
+                                             disk_info)
+-- 
+2.0.3
+

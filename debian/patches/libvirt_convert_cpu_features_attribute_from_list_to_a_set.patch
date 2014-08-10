@@ -15,8 +15,10 @@ Date: Tue, 3 Jun 2014 18:58:06 +0000 (-0400)
 X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=f154a9c82a956a1909444fea7be65d8b3d3796e6
 Last-Update: 2014-06-18
 
---- a/nova/tests/virt/libvirt/test_libvirt.py
-+++ b/nova/tests/virt/libvirt/test_libvirt.py
+Index: nova/nova/tests/virt/libvirt/test_libvirt.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-08-10 15:54:05.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-08-10 15:54:07.000000000 +0800
 @@ -2251,8 +2251,8 @@
              cpu.model = "Opteron_G4"
              cpu.vendor = "AMD"
@@ -39,8 +41,10 @@ Last-Update: 2014-06-18
  
      def test_get_guest_cpu_config_custom_old(self):
          def get_lib_version_stub():
---- a/nova/tests/virt/libvirt/test_libvirt_config.py
-+++ b/nova/tests/virt/libvirt/test_libvirt_config.py
+Index: nova/nova/tests/virt/libvirt/test_libvirt_config.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt_config.py	2014-08-09 14:47:10.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt_config.py	2014-08-10 15:54:07.000000000 +0800
 @@ -235,8 +235,30 @@
                <arch>x86_64</arch>
                <model>Penryn</model>
@@ -82,8 +86,10 @@ Last-Update: 2014-06-18
              </cpu>
          """)
  
---- a/nova/virt/libvirt/config.py
-+++ b/nova/virt/libvirt/config.py
+Index: nova/nova/virt/libvirt/config.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/config.py	2014-08-09 14:47:10.000000000 +0800
++++ nova/nova/virt/libvirt/config.py	2014-08-10 15:54:07.000000000 +0800
 @@ -250,6 +250,15 @@
  
          return ft
@@ -126,9 +132,11 @@ Last-Update: 2014-06-18
  
  
  class LibvirtConfigGuestCPUFeature(LibvirtConfigCPUFeature):
---- a/nova/virt/libvirt/driver.py
-+++ b/nova/virt/libvirt/driver.py
-@@ -2909,7 +2909,7 @@
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-08-10 15:54:06.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-08-10 15:54:07.000000000 +0800
+@@ -2912,7 +2912,7 @@
          for hostfeat in hostcpu.features:
              guestfeat = vconfig.LibvirtConfigGuestCPUFeature(hostfeat.name)
              guestfeat.policy = "require"
