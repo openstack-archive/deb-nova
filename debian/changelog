@@ -1,3 +1,10 @@
+nova (2014.1.2-2) unstable; urgency=medium
+
+  * Added new Ceph patch backport from Dmitry Borodaenko:
+    0010_CEPH_Rename_rbb.py_to_rbd_utils.py_in_libvirt_driver_directory.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 22 Aug 2014 04:54:40 +0800
+
 nova (2014.1.2-1) unstable; urgency=medium
 
   [ Gustavo Panizzo ]
