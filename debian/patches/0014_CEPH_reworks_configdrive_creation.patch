@@ -1,0 +1,95 @@
+Description: libvirt: reworks configdrive creation
+ This refactor the creation of the configdrive by using
+ the same code schema as local/ephemeral/swap/disk.
+ .
+ Now this is the imagebackend that creates the configdrive like any other
+ disk attached to VM. This ensures that the configdrive file is created
+ where the imagebackend expect it.
+ .
+ This also removes the assumption that the configdrive was always created
+ at the right place, that was not true for rbd and lvm.
+Author: Mehdi Abaakouk <mehdi.abaakouk@enovance.com>
+Date: Wed, 27 Aug 2014 17:07:43 +0200
+Origin: https://review.openstack.org/#/c/117292/
+Last-Update: 2014-08-25
+
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py
++++ nova/nova/virt/libvirt/driver.py
+@@ -2485,6 +2485,30 @@ class LibvirtDriver(driver.ComputeDriver
+         utils.mkfs('swap', target)
+ 
+     @staticmethod
++    def _create_configdrive(target, instance, admin_pass, files,
++                            network_info, max_size=None):
++        extra_md = {}
++        if admin_pass:
++            extra_md['admin_pass'] = admin_pass
++
++        inst_md = instance_metadata.InstanceMetadata(instance,
++            content=files, extra_md=extra_md,
++            network_info=network_info)
++
++        with configdrive.ConfigDriveBuilder(
++                instance_md=inst_md) as cdb:
++            LOG.info(_('Creating config drive at %(path)s'),
++                    {'path': target}, instance=instance)
++
++            try:
++                cdb.make_drive(target)
++            except processutils.ProcessExecutionError as e:
++                with excutils.save_and_reraise_exception():
++                    LOG.error(_('Creating config drive failed '
++                                'with error: %s'),
++                            e, instance=instance)
++
++    @staticmethod
+     def _get_console_log_path(instance):
+         return os.path.join(libvirt_utils.get_instance_path(instance),
+                             'console.log')
+@@ -2705,36 +2729,14 @@ class LibvirtDriver(driver.ComputeDriver
+         # Config drive
+         if configdrive.required_by(instance):
+             LOG.info(_('Using config drive'), instance=instance)
+-            extra_md = {}
+-            if admin_pass:
+-                extra_md['admin_pass'] = admin_pass
+-
+-            inst_md = instance_metadata.InstanceMetadata(instance,
+-                content=files, extra_md=extra_md, network_info=network_info)
+-            with configdrive.ConfigDriveBuilder(instance_md=inst_md) as cdb:
+-                configdrive_path = self._get_disk_config_path(instance)
+-                LOG.info(_('Creating config drive at %(path)s'),
+-                         {'path': configdrive_path}, instance=instance)
+-
+-                try:
+-                    cdb.make_drive(configdrive_path)
+-                except processutils.ProcessExecutionError as e:
+-                    with excutils.save_and_reraise_exception():
+-                        LOG.error(_('Creating config drive failed '
+-                                  'with error: %s'),
+-                                  e, instance=instance)
+-
+-                def dummy_fetch_func(target, *args, **kwargs):
+-                    # NOTE(sileht): this is never called because the
+-                    # the target have already been created by
+-                    # cdb.make_drive call
+-                    pass
+-
+-                image_type = self._get_configdrive_image_type()
+-                backend = image('disk.config', image_type)
+-                backend.cache(fetch_func=dummy_fetch_func,
+-                              context=context,
+-                              filename='disk.config' + suffix)
++            image_type = self._get_configdrive_image_type()
++            backend = image('disk.config', image_type)
++            backend.cache(fetch_func=self._create_configdrive,
++                            filename='disk.config' + suffix,
++                            instance=instance,
++                            admin_pass=admin_pass,
++                            files=files,
++                            network_info=network_info)
+ 
+         # File injection only if needed
+         elif inject_files and CONF.libvirt.inject_partition != -2:

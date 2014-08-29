@@ -1,0 +1,64 @@
+Description: libvirt: Uses correct imagebackend for configdrive
+ When the configdrive file is created it must be moved to the
+ configured imagebackend, not always the raw one.
+ .
+ Otherwise nova can't boot an instance with a configdrive attached
+ when the rbd backend is configured.
+Author: Mehdi Abaakouk <mehdi.abaakouk@enovance.com>
+Date: Tue, 26 Aug 2014 12:29:30 +0200
+Origin: https://review.openstack.org/#/c/116847/
+Last-Update: 2014-08-29
+
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py
++++ nova/nova/virt/libvirt/driver.py
+@@ -2730,9 +2730,11 @@ class LibvirtDriver(driver.ComputeDriver
+                     # cdb.make_drive call
+                     pass
+ 
+-                raw('disk.config').cache(fetch_func=dummy_fetch_func,
+-                                         context=context,
+-                                         filename='disk.config' + suffix)
++                image_type = self._get_configdrive_image_type()
++                backend = image('disk.config', image_type)
++                backend.cache(fetch_func=dummy_fetch_func,
++                              context=context,
++                              filename='disk.config' + suffix)
+ 
+         # File injection only if needed
+         elif inject_files and CONF.libvirt.inject_partition != -2:
+@@ -3072,14 +3074,7 @@ class LibvirtDriver(driver.ComputeDriver
+                     vol.save(nova_context.get_admin_context())
+ 
+             if 'disk.config' in disk_mapping:
+-                # NOTE(sileht): a configdrive is a raw image
+-                # it works well with rbd, lvm and raw images_type
+-                # but we must force to raw image_type if the desired
+-                # images_type is qcow2
+-                if CONF.libvirt.images_type not in ['rbd', 'lvm']:
+-                    image_type = "raw"
+-                else:
+-                    image_type = None
++                image_type = self._get_configdrive_image_type()
+                 diskconfig = self.get_guest_disk_config(instance,
+                                                         'disk.config',
+                                                         disk_mapping,
+@@ -3100,6 +3095,17 @@ class LibvirtDriver(driver.ComputeDriver
+ 
+         return devices
+ 
++    @staticmethod
++    def _get_configdrive_image_type():
++        # NOTE(sileht): a configdrive is a raw image
++        # it works well with rbd, lvm and raw images_type
++        # but we must force to raw image_type if the desired
++        # images_type is qcow2
++        if CONF.libvirt.images_type not in ['rbd', 'lvm']:
++            return "raw"
++        else:
++            return None
++
+     def get_guest_config_sysinfo(self, instance):
+         sysinfo = vconfig.LibvirtConfigGuestSysinfo()
+ 

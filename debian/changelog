@@ -1,7 +1,13 @@
 nova (2014.1.2-3) unstable; urgency=medium
 
+  [ Thomas Goirand ]
   * Added new patch for Ceph, thanks to Roman Podoliaka:
     0012_CEPH_Fix_instance_boot_when_Ceph_is_used_for_ephemeral_storage.patch
+
+  [ Mehdi Abaakouk ]
+  * Added two new fix for configdrive and ceph
+    0013_CEPH_uses_correct_imagebackend_for_configdrive.patch
+    0014_CEPH_reworks_configdrive_creation.patch
 
  -- Thomas Goirand <zigo@debian.org>  Sat, 30 Aug 2014 14:14:43 +0800
 
