@@ -1,3 +1,10 @@
+nova (2014.1.2-3) unstable; urgency=medium
+
+  * Added new patch for Ceph, thanks to Roman Podoliaka:
+    0012_CEPH_Fix_instance_boot_when_Ceph_is_used_for_ephemeral_storage.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 30 Aug 2014 14:14:43 +0800
+
 nova (2014.1.2-2) unstable; urgency=medium
 
   [ Thomas Goirand ]
