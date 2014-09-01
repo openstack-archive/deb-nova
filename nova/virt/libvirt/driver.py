@@ -1786,12 +1786,11 @@ class LibvirtDriver(driver.ComputeDriver):
                               'to volume service.'))
 
     def _volume_snapshot_create(self, context, instance, domain,
-                                volume_id, snapshot_id, new_file):
+                                volume_id, new_file):
         """Perform volume snapshot.
 
            :param domain: VM that volume is attached to
            :param volume_id: volume UUID to snapshot
-           :param snapshot_id: UUID of snapshot being created
            :param new_file: relative path to new qcow2 file present on share
 
         """
@@ -1941,8 +1940,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         try:
             self._volume_snapshot_create(context, instance, virt_dom,
-                                         volume_id, snapshot_id,
-                                         create_info['new_file'])
+                                         volume_id, create_info['new_file'])
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.exception(_LE('Error occurred during '
