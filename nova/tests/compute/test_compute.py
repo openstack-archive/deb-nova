@@ -10606,7 +10606,7 @@ class ComputeRescheduleOrErrorTestCase(BaseTestCase):
 
             compute_utils.add_instance_fault_from_exc(self.context,
                     self.instance, exc_info[0], exc_info=exc_info)
-            self.compute._shutdown_instance(self.context, self.instance,
+            self.compute._shutdown_instance(mox.IgnoreArg(), self.instance,
                     mox.IgnoreArg(),
                     mox.IgnoreArg()).AndRaise(InnerTestingException("Error"))
             self.compute._log_original_error(exc_info, instance_uuid)
@@ -10665,11 +10665,11 @@ class ComputeRescheduleOrErrorTestCase(BaseTestCase):
         self.mox.StubOutWithMock(self.compute, '_cleanup_volumes')
         self.mox.StubOutWithMock(self.compute, '_reschedule')
 
-        self.compute._shutdown_instance(self.context, self.instance,
+        self.compute._shutdown_instance(mox.IgnoreArg(), self.instance,
                                         mox.IgnoreArg(),
                                         mox.IgnoreArg())
-        self.compute._cleanup_volumes(self.context, instance_uuid,
-                                        mox.IgnoreArg())
+        self.compute._cleanup_volumes(mox.IgnoreArg(), instance_uuid,
+                                      mox.IgnoreArg())
         self.compute._reschedule(self.context, None, self.instance,
                 {}, self.compute.scheduler_rpcapi.run_instance,
                 method_args, task_states.SCHEDULING, exc_info).AndRaise(
@@ -10695,11 +10695,11 @@ class ComputeRescheduleOrErrorTestCase(BaseTestCase):
             compute_utils.add_instance_fault_from_exc(self.context,
                     self.instance, exc_info[0], exc_info=exc_info)
 
-            self.compute._shutdown_instance(self.context, self.instance,
+            self.compute._shutdown_instance(mox.IgnoreArg(), self.instance,
                                             mox.IgnoreArg(),
                                             mox.IgnoreArg())
-            self.compute._cleanup_volumes(self.context, instance_uuid,
-                                            mox.IgnoreArg())
+            self.compute._cleanup_volumes(mox.IgnoreArg(), instance_uuid,
+                                          mox.IgnoreArg())
             self.compute._reschedule(self.context, None, {}, self.instance,
                     self.compute.scheduler_rpcapi.run_instance, method_args,
                     task_states.SCHEDULING, exc_info).AndReturn(False)
@@ -10726,10 +10726,10 @@ class ComputeRescheduleOrErrorTestCase(BaseTestCase):
 
             compute_utils.add_instance_fault_from_exc(self.context,
                     self.instance, exc_info[0], exc_info=exc_info)
-            self.compute._shutdown_instance(self.context, self.instance,
+            self.compute._shutdown_instance(mox.IgnoreArg(), self.instance,
                                             mox.IgnoreArg(),
                                             mox.IgnoreArg())
-            self.compute._cleanup_volumes(self.context, instance_uuid,
+            self.compute._cleanup_volumes(mox.IgnoreArg(), instance_uuid,
                                           mox.IgnoreArg())
             self.compute._reschedule(self.context, None, {}, self.instance,
                     self.compute.scheduler_rpcapi.run_instance,
