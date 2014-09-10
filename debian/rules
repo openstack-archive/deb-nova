@@ -1,7 +1,5 @@
 #!/usr/bin/make -f
 
-# export DH_VERBOSE=1
-
 include /usr/share/openstack-pkg-tools/pkgos.make
 
 export OSLO_PACKAGE_VERSION=$(VERSION)
@@ -83,8 +81,8 @@ override_dh_fixperms:
 #	echo "{}" >$(CURDIR)/debian/nova-xcp-plugins/etc/xcp/xenhost.conf
 #	chmod 0440 $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
 
-ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 override_dh_auto_test:
+ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
 	./run_tests.sh -N -P || true
 	#python setup.py testr --slowest --testr-args='--subunit  ' || true
 endif
