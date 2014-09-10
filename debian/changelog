@@ -1,3 +1,10 @@
+nova (2014.1.2-4) unstable; urgency=medium
+
+  * Updated it.po italian Debconf template, thanks to Beatrice Torracca
+    <beatricet@libero.it> (Closes: #758305).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 10 Sep 2014 14:49:11 +0800
+
 nova (2014.1.2-3) unstable; urgency=medium
 
   [ Thomas Goirand ]
