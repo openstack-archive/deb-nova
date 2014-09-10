@@ -2,6 +2,7 @@ nova (2014.1.2-5) unstable; urgency=medium
 
   * Updated it.po italian Debconf template, thanks to Beatrice Torracca
     <beatricet@libero.it> (Closes: #758305).
+  * Reduced the number of lintian warnings (only cosmetic changes).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 10 Sep 2014 14:49:11 +0800
 

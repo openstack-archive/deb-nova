@@ -480,7 +480,8 @@ Description: OpenStack Compute - storage metapackage
 Package: nova-api
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
-Depends: debconf,
+Depends: adduser,
+         debconf,
          nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},

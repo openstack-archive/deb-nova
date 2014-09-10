@@ -25,17 +25,16 @@ LOCK_DIR=/var/lock/nova/
 # Exit if the package is not installed, or the default file not present,
 # or not set to this daemon
 [ -x $DAEMON ] || exit 0
-if ! [ -r /etc/default/nova-consoleproxy ] ; then
+if [ -r /etc/default/nova-consoleproxy ] ; then
+	. /etc/default/nova-consoleproxy
+else
 	exit 0
 fi
-. /etc/default/nova-consoleproxy
-
-[ -r /etc/default/openstack ] && . /etc/default/openstack
-
 if ! [ "${NOVA_CONSOLE_PROXY_TYPE}" = "xenvnc" ] ; then
 	exit 0
 fi
 
+[ -r /etc/default/openstack ] && . /etc/default/openstack
 [ "x$USE_SYSLOG" = "xyes" ] && DAEMON_ARGS="$DAEMON_ARGS --use-syslog"
 [ "x$USE_LOGFILE" != "xno" ] && DAEMON_ARGS="$DAEMON_ARGS --log-file /var/log/nova/nova-consoleproxy.log"
 
