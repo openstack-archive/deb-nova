@@ -1,3 +1,10 @@
+nova (2014.1.2-6) unstable; urgency=medium
+
+  * Switching to libvirt-daemon-system instead of libvirt-bin because the
+    libvirt package changed (Closes: #757548).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 10 Sep 2014 17:55:00 +0800
+
 nova (2014.1.2-5) unstable; urgency=medium
 
   * Updated it.po italian Debconf template, thanks to Beatrice Torracca
