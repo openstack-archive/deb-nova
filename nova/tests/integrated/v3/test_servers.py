@@ -165,3 +165,23 @@ class ServersActionsJsonTest(ServersSampleBase):
         self._test_server_action(uuid, 'createImage',
                                  'server-action-create-image',
                                  {'name': 'foo-image'})
+
+
+class ServerStartStopJsonTest(ServersSampleBase):
+    sample_dir = 'servers'
+
+    def _test_server_action(self, uuid, action, req_tpl):
+        response = self._do_post('servers/%s/action' % uuid,
+                                 req_tpl,
+                                 {'action': action})
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
+
+    def test_server_start(self):
+        uuid = self._post_server()
+        self._test_server_action(uuid, 'os-stop', 'server-action-stop')
+        self._test_server_action(uuid, 'os-start', 'server-action-start')
+
+    def test_server_stop(self):
+        uuid = self._post_server()
+        self._test_server_action(uuid, 'os-stop', 'server-action-stop')
