@@ -76,9 +76,9 @@ class IronicNodeState(bbhm.BaseBaremetalNodeState):
                     compute.get('supported_instances'))
         self.updated = compute['updated_at']
 
-    def consume_from_instance(self, context, instance):
+    def consume_from_instance(self, instance):
         """Consume nodes entire resources regardless of instance request."""
-        super(IronicNodeState, self).consume_from_instance(context, instance)
+        super(IronicNodeState, self).consume_from_instance(instance)
 
         self.updated = timeutils.utcnow()
 
