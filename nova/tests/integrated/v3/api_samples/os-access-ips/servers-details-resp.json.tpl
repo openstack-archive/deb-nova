@@ -1,8 +1,8 @@
 {
     "servers": [
         {
-        "os-access-ips:access_ip_v4": "%(access_ip_v4)s",
-        "os-access-ips:access_ip_v6": "%(access_ip_v6)s",
+        "accessIPv4": "%(access_ip_v4)s",
+        "accessIPv6": "%(access_ip_v6)s",
             "addresses": {
                 "private": [
                     {
@@ -23,13 +23,13 @@
                     }
                 ]
             },
-            "host_id": "%(hostid)s",
+            "hostId": "%(hostid)s",
             "id": "%(id)s",
             "image": {
                 "id": "%(uuid)s",
                 "links": [
                     {
-                        "href": "%(glance_host)s/images/%(uuid)s",
+                        "href": "%(host)s/images/%(uuid)s",
                         "rel": "bookmark"
                     }
                 ]

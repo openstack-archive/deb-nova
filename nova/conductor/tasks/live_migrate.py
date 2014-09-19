@@ -20,7 +20,7 @@ from nova import exception
 from nova.i18n import _
 from nova import image
 from nova.openstack.common import log as logging
-from nova.scheduler import rpcapi as scheduler_rpcapi
+from nova.scheduler import client as scheduler_client
 from nova.scheduler import utils as scheduler_utils
 from nova import servicegroup
 
@@ -48,7 +48,7 @@ class LiveMigrationTask(object):
         self.migrate_data = None
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.servicegroup_api = servicegroup.API()
-        self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
+        self.scheduler_client = scheduler_client.SchedulerClient()
         self.image_api = image.API()
 
     def execute(self):
@@ -60,8 +60,8 @@ class LiveMigrationTask(object):
         else:
             self._check_requested_destination()
 
-        #TODO(johngarbutt) need to move complexity out of compute manager
-        #TODO(johngarbutt) disk_over_commit?
+        # TODO(johngarbutt) need to move complexity out of compute manager
+        # TODO(johngarbutt) disk_over_commit?
         return self.compute_rpcapi.live_migration(self.context,
                 host=self.source,
                 instance=self.instance,
@@ -70,7 +70,7 @@ class LiveMigrationTask(object):
                 migrate_data=self.migrate_data)
 
     def rollback(self):
-        #TODO(johngarbutt) need to implement the clean up operation
+        # TODO(johngarbutt) need to implement the clean up operation
         # but this will make sense only once we pull in the compute
         # calls, since this class currently makes no state changes,
         # except to call the compute method, that has no matching
@@ -141,7 +141,7 @@ class LiveMigrationTask(object):
                 destination, self.block_migration, self.disk_over_commit)
 
     def _find_destination(self):
-        #TODO(johngarbutt) this retry loop should be shared
+        # TODO(johngarbutt) this retry loop should be shared
         attempted_hosts = [self.source]
         image = None
         if self.instance.image_ref:
@@ -156,7 +156,7 @@ class LiveMigrationTask(object):
         while host is None:
             self._check_not_over_max_retries(attempted_hosts)
             filter_properties = {'ignore_hosts': attempted_hosts}
-            host = self.scheduler_rpcapi.select_destinations(self.context,
+            host = self.scheduler_client.select_destinations(self.context,
                             request_spec, filter_properties)[0]['host']
             try:
                 self._check_compatible_with_source_hypervisor(host)
@@ -187,5 +187,5 @@ def execute(context, instance, destination,
                              destination,
                              block_migration,
                              disk_over_commit)
-    #TODO(johngarbutt) create a superclass that contains a safe_execute call
+    # TODO(johngarbutt) create a superclass that contains a safe_execute call
     return task.execute()

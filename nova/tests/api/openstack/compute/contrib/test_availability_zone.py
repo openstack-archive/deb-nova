@@ -15,29 +15,44 @@
 import datetime
 
 from lxml import etree
+from oslo.config import cfg
 import webob
 
-from nova.api.openstack.compute.contrib import availability_zone
+from nova.api.openstack.compute.contrib import availability_zone as az_v2
+from nova.api.openstack.compute import plugins
+from nova.api.openstack.compute.plugins.v3 import availability_zone as az_v21
+from nova.api.openstack.compute.plugins.v3 import servers as servers_v21
+from nova.api.openstack.compute import servers as servers_v2
+from nova.api.openstack import extensions
 from nova import availability_zones
+from nova.compute import api as compute_api
+from nova.compute import flavors
 from nova import context
 from nova import db
+from nova import exception
 from nova.openstack.common import jsonutils
 from nova import servicegroup
 from nova import test
 from nova.tests.api.openstack import fakes
+from nova.tests import fake_instance
+from nova.tests.image import fake
 from nova.tests import matchers
+from nova.tests.objects import test_service
+
+FAKE_UUID = fakes.FAKE_UUID
 
 
 def fake_service_get_all(context, disabled=None):
     def __fake_service(binary, availability_zone,
                        created_at, updated_at, host, disabled):
-        return {'binary': binary,
-                'availability_zone': availability_zone,
-                'available_zones': availability_zone,
-                'created_at': created_at,
-                'updated_at': updated_at,
-                'host': host,
-                'disabled': disabled}
+        return dict(test_service.fake_service,
+                    binary=binary,
+                    availability_zone=availability_zone,
+                    available_zones=availability_zone,
+                    created_at=created_at,
+                    updated_at=updated_at,
+                    host=host,
+                    disabled=disabled)
 
     if disabled:
         return [__fake_service("nova-compute", "zone-2",
@@ -79,17 +94,26 @@ def fake_get_availability_zones(context):
     return ['nova'], []
 
 
-class AvailabilityZoneApiTest(test.NoDBTestCase):
+CONF = cfg.CONF
+
+
+class AvailabilityZoneApiTestV21(test.NoDBTestCase):
+    availability_zone = az_v21
+    url = '/v3/os-availability-zone'
+
     def setUp(self):
-        super(AvailabilityZoneApiTest, self).setUp()
+        super(AvailabilityZoneApiTestV21, self).setUp()
         availability_zones.reset_cache()
         self.stubs.Set(db, 'service_get_all', fake_service_get_all)
         self.stubs.Set(availability_zones, 'set_availability_zones',
                        fake_set_availability_zones)
         self.stubs.Set(servicegroup.API, 'service_is_up', fake_service_is_up)
 
+    def _get_wsgi_instance(self):
+        return fakes.wsgi_app_v3(init_only=('os-availability-zone', 'servers'))
+
     def test_filtered_availability_zones(self):
-        az = availability_zone.AvailabilityZoneController()
+        az = self.availability_zone.AvailabilityZoneController()
         zones = ['zone1', 'internal']
         expected = [{'zoneName': 'zone1',
                     'zoneState': {'available': True},
@@ -104,8 +128,8 @@ class AvailabilityZoneApiTest(test.NoDBTestCase):
         self.assertEqual(result, expected)
 
     def test_availability_zone_index(self):
-        req = webob.Request.blank('/v2/fake/os-availability-zone')
-        resp = req.get_response(fakes.wsgi_app())
+        req = webob.Request.blank(self.url)
+        resp = req.get_response(self._get_wsgi_instance())
         self.assertEqual(resp.status_int, 200)
         resp_dict = jsonutils.loads(resp.body)
 
@@ -150,9 +174,10 @@ class AvailabilityZoneApiTest(test.NoDBTestCase):
             self.assertEqual(zone['zoneName'], name)
             self.assertEqual(zone['zoneState'], status)
 
-        availabilityZone = availability_zone.AvailabilityZoneController()
+        availabilityZone = self.availability_zone.AvailabilityZoneController()
 
-        req = webob.Request.blank('/v2/fake/os-availability-zone/detail')
+        req_url = self.url + '/detail'
+        req = webob.Request.blank(req_url)
         req.method = 'GET'
         req.environ['nova.context'] = context.get_admin_context()
         resp_dict = availabilityZone.detail(req)
@@ -215,15 +240,218 @@ class AvailabilityZoneApiTest(test.NoDBTestCase):
                              'zoneName': 'nova'}]}
         self.stubs.Set(availability_zones, 'get_availability_zones',
                        fake_get_availability_zones)
-        availabilityZone = availability_zone.AvailabilityZoneController()
+        availabilityZone = self.availability_zone.AvailabilityZoneController()
 
-        req = webob.Request.blank('/v2/fake/os-availability-zone/detail')
+        req_url = self.url + '/detail'
+        req = webob.Request.blank(req_url)
         req.method = 'GET'
         req.environ['nova.context'] = context.get_admin_context()
         resp_dict = availabilityZone.detail(req)
 
         self.assertThat(resp_dict,
                         matchers.DictMatches(expected_response))
+
+
+class AvailabilityZoneApiTestV2(AvailabilityZoneApiTestV21):
+    availability_zone = az_v2
+    url = '/v2/fake/os-availability-zone'
+
+    def _get_wsgi_instance(self):
+        return fakes.wsgi_app()
+
+
+class ServersControllerCreateTestV21(test.TestCase):
+    base_url = '/v3/'
+
+    def setUp(self):
+        """Shared implementation for tests below that create instance."""
+        super(ServersControllerCreateTestV21, self).setUp()
+
+        self.instance_cache_num = 0
+
+        self._set_up_controller()
+
+        def instance_create(context, inst):
+            inst_type = flavors.get_flavor_by_flavor_id(3)
+            image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+            def_image_ref = 'http://localhost/images/%s' % image_uuid
+            self.instance_cache_num += 1
+            instance = fake_instance.fake_db_instance(**{
+                'id': self.instance_cache_num,
+                'display_name': inst['display_name'] or 'test',
+                'uuid': FAKE_UUID,
+                'instance_type': dict(inst_type),
+                'access_ip_v4': '1.2.3.4',
+                'access_ip_v6': 'fead::1234',
+                'image_ref': inst.get('image_ref', def_image_ref),
+                'user_id': 'fake',
+                'project_id': 'fake',
+                'availability_zone': 'nova',
+                'reservation_id': inst['reservation_id'],
+                "created_at": datetime.datetime(2010, 10, 10, 12, 0, 0),
+                "updated_at": datetime.datetime(2010, 11, 11, 11, 0, 0),
+                "progress": 0,
+                "fixed_ips": [],
+                "task_state": "",
+                "vm_state": "",
+                "root_device_name": inst.get('root_device_name', 'vda'),
+            })
+
+            return instance
+
+        fake.stub_out_image_service(self.stubs)
+        self.stubs.Set(db, 'instance_create', instance_create)
+
+    def _set_up_controller(self):
+        ext_info = plugins.LoadedExtensionInfo()
+        self.controller = servers_v21.ServersController(
+            extension_info=ext_info)
+        CONF.set_override('extensions_blacklist',
+                          'os-availability-zone',
+                          'osapi_v3')
+        self.no_availability_zone_controller = servers_v21.ServersController(
+            extension_info=ext_info)
+
+    def _verify_no_availability_zone(self, **kwargs):
+        self.assertNotIn('availability_zone', kwargs)
+
+    def _test_create_extra(self, params, controller):
+        image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
+        server = dict(name='server_test', imageRef=image_uuid, flavorRef=2)
+        server.update(params)
+        body = dict(server=server)
+        req = fakes.HTTPRequest.blank(self.base_url + 'servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        server = controller.create(req, body=body).obj['server']
+
+    def test_create_instance_with_availability_zone_disabled(self):
+        params = {'availability_zone': 'foo'}
+        old_create = compute_api.API.create
+
+        def create(*args, **kwargs):
+            self._verify_no_availability_zone(**kwargs)
+            return old_create(*args, **kwargs)
+
+        self.stubs.Set(compute_api.API, 'create', create)
+        self._test_create_extra(params, self.no_availability_zone_controller)
+
+    def _create_instance_with_availability_zone(self, zone_name):
+        def create(*args, **kwargs):
+            self.assertIn('availability_zone', kwargs)
+            self.assertEqual('nova', kwargs['availability_zone'])
+            return old_create(*args, **kwargs)
+
+        old_create = compute_api.API.create
+        self.stubs.Set(compute_api.API, 'create', create)
+        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = ('http://localhost' + self.base_url + 'flavors/3')
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {
+                    'hello': 'world',
+                    'open': 'stack',
+                },
+                'availability_zone': zone_name,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank(self.base_url + 'servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        admin_context = context.get_admin_context()
+        db.service_create(admin_context, {'host': 'host1_zones',
+                                          'binary': "nova-compute",
+                                          'topic': 'compute',
+                                          'report_count': 0})
+        agg = db.aggregate_create(admin_context,
+                {'name': 'agg1'}, {'availability_zone': 'nova'})
+        db.aggregate_host_add(admin_context, agg['id'], 'host1_zones')
+        return req, body
+
+    def test_create_instance_with_availability_zone(self):
+        zone_name = 'nova'
+        req, body = self._create_instance_with_availability_zone(zone_name)
+        res = self.controller.create(req, body=body).obj
+        server = res['server']
+        self.assertEqual(fakes.FAKE_UUID, server['id'])
+
+    def test_create_instance_with_invalid_availability_zone_too_long(self):
+        zone_name = 'a' * 256
+        req, body = self._create_instance_with_availability_zone(zone_name)
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create, req, body=body)
+
+    def test_create_instance_with_invalid_availability_zone_too_short(self):
+        zone_name = ''
+        req, body = self._create_instance_with_availability_zone(zone_name)
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create, req, body=body)
+
+    def test_create_instance_with_invalid_availability_zone_not_str(self):
+        zone_name = 111
+        req, body = self._create_instance_with_availability_zone(zone_name)
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create, req, body=body)
+
+    def test_create_instance_without_availability_zone(self):
+        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+        flavor_ref = ('http://localhost' + self.base_url + 'flavors/3')
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': image_href,
+                'flavorRef': flavor_ref,
+                'metadata': {
+                    'hello': 'world',
+                    'open': 'stack',
+                },
+            },
+        }
+
+        req = fakes.HTTPRequest.blank(self.base_url + 'servers')
+        req.method = 'POST'
+        req.body = jsonutils.dumps(body)
+        req.headers["content-type"] = "application/json"
+        res = self.controller.create(req, body=body).obj
+        server = res['server']
+        self.assertEqual(fakes.FAKE_UUID, server['id'])
+
+
+class ServersControllerCreateTestV2(ServersControllerCreateTestV21):
+    base_url = '/v2/fake/'
+
+    def _set_up_controller(self):
+        ext_mgr = extensions.ExtensionManager()
+        ext_mgr.extensions = {'os-availability-zone': 'fake'}
+        self.controller = servers_v2.Controller(ext_mgr)
+        ext_mgr_no_az = extensions.ExtensionManager()
+        ext_mgr_no_az.extensions = {}
+        self.no_availability_zone_controller = servers_v2.Controller(
+                                                   ext_mgr_no_az)
+
+    def _verify_no_availability_zone(self, **kwargs):
+        self.assertIsNone(kwargs['availability_zone'])
+
+    def test_create_instance_with_invalid_availability_zone_too_long(self):
+        # NOTE: v2.0 API does not check this bad request case.
+        # So we skip this test for v2.0 API.
+        pass
+
+    def test_create_instance_with_invalid_availability_zone_too_short(self):
+        # NOTE: v2.0 API does not check this bad request case.
+        # So we skip this test for v2.0 API.
+        pass
+
+    def test_create_instance_with_invalid_availability_zone_not_str(self):
+        # NOTE: v2.0 API does not check this bad request case.
+        # So we skip this test for v2.0 API.
+        pass
 
 
 class AvailabilityZoneSerializerTest(test.NoDBTestCase):
@@ -249,7 +477,7 @@ class AvailabilityZoneSerializerTest(test.NoDBTestCase):
                     self.assertEqual(str(svc['updated_at']),
                                      svc_child[0].get('updated_at'))
 
-        serializer = availability_zone.AvailabilityZonesTemplate()
+        serializer = az_v2.AvailabilityZonesTemplate()
         raw_availability_zones = \
             [{'zoneName': 'zone-1',
               'zoneState': {'available': True},

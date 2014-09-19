@@ -205,6 +205,7 @@ class LibvirtBlockInfoTest(test.TestCase):
         # A simple disk mapping setup, but for lxc
 
         user_context = context.RequestContext(self.user_id, self.project_id)
+        self.test_instance['ephemeral_gb'] = 0
         instance_ref = db.instance_create(user_context, self.test_instance)
 
         mapping = blockinfo.get_disk_mapping("lxc", instance_ref,
@@ -261,6 +262,9 @@ class LibvirtBlockInfoTest(test.TestCase):
 
     def test_get_disk_mapping_simple_configdrive(self):
         # A simple disk mapping setup, but with configdrive added
+        # It's necessary to check if the architecture is power, because
+        # power doesn't have support to ide, and so libvirt translate
+        # all ide calls to scsi
 
         self.flags(force_config_drive=True)
 
@@ -270,18 +274,32 @@ class LibvirtBlockInfoTest(test.TestCase):
         mapping = blockinfo.get_disk_mapping("kvm", instance_ref,
                                              "virtio", "ide")
 
+        # The last device is selected for this. on x86 is the last ide
+        # device (hdd). Since power only support scsi, the last device
+        # is sdz
+
+        bus_ppc = ("scsi", "sdz")
+        expect_bus = {"ppc": bus_ppc, "ppc64": bus_ppc}
+
+        bus, dev = expect_bus.get(blockinfo.libvirt_utils.get_arch({}),
+                                  ("ide", "hdd"))
+
         expect = {
             'disk': {'bus': 'virtio', 'dev': 'vda',
                      'type': 'disk', 'boot_index': '1'},
             'disk.local': {'bus': 'virtio', 'dev': 'vdb', 'type': 'disk'},
-            'disk.config': {'bus': 'ide', 'dev': 'hdd', 'type': 'cdrom'},
+            'disk.config': {'bus': bus, 'dev': dev, 'type': 'cdrom'},
             'root': {'bus': 'virtio', 'dev': 'vda',
                      'type': 'disk', 'boot_index': '1'}
             }
+
         self.assertEqual(expect, mapping)
 
     def test_get_disk_mapping_cdrom_configdrive(self):
         # A simple disk mapping setup, with configdrive added as cdrom
+        # It's necessary to check if the architecture is power, because
+        # power doesn't have support to ide, and so libvirt translate
+        # all ide calls to scsi
 
         self.flags(force_config_drive=True)
         self.flags(config_drive_format='iso9660')
@@ -292,14 +310,21 @@ class LibvirtBlockInfoTest(test.TestCase):
         mapping = blockinfo.get_disk_mapping("kvm", instance_ref,
                                              "virtio", "ide")
 
+        bus_ppc = ("scsi", "sdz")
+        expect_bus = {"ppc": bus_ppc, "ppc64": bus_ppc}
+
+        bus, dev = expect_bus.get(blockinfo.libvirt_utils.get_arch({}),
+                                  ("ide", "hdd"))
+
         expect = {
             'disk': {'bus': 'virtio', 'dev': 'vda',
                      'type': 'disk', 'boot_index': '1'},
             'disk.local': {'bus': 'virtio', 'dev': 'vdb', 'type': 'disk'},
-            'disk.config': {'bus': 'ide', 'dev': 'hdd', 'type': 'cdrom'},
+            'disk.config': {'bus': bus, 'dev': dev, 'type': 'cdrom'},
             'root': {'bus': 'virtio', 'dev': 'vda',
                      'type': 'disk', 'boot_index': '1'}
             }
+
         self.assertEqual(expect, mapping)
 
     def test_get_disk_mapping_disk_configdrive(self):
@@ -868,6 +893,15 @@ class DefaultDeviceNamesTestCase(test.TestCase):
                  'disk_bus': 'virtio',
                  'destination_type': 'volume',
                  'snapshot_id': 'fake-snapshot-id-1',
+                 'boot_index': -1})),
+            objects.BlockDeviceMapping(self.context,
+                **fake_block_device.FakeDbBlockDeviceDict(
+                {'id': 5, 'instance_uuid': 'fake-instance',
+                 'device_name': '/dev/vde',
+                 'source_type': 'blank',
+                 'device_type': 'disk',
+                 'disk_bus': 'virtio',
+                 'destination_type': 'volume',
                  'boot_index': -1}))]
 
     def tearDown(self):
@@ -890,11 +924,14 @@ class DefaultDeviceNamesTestCase(test.TestCase):
                 original_bdm, self.block_device_mapping):
             self.assertEqual(original.device_name, defaulted.device_name)
 
-        # Asser it defaults the missing one as expected
+        # Assert it defaults the missing one as expected
         self.block_device_mapping[1]['device_name'] = None
+        self.block_device_mapping[2]['device_name'] = None
         self._test_default_device_names([], [], self.block_device_mapping)
         self.assertEqual('/dev/vdd',
                          self.block_device_mapping[1]['device_name'])
+        self.assertEqual('/dev/vde',
+                         self.block_device_mapping[2]['device_name'])
 
     def test_with_ephemerals(self):
         # Test ephemeral gets assigned
@@ -904,10 +941,13 @@ class DefaultDeviceNamesTestCase(test.TestCase):
         self.assertEqual('/dev/vdb', self.ephemerals[0]['device_name'])
 
         self.block_device_mapping[1]['device_name'] = None
+        self.block_device_mapping[2]['device_name'] = None
         self._test_default_device_names(self.ephemerals, [],
                                         self.block_device_mapping)
         self.assertEqual('/dev/vdd',
                          self.block_device_mapping[1]['device_name'])
+        self.assertEqual('/dev/vde',
+                         self.block_device_mapping[2]['device_name'])
 
     def test_with_swap(self):
         # Test swap only
@@ -918,11 +958,14 @@ class DefaultDeviceNamesTestCase(test.TestCase):
         # Test swap and block_device_mapping
         self.swap[0]['device_name'] = None
         self.block_device_mapping[1]['device_name'] = None
+        self.block_device_mapping[2]['device_name'] = None
         self._test_default_device_names([], self.swap,
                                         self.block_device_mapping)
         self.assertEqual('/dev/vdc', self.swap[0]['device_name'])
         self.assertEqual('/dev/vdd',
                          self.block_device_mapping[1]['device_name'])
+        self.assertEqual('/dev/vde',
+                         self.block_device_mapping[2]['device_name'])
 
     def test_all_together(self):
         # Test swap missing
@@ -943,9 +986,12 @@ class DefaultDeviceNamesTestCase(test.TestCase):
         self.swap[0]['device_name'] = None
         self.ephemerals[0]['device_name'] = None
         self.block_device_mapping[1]['device_name'] = None
+        self.block_device_mapping[2]['device_name'] = None
         self._test_default_device_names(self.ephemerals,
                                         self.swap, self.block_device_mapping)
         self.assertEqual('/dev/vdb', self.ephemerals[0]['device_name'])
         self.assertEqual('/dev/vdc', self.swap[0]['device_name'])
         self.assertEqual('/dev/vdd',
                          self.block_device_mapping[1]['device_name'])
+        self.assertEqual('/dev/vde',
+                         self.block_device_mapping[2]['device_name'])

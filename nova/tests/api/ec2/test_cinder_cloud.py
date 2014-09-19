@@ -34,6 +34,7 @@ from nova import objects
 from nova import test
 from nova.tests import cast_as_call
 from nova.tests import fake_network
+from nova.tests import fake_notifier
 from nova.tests import fake_utils
 from nova.tests.image import fake
 from nova.tests import matchers
@@ -93,7 +94,7 @@ class CinderCloudTestCase(test.TestCase):
         self.flags(compute_driver='nova.virt.fake.FakeDriver',
                    volume_api_class='nova.tests.fake_volume.API')
 
-        def fake_show(meh, context, id):
+        def fake_show(meh, context, id, **kwargs):
             return {'id': id,
                     'name': 'fake_name',
                     'container_format': 'ami',
@@ -125,6 +126,12 @@ class CinderCloudTestCase(test.TestCase):
 
         # Short-circuit the conductor service
         self.flags(use_local=True, group='conductor')
+
+        # Stub out the notification service so we use the no-op serializer
+        # and avoid lazy-load traces with the wrap_exception decorator in
+        # the compute service.
+        fake_notifier.stub_notifier(self.stubs)
+        self.addCleanup(fake_notifier.reset)
 
         # set up services
         self.conductor = self.start_service('conductor',
@@ -679,7 +686,7 @@ class CinderCloudTestCase(test.TestCase):
                 'mappings': mappings2,
                 'block_device_mapping': block_device_mapping2}}
 
-        def fake_show(meh, context, image_id):
+        def fake_show(meh, context, image_id, **kwargs):
             _images = [copy.deepcopy(image1), copy.deepcopy(image2)]
             for i in _images:
                 if str(i['id']) == str(image_id):
@@ -852,7 +859,7 @@ class CinderCloudTestCase(test.TestCase):
             self.assertEqual(vol['status'], "in-use")
             self.assertEqual(vol['attach_status'], "attached")
 
-        #Here we puke...
+        # Here we puke...
         self.cloud.terminate_instances(self.context, [ec2_instance_id])
 
         admin_ctxt = context.get_admin_context(read_deleted="no")
@@ -990,7 +997,7 @@ class CinderCloudTestCase(test.TestCase):
 
             self._assert_volume_attached(vol, instance_uuid, mountpoint)
 
-        #Just make sure we found them
+        # Just make sure we found them
         self.assertTrue(vol1_id)
         self.assertTrue(vol2_id)
 

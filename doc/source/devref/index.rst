@@ -63,28 +63,12 @@ Other Resources
    gerrit
    jenkins
 
-API Reference
--------------
-.. toctree::
-   :maxdepth: 3
-
-   ../api/autoindex
-
 Module Reference
 ----------------
 .. toctree::
    :maxdepth: 3
 
    services
-   database
-   compute
-   network
-   api
-   scheduler
-   fakes
-   nova
-   objectstore
-   glance
 
 
 Indices and tables

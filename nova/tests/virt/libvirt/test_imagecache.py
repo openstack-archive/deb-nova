@@ -17,7 +17,6 @@
 import contextlib
 import cStringIO
 import hashlib
-import json
 import os
 import time
 
@@ -26,13 +25,14 @@ from oslo.config import cfg
 from nova import conductor
 from nova import db
 from nova.openstack.common import importutils
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import test
 from nova.tests import fake_instance
 from nova import utils
 from nova.virt.libvirt import imagecache
-from nova.virt.libvirt import utils as virtutils
+from nova.virt.libvirt import utils as libvirt_utils
 
 CONF = cfg.CONF
 CONF.import_opt('compute_manager', 'nova.service')
@@ -165,7 +165,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                                   'instance-00000002', 'instance-00000003'])
         self.stubs.Set(os.path, 'exists',
                        lambda x: x.find('instance-') != -1)
-        self.stubs.Set(virtutils, 'get_disk_backing_file',
+        self.stubs.Set(libvirt_utils, 'get_disk_backing_file',
                        lambda x: 'e97222e91fc4241f49a7f520d1dcf446751129b3_sm')
 
         found = os.path.join(CONF.instances_path,
@@ -187,7 +187,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                                   'instance-00000002', 'instance-00000003'])
         self.stubs.Set(os.path, 'exists',
                        lambda x: x.find('instance-') != -1)
-        self.stubs.Set(virtutils, 'get_disk_backing_file',
+        self.stubs.Set(libvirt_utils, 'get_disk_backing_file',
                        lambda x: ('e97222e91fc4241f49a7f520d1dcf446751129b3_'
                                   '10737418240'))
 
@@ -210,7 +210,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                        lambda x: ['_base', 'banana-42-hamster'])
         self.stubs.Set(os.path, 'exists',
                        lambda x: x.find('banana-42-hamster') != -1)
-        self.stubs.Set(virtutils, 'get_disk_backing_file',
+        self.stubs.Set(libvirt_utils, 'get_disk_backing_file',
                        lambda x: 'e97222e91fc4241f49a7f520d1dcf446751129b3_sm')
 
         found = os.path.join(CONF.instances_path,
@@ -235,7 +235,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         def fake_get_disk(disk_path):
             raise processutils.ProcessExecutionError()
 
-        self.stubs.Set(virtutils, 'get_disk_backing_file', fake_get_disk)
+        self.stubs.Set(libvirt_utils, 'get_disk_backing_file', fake_get_disk)
 
         image_cache_manager = imagecache.ImageCacheManager()
         image_cache_manager.unexplained_images = []
@@ -424,7 +424,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             self.assertEqual(image_cache_manager.corrupt_base_files, [])
 
     def test_handle_base_image_used(self):
-        self.stubs.Set(virtutils, 'chown', lambda x, y: None)
+        self.stubs.Set(libvirt_utils, 'chown', lambda x, y: None)
         img = '123'
 
         with self._make_base_file() as fname:
@@ -440,7 +440,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             self.assertEqual(image_cache_manager.corrupt_base_files, [])
 
     def test_handle_base_image_used_remotely(self):
-        self.stubs.Set(virtutils, 'chown', lambda x, y: None)
+        self.stubs.Set(libvirt_utils, 'chown', lambda x, y: None)
         img = '123'
 
         with self._make_base_file() as fname:
@@ -491,7 +491,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
     def test_handle_base_image_checksum_fails(self):
         self.flags(checksum_base_images=True, group='libvirt')
-        self.stubs.Set(virtutils, 'chown', lambda x, y: None)
+        self.stubs.Set(libvirt_utils, 'chown', lambda x, y: None)
 
         img = '123'
 
@@ -501,7 +501,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
             d = {'sha1': '21323454'}
             with open('%s.info' % fname, 'w') as f:
-                f.write(json.dumps(d))
+                f.write(jsonutils.dumps(d))
 
             image_cache_manager = imagecache.ImageCacheManager()
             image_cache_manager.unexplained_images = [fname]
@@ -569,7 +569,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         self.stubs.Set(os.path, 'exists', lambda x: exists(x))
 
-        self.stubs.Set(virtutils, 'chown', lambda x, y: None)
+        self.stubs.Set(libvirt_utils, 'chown', lambda x, y: None)
 
         # We need to stub utime as well
         self.stubs.Set(os, 'utime', lambda x, y: None)
@@ -609,21 +609,22 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         self.stubs.Set(os.path, 'isfile', lambda x: isfile(x))
 
         # Fake the database call which lists running instances
-        all_instances = [{'image_ref': '1',
-                          'host': CONF.host,
-                          'name': 'instance-1',
-                          'uuid': '123',
-                          'vm_state': '',
-                          'task_state': ''},
-                         {'image_ref': '1',
-                          'kernel_id': '21',
-                          'ramdisk_id': '22',
-                          'host': CONF.host,
-                          'name': 'instance-2',
-                          'uuid': '456',
-                          'vm_state': '',
-                          'task_state': ''}]
-
+        instances = [{'image_ref': '1',
+                      'host': CONF.host,
+                      'name': 'instance-1',
+                      'uuid': '123',
+                      'vm_state': '',
+                      'task_state': ''},
+                     {'image_ref': '1',
+                      'kernel_id': '21',
+                      'ramdisk_id': '22',
+                      'host': CONF.host,
+                      'name': 'instance-2',
+                      'uuid': '456',
+                      'vm_state': '',
+                      'task_state': ''}]
+        all_instances = [fake_instance.fake_instance_obj(None, **instance)
+                         for instance in instances]
         image_cache_manager = imagecache.ImageCacheManager()
 
         # Fake the utils call which finds the backing image
@@ -633,7 +634,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                 return fq_path('%s_5368709120' % hashed_1)
             self.fail('Unexpected backing file lookup: %s' % path)
 
-        self.stubs.Set(virtutils, 'get_disk_backing_file',
+        self.stubs.Set(libvirt_utils, 'get_disk_backing_file',
                        lambda x: get_disk_backing_file(x))
 
         # Fake out verifying checksums, as that is tested elsewhere
@@ -717,18 +718,23 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             os.mkdir(os.path.join(tmpdir, '_base'))
 
             # Fake the database call which lists running instances
-            all_instances = [{'image_ref': '1',
-                              'host': CONF.host,
-                              'name': 'instance-1',
-                              'uuid': '123',
-                              'vm_state': '',
-                              'task_state': ''},
-                             {'image_ref': '1',
-                              'host': CONF.host,
-                              'name': 'instance-2',
-                              'uuid': '456',
-                              'vm_state': '',
-                              'task_state': ''}]
+            instances = [{'image_ref': '1',
+                          'host': CONF.host,
+                          'name': 'instance-1',
+                          'uuid': '123',
+                          'vm_state': '',
+                          'task_state': ''},
+                         {'image_ref': '1',
+                          'host': CONF.host,
+                          'name': 'instance-2',
+                          'uuid': '456',
+                          'vm_state': '',
+                          'task_state': ''}]
+
+            all_instances = []
+            for instance in instances:
+                all_instances.append(fake_instance.fake_instance_obj(
+                    None, **instance))
 
             def touch(filename):
                 f = open(filename, 'w')

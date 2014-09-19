@@ -22,6 +22,8 @@ A fake VMware VI API implementation.
 import collections
 import pprint
 
+from oslo.vmware import exceptions as vexc
+
 from nova import exception
 from nova.i18n import _
 from nova.openstack.common import jsonutils
@@ -29,7 +31,7 @@ from nova.openstack.common import log as logging
 from nova.openstack.common import units
 from nova.openstack.common import uuidutils
 from nova.virt.vmwareapi import constants
-from nova.virt.vmwareapi import error_util
+from nova.virt.vmwareapi import ds_util
 
 _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
             'Network', 'HostSystem', 'HostNetworkSystem', 'Task', 'session',
@@ -38,6 +40,8 @@ _CLASSES = ['Datacenter', 'Datastore', 'ResourcePool', 'VirtualMachine',
 _FAKE_FILE_SIZE = 1024
 
 _db_content = {}
+_array_types = {}
+_vim_map = {}
 
 LOG = logging.getLogger(__name__)
 
@@ -48,7 +52,7 @@ def log_db_contents(msg=None):
               {'text': msg or "", 'content': pprint.pformat(_db_content)})
 
 
-def reset(vc=False):
+def reset():
     """Resets the db contents."""
     cleanup()
     create_network()
@@ -56,16 +60,13 @@ def reset(vc=False):
     create_host_storage_system()
     ds_ref1 = create_datastore('ds1', 1024, 500)
     create_host(ds_ref=ds_ref1)
-    if vc:
-        ds_ref2 = create_datastore('ds2', 1024, 500)
-        create_host(ds_ref=ds_ref2)
+    ds_ref2 = create_datastore('ds2', 1024, 500)
+    create_host(ds_ref=ds_ref2)
     create_datacenter('dc1', ds_ref1)
-    if vc:
-        create_datacenter('dc2', ds_ref2)
+    create_datacenter('dc2', ds_ref2)
     create_res_pool()
-    if vc:
-        create_cluster('test_cluster', ds_ref1)
-        create_cluster('test_cluster2', ds_ref2)
+    create_cluster('test_cluster', ds_ref1)
+    create_cluster('test_cluster2', ds_ref2)
 
 
 def cleanup():
@@ -109,6 +110,24 @@ def _convert_to_array_of_opt_val(optvals):
     array_of_optv = DataObject()
     array_of_optv.OptionValue = optvals
     return array_of_optv
+
+
+def _create_array_of_type(t):
+    """Returns an array to contain objects of type t."""
+    if t in _array_types:
+        return _array_types[t]()
+
+    array_type_name = 'ArrayOf%s' % t
+    array_type = type(array_type_name, (DataObject,), {})
+
+    def __init__(self):
+        super(array_type, self).__init__(array_type_name)
+        setattr(self, t, [])
+
+    setattr(array_type, '__init__', __init__)
+
+    _array_types[t] = array_type
+    return array_type()
 
 
 class FakeRetrieveResult(object):
@@ -279,7 +298,7 @@ class FileAlreadyExists(DataObject):
 
     def __init__(self):
         super(FileAlreadyExists, self).__init__()
-        self.__name__ = error_util.FILE_ALREADY_EXISTS
+        self.__name__ = vexc.FILE_ALREADY_EXISTS
 
 
 class FileNotFound(DataObject):
@@ -287,7 +306,7 @@ class FileNotFound(DataObject):
 
     def __init__(self):
         super(FileNotFound, self).__init__()
-        self.__name__ = error_util.FILE_NOT_FOUND
+        self.__name__ = vexc.FILE_NOT_FOUND
 
 
 class FileFault(DataObject):
@@ -295,7 +314,7 @@ class FileFault(DataObject):
 
     def __init__(self):
         super(FileFault, self).__init__()
-        self.__name__ = error_util.FILE_FAULT
+        self.__name__ = vexc.FILE_FAULT
 
 
 class CannotDeleteFile(DataObject):
@@ -303,7 +322,7 @@ class CannotDeleteFile(DataObject):
 
     def __init__(self):
         super(CannotDeleteFile, self).__init__()
-        self.__name__ = error_util.CANNOT_DELETE_FILE
+        self.__name__ = vexc.CANNOT_DELETE_FILE
 
 
 class FileLocked(DataObject):
@@ -311,7 +330,7 @@ class FileLocked(DataObject):
 
     def __init__(self):
         super(FileLocked, self).__init__()
-        self.__name__ = error_util.FILE_LOCKED
+        self.__name__ = vexc.FILE_LOCKED
 
 
 class VirtualDisk(DataObject):
@@ -397,7 +416,11 @@ class VirtualMachine(ManagedObject):
         self.set("summary.config.numCpu", kwargs.get("numCpu", 1))
         self.set("summary.config.memorySizeMB", kwargs.get("mem", 1))
         self.set("summary.config.instanceUuid", kwargs.get("instanceUuid"))
-        self.set("config.hardware.device", kwargs.get("virtual_device", None))
+
+        devices = _create_array_of_type('VirtualDevice')
+        devices.VirtualDevice = kwargs.get("virtual_device", [])
+        self.set("config.hardware.device", devices)
+
         exconfig_do = kwargs.get("extra_config", None)
         self.set("config.extraConfig",
                  _convert_to_array_of_opt_val(exconfig_do))
@@ -405,7 +428,7 @@ class VirtualMachine(ManagedObject):
             for optval in exconfig_do:
                 self.set('config.extraConfig["%s"]' % optval.key, optval)
         self.set('runtime.host', kwargs.get("runtime_host", None))
-        self.device = kwargs.get("virtual_device")
+        self.device = kwargs.get("virtual_device", [])
         # Sample of diagnostics data is below.
         config = [
             ('template', False),
@@ -499,8 +522,9 @@ class VirtualMachine(ManagedObject):
             controller = VirtualLsiLogicController()
             controller.key = controller_key
 
-            self.set("config.hardware.device", [disk, controller,
-                                                  self.device[0]])
+            devices = _create_array_of_type('VirtualDevice')
+            devices.VirtualDevice = [disk, controller, self.device[0]]
+            self.set("config.hardware.device", devices)
         except AttributeError:
             pass
 
@@ -639,13 +663,15 @@ class ClusterComputeResource(ManagedObject):
 class Datastore(ManagedObject):
     """Datastore class."""
 
-    def __init__(self, name="fake-ds", capacity=1024, free=500):
+    def __init__(self, name="fake-ds", capacity=1024, free=500,
+                 accessible=True, maintenance_mode="normal"):
         super(Datastore, self).__init__("ds")
         self.set("summary.type", "VMFS")
         self.set("summary.name", name)
         self.set("summary.capacity", capacity * units.Gi)
         self.set("summary.freeSpace", free * units.Gi)
-        self.set("summary.accessible", True)
+        self.set("summary.accessible", accessible)
+        self.set("summary.maintenanceMode", maintenance_mode)
         self.set("browser", "")
 
 
@@ -941,7 +967,7 @@ def _remove_file(file_path):
     # Check if the remove is for a single file object or for a folder
     if file_path.find(".vmdk") != -1:
         if file_path not in _db_content.get("files"):
-            raise error_util.FileNotFoundException(file_path)
+            raise vexc.FileNotFoundException(file_path)
         _db_content.get("files").remove(file_path)
     else:
         # Removes the files in the folder and the folder too from the db
@@ -975,11 +1001,11 @@ def fake_upload_image(context, image, instance, **kwargs):
     pass
 
 
-def fake_get_vmdk_size_and_properties(context, image_id, instance):
-    """Fakes the file size and properties fetch for the image file."""
-    props = {"vmware_ostype": constants.DEFAULT_OS_TYPE,
-             "vmware_adaptertype": constants.DEFAULT_ADAPTER_TYPE}
-    return _FAKE_FILE_SIZE, props
+def fake_fetch_image(context, instance, host, dc_name, ds_name, file_path,
+                     cookies=None):
+    """Fakes the fetch of an image."""
+    ds_file_path = "[" + ds_name + "] " + file_path
+    _add_file(ds_file_path)
 
 
 def _get_vm_mdo(vm_ref):
@@ -1011,6 +1037,21 @@ class FakeFactory(object):
     def create(self, obj_name):
         """Creates a namespace object."""
         return DataObject(obj_name)
+
+
+class FakeService(DataObject):
+    """Fake service class."""
+
+    def Logout(self, session_manager):
+        pass
+
+
+class FakeClient(DataObject):
+    """Fake client class."""
+
+    def __init__(self):
+        """Creates a namespace object."""
+        self.service = FakeService()
 
 
 class FakeSession(object):
@@ -1047,6 +1088,13 @@ class FakeObjectRetrievalSession(FakeSession):
         return self.ret[self.ind - 1]
 
 
+def get_fake_vim_object(vmware_api_session):
+    key = vmware_api_session.__repr__()
+    if key not in _vim_map:
+        _vim_map[key] = FakeVim()
+    return _vim_map[key]
+
+
 class FakeVim(object):
     """Fake VIM Class."""
 
@@ -1055,7 +1103,7 @@ class FakeVim(object):
         contents and the cookies for the session.
         """
         self._session = None
-        self.client = DataObject()
+        self.client = FakeClient()
         self.client.factory = FakeFactory()
 
         transport = DataObject()
@@ -1080,7 +1128,8 @@ class FakeVim(object):
 
         self._service_content = service_content
 
-    def get_service_content(self):
+    @property
+    def service_content(self):
         return self._service_content
 
     def __repr__(self):
@@ -1110,8 +1159,8 @@ class FakeVim(object):
         if (self._session is None or self._session not in
                  _db_content['session']):
             LOG.debug("Session is faulty")
-            raise error_util.VimFaultException(
-                               [error_util.NOT_AUTHENTICATED],
+            raise vexc.VimFaultException(
+                               [vexc.NOT_AUTHENTICATED],
                                _("Session Invalid"))
 
     def _session_is_active(self, *args, **kwargs):
@@ -1125,7 +1174,20 @@ class FakeVim(object):
         """Creates and registers a VM object with the Host System."""
         config_spec = kwargs.get("config")
         pool = kwargs.get('pool')
-        ds = _db_content["Datastore"].keys()[0]
+
+        vm_path = ds_util.DatastorePath.parse(config_spec.files.vmPathName)
+        for key, value in _db_content["Datastore"].iteritems():
+            if value.get('summary.name') == vm_path.datastore:
+                ds = key
+                break
+        else:
+            ds = create_datastore(vm_path.datastore, 1024, 500)
+
+        devices = []
+        for device_change in config_spec.deviceChange:
+            if device_change.operation == 'add':
+                devices.append(device_change.device)
+
         host = _db_content["HostSystem"].keys()[0]
         vm_dict = {"name": config_spec.name,
                   "ds": [ds],
@@ -1135,7 +1197,7 @@ class FakeVim(object):
                   "numCpu": config_spec.numCPUs,
                   "mem": config_spec.memoryMB,
                   "extra_config": config_spec.extraConfig,
-                  "virtual_device": config_spec.deviceChange,
+                  "virtual_device": devices,
                   "instanceUuid": config_spec.instanceUuid}
         virtual_machine = VirtualMachine(**vm_dict)
         _create_object("VirtualMachine", virtual_machine)
@@ -1216,7 +1278,8 @@ class FakeVim(object):
          "numCpu": source_vm_mdo.get("summary.config.numCpu"),
          "mem": source_vm_mdo.get("summary.config.memorySizeMB"),
          "extra_config": source_vm_mdo.get("config.extraConfig").OptionValue,
-         "virtual_device": source_vm_mdo.get("config.hardware.device"),
+         "virtual_device":
+             source_vm_mdo.get("config.hardware.device").VirtualDevice,
          "instanceUuid": source_vm_mdo.get("summary.config.instanceUuid")}
 
         if clone_spec.config is not None:
@@ -1314,7 +1377,7 @@ class FakeVim(object):
         if _db_content.get("files", None) is None:
             raise exception.NoFilesFound()
         if get_file(ds_path):
-            raise error_util.FileAlreadyExistsException()
+            raise vexc.FileAlreadyExistsException()
         _db_content["files"].append('%s/' % ds_path)
 
     def _set_power_state(self, method, vm_ref, pwr_state="poweredOn"):
@@ -1464,8 +1527,6 @@ class FakeVim(object):
         elif attr_name == "FindAllByUuid":
             return lambda *args, **kwargs: self._find_all_by_uuid(attr_name,
                                                 *args, **kwargs)
-        elif attr_name == "Rename_Task":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)
         elif attr_name == "SearchDatastore_Task":
             return lambda *args, **kwargs: self._search_ds(attr_name,
                                                 *args, **kwargs)
@@ -1484,16 +1545,12 @@ class FakeVim(object):
         elif attr_name == "CancelRetrievePropertiesEx":
             return lambda *args, **kwargs: self._retrieve_properties_cancel(
                                                 attr_name, *args, **kwargs)
-        elif attr_name == "AcquireCloneTicket":
-            return lambda *args, **kwargs: self._just_return()
         elif attr_name == "AddPortGroup":
             return lambda *args, **kwargs: self._add_port_group(attr_name,
                                                 *args, **kwargs)
         elif attr_name == "RebootHost_Task":
             return lambda *args, **kwargs: self._just_return_task(attr_name)
         elif attr_name == "ShutdownHost_Task":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)
-        elif attr_name == "PowerDownHostToStandBy_Task":
             return lambda *args, **kwargs: self._just_return_task(attr_name)
         elif attr_name == "PowerUpHostFromStandBy_Task":
             return lambda *args, **kwargs: self._just_return_task(attr_name)

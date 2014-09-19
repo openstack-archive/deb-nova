@@ -22,18 +22,22 @@ import netaddr
 import six
 
 from nova.compute import manager
+from nova.console import type as ctype
 from nova import exception
 from nova import objects
 from nova.openstack.common import importutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
+from nova.openstack.common import timeutils
 from nova import test
+from nova.tests import fake_block_device
 from nova.tests.image import fake as fake_image
 from nova.tests import utils as test_utils
 from nova.tests.virt.libvirt import fake_libvirt_utils
-from nova.tests.virt.libvirt import test_driver
+from nova.virt import block_device as driver_block_device
 from nova.virt import event as virtevent
 from nova.virt import fake
+from nova.virt import libvirt
 from nova.virt.libvirt import imagebackend
 
 LOG = logging.getLogger(__name__)
@@ -262,6 +266,12 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                                  lambda *args, **kwargs: None)
 
     @catch_notimplementederror
+    def test_post_interrupted_snapshot_cleanup(self):
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.post_interrupted_snapshot_cleanup(self.ctxt,
+                instance_ref)
+
+    @catch_notimplementederror
     def test_reboot(self):
         reboot_type = "SOFT"
         instance_ref, network_info = self._get_running_instance()
@@ -438,7 +448,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
             self.connection.swap_volume({'driver_volume_type': 'fake'},
                                         {'driver_volume_type': 'fake'},
                                         instance_ref,
-                                        '/dev/sda'))
+                                        '/dev/sda', 2))
 
     @catch_notimplementederror
     def test_attach_detach_different_power_states(self):
@@ -455,24 +465,29 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
             'root_device_name': None,
             'swap': None,
             'ephemerals': [],
-            'block_device_mapping': [
-                test_driver.mocked_bdm(1, {
-                        'instance_uuid': instance_ref['uuid'],
-                        'connection_info': {'driver_volume_type': 'fake'},
-                        'mount_device': '/dev/sda',
+            'block_device_mapping': driver_block_device.convert_volumes([
+                fake_block_device.FakeDbBlockDeviceDict(
+                       {'id': 1, 'instance_uuid': instance_ref['uuid'],
+                        'device_name': '/dev/sda',
+                        'source_type': 'volume',
+                        'destination_type': 'volume',
                         'delete_on_termination': False,
-                        'virtual_name': None,
                         'snapshot_id': None,
                         'volume_id': 'abcdedf',
                         'volume_size': None,
                         'no_device': None
                         }),
-                ]
+                ])
         }
-        self.connection.power_on(self.ctxt, instance_ref, network_info, bdm)
-        self.connection.detach_volume(connection_info,
-                                      instance_ref,
-                                      '/dev/sda')
+        bdm['block_device_mapping'][0]['connection_info'] = (
+            {'driver_volume_type': 'fake'})
+        with mock.patch.object(
+                driver_block_device.DriverVolumeBlockDevice, 'save'):
+            self.connection.power_on(
+                    self.ctxt, instance_ref, network_info, bdm)
+            self.connection.detach_volume(connection_info,
+                                          instance_ref,
+                                          '/dev/sda')
 
     @catch_notimplementederror
     def test_get_info(self):
@@ -498,6 +513,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_get_instance_diagnostics(self):
         instance_ref, network_info = self._get_running_instance(obj=True)
+        instance_ref['launched_at'] = timeutils.utcnow()
         self.connection.get_instance_diagnostics(instance_ref)
 
     @catch_notimplementederror
@@ -524,27 +540,20 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     def test_get_vnc_console(self):
         instance, network_info = self._get_running_instance(obj=True)
         vnc_console = self.connection.get_vnc_console(self.ctxt, instance)
-        self.assertIn('internal_access_path', vnc_console)
-        self.assertIn('host', vnc_console)
-        self.assertIn('port', vnc_console)
+        self.assertIsInstance(vnc_console, ctype.ConsoleVNC)
 
     @catch_notimplementederror
     def test_get_spice_console(self):
         instance_ref, network_info = self._get_running_instance()
         spice_console = self.connection.get_spice_console(self.ctxt,
-                instance_ref)
-        self.assertIn('internal_access_path', spice_console)
-        self.assertIn('host', spice_console)
-        self.assertIn('port', spice_console)
-        self.assertIn('tlsPort', spice_console)
+                                                          instance_ref)
+        self.assertIsInstance(spice_console, ctype.ConsoleSpice)
 
     @catch_notimplementederror
     def test_get_rdp_console(self):
         instance_ref, network_info = self._get_running_instance()
         rdp_console = self.connection.get_rdp_console(self.ctxt, instance_ref)
-        self.assertIn('internal_access_path', rdp_console)
-        self.assertIn('host', rdp_console)
-        self.assertIn('port', rdp_console)
+        self.assertIsInstance(rdp_console, ctype.ConsoleRDP)
 
     @catch_notimplementederror
     def test_get_console_pool_info(self):
@@ -829,3 +838,21 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
             self.connection._set_host_enabled(False, 'ERROR!')
             self.assertTrue(service_mock.disabled)
             self.assertEqual(service_mock.disabled_reason, 'Manually disabled')
+
+    @catch_notimplementederror
+    @mock.patch.object(libvirt.driver.LibvirtDriver, '_unplug_vifs')
+    def test_unplug_vifs_with_destroy_vifs_false(self, unplug_vifs_mock):
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.cleanup(self.ctxt, instance_ref, network_info,
+                                destroy_vifs=False)
+        self.assertEqual(unplug_vifs_mock.call_count, 0)
+
+    @catch_notimplementederror
+    @mock.patch.object(libvirt.driver.LibvirtDriver, '_unplug_vifs')
+    def test_unplug_vifs_with_destroy_vifs_true(self, unplug_vifs_mock):
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.cleanup(self.ctxt, instance_ref, network_info,
+                                destroy_vifs=True)
+        self.assertEqual(unplug_vifs_mock.call_count, 1)
+        unplug_vifs_mock.assert_called_once_with(instance_ref,
+                                            network_info, True)

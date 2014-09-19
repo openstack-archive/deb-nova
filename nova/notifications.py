@@ -21,6 +21,7 @@ the system.
 import datetime
 
 from oslo.config import cfg
+import six
 
 from nova.compute import flavors
 import nova.context
@@ -97,7 +98,8 @@ def send_api_fault(url, status, exception):
     if not CONF.notify_api_faults:
         return
 
-    payload = {'url': url, 'exception': str(exception), 'status': status}
+    payload = {'url': url, 'exception': six.text_type(exception),
+               'status': status}
 
     rpc.get_notifier('api').error(None, 'api.fault', payload)
 
@@ -319,10 +321,15 @@ def info_from_instance(context, instance_ref, network_info,
     """Get detailed instance information for an instance which is common to all
     notifications.
 
-    :param network_info: network_info provided if not None
-    :param system_metadata: system_metadata DB entries for the instance,
-    if not None.  *NOTE*: Currently unused here in trunk, but needed for
-    potential custom modifications.
+    :param:network_info: network_info provided if not None
+    :param:system_metadata: system_metadata DB entries for the instance,
+    if not None
+
+    .. note::
+
+        Currently unused here in trunk, but needed for potential custom
+        modifications.
+
     """
 
     def null_safe_str(s):

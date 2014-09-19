@@ -58,6 +58,10 @@ class PathUtils(object):
         instance_path = self.get_instance_dir(instance_name)
         return os.path.join(instance_path, 'root.vhd')
 
+    def lookup_configdrive_path(self, instance_name):
+        instance_path = self.get_instance_dir(instance_name)
+        return os.path.join(instance_path, 'configdrive.iso')
+
     def lookup_ephemeral_vhd_path(self, instance_name):
         instance_path = self.get_instance_dir(instance_name)
         if instance_path:
@@ -81,3 +85,6 @@ class PathUtils(object):
 
     def vhd_exists(self, path):
         return False
+
+    def get_vm_console_log_paths(self, vm_name, remote_server=None):
+        return 'fake_vm_log_path'

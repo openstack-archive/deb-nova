@@ -12,6 +12,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import textwrap
+
+import mock
+import pep8
+
 from nova.hacking import checks
 from nova import test
 
@@ -188,3 +193,147 @@ class HackingTestCase(test.NoDBTestCase):
 
         self.assertEqual(0, len(list(checks.no_mutable_default_args(
             "defined, undefined = [], {}"))))
+
+    def test_check_explicit_underscore_import(self):
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "LOG.info(_('My info message'))",
+            "cinder/tests/other_files.py"))), 1)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "msg = _('My message')",
+            "cinder/tests/other_files.py"))), 1)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "from cinder.i18n import _",
+            "cinder/tests/other_files.py"))), 0)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "LOG.info(_('My info message'))",
+            "cinder/tests/other_files.py"))), 0)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "msg = _('My message')",
+            "cinder/tests/other_files.py"))), 0)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "from cinder.i18n import _, _LW",
+            "cinder/tests/other_files2.py"))), 0)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "msg = _('My message')",
+            "cinder/tests/other_files2.py"))), 0)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "_ = translations.ugettext",
+            "cinder/tests/other_files3.py"))), 0)
+        self.assertEqual(len(list(checks.check_explicit_underscore_import(
+            "msg = _('My message')",
+            "cinder/tests/other_files3.py"))), 0)
+
+    def test_use_jsonutils(self):
+        def __get_msg(fun):
+            msg = ("N324: jsonutils.%(fun)s must be used instead of "
+                   "json.%(fun)s" % {'fun': fun})
+            return [(0, msg)]
+
+        for method in ('dump', 'dumps', 'load', 'loads'):
+            self.assertEqual(
+                __get_msg(method),
+                list(checks.use_jsonutils("json.%s(" % method,
+                                     "./nova/virt/xenapi/driver.py")))
+            self.assertEqual(0,
+                len(list(checks.use_jsonutils("json.%s(" % method,
+                                     "./plugins/xenserver/script.py"))))
+            self.assertEqual(0,
+                len(list(checks.use_jsonutils("jsonx.%s(" % method,
+                                     "./nova/virt/xenapi/driver.py"))))
+        self.assertEqual(0,
+            len(list(checks.use_jsonutils("json.dumb",
+                                 "./nova/virt/xenapi/driver.py"))))
+
+    # We are patching pep8 so that only the check under test is actually
+    # installed.
+    @mock.patch('pep8._checks',
+                {'physical_line': {}, 'logical_line': {}, 'tree': {}})
+    def _run_check(self, code, checker):
+        pep8.register_check(checker)
+
+        lines = textwrap.dedent(code).strip().splitlines(True)
+
+        checker = pep8.Checker(lines=lines)
+        checker.check_all()
+        checker.report._deferred_print.sort()
+        return checker.report._deferred_print
+
+    def _assert_has_errors(self, code, checker, expected_errors=None):
+        actual_errors = [e[:3] for e in self._run_check(code, checker)]
+        self.assertEqual(expected_errors or [], actual_errors)
+
+    def test_str_exception(self):
+
+        checker = checks.CheckForStrExc
+        code = """
+               def f(a, b):
+                   try:
+                       p = str(a) + str(b)
+                   except ValueError as e:
+                       p = str(e)
+                   return p
+               """
+        errors = [(5, 16, 'N325')]
+        self._assert_has_errors(code, checker, expected_errors=errors)
+
+        code = """
+               def f(a, b):
+                   try:
+                       p = str(a) + str(b)
+                   except ValueError as e:
+                       p = unicode(e)
+                   return p
+               """
+        errors = []
+        self._assert_has_errors(code, checker, expected_errors=errors)
+
+        code = """
+               def f(a, b):
+                   try:
+                       p = str(a) + str(b)
+                   except ValueError as e:
+                       try:
+                           p  = unicode(a) + unicode(b)
+                       except ValueError as ve:
+                           p = str(e) + str(ve)
+                       p = unicode(e)
+                   return p
+               """
+        errors = [(8, 20, 'N325'), (8, 29, 'N325')]
+        self._assert_has_errors(code, checker, expected_errors=errors)
+
+    def test_trans_add(self):
+
+        checker = checks.CheckForTransAdd
+        code = """
+               def fake_tran(msg):
+                   return msg
+
+
+               _ = fake_tran
+               _LI = _
+               _LW = _
+               _LE = _
+               _LC = _
+
+
+               def f(a, b):
+                   msg = _('test') + 'add me'
+                   msg = _LI('test') + 'add me'
+                   msg = _LW('test') + 'add me'
+                   msg = _LE('test') + 'add me'
+                   msg = _LC('test') + 'add me'
+                   msg = 'add to me' + _('test')
+                   return msg
+               """
+        errors = [(13, 10, 'N326'), (14, 10, 'N326'), (15, 10, 'N326'),
+                  (16, 10, 'N326'), (17, 10, 'N326'), (18, 24, 'N326')]
+        self._assert_has_errors(code, checker, expected_errors=errors)
+
+        code = """
+               def f(a, b):
+                   msg = 'test' + 'add me'
+                   return msg
+               """
+        errors = []
+        self._assert_has_errors(code, checker, expected_errors=errors)

@@ -21,6 +21,7 @@
 import errno
 import os
 import platform
+import re
 
 from lxml import etree
 from oslo.config import cfg
@@ -32,6 +33,7 @@ from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova import utils
 from nova.virt import images
+from nova.virt.libvirt import config as vconfig
 from nova.virt import volumeutils
 
 libvirt_opts = [
@@ -203,52 +205,6 @@ def create_cow_image(backing_file, path, size=None):
     execute(*cmd)
 
 
-def import_rbd_image(*args):
-    execute('rbd', 'import', *args)
-
-
-def _run_rbd(*args, **kwargs):
-    total = list(args)
-
-    if CONF.libvirt.rbd_user:
-        total.extend(['--id', str(CONF.libvirt.rbd_user)])
-    if CONF.libvirt.images_rbd_ceph_conf:
-        total.extend(['--conf', str(CONF.libvirt.images_rbd_ceph_conf)])
-
-    return utils.execute(*total, **kwargs)
-
-
-def list_rbd_volumes(pool):
-    """List volumes names for given ceph pool.
-
-    :param pool: ceph pool name
-    """
-    try:
-        out, err = _run_rbd('rbd', '-p', pool, 'ls')
-    except processutils.ProcessExecutionError:
-        # No problem when no volume in rbd pool
-        return []
-
-    return [line.strip() for line in out.splitlines()]
-
-
-def remove_rbd_volumes(pool, *names):
-    """Remove one or more rbd volume."""
-    for name in names:
-        # NOTE(nic): the rbd command supports two methods for
-        # specifying a pool name: the "-p" flag, and using the volume
-        # name notation "pool_name/volume_name"
-        # The latter method supercedes the former, so to guard
-        # against slashes in the volume name confusing things, always
-        # use the path notation
-        rbd_remove = ('rbd', 'rm', os.path.join(pool, name))
-        try:
-            _run_rbd(*rbd_remove, attempts=3, run_as_root=True)
-        except processutils.ProcessExecutionError:
-            LOG.warn(_LW("rbd remove %(name)s in pool %(pool)s failed"),
-                     {'name': name, 'pool': pool})
-
-
 def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
     """Pick the libvirt primary backend driver name
 
@@ -359,6 +315,27 @@ def chown(path, owner):
     :param owner: Desired new owner (given as uid or username)
     """
     execute('chown', owner, path, run_as_root=True)
+
+
+def _id_map_to_config(id_map):
+    return "%s:%s:%s" % (id_map.start, id_map.target, id_map.count)
+
+
+def chown_for_id_maps(path, id_maps):
+    """Change ownership of file or directory for an id mapped
+    environment
+
+    :param path: File or directory whose ownership to change
+    :param id_maps: List of type LibvirtConfigGuestIDMap
+    """
+    uid_maps_str = ','.join([_id_map_to_config(id_map) for id_map in id_maps if
+                             isinstance(id_map,
+                                        vconfig.LibvirtConfigGuestUIDMap)])
+    gid_maps_str = ','.join([_id_map_to_config(id_map) for id_map in id_maps if
+                             isinstance(id_map,
+                                        vconfig.LibvirtConfigGuestGIDMap)])
+    execute('nova-idmapshift', '-i', '-u', uid_maps_str,
+            '-g', gid_maps_str, path, run_as_root=True)
 
 
 def extract_snapshot(disk_path, source_fmt, out_path, dest_fmt):
@@ -531,7 +508,11 @@ def is_mounted(mount_path, source=None):
     except processutils.ProcessExecutionError as exc:
         return False
     except OSError as exc:
-        #info since it's not required to have this tool.
+        # info since it's not required to have this tool.
         if exc.errno == errno.ENOENT:
             LOG.info(_LI("findmnt tool is not installed"))
         return False
+
+
+def is_valid_hostname(hostname):
+    return re.match(r"^[\w\-\.:]+$", hostname)

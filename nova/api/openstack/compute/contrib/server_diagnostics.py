@@ -21,6 +21,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
 from nova import exception
+from nova.i18n import _
 
 
 authorize = extensions.extension_authorizer('compute', 'server_diagnostics')
@@ -37,21 +38,27 @@ class ServerDiagnosticsTemplate(xmlutil.TemplateBuilder):
 
 
 class ServerDiagnosticsController(object):
+    def __init__(self):
+        self.compute_api = compute.API()
+
     @wsgi.serializers(xml=ServerDiagnosticsTemplate)
     def index(self, req, server_id):
         context = req.environ["nova.context"]
         authorize(context)
-        compute_api = compute.API()
         try:
-            instance = compute_api.get(context, server_id, want_objects=True)
+            instance = self.compute_api.get(context, server_id,
+                want_objects=True)
         except exception.InstanceNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
         try:
-            return compute_api.get_diagnostics(context, instance)
+            return self.compute_api.get_diagnostics(context, instance)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'get_diagnostics')
+        except NotImplementedError:
+            msg = _("Unable to get diagnostics, functionality not implemented")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
 
 
 class Server_diagnostics(extensions.ExtensionDescriptor):
@@ -65,7 +72,7 @@ class Server_diagnostics(extensions.ExtensionDescriptor):
 
     def get_resources(self):
         parent_def = {'member_name': 'server', 'collection_name': 'servers'}
-        #NOTE(bcwaldon): This should be prefixed with 'os-'
+        # NOTE(bcwaldon): This should be prefixed with 'os-'
         ext = extensions.ResourceExtension('diagnostics',
                                            ServerDiagnosticsController(),
                                            parent=parent_def)

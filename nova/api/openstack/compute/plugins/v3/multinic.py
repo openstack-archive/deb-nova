@@ -25,10 +25,8 @@ from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova import exception
-from nova.openstack.common import log as logging
 
 
-LOG = logging.getLogger(__name__)
 ALIAS = "os-multinic"
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 
@@ -38,8 +36,8 @@ class MultinicController(wsgi.Controller):
         super(MultinicController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
-    @wsgi.action('add_fixed_ip')
-    @extensions.expected_errors(404)
+    @wsgi.action('addFixedIp')
+    @extensions.expected_errors((400, 404))
     @validation.schema(multinic.add_fixed_ip)
     def _add_fixed_ip(self, req, id, body):
         """Adds an IP on a given network to an instance."""
@@ -48,11 +46,15 @@ class MultinicController(wsgi.Controller):
 
         instance = common.get_instance(self.compute_api, context, id,
                                        want_objects=True)
-        network_id = body['add_fixed_ip']['network_id']
-        self.compute_api.add_fixed_ip(context, instance, network_id)
+        network_id = body['addFixedIp']['networkId']
+        try:
+            self.compute_api.add_fixed_ip(context, instance, network_id)
+        except exception.NoMoreFixedIps as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
+
         return webob.Response(status_int=202)
 
-    @wsgi.action('remove_fixed_ip')
+    @wsgi.action('removeFixedIp')
     @extensions.expected_errors((400, 404))
     @validation.schema(multinic.remove_fixed_ip)
     def _remove_fixed_ip(self, req, id, body):
@@ -62,7 +64,7 @@ class MultinicController(wsgi.Controller):
 
         instance = common.get_instance(self.compute_api, context, id,
                                        want_objects=True)
-        address = body['remove_fixed_ip']['address']
+        address = body['removeFixedIp']['address']
 
         try:
             self.compute_api.remove_fixed_ip(context, instance, address)

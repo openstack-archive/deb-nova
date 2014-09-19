@@ -41,6 +41,22 @@ class FakeCinderClient(object):
         self.volume_snapshots = self.volumes
 
 
+class FakeVolume(object):
+    def __init__(self, dict=dict()):
+        self.id = dict.get('id') or '1234'
+        self.status = dict.get('status') or 'available'
+        self.size = dict.get('size') or 1
+        self.availability_zone = dict.get('availability_zone') or 'cinder'
+        self.created_at = dict.get('created_at')
+        self.attach_time = dict.get('attach_time')
+        self.mountpoint = dict.get('mountpoint')
+        self.display_name = dict.get('display_name') or 'volume-' + self.id
+        self.display_description = dict.get('display_description') or 'fake'
+        self.volume_type_id = dict.get('volume_type_id')
+        self.snapshot_id = dict.get('snapshot_id')
+        self.metadata = dict.get('volume_metadata') or {}
+
+
 class CinderApiTestCase(test.NoDBTestCase):
     def setUp(self):
         super(CinderApiTestCase, self).setUp()
@@ -51,6 +67,7 @@ class CinderApiTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(cinder, 'cinderclient')
         self.mox.StubOutWithMock(cinder, '_untranslate_volume_summary_view')
         self.mox.StubOutWithMock(cinder, '_untranslate_snapshot_summary_view')
+        self.mox.StubOutWithMock(cinder, 'get_cinder_client_version')
 
     def test_get(self):
         volume_id = 'volume_id1'
@@ -76,6 +93,7 @@ class CinderApiTestCase(test.NoDBTestCase):
                           self.api.get, self.ctx, volume_id)
 
     def test_create(self):
+        cinder.get_cinder_client_version(self.ctx).AndReturn('2')
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
         cinder._untranslate_volume_summary_view(self.ctx, {'id': 'created_id'})
         self.mox.ReplayAll()
@@ -83,22 +101,26 @@ class CinderApiTestCase(test.NoDBTestCase):
         self.api.create(self.ctx, 1, '', '')
 
     def test_create_failed(self):
+        cinder.get_cinder_client_version(self.ctx).AndReturn('2')
         cinder.cinderclient(self.ctx).AndRaise(cinder_exception.BadRequest(''))
         self.mox.ReplayAll()
 
         self.assertRaises(exception.InvalidInput,
                           self.api.create, self.ctx, 1, '', '')
 
+    @mock.patch('nova.volume.cinder.get_cinder_client_version')
     @mock.patch('nova.volume.cinder.cinderclient')
-    def test_create_over_quota_failed(self, mock_cinderclient):
+    def test_create_over_quota_failed(self, mock_cinderclient,
+                                      mock_get_version):
+        mock_get_version.return_value = '2'
         mock_cinderclient.return_value.volumes.create.side_effect = (
             cinder_exception.OverLimit(413))
         self.assertRaises(exception.OverQuota, self.api.create, self.ctx,
                           1, '', '')
         mock_cinderclient.return_value.volumes.create.assert_called_once_with(
             1, user_id=None, imageRef=None, availability_zone=None,
-            volume_type=None, display_description='', snapshot_id=None,
-            display_name='', project_id=None, metadata=None)
+            volume_type=None, description='', snapshot_id=None, name='',
+            project_id=None, metadata=None)
 
     def test_get_all(self):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
@@ -130,7 +152,7 @@ class CinderApiTestCase(test.NoDBTestCase):
                                side_effect=lambda context,
                                instance: 'zone1') as mock_get_instance_az:
 
-            cinder.CONF.set_override('cinder_cross_az_attach', False)
+            cinder.CONF.set_override('cross_az_attach', False, group='cinder')
             volume['availability_zone'] = 'zone1'
             self.assertIsNone(self.api.check_attach(self.ctx,
                                                     volume, instance))
@@ -145,11 +167,11 @@ class CinderApiTestCase(test.NoDBTestCase):
             volume['availability_zone'] = 'zone1'
             self.assertIsNone(self.api.check_attach(
                 self.ctx, volume, instance))
-            mock_get_instance_az.assert_not_called()
+            self.assertFalse(mock_get_instance_az.called)
             volume['availability_zone'] = 'zone2'
             self.assertRaises(exception.InvalidVolume,
                             self.api.check_attach, self.ctx, volume, instance)
-            mock_get_instance_az.assert_not_called()
+            self.assertFalse(mock_get_instance_az.called)
             cinder.CONF.reset()
 
     def test_check_attach(self):
@@ -157,7 +179,7 @@ class CinderApiTestCase(test.NoDBTestCase):
         volume['attach_status'] = "detached"
         volume['availability_zone'] = 'zone1'
         instance = {'availability_zone': 'zone1', 'host': 'fakehost'}
-        cinder.CONF.set_override('cinder_cross_az_attach', False)
+        cinder.CONF.set_override('cross_az_attach', False, group='cinder')
 
         with mock.patch.object(cinder.az, 'get_instance_availability_zone',
                                side_effect=lambda context, instance: 'zone1'):
@@ -327,21 +349,85 @@ class CinderApiTestCase(test.NoDBTestCase):
 
         self.api.delete_snapshot(self.ctx, 'id1')
 
-    def test_get_volume_metadata(self):
-        self.assertRaises(NotImplementedError,
-                          self.api.get_volume_metadata, self.ctx, '')
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_get_volume_metadata(self, mock_cinderclient):
+        volume_id = 'id1'
+        metadata = {'key1': 'value1', 'key2': 'value2'}
+        volume = FakeVolume({'id': volume_id, 'volume_metadata': metadata})
 
-    def test_get_volume_metadata_value(self):
-        self.assertRaises(NotImplementedError,
-                          self.api.get_volume_metadata_value, '', '')
+        mock_volumes = mock.MagicMock()
+        mock_volumes.get.return_value = volume
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
 
-    def test_delete_volume_metadata(self):
-        self.assertRaises(NotImplementedError,
-                          self.api.delete_volume_metadata, self.ctx, '', '')
+        results = self.api.get_volume_metadata(self.ctx, volume_id)
 
-    def test_update_volume_metadata(self):
-        self.assertRaises(NotImplementedError,
-                          self.api.update_volume_metadata, self.ctx, '', '')
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        mock_volumes.get.assert_called_once_with(volume_id)
+        self.assertEqual(results, metadata)
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_get_volume_metadata_value(self, mock_cinderclient):
+        volume_id = 'id1'
+        metadata = {'key1': 'value1'}
+        volume = FakeVolume({'id': volume_id, 'volume_metadata': metadata})
+
+        mock_volumes = mock.MagicMock()
+        mock_volumes.get.return_value = volume
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
+
+        results = self.api.get_volume_metadata_value(self.ctx, volume_id,
+                                                     'key1')
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        mock_volumes.get.assert_called_once_with(volume_id)
+        self.assertEqual(results, 'value1')
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_delete_volume_metadata(self, mock_cinderclient):
+        volume_id = 'id1'
+        keys = ['key1', 'key2', 'key3']
+
+        mock_volumes = mock.MagicMock()
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
+
+        self.api.delete_volume_metadata(self.ctx, volume_id, keys)
+
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        mock_volumes.delete_metadata.assert_called_once_with(volume_id, keys)
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_update_volume_metadata(self, mock_cinderclient):
+        volume_id = 'id1'
+        metadata = {'key1': 'value1'}
+
+        mock_volumes = mock.MagicMock()
+        mock_volumes.set_metadata.return_value = metadata
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
+
+        updated_meta = self.api.update_volume_metadata(self.ctx, volume_id,
+                                                       metadata)
+
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        self.assertFalse(mock_volumes.update_all_metadata.called)
+        mock_volumes.set_metadata.assert_called_once_with(volume_id, metadata)
+        self.assertEqual(metadata, updated_meta)
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_update_volume_metadata_delete(self, mock_cinderclient):
+        volume_id = 'id1'
+        metadata = {'key1': 'value1', 'key2': 'value2'}
+
+        mock_volumes = mock.MagicMock()
+        mock_volumes.update_all_metadata.return_value = metadata
+        mock_cinderclient.return_value = mock.MagicMock(volumes=mock_volumes)
+
+        updated_meta = self.api.update_volume_metadata(self.ctx, volume_id,
+                                                       metadata, delete=True)
+
+        mock_cinderclient.assert_called_once_with(self.ctx)
+        mock_volumes.update_all_metadata.assert_called_once_with(volume_id,
+                                                                 metadata)
+        self.assertFalse(mock_volumes.set_metadata.called)
+        self.assertEqual(metadata, updated_meta)
 
     def test_update_snapshot_status(self):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)

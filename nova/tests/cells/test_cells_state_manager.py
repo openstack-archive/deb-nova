@@ -16,14 +16,19 @@
 Tests For CellStateManager
 """
 
+import time
+
+import mock
 from oslo.config import cfg
+import six
 
 from nova.cells import state
 from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
+from nova.openstack.common.db import exception as db_exc
+from nova.openstack.common import fileutils
 from nova import test
-
 
 FAKE_COMPUTES = [
     ('host1', 1024, 100, 0, 0),
@@ -77,6 +82,19 @@ class TestCellsStateManager(test.TestCase):
         e = self.assertRaises(cfg.ConfigFilesNotFoundError,
                               state.CellStateManager)
         self.assertEqual(['no_such_file_exists.conf'], e.config_files)
+
+    @mock.patch.object(cfg.ConfigOpts, 'find_file')
+    @mock.patch.object(fileutils, 'read_cached_file')
+    def test_filemanager_returned(self, mock_read_cached_file, mock_find_file):
+        mock_find_file.return_value = "/etc/nova/cells.json"
+        mock_read_cached_file.return_value = (False, six.StringIO({}))
+        self.flags(cells_config='cells.json', group='cells')
+        self.assertIsInstance(state.CellStateManager(),
+                              state.CellStateManagerFile)
+
+    def test_dbmanager_returned(self):
+        self.assertIsInstance(state.CellStateManager(),
+                              state.CellStateManagerDB)
 
     def test_capacity_no_reserve(self):
         # utilize entire cell
@@ -143,6 +161,19 @@ class TestCellsStateManager(test.TestCase):
         state_manager = self._get_state_manager(reserve_percent)
         my_state = state_manager.get_my_state()
         return my_state.capacities
+
+
+class TestCellStateManagerException(test.TestCase):
+    @mock.patch.object(time, 'sleep')
+    def test_init_db_error(self, mock_sleep):
+        class TestCellStateManagerDB(state.CellStateManagerDB):
+            def __init__(self):
+                self._cell_data_sync = mock.Mock()
+                self._cell_data_sync.side_effect = [db_exc.DBError(), []]
+                super(TestCellStateManagerDB, self).__init__()
+        test = TestCellStateManagerDB()
+        mock_sleep.assert_called_once_with(30)
+        self.assertEqual(test._cell_data_sync.call_count, 2)
 
 
 class TestCellsGetCapacity(TestCellsStateManager):

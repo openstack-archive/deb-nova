@@ -94,16 +94,33 @@ There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
   ``disk_allocation_ration`` setting. It's virtual disk to physical disk
   allocation ratio and it's 1.0 by default. The total allow allocated disk size will
   be physical disk multiplied this ratio.
+* |AggregateDiskFilter| - filters hosts by disk allocation with per-aggregate
+  ``disk_allocation_ratio`` setting. If no per-aggregate value is found, it will
+  fall back to the global default ``disk_allocation_ratio``. If more than one value
+  is found for a host (meaning the host is in two or more different aggregates with
+  different ratio settings), the minimum value will be used.
 * |NumInstancesFilter| - filters hosts by number of running instances on it.
   hosts with too many instances will be filtered.
   ``max_instances_per_host`` setting. Maximum number of instances allowed to run on
   this host, the host will be ignored by scheduler if more than ``max_instances_per_host``
   are already existing on the host.
+* |AggregateNumInstancesFilter| - filters hosts by number of instances with
+  per-aggregate ``max_instances_per_host`` setting. If no per-aggregate value
+  is found, it will fall back to the global default ``max_instances_per_host``.
+  If more than one value is found for a host (meaning the host is in two or more
+  different aggregates with different max instances per host settings),
+  the minimum value will be used.
 * |IoOpsFilter| - filters hosts by concurrent I/O operations on it.
   hosts with too many concurrent I/O operations will be filtered.
   ``max_io_ops_per_host`` setting. Maximum number of I/O intensive instances allowed to
   run on this host, the host will be ignored by scheduler if more than ``max_io_ops_per_host``
   instances such as build/resize/snapshot etc are running on it.
+* |AggregateIoOpsFilter| - filters hosts by I/O operations with per-aggregate
+  ``max_io_ops_per_host`` setting. If no per-aggregate value is found, it will
+  fall back to the global default ``max_io_ops_per_host``. If more than
+  one value is found for a host (meaning the host is in two or more different
+  aggregates with different max io operations settings), the minimum value
+  will be used.
 * |PciPassthroughFilter| - Filter that schedules instances on a host if the host
   has devices to meet the device requests in the 'extra_specs' for the flavor.
 * |SimpleCIDRAffinityFilter| - allows to put a new instance on a host within
@@ -354,8 +371,11 @@ in :mod:``nova.tests.scheduler``.
 .. |RamFilter| replace:: :class:`RamFilter <nova.scheduler.filters.ram_filter.RamFilter>`
 .. |AggregateRamFilter| replace:: :class:`AggregateRamFilter <nova.scheduler.filters.ram_filter.AggregateRamFilter>`
 .. |DiskFilter| replace:: :class:`DiskFilter <nova.scheduler.filters.disk_filter.DiskFilter>`
+.. |AggregateDiskFilter| replace:: :class:`AggregateDiskFilter <nova.scheduler.filters.disk_filter.AggregateDiskFilter>`
 .. |NumInstancesFilter| replace:: :class:`NumInstancesFilter <nova.scheduler.filters.num_instances_filter.NumInstancesFilter>`
+.. |AggregateNumInstancesFilter| replace:: :class:`AggregateNumInstancesFilter <nova.scheduler.filters.numinstances_filter.AggregateNumInstancesFilter>`
 .. |IoOpsFilter| replace:: :class:`IoOpsFilter <nova.scheduler.filters.io_ops_filter.IoOpsFilter>`
+.. |AggregateIoOpsFilter| replace:: :class:`AggregateIoOpsFilter <nova.scheduler.filters.io_ops_filter.AggregateIoOpsFilter>`
 .. |PciPassthroughFilter| replace:: :class:`PciPassthroughFilter <nova.scheduler.filters.pci_passthrough_filter.PciPassthroughFilter>`
 .. |SimpleCIDRAffinityFilter| replace:: :class:`SimpleCIDRAffinityFilter <nova.scheduler.filters.affinity_filter.SimpleCIDRAffinityFilter>`
 .. |GroupAntiAffinityFilter| replace:: :class:`GroupAntiAffinityFilter <nova.scheduler.filters.affinity_filter.GroupAntiAffinityFilter>`
@@ -366,8 +386,11 @@ in :mod:``nova.tests.scheduler``.
 .. |TrustedFilter| replace:: :class:`TrustedFilter <nova.scheduler.filters.trusted_filter.TrustedFilter>`
 .. |TypeAffinityFilter| replace:: :class:`TypeAffinityFilter <nova.scheduler.filters.type_filter.TypeAffinityFilter>`
 .. |AggregateTypeAffinityFilter| replace:: :class:`AggregateTypeAffinityFilter <nova.scheduler.filters.type_filter.AggregateTypeAffinityFilter>`
+.. |ServerGroupAntiAffinityFilter| replace:: :class:`ServerGroupAntiAffinityFilter <nova.scheduler.filters.affinity_filter.ServerGroupAntiAffinityFilter>`
+.. |ServerGroupAffinityFilter| replace:: :class:`ServerGroupAffinityFilter <nova.scheduler.filters.affinity_filter.ServerGroupAffinityFilter>`
 .. |AggregateInstanceExtraSpecsFilter| replace:: :class:`AggregateInstanceExtraSpecsFilter <nova.scheduler.filters.aggregate_instance_extra_specs.AggregateInstanceExtraSpecsFilter>`
 .. |AggregateMultiTenancyIsolation| replace:: :class:`AggregateMultiTenancyIsolation <nova.scheduler.filters.aggregate_multitenancy_isolation.AggregateMultiTenancyIsolation>`
 .. |RamWeigher| replace:: :class:`RamWeigher <nova.scheduler.weights.all_weighers.RamWeigher>`
 .. |AggregateImagePropertiesIsolation| replace:: :class:`AggregateImagePropertiesIsolation <nova.scheduler.filters.aggregate_image_properties_isolation.AggregateImagePropertiesIsolation>`
 .. |MetricsFilter| replace:: :class:`MetricsFilter <nova.scheduler.filters.metrics_filter.MetricsFilter>`
+.. |MetricsWeigher| replace:: :class:`MetricsWeigher <nova.scheduler.weights.metrics.MetricsWeigher>`

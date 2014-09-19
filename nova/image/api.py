@@ -46,11 +46,11 @@ class API(object):
 
         :param context: The `nova.context.Context` object for the request
         """
-        #TODO(jaypipes): Refactor glance.get_remote_image_service and
-        #                glance.get_default_image_service into a single
-        #                method that takes a context and actually respects
-        #                it, returning a real session object that keeps
-        #                the context alive...
+        # TODO(jaypipes): Refactor glance.get_remote_image_service and
+        #                 glance.get_default_image_service into a single
+        #                 method that takes a context and actually respects
+        #                 it, returning a real session object that keeps
+        #                 the context alive...
         return glance.get_default_image_service()
 
     def get_all(self, context, **kwargs):
@@ -61,13 +61,13 @@ class API(object):
         are owned by the requesting user in the ACTIVE status are returned.
 
         :param context: The `nova.context.Context` object for the request
-        :param **kwargs: A dictionary of filter and pagination values that
-                         may be passed to the underlying image info driver.
+        :param kwargs: A dictionary of filter and pagination values that
+                       may be passed to the underlying image info driver.
         """
         session = self._get_session(context)
         return session.detail(context, **kwargs)
 
-    def get(self, context, id_or_uri):
+    def get(self, context, id_or_uri, include_locations=False):
         """Retrieves the information record for a single disk image. If the
         supplied identifier parameter is a UUID, the default driver will
         be used to return information about the image. If the supplied
@@ -77,9 +77,16 @@ class API(object):
         :param context: The `nova.context.Context` object for the request
         :param id_or_uri: A UUID identifier or an image URI to look up image
                           information for.
+        :param include_locations: (Optional) include locations in the returned
+                                  dict of information if the image service API
+                                  supports it. If the image service API does
+                                  not support the locations attribute, it will
+                                  still be included in the returned dict, as an
+                                  empty list.
         """
         session, image_id = self._get_session_and_image_id(context, id_or_uri)
-        return session.show(context, image_id)
+        return session.show(context, image_id,
+                            include_locations=include_locations)
 
     def create(self, context, image_info, data=None):
         """Creates a new image record, optionally passing the image bits to
@@ -108,7 +115,7 @@ class API(object):
                            passed to the image registry.
         :param data: Optional file handle or bytestream iterator that is
                      passed to backend storage.
-        :param purge_props: Optional, defaults to True. If set, the backend
+        :param purge_props: Optional, defaults to False. If set, the backend
                             image registry will clear all image properties
                             and replace them the image properties supplied
                             in the image_info dictionary's 'properties'

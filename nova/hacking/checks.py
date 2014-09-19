@@ -13,6 +13,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import ast
 import re
 
 import pep8
@@ -30,6 +31,8 @@ Guidelines for writing new hacking checks
  - Add test cases for each new rule to nova/tests/test_hacking.py
 
 """
+
+UNDERSCORE_IMPORT_FILES = []
 
 session_check = re.compile(r"\w*def [a-zA-Z0-9].*[(].*session.*[)]")
 cfg_re = re.compile(r".*\scfg\.")
@@ -54,7 +57,57 @@ asse_equal_start_with_none_re = re.compile(
 conf_attribute_set_re = re.compile(r"CONF\.[a-z0-9_.]+\s*=\s*\w")
 log_translation = re.compile(
     r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)\(\s*('|\")")
+translated_log = re.compile(
+    r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)"
+    "\(\s*_\(\s*('|\")")
 mutable_default_args = re.compile(r"^\s*def .+\((.+=\{\}|.+=\[\])")
+string_translation = re.compile(r"[^_]*_\(\s*('|\")")
+underscore_import_check = re.compile(r"(.)*import _(.)*")
+# We need this for cases where they have created their own _ function.
+custom_underscore_check = re.compile(r"(.)*_\s*=\s*(.)*")
+
+
+class BaseASTChecker(ast.NodeVisitor):
+    """Provides a simple framework for writing AST-based checks.
+
+    Subclasses should implement visit_* methods like any other AST visitor
+    implementation. When they detect an error for a particular node the
+    method should call ``self.add_error(offending_node)``. Details about
+    where in the code the error occurred will be pulled from the node
+    object.
+
+    Subclasses should also provide a class variable named CHECK_DESC to
+    be used for the human readable error message.
+
+    """
+
+    def __init__(self, tree, filename):
+        """This object is created automatically by pep8.
+
+        :param tree: an AST tree
+        :param filename: name of the file being analyzed
+                         (ignored by our checks)
+        """
+        self._tree = tree
+        self._errors = []
+
+    def run(self):
+        """Called automatically by pep8."""
+        self.visit(self._tree)
+        return self._errors
+
+    def add_error(self, node, message=None):
+        """Add an error caused by a node to the list of errors for pep8."""
+        message = message or self.CHECK_DESC
+        error = (node.lineno, node.col_offset, message, self.__class__)
+        self._errors.append(error)
+
+    def _check_call_names(self, call_node, names):
+        if isinstance(call_node, ast.Call):
+            if isinstance(call_node.func, ast.Name):
+                if call_node.func.id in names:
+                    return True
+        return False
 
 
 def import_no_db_in_virt(logical_line, filename):
@@ -256,6 +309,102 @@ def no_mutable_default_args(logical_line):
         yield (0, msg)
 
 
+def check_explicit_underscore_import(logical_line, filename):
+    """Check for explicit import of the _ function
+
+    We need to ensure that any files that are using the _() function
+    to translate logs are explicitly importing the _ function.  We
+    can't trust unit test to catch whether the import has been
+    added so we need to check for it here.
+    """
+
+    # Build a list of the files that have _ imported.  No further
+    # checking needed once it is found.
+    if filename in UNDERSCORE_IMPORT_FILES:
+        pass
+    elif (underscore_import_check.match(logical_line) or
+          custom_underscore_check.match(logical_line)):
+        UNDERSCORE_IMPORT_FILES.append(filename)
+    elif (translated_log.match(logical_line) or
+         string_translation.match(logical_line)):
+        yield(0, "N323: Found use of _() without explicit import of _ !")
+
+
+def use_jsonutils(logical_line, filename):
+    # the code below that path is not meant to be executed from neutron
+    # tree where jsonutils module is present, so don't enforce its usage
+    # for this subdirectory
+    if "plugins/xenserver" in filename:
+        return
+
+    msg = "N324: jsonutils.%(fun)s must be used instead of json.%(fun)s"
+
+    if "json." in logical_line:
+        json_funcs = ['dumps(', 'dump(', 'loads(', 'load(']
+        for f in json_funcs:
+            pos = logical_line.find('json.%s' % f)
+            if pos != -1:
+                yield (pos, msg % {'fun': f[:-1]})
+
+
+class CheckForStrExc(BaseASTChecker):
+    """Checks for the use of str() on an exception.
+
+    This currently only handles the case where str() is used in
+    the scope of an exception handler.  If the exception is passed
+    into a function, returned from an assertRaises, or used on an
+    exception created in the same scope, this does not catch it.
+    """
+
+    CHECK_DESC = ('N325 str() cannot be used on an exception.  '
+                  'Remove or use six.text_type()')
+
+    def __init__(self, tree, filename):
+        super(CheckForStrExc, self).__init__(tree, filename)
+        self.name = []
+        self.already_checked = []
+
+    def visit_TryExcept(self, node):
+        for handler in node.handlers:
+            if handler.name:
+                self.name.append(handler.name.id)
+                super(CheckForStrExc, self).generic_visit(node)
+                self.name = self.name[:-1]
+            else:
+                super(CheckForStrExc, self).generic_visit(node)
+
+    def visit_Call(self, node):
+        if self._check_call_names(node, ['str']):
+            if node not in self.already_checked:
+                self.already_checked.append(node)
+                if isinstance(node.args[0], ast.Name):
+                    if node.args[0].id in self.name:
+                        self.add_error(node.args[0])
+        super(CheckForStrExc, self).generic_visit(node)
+
+
+class CheckForTransAdd(BaseASTChecker):
+    """Checks for the use of concatenation on a translated string.
+
+    Translations should not be concatenated with other strings, but
+    should instead include the string being added to the translated
+    string to give the translators the most information.
+    """
+
+    CHECK_DESC = ('N326 Translated messages cannot be concatenated.  '
+                  'String should be included in translated message.')
+
+    TRANS_FUNC = ['_', '_LI', '_LW', '_LE', '_LC']
+
+    def visit_BinOp(self, node):
+        if isinstance(node.op, ast.Add):
+            if self._check_call_names(node.left, self.TRANS_FUNC):
+                self.add_error(node.left)
+            elif self._check_call_names(node.right, self.TRANS_FUNC):
+                self.add_error(node.right)
+        super(CheckForTransAdd, self).generic_visit(node)
+
+
 def factory(register):
     register(import_no_db_in_virt)
     register(no_db_session_in_public_api)
@@ -272,3 +421,7 @@ def factory(register):
     register(no_setting_conf_directly_in_tests)
     register(validate_log_translations)
     register(no_mutable_default_args)
+    register(check_explicit_underscore_import)
+    register(use_jsonutils)
+    register(CheckForStrExc)
+    register(CheckForTransAdd)

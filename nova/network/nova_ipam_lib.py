@@ -45,18 +45,20 @@ class NeutronNovaIPAMLib(object):
             'network_id': n.uuid,
             'cidr': n.cidr,
             'gateway': n.gateway,
+            'dhcp_server': getattr(n, 'dhcp_server'),
             'broadcast': n.broadcast,
             'netmask': n.netmask,
             'version': 4,
             'dns1': n.dns1,
             'dns2': n.dns2}
-        #TODO(tr3buchet): I'm noticing we've assumed here that all dns is v4.
-        #                 this is probably bad as there is no way to add v6
-        #                 dns to nova
+        # TODO(tr3buchet): I'm noticing we've assumed here that all dns is v4.
+        #                  this is probably bad as there is no way to add v6
+        #                  dns to nova
         subnet_v6 = {
             'network_id': n.uuid,
             'cidr': n.cidr_v6,
             'gateway': n.gateway_v6,
+            'dhcp_server': None,
             'broadcast': None,
             'netmask': n.netmask_v6,
             'version': 6,

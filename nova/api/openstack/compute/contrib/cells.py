@@ -29,13 +29,11 @@ from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import api as compute
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova.openstack.common import timeutils
 from nova import rpc
 
 
-LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 CONF.import_opt('name', 'nova.cells.opts', group='cells')
 CONF.import_opt('capabilities', 'nova.cells.opts', group='cells')
@@ -270,7 +268,10 @@ class Controller(object):
     def delete(self, req, id):
         """Delete a child or parent cell entry.  'id' is a cell name."""
         context = req.environ['nova.context']
+
         authorize(context)
+        authorize(context, action="delete")
+
         try:
             num_deleted = self.cells_rpcapi.cell_delete(context, id)
         except exception.CellsUpdateUnsupported as e:
@@ -283,18 +284,15 @@ class Controller(object):
         """Validate cell name is not empty and doesn't contain '!' or '.'."""
         if not cell_name:
             msg = _("Cell name cannot be empty")
-            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
         if '!' in cell_name or '.' in cell_name:
             msg = _("Cell name cannot contain '!' or '.'")
-            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
 
     def _validate_cell_type(self, cell_type):
         """Validate cell_type is 'parent' or 'child'."""
         if cell_type not in ['parent', 'child']:
             msg = _("Cell type must be 'parent' or 'child'")
-            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
 
     def _normalize_cell(self, cell, existing=None):
@@ -347,15 +345,16 @@ class Controller(object):
     def create(self, req, body):
         """Create a child cell entry."""
         context = req.environ['nova.context']
+
         authorize(context)
+        authorize(context, action="create")
+
         if 'cell' not in body:
             msg = _("No cell information in request")
-            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
         cell = body['cell']
         if 'name' not in cell:
             msg = _("No cell name in request")
-            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
         self._validate_cell_name(cell['name'])
         self._normalize_cell(cell)
@@ -371,10 +370,12 @@ class Controller(object):
     def update(self, req, id, body):
         """Update a child cell entry.  'id' is the cell name to update."""
         context = req.environ['nova.context']
+
         authorize(context)
+        authorize(context, action="update")
+
         if 'cell' not in body:
             msg = _("No cell information in request")
-            LOG.error(msg)
             raise exc.HTTPBadRequest(explanation=msg)
         cell = body['cell']
         cell.pop('id', None)
@@ -403,7 +404,10 @@ class Controller(object):
     def sync_instances(self, req, body):
         """Tell all cells to sync instance info."""
         context = req.environ['nova.context']
+
         authorize(context)
+        authorize(context, action="sync_instances")
+
         project_id = body.pop('project_id', None)
         deleted = body.pop('deleted', False)
         updated_since = body.pop('updated_since', None)
@@ -415,7 +419,7 @@ class Controller(object):
             try:
                 deleted = strutils.bool_from_string(deleted, strict=True)
             except ValueError as err:
-                raise exc.HTTPBadRequest(explanation=str(err))
+                raise exc.HTTPBadRequest(explanation=six.text_type(err))
         if updated_since:
             try:
                 timeutils.parse_isotime(updated_since)

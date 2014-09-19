@@ -19,13 +19,13 @@ import contextlib
 import re
 
 import mock
+from oslo.vmware import exceptions as vexc
 
 from nova import exception
 from nova.network import model as network_model
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.virt.vmwareapi import fake
-from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import vm_util
 
 
@@ -251,6 +251,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
                 },
                 'backing': {
                     'datastore': {
+                        "summary.maintenanceMode": "normal",
                         "summary.type": "VMFS",
                         "summary.accessible":true,
                         "summary.name": "fake-ds",
@@ -299,6 +300,18 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         controller.key = controller_key
         devices = [disk, controller]
         return devices
+
+    def test_get_vmdk_path(self):
+        uuid = '00000000-0000-0000-0000-000000000000'
+        filename = '[test_datastore] %s/%s.vmdk' % (uuid, uuid)
+        devices = self._vmdk_path_and_adapter_type_devices(filename)
+        session = fake.FakeSession()
+
+        with mock.patch.object(session, '_call_method',
+                               return_value=devices):
+            instance = {'uuid': uuid}
+            vmdk_path = vm_util.get_vmdk_path(session, None, instance)
+            self.assertEqual(filename, vmdk_path)
 
     def test_get_vmdk_path_and_adapter_type(self):
         filename = '[test_datastore] test_file.vmdk'
@@ -545,6 +558,147 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         result = re.sub(r'\s+', '', repr(result))
         self.assertEqual(expected, result)
 
+    def test_get_vm_create_spec_with_allocations(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = {'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048}
+        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+                                            fake_instance, instance_uuid,
+                                            'fake-datastore', [],
+                                            allocations={'cpu_limit': 7,
+                                                         'cpu_reservation': 6})
+        expected = """{
+            'files': {'vmPathName': '[fake-datastore]',
+            'obj_name': 'ns0:VirtualMachineFileInfo'},
+            'instanceUuid': '%(instance_uuid)s',
+            'name': '%(instance_uuid)s', 'deviceChange': [],
+            'extraConfig': [{'value': '%(instance_uuid)s',
+                             'key': 'nvp.vm-uuid',
+                             'obj_name': 'ns0:OptionValue'}],
+            'memoryMB': 2048,
+            'obj_name': 'ns0:VirtualMachineConfigSpec',
+            'guestId': 'otherGuest',
+            'tools': {'beforeGuestStandby': True,
+                      'beforeGuestReboot': True,
+                      'beforeGuestShutdown': True,
+                      'afterResume': True,
+                      'afterPowerOn': True,
+            'obj_name': 'ns0:ToolsConfigInfo'},
+            'cpuAllocation': {'reservation': 6,
+                              'limit': 7,
+                              'obj_name': 'ns0:ResourceAllocationInfo'},
+            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
+        expected = re.sub(r'\s+', '', expected)
+        result = re.sub(r'\s+', '', repr(result))
+        self.assertEqual(expected, result)
+
+    def test_get_vm_create_spec_with_limit(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = {'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048}
+        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+                                            fake_instance, instance_uuid,
+                                            'fake-datastore', [],
+                                            allocations={'cpu_limit': 7})
+        expected = """{
+            'files': {'vmPathName': '[fake-datastore]',
+            'obj_name': 'ns0:VirtualMachineFileInfo'},
+            'instanceUuid': '%(instance_uuid)s',
+            'name': '%(instance_uuid)s', 'deviceChange': [],
+            'extraConfig': [{'value': '%(instance_uuid)s',
+                             'key': 'nvp.vm-uuid',
+                             'obj_name': 'ns0:OptionValue'}],
+            'memoryMB': 2048,
+            'obj_name': 'ns0:VirtualMachineConfigSpec',
+            'guestId': 'otherGuest',
+            'tools': {'beforeGuestStandby': True,
+                      'beforeGuestReboot': True,
+                      'beforeGuestShutdown': True,
+                      'afterResume': True,
+                      'afterPowerOn': True,
+            'obj_name': 'ns0:ToolsConfigInfo'},
+            'cpuAllocation': {'limit': 7,
+                              'obj_name': 'ns0:ResourceAllocationInfo'},
+            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
+        expected = re.sub(r'\s+', '', expected)
+        result = re.sub(r'\s+', '', repr(result))
+        self.assertEqual(expected, result)
+
+    def test_get_vm_create_spec_with_share(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = {'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048}
+        shares = {'cpu_shares_level': 'high'}
+        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+                                            fake_instance, instance_uuid,
+                                            'fake-datastore', [],
+                                            allocations=shares)
+        expected = """{
+            'files': {'vmPathName': '[fake-datastore]',
+            'obj_name': 'ns0:VirtualMachineFileInfo'},
+            'instanceUuid': '%(instance_uuid)s',
+            'name': '%(instance_uuid)s', 'deviceChange': [],
+            'extraConfig': [{'value': '%(instance_uuid)s',
+                             'key': 'nvp.vm-uuid',
+                             'obj_name': 'ns0:OptionValue'}],
+            'memoryMB': 2048,
+            'obj_name': 'ns0:VirtualMachineConfigSpec',
+            'guestId': 'otherGuest',
+            'tools': {'beforeGuestStandby': True,
+                      'beforeGuestReboot': True,
+                      'beforeGuestShutdown': True,
+                      'afterResume': True,
+                      'afterPowerOn': True,
+            'obj_name': 'ns0:ToolsConfigInfo'},
+            'cpuAllocation': {'shares': {'level': 'high',
+                                         'shares': 0,
+                                         'obj_name':'ns0:SharesInfo'},
+                              'obj_name':'ns0:ResourceAllocationInfo'},
+            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
+        expected = re.sub(r'\s+', '', expected)
+        result = re.sub(r'\s+', '', repr(result))
+        self.assertEqual(expected, result)
+
+    def test_get_vm_create_spec_with_share_custom(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = {'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048}
+        shares = {'cpu_shares_level': 'custom',
+                  'cpu_shares_share': 1948}
+        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+                                            fake_instance, instance_uuid,
+                                            'fake-datastore', [],
+                                            allocations=shares)
+        expected = """{
+            'files': {'vmPathName': '[fake-datastore]',
+            'obj_name': 'ns0:VirtualMachineFileInfo'},
+            'instanceUuid': '%(instance_uuid)s',
+            'name': '%(instance_uuid)s', 'deviceChange': [],
+            'extraConfig': [{'value': '%(instance_uuid)s',
+                             'key': 'nvp.vm-uuid',
+                             'obj_name': 'ns0:OptionValue'}],
+            'memoryMB': 2048,
+            'obj_name': 'ns0:VirtualMachineConfigSpec',
+            'guestId': 'otherGuest',
+            'tools': {'beforeGuestStandby': True,
+                      'beforeGuestReboot': True,
+                      'beforeGuestShutdown': True,
+                      'afterResume': True,
+                      'afterPowerOn': True,
+            'obj_name': 'ns0:ToolsConfigInfo'},
+            'cpuAllocation': {'shares': {'level': 'custom',
+                                         'shares': 1948,
+                                         'obj_name':'ns0:SharesInfo'},
+                              'obj_name':'ns0:ResourceAllocationInfo'},
+            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
+        expected = re.sub(r'\s+', '', expected)
+        result = re.sub(r'\s+', '', repr(result))
+        self.assertEqual(expected, result)
+
     def test_create_vm(self):
 
         method_list = ['CreateVM_Task', 'get_dynamic_property']
@@ -661,7 +815,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
                               return_value='fake-task'),
             mock.patch.object(
                     session, "_wait_for_task",
-                    side_effect=error_util.InvalidPowerStateException),
+                    side_effect=vexc.InvalidPowerStateException),
         ) as (fake_call_method, fake_wait_for_task):
             vm_util.power_on_instance(session, fake_instance,
                                       vm_ref='fake-vm-ref')
@@ -672,7 +826,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
 
     def test_create_virtual_disk(self):
         session = fake.FakeSession()
-        dm = session._get_vim().get_service_content().virtualDiskManager
+        dm = session._get_vim().service_content.virtualDiskManager
         with contextlib.nested(
             mock.patch.object(vm_util, "get_vmdk_create_spec",
                               return_value='fake-spec'),
@@ -698,7 +852,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
 
     def test_copy_virtual_disk(self):
         session = fake.FakeSession()
-        dm = session._get_vim().get_service_content().virtualDiskManager
+        dm = session._get_vim().service_content.virtualDiskManager
         with contextlib.nested(
             mock.patch.object(session, "_call_method",
                               return_value='fake-task'),
@@ -837,3 +991,72 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         expected = re.sub(r'\s+', '', expected)
         result = re.sub(r'\s+', '', repr(result))
         self.assertEqual(expected, result)
+
+    @mock.patch.object(vm_util, "get_vm_ref")
+    def test_power_off_instance(self, fake_get_ref):
+        session = fake.FakeSession()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, '_call_method',
+                              return_value='fake-task'),
+            mock.patch.object(session, '_wait_for_task')
+        ) as (fake_call_method, fake_wait_for_task):
+            vm_util.power_off_instance(session, fake_instance, 'fake-vm-ref')
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOffVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+            self.assertFalse(fake_get_ref.called)
+
+    @mock.patch.object(vm_util, "get_vm_ref", return_value="fake-vm-ref")
+    def test_power_off_instance_no_vm_ref(self, fake_get_ref):
+        session = fake.FakeSession()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, '_call_method',
+                              return_value='fake-task'),
+            mock.patch.object(session, '_wait_for_task')
+        ) as (fake_call_method, fake_wait_for_task):
+            vm_util.power_off_instance(session, fake_instance)
+            fake_get_ref.assert_called_once_with(session, fake_instance)
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOffVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+
+    @mock.patch.object(vm_util, "get_vm_ref")
+    def test_power_off_instance_with_exception(self, fake_get_ref):
+        session = fake.FakeSession()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, '_call_method',
+                              return_value='fake-task'),
+            mock.patch.object(session, '_wait_for_task',
+                              side_effect=exception.NovaException('fake'))
+        ) as (fake_call_method, fake_wait_for_task):
+            self.assertRaises(exception.NovaException,
+                              vm_util.power_off_instance,
+                              session, fake_instance, 'fake-vm-ref')
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOffVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+            self.assertFalse(fake_get_ref.called)
+
+    @mock.patch.object(vm_util, "get_vm_ref")
+    def test_power_off_instance_power_state_exception(self, fake_get_ref):
+        session = fake.FakeSession()
+        fake_instance = mock.MagicMock()
+        with contextlib.nested(
+            mock.patch.object(session, '_call_method',
+                              return_value='fake-task'),
+            mock.patch.object(
+                    session, '_wait_for_task',
+                    side_effect=vexc.InvalidPowerStateException)
+        ) as (fake_call_method, fake_wait_for_task):
+            vm_util.power_off_instance(session, fake_instance, 'fake-vm-ref')
+            fake_call_method.assert_called_once_with(session._get_vim(),
+                                                     "PowerOffVM_Task",
+                                                     'fake-vm-ref')
+            fake_wait_for_task.assert_called_once_with('fake-task')
+            self.assertFalse(fake_get_ref.called)

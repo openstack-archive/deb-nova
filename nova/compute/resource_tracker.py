@@ -18,6 +18,7 @@ Track resources like memory and disk for a compute host.  Provides the
 scheduler with useful information about availability through the ComputeNode
 model.
 """
+import copy
 
 from oslo.config import cfg
 
@@ -38,6 +39,7 @@ from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.pci import pci_manager
 from nova import rpc
+from nova.scheduler import client as scheduler_client
 from nova import utils
 
 resource_tracker_opts = [
@@ -83,6 +85,7 @@ class ResourceTracker(object):
             ext_resources.ResourceHandler(CONF.compute_resources)
         self.notifier = rpc.get_notifier()
         self.old_resources = {}
+        self.scheduler_client = scheduler_client.SchedulerClient()
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def instance_claim(self, context, instance_ref, limits=None):
@@ -145,10 +148,10 @@ class ResourceTracker(object):
         :param instance: instance object to reserve resources for
         :param instance_type: new instance_type being resized to
         :param limits: Dict of oversubscription limits for memory, disk,
-                       and CPUs.
+        and CPUs
         :returns: A Claim ticket representing the reserved resources.  This
-                  should be turned into finalize  a resource claim or free
-                  resources after the compute operation is finished.
+        should be turned into finalize  a resource claim or free
+        resources after the compute operation is finished.
         """
         if self.disabled:
             # compute_driver doesn't support resource tracking, just
@@ -397,6 +400,8 @@ class ResourceTracker(object):
 
         self.compute_node = self.conductor_api.compute_node_create(context,
                                                                    values)
+        # NOTE(sbauza): We don't want to miss the first creation event
+        self._update_resource_stats(context, values)
 
     def _get_service(self, context):
         try:
@@ -438,17 +443,22 @@ class ResourceTracker(object):
             LOG.debug("Hypervisor: no assignable PCI devices")
 
     def _report_final_resource_view(self, resources):
-        """Report final calculate of free memory, disk, CPUs, and PCI devices,
+        """Report final calculate of physical memory, used virtual memory,
+        disk, usable vCPUs, used virtual CPUs and PCI devices,
         including instance calculations and in-progress resource claims. These
         values will be exposed via the compute node table to the scheduler.
         """
-        LOG.audit(_("Free ram (MB): %s") % resources['free_ram_mb'])
+        LOG.audit(_("Total physical ram (MB): %(pram)s, "
+                    "total allocated virtual ram (MB): %(vram)s"),
+                    {'pram': resources['memory_mb'],
+                     'vram': resources['memory_mb_used']})
         LOG.audit(_("Free disk (GB): %s") % resources['free_disk_gb'])
 
         vcpus = resources['vcpus']
         if vcpus:
-            free_vcpus = vcpus - resources['vcpus_used']
-            LOG.audit(_("Free VCPUS: %s") % free_vcpus)
+            LOG.audit(_("Total usable vcpus: %(tcpu)s, "
+                        "total allocated vcpus: %(ucpu)s"),
+                        {'tcpu': vcpus, 'ucpu': resources['vcpus_used']})
         else:
             LOG.audit(_("Free VCPU information unavailable"))
 
@@ -458,12 +468,12 @@ class ResourceTracker(object):
     def _resource_change(self, resources):
         """Check to see if any resouces have changed."""
         if cmp(resources, self.old_resources) != 0:
-            self.old_resources = resources
+            self.old_resources = copy.deepcopy(resources)
             return True
         return False
 
     def _update(self, context, values):
-        """Persist the compute node updates to the DB."""
+        """Update partial stats locally and populate them to Scheduler."""
         self._write_ext_resources(values)
         # NOTE(pmurray): the stats field is stored as a json string. The
         # json conversion will be done automatically by the ComputeNode object
@@ -474,11 +484,19 @@ class ResourceTracker(object):
             return
         if "service" in self.compute_node:
             del self.compute_node['service']
-
-        self.compute_node = self.conductor_api.compute_node_update(
-            context, self.compute_node, values)
+        # NOTE(sbauza): Now the DB update is asynchronous, we need to locally
+        #               update the values
+        self.compute_node.update(values)
+        # Persist the stats to the Scheduler
+        self._update_resource_stats(context, values)
         if self.pci_tracker:
             self.pci_tracker.save(context)
+
+    def _update_resource_stats(self, context, values):
+        stats = values.copy()
+        stats['id'] = self.compute_node['id']
+        self.scheduler_client.update_resource_stats(
+            context, (self.host, self.nodename), stats)
 
     def _update_usage(self, resources, usage, sign=1):
         mem_usage = usage['memory_mb']
@@ -628,8 +646,9 @@ class ResourceTracker(object):
         """
         self.tracked_instances.clear()
 
-        # purge old stats
+        # purge old stats and init with anything passed in by the driver
         self.stats.clear()
+        self.stats.digest_stats(resources.get('stats'))
 
         # set some initial values, reserve room for host/hypervisor:
         resources['local_gb_used'] = CONF.reserved_host_disk_mb / 1024
@@ -645,9 +664,7 @@ class ResourceTracker(object):
         self.ext_resources_handler.reset_resources(resources, self.driver)
 
         for instance in instances:
-            if instance['vm_state'] == vm_states.DELETED:
-                continue
-            else:
+            if instance['vm_state'] != vm_states.DELETED:
                 self._update_usage_from_instance(resources, instance)
 
     def _find_orphaned_instances(self):

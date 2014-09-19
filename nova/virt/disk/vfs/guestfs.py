@@ -13,9 +13,12 @@
 # under the License.
 
 from eventlet import tpool
+import six
 
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LW
+from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.virt.disk.vfs import api as vfs
 
@@ -23,6 +26,18 @@ from nova.virt.disk.vfs import api as vfs
 LOG = logging.getLogger(__name__)
 
 guestfs = None
+forceTCG = False
+
+
+def force_tcg(force=True):
+    """Prevent libguestfs trying to use KVM acceleration
+
+    It is a good idea to call this if it is known that
+    KVM is not desired, even if technically available.
+    """
+
+    global forceTCG
+    forceTCG = force
 
 
 class VFSGuestFS(vfs.VFS):
@@ -37,7 +52,7 @@ class VFSGuestFS(vfs.VFS):
 
         global guestfs
         if guestfs is None:
-            guestfs = __import__('guestfs')
+            guestfs = importutils.import_module('guestfs')
 
         self.handle = None
 
@@ -105,15 +120,28 @@ class VFSGuestFS(vfs.VFS):
         LOG.debug("Setting up appliance for %(imgfile)s %(imgfmt)s",
                   {'imgfile': self.imgfile, 'imgfmt': self.imgfmt})
         try:
-            self.handle = tpool.Proxy(guestfs.GuestFS(close_on_exit=False))
+            self.handle = tpool.Proxy(
+                guestfs.GuestFS(python_return_dict=False,
+                                close_on_exit=False))
         except TypeError as e:
-            if 'close_on_exit' in str(e):
+            if ('close_on_exit' in six.text_type(e) or
+                'python_return_dict' in six.text_type(e)):
                 # NOTE(russellb) In case we're not using a version of
-                # libguestfs new enough to support the close_on_exit parameter,
-                # which was added in libguestfs 1.20.
+                # libguestfs new enough to support parameters close_on_exit
+                # and python_return_dict which were added in libguestfs 1.20.
                 self.handle = tpool.Proxy(guestfs.GuestFS())
             else:
                 raise
+
+        try:
+            if forceTCG:
+                self.handle.set_backend_settings("force_tcg")
+        except AttributeError as ex:
+            # set_backend_settings method doesn't exist in older
+            # libguestfs versions, so nothing we can do but ignore
+            LOG.warn(_LW("Unable to force TCG mode, libguestfs too old? %s"),
+                     ex)
+            pass
 
         try:
             self.handle.add_drive_opts(self.imgfile, format=self.imgfmt)

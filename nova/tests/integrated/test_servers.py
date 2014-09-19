@@ -282,7 +282,7 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
             LOG.debug("Found_server=%s" % found_server)
 
             # TODO(justinsb): Mock doesn't yet do accurate state changes
-            #if found_server['status'] != 'deleting':
+            # if found_server['status'] != 'deleting':
             #    break
             time.sleep(.1)
 
@@ -510,12 +510,10 @@ class ServersTest(integrated_helpers._IntegratedTestBase):
 
 
 class ServersTestV3(client.TestOpenStackClientV3Mixin, ServersTest):
-    _force_delete_parameter = 'force_delete'
+    _force_delete_parameter = 'forceDelete'
     _api_version = 'v3'
-    _image_ref_parameter = 'image_ref'
-    _flavor_ref_parameter = 'flavor_ref'
-    _return_resv_id_parameter = 'os-multiple-create:return_reservation_id'
-    _min_count_parameter = 'os-multiple-create:min_count'
+    _image_ref_parameter = 'imageRef'
+    _flavor_ref_parameter = 'flavorRef'
     _access_ipv4_parameter = None
     _access_ipv6_parameter = None
 

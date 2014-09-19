@@ -83,6 +83,8 @@ class BlockDeviceDict(dict):
         do_not_default = do_not_default or set()
 
         self._validate(bdm_dict)
+        if bdm_dict.get('device_name'):
+            bdm_dict['device_name'] = prepend_dev(bdm_dict['device_name'])
         # NOTE (ndipanov): Never default db fields
         self.update(
             dict((field, None)
@@ -184,6 +186,9 @@ class BlockDeviceDict(dict):
             if source_type not in ('volume', 'image', 'snapshot', 'blank'):
                 raise exception.InvalidBDMFormat(
                     details=_("Invalid source_type field."))
+            elif source_type == 'blank' and device_uuid:
+                raise exception.InvalidBDMFormat(
+                    details=_("Invalid device UUID."))
             elif source_type != 'blank':
                 if not device_uuid:
                     raise exception.InvalidBDMFormat(
@@ -409,8 +414,9 @@ def new_format_is_swap(bdm):
 
 
 def new_format_is_ephemeral(bdm):
-    if (bdm.get('source_type') == 'blank' and not
-            new_format_is_swap(bdm)):
+    if (bdm.get('source_type') == 'blank' and
+            bdm.get('destination_type') == 'local' and
+            bdm.get('guest_format') != 'swap'):
         return True
     return False
 
@@ -420,6 +426,14 @@ def get_root_bdm(bdms):
         return (bdm for bdm in bdms if bdm.get('boot_index', -1) == 0).next()
     except StopIteration:
         return None
+
+
+def get_bdms_to_connect(bdms, exclude_root_mapping=False):
+    """Will return non-root mappings, when exclude_root_mapping is true.
+       Otherwise all mappings will be returned.
+    """
+    return (bdm for bdm in bdms if bdm.get('boot_index', -1) != 0 or
+            not exclude_root_mapping)
 
 
 def mappings_prepend_dev(mappings):

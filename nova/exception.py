@@ -292,7 +292,7 @@ class InvalidVolume(Invalid):
 
 
 class InvalidVolumeAccessMode(Invalid):
-    msg_fmt = _("Invalid volume access mode") + ": %(access_mode)s"
+    msg_fmt = _("Invalid volume access mode: %(access_mode)s")
 
 
 class InvalidMetadata(Invalid):
@@ -314,10 +314,6 @@ class InvalidIpProtocol(Invalid):
 
 class InvalidContentType(Invalid):
     msg_fmt = _("Invalid content type %(content_type)s.")
-
-
-class InvalidCidr(Invalid):
-    msg_fmt = _("Invalid cidr %(cidr)s.")
 
 
 class InvalidUnicodeParameter(Invalid):
@@ -594,8 +590,44 @@ class NetworkInUse(NovaException):
     msg_fmt = _("Network %(network_id)s is still in use.")
 
 
-class NetworkNotCreated(NovaException):
+class NetworkNotCreated(Invalid):
     msg_fmt = _("%(req)s is required to create a network.")
+
+
+class LabelTooLong(Invalid):
+    msg_fmt = _("Maximum allowed length for 'label' is 255.")
+
+
+class InvalidIntValue(Invalid):
+    msg_fmt = _("%(key)s must be an integer.")
+
+
+class InvalidCidr(Invalid):
+    msg_fmt = _("%(cidr)s is not a valid ip network.")
+
+
+class InvalidAddress(Invalid):
+    msg_fmt = _("%(address)s is not a valid ip address.")
+
+
+class AddressOutOfRange(Invalid):
+    msg_fmt = _("%(address)s is not within %(cidr)s.")
+
+
+class DuplicateVlan(NovaException):
+    msg_fmt = _("Detected existing vlan with id %(vlan)d")
+    code = 409
+
+
+class CidrConflict(NovaException):
+    msg_fmt = _('Requested cidr (%(cidr)s) conflicts '
+                'with existing cidr (%(other)s)')
+    code = 409
+
+
+class NetworkHasProject(NetworkInUse):
+    msg_fmt = _('Network must be disassociated from project '
+                '%(project_id)s before it can be deleted.')
 
 
 class NetworkNotFound(NotFound):
@@ -810,6 +842,11 @@ class ComputeHostNotFound(HostNotFound):
     msg_fmt = _("Compute host %(host)s could not be found.")
 
 
+class ComputeHostNotCreated(HostNotFound):
+    msg_fmt = _("Compute host %(name)s needs to be created first"
+                " before updating.")
+
+
 class HostBinaryNotFound(NotFound):
     msg_fmt = _("Could not find binary %(binary)s on host %(host)s.")
 
@@ -821,6 +858,10 @@ class InvalidReservationExpiration(Invalid):
 class InvalidQuotaValue(Invalid):
     msg_fmt = _("Change would make usage less than 0 for the following "
                 "resources: %(unders)s")
+
+
+class InvalidQuotaMethodUsage(Invalid):
+    msg_fmt = _("Wrong quota method %(method)s used on resource %(res)s")
 
 
 class QuotaNotFound(NotFound):
@@ -1148,6 +1189,9 @@ class NoValidHost(NovaException):
 class QuotaError(NovaException):
     ec2_code = 'ResourceLimitExceeded'
     msg_fmt = _("Quota exceeded: code=%(code)s")
+    # NOTE(cyeoh): 413 should only be used for the ec2 API
+    # The error status code for out of quota for the nova api should be
+    # 403 Forbidden.
     code = 413
     headers = {'Retry-After': 0}
     safe = True
@@ -1174,11 +1218,11 @@ class OnsetFileLimitExceeded(QuotaError):
     msg_fmt = _("Personality file limit exceeded")
 
 
-class OnsetFilePathLimitExceeded(QuotaError):
+class OnsetFilePathLimitExceeded(OnsetFileLimitExceeded):
     msg_fmt = _("Personality file path too long")
 
 
-class OnsetFileContentLimitExceeded(QuotaError):
+class OnsetFileContentLimitExceeded(OnsetFileLimitExceeded):
     msg_fmt = _("Personality file content too long")
 
 
@@ -1231,15 +1275,6 @@ class InstancePasswordSetFailed(NovaException):
     safe = True
 
 
-class DuplicateVlan(NovaException):
-    msg_fmt = _("Detected existing vlan with id %(vlan)d")
-
-
-class CidrConflict(NovaException):
-    msg_fmt = _("There was a conflict when trying to complete your request.")
-    code = 409
-
-
 class InstanceNotFound(NotFound):
     ec2_code = 'InvalidInstanceID.NotFound'
     msg_fmt = _("Instance %(instance_id)s could not be found.")
@@ -1263,8 +1298,13 @@ class MarkerNotFound(NotFound):
 
 
 class InvalidInstanceIDMalformed(Invalid):
+    msg_fmt = _("Invalid id: %(instance_id)s (expecting \"i-...\")")
     ec2_code = 'InvalidInstanceID.Malformed'
-    msg_fmt = _("Invalid id: %(val)s (expecting \"i-...\").")
+
+
+class InvalidVolumeIDMalformed(Invalid):
+    msg_fmt = _("Invalid id: %(volume_id)s (expecting \"i-...\")")
+    ec2_code = 'InvalidVolumeID.Malformed'
 
 
 class CouldNotFetchImage(NovaException):
@@ -1302,11 +1342,13 @@ class ConfigDriveUnknownFormat(NovaException):
 
 
 class InterfaceAttachFailed(Invalid):
-    msg_fmt = _("Failed to attach network adapter device to %(instance)s")
+    msg_fmt = _("Failed to attach network adapter device to "
+                "%(instance_uuid)s")
 
 
 class InterfaceDetachFailed(Invalid):
-    msg_fmt = _("Failed to detach network adapter device from  %(instance)s")
+    msg_fmt = _("Failed to detach network adapter device from "
+                "%(instance_uuid)s")
 
 
 class InstanceUserDataTooLarge(NovaException):
@@ -1491,6 +1533,17 @@ class PciDeviceWrongAddressFormat(NovaException):
     msg_fmt = _("The PCI address %(address)s has an incorrect format.")
 
 
+class PciDeviceInvalidAddressField(NovaException):
+    msg_fmt = _("Invalid PCI Whitelist: "
+                "The PCI address %(address)s has an invalid %(field)s.")
+
+
+class PciDeviceInvalidDeviceName(NovaException):
+    msg_fmt = _("Invalid PCI Whitelist: "
+                "The PCI whitelist can specify devname or address,"
+                " but not both")
+
+
 class PciDeviceNotFoundById(NotFound):
     msg_fmt = _("PCI device %(id)s not found")
 
@@ -1589,12 +1642,6 @@ class InvalidWatchdogAction(Invalid):
     msg_fmt = _("Provided watchdog action (%(action)s) is not supported.")
 
 
-class NoLiveMigrationForConfigDriveInLibVirt(NovaException):
-    msg_fmt = _("Live migration of instances with config drives is not "
-                "supported in libvirt unless libvirt instance path and "
-                "drive data is shared across compute nodes.")
-
-
 class LiveMigrationWithOldNovaNotSafe(NovaException):
     msg_fmt = _("Host %(server)s is running an old version of Nova, "
                 "live migrations involving that version may cause data loss. "
@@ -1618,3 +1665,65 @@ class ImageVCPUTopologyRangeExceeded(Invalid):
 class ImageVCPULimitsRangeImpossible(Invalid):
     msg_fmt = _("Requested vCPU limits %(sockets)d:%(cores)d:%(threads)d "
                 "are impossible to satisfy for vcpus count %(vcpus)d")
+
+
+class InvalidArchitectureName(Invalid):
+    msg_fmt = _("Architecture name '%(arch)s' is not recognised")
+
+
+class ImageNUMATopologyIncomplete(Invalid):
+    msg_fmt = _("CPU and memory allocation must be provided for all "
+                "NUMA nodes")
+
+
+class ImageNUMATopologyForbidden(Invalid):
+    msg_fmt = _("Image property '%(name)s' is not permitted to override "
+                "NUMA configuration set against the flavor")
+
+
+class ImageNUMATopologyAsymmetric(Invalid):
+    msg_fmt = _("Asymmetric NUMA topologies require explicit assignment "
+                "of CPUs and memory to nodes in image or flavor")
+
+
+class ImageNUMATopologyCPUOutOfRange(Invalid):
+    msg_fmt = _("CPU number %(cpunum)d is larger than max %(cpumax)d")
+
+
+class ImageNUMATopologyCPUDuplicates(Invalid):
+    msg_fmt = _("CPU number %(cpunum)d is assigned to two nodes")
+
+
+class ImageNUMATopologyCPUsUnassigned(Invalid):
+    msg_fmt = _("CPU number %(cpuset)s is not assigned to any node")
+
+
+class ImageNUMATopologyMemoryOutOfRange(Invalid):
+    msg_fmt = _("%(memsize)d MB of memory assigned, but expected "
+                "%(memtotal)d MB")
+
+
+class InvalidHostname(Invalid):
+    msg_fmt = _("Invalid characters in hostname '%(hostname)s'")
+
+
+class NumaTopologyNotFound(NotFound):
+    msg_fmt = _("Instance %(instance_uuid)s does not specify a NUMA topology")
+
+
+class SocketPortRangeExhaustedException(NovaException):
+    msg_fmt = _("Not able to acquire a free port for %(host)s")
+
+
+class SocketPortInUseException(NovaException):
+    msg_fmt = _("Not able to bind %(host)s:%(port)d, %(error)s")
+
+
+class ImageSerialPortNumberInvalid(Invalid):
+    msg_fmt = _("Number of serial ports '%(num_ports)s' specified in "
+                "'%(property)s' isn't valid.")
+
+
+class ImageSerialPortNumberExceedFlavorValue(Invalid):
+    msg_fmt = _("Forbidden to exceed flavor value of number of serial "
+                "ports passed in image meta.")

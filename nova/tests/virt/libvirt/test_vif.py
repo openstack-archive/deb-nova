@@ -326,7 +326,7 @@ class LibvirtVifTestCase(test.TestCase):
         default_inst_type['extra_specs'] = dict(extra_specs + quota_bandwidth)
         conf = self._get_conf()
         nic = driver.get_config(self.instance, vif, image_meta,
-                                default_inst_type)
+                                default_inst_type, CONF.libvirt.virt_type)
         conf.add_device(nic)
         return conf.to_xml()
 
@@ -382,20 +382,25 @@ class LibvirtVifTestCase(test.TestCase):
 
         d = vif.LibvirtGenericVIFDriver(self._get_conn())
         xml = self._get_instance_xml(d, self.vif_bridge)
-
         self._assertModel(xml, network_model.VIF_MODEL_VIRTIO)
 
-    def test_model_kvm_custom(self):
-        self.flags(use_virtio_for_bridges=True,
-                   virt_type='kvm',
-                   group='libvirt')
+    def test_model_kvm_qemu_custom(self):
+        for virt in ('kvm', 'qemu'):
+            self.flags(use_virtio_for_bridges=True,
+                       virt_type=virt,
+                       group='libvirt')
 
-        d = vif.LibvirtGenericVIFDriver(self._get_conn())
-        image_meta = {'properties': {'hw_vif_model':
-                                     network_model.VIF_MODEL_E1000}}
-        xml = self._get_instance_xml(d, self.vif_bridge,
-                                     image_meta)
-        self._assertModel(xml, network_model.VIF_MODEL_E1000)
+            d = vif.LibvirtGenericVIFDriver(self._get_conn())
+            supported = (network_model.VIF_MODEL_NE2K_PCI,
+                         network_model.VIF_MODEL_PCNET,
+                         network_model.VIF_MODEL_RTL8139,
+                         network_model.VIF_MODEL_E1000,
+                         network_model.VIF_MODEL_SPAPR_VLAN)
+            for model in supported:
+                image_meta = {'properties': {'hw_vif_model': model}}
+                xml = self._get_instance_xml(d, self.vif_bridge,
+                                             image_meta)
+                self._assertModel(xml, model)
 
     def test_model_kvm_bogus(self):
         self.flags(use_virtio_for_bridges=True,
@@ -454,9 +459,8 @@ class LibvirtVifTestCase(test.TestCase):
             self.vif_8021qbg,
             self.vif_iovisor,
             self.vif_mlnx,
+            self.vif_ovs,
         )
-        self._test_model_qemu(self.vif_ovs,
-                              libvirt_version=vif.LIBVIRT_OVS_VPORT_VERSION)
 
     def test_model_qemu_iptables(self):
         self.flags(firewall_driver="nova.virt.firewall.IptablesFirewallDriver")
@@ -507,23 +511,8 @@ class LibvirtVifTestCase(test.TestCase):
         script = node.find("script").get("path")
         self.assertEqual(script, "")
 
-    def _check_ovs_ethernet_driver(self, d, vif, dev_prefix):
-        self.flags(firewall_driver="nova.virt.firewall.NoopFirewallDriver")
-        xml = self._get_instance_xml(d, vif)
-        node = self._get_node(xml)
-        self._assertTypeAndMacEquals(node, "ethernet", "target", "dev",
-                                     self.vif_ovs, prefix=dev_prefix)
-        script = node.find("script").get("path")
-        self.assertEqual(script, "")
-
-    def test_ovs_ethernet_driver(self):
-        d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
-        self._check_ovs_ethernet_driver(d,
-                                        self.vif_ovs,
-                                        "tap")
-
     def test_unplug_ivs_ethernet(self):
-        d = vif.LibvirtGenericVIFDriver(self._get_conn(ver=9010))
+        d = vif.LibvirtGenericVIFDriver(self._get_conn())
         with mock.patch.object(linux_net, 'delete_ivs_vif_port') as delete:
             delete.side_effect = processutils.ProcessExecutionError
             d.unplug_ivs_ethernet(None, self.vif_ovs)
@@ -810,7 +799,7 @@ class LibvirtVifTestCase(test.TestCase):
         br_want = self.vif_midonet['devname']
         xml = self._get_instance_xml(d, self.vif_ovs_filter_cap)
         node = self._get_node(xml)
-        self._assertTypeAndMacEquals(node, "ethernet", "target", "dev",
+        self._assertTypeAndMacEquals(node, "bridge", "target", "dev",
                                      self.vif_ovs_filter_cap, br_want)
 
     def _check_neutron_hybrid_driver(self, d, vif, br_want):

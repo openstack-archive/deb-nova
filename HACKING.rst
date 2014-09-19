@@ -35,6 +35,10 @@ Nova Specific Commandments
   self.flags(option=value) instead.
 - [N321] Validate that LOG messages, except debug ones, have translations
 - [N322] Method's default argument shouldn't be mutable
+- [N323] Ensure that the _() function is explicitly imported to ensure proper translations.
+- [N324] Ensure that jsonutils.%(fun)s must be used instead of json.%(fun)s
+- [N325] str() cannot be used on an exception.  Remove use or use six.text_type()
+- [N326] Translated messages cannot be concatenated.  String should be included in translated message.
 
 Creating Unit Tests
 -------------------

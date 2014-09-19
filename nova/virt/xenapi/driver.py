@@ -228,6 +228,10 @@ class XenAPIDriver(driver.ComputeDriver):
         """Create snapshot from a running VM instance."""
         self._vmops.snapshot(context, instance, image_id, update_task_state)
 
+    def post_interrupted_snapshot_cleanup(self, context, instance):
+        """Cleans up any resources left after a failed snapshot."""
+        self._vmops.post_interrupted_snapshot_cleanup(context, instance)
+
     def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None, bad_volumes_callback=None):
         """Reboot VM instance."""
@@ -255,7 +259,7 @@ class XenAPIDriver(driver.ComputeDriver):
                             destroy_disks)
 
     def cleanup(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True, migrate_data=None):
+                destroy_disks=True, migrate_data=None, destroy_vifs=True):
         """Cleanup after instance being destroyed by Hypervisor."""
         pass
 
@@ -269,11 +273,13 @@ class XenAPIDriver(driver.ComputeDriver):
 
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    flavor, network_info,
-                                   block_device_info=None):
+                                   block_device_info=None,
+                                   timeout=0, retry_interval=0):
         """Transfers the VHD of a running instance to another host, then shuts
         off the instance copies over the COW disk
         """
         # NOTE(vish): Xen currently does not use network info.
+        # TODO(PhilDay): Add support for timeout (clean shutdown)
         return self._vmops.migrate_disk_and_power_off(context, instance,
                     dest, flavor, block_device_info)
 
@@ -299,8 +305,9 @@ class XenAPIDriver(driver.ComputeDriver):
         """Unrescue the specified instance."""
         self._vmops.unrescue(instance)
 
-    def power_off(self, instance):
+    def power_off(self, instance, timeout=0, retry_interval=0):
         """Power off the specified instance."""
+        # TODO(PhilDay): Add support for timeout (clean shutdown)
         self._vmops.power_off(instance)
 
     def power_on(self, context, instance, network_info,
@@ -584,7 +591,8 @@ class XenAPIDriver(driver.ComputeDriver):
             nova.db.sqlalchemy.models.Instance object
             instance object that is migrated.
         :param network_info: instance network information
-        :param : block_migration: if true, post operation of block_migration.
+        :param block_migration: if true, post operation of block_migration.
+
         """
         self._vmops.post_live_migration_at_destination(context, instance,
                 network_info, block_device_info, block_device_info)
@@ -677,7 +685,6 @@ class XenAPIDriver(driver.ComputeDriver):
     def get_per_instance_usage(self):
         """Get information about instance resource usage.
 
-        :returns: dict of  nova uuid => dict of usage
-        info
+        :returns: dict of  nova uuid => dict of usage info
         """
         return self._vmops.get_per_instance_usage()

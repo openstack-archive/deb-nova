@@ -84,7 +84,7 @@ class MultiNodeComputeTestCase(BaseTestCase):
         self.conductor = self.start_service('conductor',
                                             manager=CONF.conductor.manager)
 
-        def fake_get_compute_nodes_in_db(context):
+        def fake_get_compute_nodes_in_db(context, use_slave=False):
             fake_compute_nodes = [{'local_gb': 259,
                                    'vcpus_used': 0,
                                    'deleted': 0,
@@ -106,6 +106,7 @@ class MultiNodeComputeTestCase(BaseTestCase):
                                    'deleted_at': None,
                                    'free_ram_mb': 130560,
                                    'metrics': '',
+                                   'numa_topology': '',
                                    'stats': '',
                                    'id': 2,
                                    'host_ip': '127.0.0.1'}]
@@ -149,7 +150,7 @@ class MultiNodeComputeTestCase(BaseTestCase):
                 context=ctx, hypervisor_hostname='B', id=3),
             ]
 
-        def fake_get_compute_nodes_in_db(context):
+        def fake_get_compute_nodes_in_db(context, use_slave=False):
             return fake_compute_nodes
 
         def fake_compute_node_delete(context, compute_node_id):

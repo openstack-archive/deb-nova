@@ -19,7 +19,6 @@ import datetime
 import uuid
 
 from oslo.config import cfg
-import webob
 
 from nova.api.openstack.compute import plugins
 from nova.api.openstack.compute.plugins.v3 import servers
@@ -27,6 +26,7 @@ from nova.api.openstack.compute.plugins.v3 import user_data
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova import db
+from nova import exception
 from nova.network import manager
 from nova.openstack.common import jsonutils
 from nova import test
@@ -143,9 +143,9 @@ class ServersControllerCreateTest(test.TestCase):
     def _test_create_extra(self, params, no_image=False,
                            override_controller=None):
         image_uuid = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
-        server = dict(name='server_test', image_ref=image_uuid, flavor_ref=2)
+        server = dict(name='server_test', imageRef=image_uuid, flavorRef=2)
         if no_image:
-            server.pop('image_ref', None)
+            server.pop('imageRef', None)
         server.update(params)
         body = dict(server=server)
         req = fakes.HTTPRequestV3.blank('/servers')
@@ -156,6 +156,7 @@ class ServersControllerCreateTest(test.TestCase):
             server = override_controller.create(req, body=body).obj['server']
         else:
             server = self.controller.create(req, body=body).obj['server']
+        return server
 
     def test_create_instance_with_user_data_disabled(self):
         params = {user_data.ATTRIBUTE_NAME: base64.b64encode('fake')}
@@ -182,51 +183,13 @@ class ServersControllerCreateTest(test.TestCase):
         self._test_create_extra(params)
 
     def test_create_instance_with_user_data(self):
-        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        flavor_ref = 'http://localhost/flavors/3'
-        value = "A random string"
-        body = {
-            'server': {
-                'name': 'user_data_test',
-                'image_ref': image_href,
-                'flavor_ref': flavor_ref,
-                'metadata': {
-                    'hello': 'world',
-                    'open': 'stack',
-                },
-                user_data.ATTRIBUTE_NAME: base64.b64encode(value),
-            },
-        }
-
-        req = fakes.HTTPRequestV3.blank('/servers')
-        req.method = 'POST'
-        req.body = jsonutils.dumps(body)
-        req.headers["content-type"] = "application/json"
-        res = self.controller.create(req, body=body).obj
-
-        server = res['server']
+        value = base64.b64encode("A random string")
+        params = {user_data.ATTRIBUTE_NAME: value}
+        server = self._test_create_extra(params)
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_bad_user_data(self):
-        image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        flavor_ref = 'http://localhost/flavors/3'
         value = "A random string"
-        body = {
-            'server': {
-                'name': 'user_data_test',
-                'image_ref': image_href,
-                'flavor_ref': flavor_ref,
-                'metadata': {
-                    'hello': 'world',
-                    'open': 'stack',
-                },
-                user_data.ATTRIBUTE_NAME: value,
-            },
-        }
-
-        req = fakes.HTTPRequestV3.blank('/servers')
-        req.method = 'POST'
-        req.body = jsonutils.dumps(body)
-        req.headers["content-type"] = "application/json"
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller.create, req, body=body)
+        params = {user_data.ATTRIBUTE_NAME: value}
+        self.assertRaises(exception.ValidationError,
+                          self._test_create_extra, params)

@@ -21,7 +21,7 @@ from nova.api.openstack.compute.views import addresses as views_addresses
 from nova.api.openstack.compute.views import flavors as views_flavors
 from nova.api.openstack.compute.views import images as views_images
 from nova.compute import flavors
-from nova.i18n import _
+from nova.i18n import _LW
 from nova.objects import base as obj_base
 from nova.openstack.common import log as logging
 from nova.openstack.common import timeutils
@@ -194,8 +194,8 @@ class ViewBuilder(common.ViewBuilder):
     def _get_flavor(self, request, instance):
         instance_type = flavors.extract_flavor(instance)
         if not instance_type:
-            LOG.warn(_("Instance has had its instance_type removed "
-                    "from the DB"), instance=instance)
+            LOG.warn(_LW("Instance has had its instance_type removed "
+                         "from the DB"), instance=instance)
             return {}
         flavor_id = instance_type["flavorid"]
         flavor_bookmark = self._flavor_builder._get_bookmark_link(request,
@@ -241,7 +241,9 @@ class ViewBuilderV3(ViewBuilder):
         """Initialize view builder."""
         super(ViewBuilderV3, self).__init__()
         self._address_builder = views_addresses.ViewBuilderV3()
-        self._image_builder = views_images.ViewBuilderV3()
+        # TODO(alex_xu): In V3 API, we correct the image bookmark link to
+        # use glance endpoint. We revert back it to use nova endpoint for v2.1.
+        self._image_builder = views_images.ViewBuilder()
 
     def show(self, request, instance):
         """Detailed view of a single instance."""
@@ -253,7 +255,10 @@ class ViewBuilderV3(ViewBuilder):
                 "tenant_id": instance.get("project_id") or "",
                 "user_id": instance.get("user_id") or "",
                 "metadata": self._get_metadata(instance),
-                "host_id": self._get_host_id(instance) or "",
+                "hostId": self._get_host_id(instance) or "",
+                # TODO(alex_xu): '_get_image' return {} when there image_ref
+                # isn't existed in V3 API, we revert it back to return "" in
+                # V2.1.
                 "image": self._get_image(request, instance),
                 "flavor": self._get_flavor(request, instance),
                 "created": timeutils.isotime(instance["created_at"]),
@@ -272,7 +277,4 @@ class ViewBuilderV3(ViewBuilder):
         if server["server"]["status"] in self._progress_statuses:
             server["server"]["progress"] = instance.get("progress", 0)
 
-        # We should modify the "image" to empty dictionary
-        if not server["server"]["image"]:
-            server["server"]["image"] = {}
         return server

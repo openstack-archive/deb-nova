@@ -443,7 +443,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
         # Note(sulo): We don't care about session id in test
         # they will always differ so strip that out
-        actual_path = console['internal_access_path'].split('&')[0]
+        actual_path = console.internal_access_path.split('&')[0]
         expected_path = "/console?ref=%s" % str(vm_ref)
 
         self.assertEqual(expected_path, actual_path)
@@ -460,7 +460,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
         # Note(sulo): We don't care about session id in test
         # they will always differ so strip that out
-        actual_path = console['internal_access_path'].split('&')[0]
+        actual_path = console.internal_access_path.split('&')[0]
         expected_path = "/console?ref=%s" % str(rescue_vm)
 
         self.assertEqual(expected_path, actual_path)
@@ -974,7 +974,7 @@ iface eth0 inet6 static
             return '', ''
 
         def _umount_handler(cmd, *ignore_args, **ignore_kwargs):
-            # Umount would normall make files in the m,ounted filesystem
+            # Umount would normally make files in the mounted filesystem
             # disappear, so do that here
             LOG.debug('Removing simulated guest agent files in %s',
                       self._tmpdir)
@@ -1165,7 +1165,7 @@ iface eth0 inet6 static
 
         def fake_resetnetwork(self, method, args):
             fake_resetnetwork.called = True
-            #NOTE(johngarbutt): as returned by FreeBSD and Gentoo
+            # NOTE(johngarbutt): as returned by FreeBSD and Gentoo
             return jsonutils.dumps({'returncode': '500',
                                     'message': 'success'})
         self.stubs.Set(stubs.FakeSessionForVMTests,
@@ -1231,9 +1231,16 @@ iface eth0 inet6 static
 
         swap_vdi_ref = xenapi_fake.create_vdi('swap', None)
         root_vdi_ref = xenapi_fake.create_vdi('root', None)
+        eph1_vdi_ref = xenapi_fake.create_vdi('eph', None)
+        eph2_vdi_ref = xenapi_fake.create_vdi('eph', None)
+        vol_vdi_ref = xenapi_fake.create_vdi('volume', None)
 
-        xenapi_fake.create_vbd(vm_ref, swap_vdi_ref, userdevice=1)
+        xenapi_fake.create_vbd(vm_ref, swap_vdi_ref, userdevice=2)
         xenapi_fake.create_vbd(vm_ref, root_vdi_ref, userdevice=0)
+        xenapi_fake.create_vbd(vm_ref, eph1_vdi_ref, userdevice=4)
+        xenapi_fake.create_vbd(vm_ref, eph2_vdi_ref, userdevice=5)
+        xenapi_fake.create_vbd(vm_ref, vol_vdi_ref, userdevice=6,
+                               other_config={'osvol': True})
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         image_meta = {'id': IMAGE_VHD,
@@ -1245,11 +1252,16 @@ iface eth0 inet6 static
         rescue_ref = vm_utils.lookup(session, rescue_name)
         rescue_vm = xenapi_fake.get_record('VM', rescue_ref)
 
-        vdi_refs = []
+        vdi_refs = {}
         for vbd_ref in rescue_vm['VBDs']:
-            vdi_refs.append(xenapi_fake.get_record('VBD', vbd_ref)['VDI'])
-        self.assertNotIn(swap_vdi_ref, vdi_refs)
-        self.assertIn(root_vdi_ref, vdi_refs)
+            vbd = xenapi_fake.get_record('VBD', vbd_ref)
+            vdi_refs[vbd['VDI']] = vbd['userdevice']
+
+        self.assertEqual('1', vdi_refs[root_vdi_ref])
+        self.assertEqual('2', vdi_refs[swap_vdi_ref])
+        self.assertEqual('4', vdi_refs[eph1_vdi_ref])
+        self.assertEqual('5', vdi_refs[eph2_vdi_ref])
+        self.assertNotIn(vol_vdi_ref, vdi_refs)
 
     def test_rescue_preserve_disk_on_failure(self):
         # test that the original disk is preserved if rescue setup fails
@@ -2741,7 +2753,7 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
                                        'from_port': 200,
                                        'to_port': 299,
                                        'cidr': '192.168.99.0/24'})
-        #validate the extra rule
+        # validate the extra rule
         self.fw.refresh_security_group_rules(secgroup)
         regex = re.compile('\[0\:0\] -A .* -j ACCEPT -p udp --dport 200:299'
                            ' -s 192.168.99.0/24')
@@ -3072,27 +3084,30 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
         aggregate is not ready.
         """
         aggregate = self._aggregate_setup(aggr_state=pool_states.CHANGING)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.conn.add_to_aggregate, self.context,
-                          aggregate, 'host')
+        ex = self.assertRaises(exception.InvalidAggregateAction,
+                               self.conn.add_to_aggregate, self.context,
+                               aggregate, 'host')
+        self.assertIn('setup in progress', str(ex))
 
     def test_add_host_to_aggregate_invalid_dismissed_status(self):
         """Ensure InvalidAggregateAction is raised when aggregate is
         deleted.
         """
         aggregate = self._aggregate_setup(aggr_state=pool_states.DISMISSED)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.conn.add_to_aggregate, self.context,
-                          aggregate, 'fake_host')
+        ex = self.assertRaises(exception.InvalidAggregateAction,
+                               self.conn.add_to_aggregate, self.context,
+                               aggregate, 'fake_host')
+        self.assertIn('aggregate deleted', str(ex))
 
     def test_add_host_to_aggregate_invalid_error_status(self):
         """Ensure InvalidAggregateAction is raised when aggregate is
         in error.
         """
         aggregate = self._aggregate_setup(aggr_state=pool_states.ERROR)
-        self.assertRaises(exception.InvalidAggregateAction,
-                          self.conn.add_to_aggregate, self.context,
-                          aggregate, 'fake_host')
+        ex = self.assertRaises(exception.InvalidAggregateAction,
+                               self.conn.add_to_aggregate, self.context,
+                               aggregate, 'fake_host')
+        self.assertIn('aggregate in error', str(ex))
 
     def test_remove_host_from_aggregate_error(self):
         # Ensure we can remove a host from an aggregate even if in error.

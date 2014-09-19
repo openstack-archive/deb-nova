@@ -89,7 +89,7 @@ TIME_UNITS = {
     'SECOND': 1,
     'MINUTE': 60,
     'HOUR': 3600,
-    'DAY': 84400
+    'DAY': 86400
 }
 
 
@@ -574,7 +574,7 @@ def monkey_patch():
     using CONF.monkey_patch_modules.
     The format is "Module path:Decorator function".
     Example:
-      'nova.api.ec2.cloud:nova.notifications.notify_decorator'
+    'nova.api.ec2.cloud:nova.notifications.notify_decorator'
 
     Parameters of the decorator is as follows.
     (See nova.notifications.notify_decorator)
@@ -770,7 +770,7 @@ def tempdir(**kwargs):
         try:
             shutil.rmtree(tmpdir)
         except OSError as e:
-            LOG.error(_('Could not remove tmpdir: %s'), str(e))
+            LOG.error(_('Could not remove tmpdir: %s'), e)
 
 
 def walk_class_hierarchy(clazz, encountered=None):
@@ -825,7 +825,7 @@ def mkfs(fs, path, label=None, run_as_root=False):
         args = ['mkswap']
     else:
         args = ['mkfs', '-t', fs]
-    #add -F to force no interactive execute on non-block device.
+    # add -F to force no interactive execute on non-block device.
     if fs in ('ext3', 'ext4', 'ntfs'):
         args.extend(['-F'])
     if label:
@@ -952,7 +952,7 @@ class ExceptionHelper(object):
         return wrapper
 
 
-def check_string_length(value, name, min_length=0, max_length=None):
+def check_string_length(value, name=None, min_length=0, max_length=None):
     """Check the length of specified string
     :param value: the value of the string
     :param name: the name of the string
@@ -960,8 +960,14 @@ def check_string_length(value, name, min_length=0, max_length=None):
     :param max_length: the max_length of the string
     """
     if not isinstance(value, six.string_types):
-        msg = _("%s is not a string or unicode") % name
+        if name is None:
+            msg = _("The input is not a string or unicode")
+        else:
+            msg = _("%s is not a string or unicode") % name
         raise exception.InvalidInput(message=msg)
+
+    if name is None:
+        name = value
 
     if len(value) < min_length:
         msg = _("%(name)s has a minimum character requirement of "

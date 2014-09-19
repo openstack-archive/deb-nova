@@ -12,6 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import re
+
 from nova.api import validation
 from nova.api.validation import parameter_types
 from nova import exception
@@ -24,11 +26,10 @@ class APIValidationTestCase(test.TestCase):
         try:
             method(body=body)
         except exception.ValidationError as ex:
-            expected_kwargs = {
-                'code': 400,
-                'detail': expected_detail
-            }
-            self.assertEqual(ex.kwargs, expected_kwargs)
+            self.assertEqual(400, ex.kwargs['code'])
+            if not re.match(expected_detail, ex.kwargs['detail']):
+                self.assertEqual(expected_detail, ex.kwargs['detail'],
+                                 'Exception details did not match expected')
         except Exception as ex:
             self.fail('An unexpected exception happens: %s' % ex)
         else:
@@ -356,22 +357,22 @@ class IntegerRangeTestCase(APIValidationTestCase):
 
     def test_validate_integer_range_fails(self):
         detail = ("Invalid input for field/attribute foo. Value: 0."
-                  " 0.0 is less than the minimum of 1")
+                  " 0(.0)? is less than the minimum of 1")
         self.check_validation_error(self.post, body={'foo': 0},
                                     expected_detail=detail)
 
         detail = ("Invalid input for field/attribute foo. Value: 11."
-                  " 11.0 is greater than the maximum of 10")
+                  " 11(.0)? is greater than the maximum of 10")
         self.check_validation_error(self.post, body={'foo': 11},
                                     expected_detail=detail)
 
         detail = ("Invalid input for field/attribute foo. Value: 0."
-                  " 0.0 is less than the minimum of 1")
+                  " 0(.0)? is less than the minimum of 1")
         self.check_validation_error(self.post, body={'foo': '0'},
                                     expected_detail=detail)
 
         detail = ("Invalid input for field/attribute foo. Value: 11."
-                  " 11.0 is greater than the maximum of 10")
+                  " 11(.0)? is greater than the maximum of 10")
         self.check_validation_error(self.post, body={'foo': '11'},
                                     expected_detail=detail)
 
@@ -540,7 +541,7 @@ class NameTestCase(APIValidationTestCase):
                          self.post(body={'foo': 'a'}))
 
     def test_validate_name_fails(self):
-        pattern = "'^(?! )[a-zA-Z0-9. _-]+(?<! )$'"
+        pattern = "'^(?! )[a-zA-Z0-9. _-]*(?<! )$'"
         detail = ("Invalid input for field/attribute foo. Value:  ."
                   " ' ' does not match %s") % pattern
         self.check_validation_error(self.post, body={'foo': ' '},
@@ -597,8 +598,53 @@ class TcpUdpPortTestCase(APIValidationTestCase):
                                     expected_detail=detail)
 
         detail = ("Invalid input for field/attribute foo. Value: 65536."
-                  " 65536.0 is greater than the maximum of 65535")
+                  " 65536(.0)? is greater than the maximum of 65535")
         self.check_validation_error(self.post, body={'foo': 65536},
+                                    expected_detail=detail)
+
+
+class DatetimeTestCase(APIValidationTestCase):
+
+    def setUp(self):
+        super(DatetimeTestCase, self).setUp()
+        schema = {
+            'type': 'object',
+            'properties': {
+                'foo': {
+                    'type': 'string',
+                    'format': 'date-time',
+                },
+            },
+        }
+
+        @validation.schema(schema)
+        def post(body):
+            return 'Validation succeeded.'
+
+        self.post = post
+
+    def test_validate_datetime(self):
+        self.assertEqual('Validation succeeded.',
+                         self.post(
+                         body={'foo': '2014-01-14T01:00:00Z'}
+                         ))
+
+    def test_validate_datetime_fails(self):
+        detail = ("Invalid input for field/attribute foo."
+                  " Value: 2014-13-14T01:00:00Z."
+                  " '2014-13-14T01:00:00Z' is not a 'date-time'")
+        self.check_validation_error(self.post,
+                                    body={'foo': '2014-13-14T01:00:00Z'},
+                                    expected_detail=detail)
+
+        detail = ("Invalid input for field/attribute foo."
+                  " Value: bar. 'bar' is not a 'date-time'")
+        self.check_validation_error(self.post, body={'foo': 'bar'},
+                                    expected_detail=detail)
+
+        detail = ("Invalid input for field/attribute foo. Value: 1."
+                  " '1' is not a 'date-time'")
+        self.check_validation_error(self.post, body={'foo': '1'},
                                     expected_detail=detail)
 
 
@@ -645,6 +691,64 @@ class UuidTestCase(APIValidationTestCase):
                   " 'abc' is not a 'uuid'")
         self.check_validation_error(self.post, body={'foo': 'abc'},
                                     expected_detail=detail)
+
+
+class UriTestCase(APIValidationTestCase):
+
+    def setUp(self):
+        super(UriTestCase, self).setUp()
+        schema = {
+            'type': 'object',
+            'properties': {
+                'foo': {
+                    'type': 'string',
+                    'format': 'uri',
+                },
+            },
+        }
+
+        @validation.schema(request_body_schema=schema)
+        def post(body):
+            return 'Validation succeeded.'
+
+        self.post = post
+
+    def test_validate_uri(self):
+        self.assertEqual('Validation succeeded.',
+                         self.post(
+                         body={'foo': 'http://localhost:8774/v2/servers'}
+                         ))
+        self.assertEqual('Validation succeeded.',
+                         self.post(
+                         body={'foo': 'http://[::1]:8774/v2/servers'}
+                         ))
+
+    def test_validate_uri_fails(self):
+        base_detail = ("Invalid input for field/attribute foo. Value: {0}. "
+                       "'{0}' is not a 'uri'")
+        invalid_uri = 'http://localhost:8774/v2/servers##'
+        self.check_validation_error(self.post,
+                                    body={'foo': invalid_uri},
+                                    expected_detail=base_detail.format(
+                                        invalid_uri))
+
+        invalid_uri = 'http://[fdf8:01]:8774/v2/servers'
+        self.check_validation_error(self.post,
+                                    body={'foo': invalid_uri},
+                                    expected_detail=base_detail.format(
+                                        invalid_uri))
+
+        invalid_uri = '1'
+        self.check_validation_error(self.post,
+                                    body={'foo': invalid_uri},
+                                    expected_detail=base_detail.format(
+                                        invalid_uri))
+
+        invalid_uri = 'abc'
+        self.check_validation_error(self.post,
+                                    body={'foo': invalid_uri},
+                                    expected_detail=base_detail.format(
+                                        invalid_uri))
 
 
 class Ipv4TestCase(APIValidationTestCase):
@@ -732,4 +836,37 @@ class Ipv6TestCase(APIValidationTestCase):
         detail = ("Invalid input for field/attribute foo."
                   " Value: 192.168.0.100. '192.168.0.100' is not a 'ipv6'")
         self.check_validation_error(self.post, body={'foo': '192.168.0.100'},
+                                    expected_detail=detail)
+
+
+class Base64TestCase(APIValidationTestCase):
+
+    def setUp(self):
+        super(APIValidationTestCase, self).setUp()
+        schema = {
+            'type': 'object',
+            'properties': {
+                'foo': {
+                    'type': 'string',
+                    'format': 'base64',
+                },
+            },
+        }
+
+        @validation.schema(request_body_schema=schema)
+        def post(body):
+            return 'Validation succeeded.'
+
+        self.post = post
+
+    def test_validate_base64(self):
+        self.assertEqual('Validation succeeded.',
+                         self.post(body={'foo': 'aGVsbG8gd29ybGQ='}))
+        # 'aGVsbG8gd29ybGQ=' is the base64 code of 'hello world'
+
+    def test_validate_base64_fails(self):
+        value = 'A random string'
+        detail = ("Invalid input for field/attribute foo. "
+                  "Value: %s. '%s' is not a 'base64'") % (value, value)
+        self.check_validation_error(self.post, body={'foo': value},
                                     expected_detail=detail)

@@ -22,6 +22,7 @@ import webob.exc
 
 from nova import context
 from nova.i18n import _
+from nova.i18n import _LW
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common.middleware import request_id
@@ -69,14 +70,18 @@ def pipeline_factory(loader, global_conf, **local_conf):
     # If the configuration file still contains 'ratelimit_v3', just ignore it.
     # We will remove this code at next release (J)
     if 'ratelimit_v3' in pipeline:
-        LOG.warn(_('ratelimit_v3 is removed from v3 api.'))
+        LOG.warn(_LW('ratelimit_v3 is removed from v3 api.'))
         pipeline.remove('ratelimit_v3')
     return _load_pipeline(loader, pipeline)
 
 
-def pipeline_factory_v3(loader, global_conf, **local_conf):
+def pipeline_factory_v21(loader, global_conf, **local_conf):
     """A paste pipeline replica that keys off of auth_strategy."""
     return _load_pipeline(loader, local_conf[CONF.auth_strategy].split())
+
+
+# NOTE(oomichi): This pipeline_factory_v3 is for passing check-grenade-dsvm.
+pipeline_factory_v3 = pipeline_factory_v21
 
 
 class InjectContext(wsgi.Middleware):
@@ -156,6 +161,6 @@ class NovaKeystoneContext(wsgi.Middleware):
             # Fallback to deprecated role header:
             roles = req.headers.get('X_ROLE', '')
             if roles:
-                LOG.warn(_("Sourcing roles from deprecated X-Role HTTP "
-                           "header"))
+                LOG.warn(_LW("Sourcing roles from deprecated X-Role HTTP "
+                             "header"))
         return [r.strip() for r in roles.split(',')]

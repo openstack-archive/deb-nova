@@ -33,47 +33,11 @@ from nova.pci import pci_device
 from nova.tests.objects import test_fixed_ip
 from nova.tests.objects import test_instance_info_cache
 from nova.tests.objects import test_pci_device
-from nova.virt.libvirt import config as libvirt_config
 
 
 HOST = "testhost"
 CONF = cfg.CONF
 CONF.import_opt('use_ipv6', 'nova.netconf')
-
-
-class FakeIptablesFirewallDriver(object):
-    def __init__(self, **kwargs):
-        pass
-
-    def setattr(self, key, val):
-        self.__setattr__(key, val)
-
-    def apply_instance_filter(self, instance, network_info):
-        pass
-
-
-class FakeVIFDriver(object):
-
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def setattr(self, key, val):
-        self.__setattr__(key, val)
-
-    def get_config(self, instance, vif, image_meta, inst_type):
-        conf = libvirt_config.LibvirtConfigGuestInterface()
-
-        for attr, val in conf.__dict__.iteritems():
-            if val is None:
-                setattr(conf, attr, 'fake')
-
-        return conf
-
-    def plug(self, instance, vif):
-        pass
-
-    def unplug(self, instance, vif):
-        pass
 
 
 class FakeModel(dict):
@@ -189,7 +153,8 @@ class FakeNetworkManager(network_manager.NetworkManager):
         self.deallocate_called = address
 
     def _create_fixed_ips(self, context, network_id, fixed_cidr=None,
-                          extra_reserved=None):
+                          extra_reserved=None, bottom_reserved=0,
+                          top_reserved=0):
         pass
 
     def get_instance_nw_info(context, instance_id, rxtx_factor,

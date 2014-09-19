@@ -10,7 +10,7 @@
                 }
             ]
         },
-        "admin_password": "%(password)s",
+        "adminPass": "%(password)s",
         "created": "%(isotime)s",
         "flavor": {
             "id": "1",
@@ -21,13 +21,13 @@
                 }
             ]
         },
-        "host_id": "%(hostid)s",
+        "hostId": "%(hostid)s",
         "id": "%(uuid)s",
         "image": {
             "id": "%(image_id)s",
             "links": [
                 {
-                    "href": "%(glance_host)s/images/%(image_id)s",
+                    "href": "%(host)s/images/%(image_id)s",
                     "rel": "bookmark"
                 }
             ]
@@ -51,7 +51,7 @@
         "tenant_id": "openstack",
         "updated": "%(isotime)s",
         "user_id": "fake",
-        "os-access-ips:access_ip_v4": "%(access_ip_v4)s",
-        "os-access-ips:access_ip_v6": "%(access_ip_v6)s"
+        "accessIPv4": "%(access_ip_v4)s",
+        "accessIPv6": "%(access_ip_v6)s"
     }
 }

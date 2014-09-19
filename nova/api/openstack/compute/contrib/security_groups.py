@@ -17,7 +17,6 @@
 """The security groups extension."""
 
 import contextlib
-import json
 
 import webob
 from webob import exc
@@ -32,6 +31,7 @@ from nova import exception
 from nova.i18n import _
 from nova.network.security_group import neutron_driver
 from nova.network.security_group import openstack_driver
+from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import xmlutils
 from nova.virt import netutils
@@ -194,7 +194,7 @@ def translate_exceptions():
         raise exc.HTTPNotFound(explanation=msg)
     except exception.SecurityGroupLimitExceeded as exp:
         msg = exp.format_message()
-        raise exc.HTTPRequestEntityTooLarge(explanation=msg)
+        raise exc.HTTPForbidden(explanation=msg)
     except exception.NoUniqueMatch as exp:
         msg = exp.format_message()
         raise exc.HTTPConflict(explanation=msg)
@@ -209,7 +209,12 @@ class SecurityGroupControllerBase(object):
         self.compute_api = compute.API(
                                    security_group_api=self.security_group_api)
 
-    def _format_security_group_rule(self, context, rule):
+    def _format_security_group_rule(self, context, rule, group_rule_data=None):
+        """Return a secuity group rule in desired API response format.
+
+        If group_rule_data is passed in that is used rather than querying
+        for it.
+        """
         sg_rule = {}
         sg_rule['id'] = rule['id']
         sg_rule['parent_group_id'] = rule['parent_group_id']
@@ -236,6 +241,8 @@ class SecurityGroupControllerBase(object):
                     return
             sg_rule['group'] = {'name': source_group.get('name'),
                                 'tenant_id': source_group.get('project_id')}
+        elif group_rule_data:
+            sg_rule['group'] = group_rule_data
         else:
             sg_rule['ip_range'] = {'cidr': rule['cidr']}
         return sg_rule
@@ -395,23 +402,22 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
                 msg = _("Bad prefix for network in cidr %s") % new_rule['cidr']
                 raise exc.HTTPBadRequest(explanation=msg)
 
+        group_rule_data = None
         with translate_exceptions():
+            if sg_rule.get('group_id'):
+                source_group = self.security_group_api.get(
+                            context, id=sg_rule['group_id'])
+                group_rule_data = {'name': source_group.get('name'),
+                                   'tenant_id': source_group.get('project_id')}
+
             security_group_rule = (
                 self.security_group_api.create_security_group_rule(
                     context, security_group, new_rule))
 
         formatted_rule = self._format_security_group_rule(context,
-                                                          security_group_rule)
-        if formatted_rule:
-            return {"security_group_rule": formatted_rule}
-
-        # TODO(arosen): if we first look up the security group information for
-        # the group_id before creating the rule we can avoid the case that
-        # the remote group (group_id) has been deleted when we go to look
-        # up it's name.
-        with translate_exceptions():
-            raise exception.SecurityGroupNotFound(
-                security_group_id=sg_rule['group_id'])
+                                                          security_group_rule,
+                                                          group_rule_data)
+        return {"security_group_rule": formatted_rule}
 
     def _rule_args_to_dict(self, context, to_port=None, from_port=None,
                            ip_protocol=None, cidr=None, group_id=None):
@@ -559,7 +565,7 @@ class SecurityGroupsOutputController(wsgi.Controller):
             else:
                 try:
                     # try converting to json
-                    req_obj = json.loads(req.body)
+                    req_obj = jsonutils.loads(req.body)
                     # Add security group to server, if no security group was in
                     # request add default since that is the group it is part of
                     servers[0][key] = req_obj['server'].get(

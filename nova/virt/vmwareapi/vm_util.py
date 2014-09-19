@@ -22,6 +22,7 @@ import copy
 import functools
 
 from oslo.config import cfg
+from oslo.vmware import exceptions as vexc
 
 from nova import exception
 from nova.i18n import _
@@ -30,7 +31,6 @@ from nova.openstack.common import log as logging
 from nova.openstack.common import units
 from nova import utils
 from nova.virt.vmwareapi import constants
-from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import vim_util
 
 CONF = cfg.CONF
@@ -100,7 +100,8 @@ def _iface_id_option_value(client_factory, iface_id, port_index):
 
 
 def get_vm_create_spec(client_factory, instance, name, data_store_name,
-                       vif_infos, os_type=constants.DEFAULT_OS_TYPE):
+                       vif_infos, os_type=constants.DEFAULT_OS_TYPE,
+                       allocations=None):
     """Builds the VM Create spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
     config_spec.name = name
@@ -128,6 +129,27 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     config_spec.tools = tools_info
     config_spec.numCPUs = int(instance['vcpus'])
     config_spec.memoryMB = int(instance['memory_mb'])
+
+    # Configure cpu information
+    if (allocations is not None and
+        ('cpu_limit' in allocations or
+         'cpu_reservation' in allocations or
+         'cpu_shares_level' in allocations)):
+        allocation = client_factory.create('ns0:ResourceAllocationInfo')
+        if 'cpu_limit' in allocations:
+            allocation.limit = allocations['cpu_limit']
+        if 'cpu_reservation' in allocations:
+            allocation.reservation = allocations['cpu_reservation']
+        if 'cpu_shares_level' in allocations:
+            shares = client_factory.create('ns0:SharesInfo')
+            shares.level = allocations['cpu_shares_level']
+            if (shares.level == 'custom' and
+                'cpu_shares_share' in allocations):
+                shares.shares = allocations['cpu_shares_share']
+            else:
+                shares.shares = 0
+            allocation.shares = shares
+        config_spec.cpuAllocation = allocation
 
     vif_spec_list = []
     for vif_info in vif_infos:
@@ -176,10 +198,10 @@ def create_controller_spec(client_factory, key,
     virtual_device_config = client_factory.create(
                             'ns0:VirtualDeviceConfigSpec')
     virtual_device_config.operation = "add"
-    if adapter_type == "busLogic":
+    if adapter_type == constants.ADAPTER_TYPE_BUSLOGIC:
         virtual_controller = client_factory.create(
                                 'ns0:VirtualBusLogicController')
-    elif adapter_type == "lsiLogicsas":
+    elif adapter_type == constants.ADAPTER_TYPE_LSILOGICSAS:
         virtual_controller = client_factory.create(
                                 'ns0:VirtualLsiLogicSASController')
     else:
@@ -371,6 +393,16 @@ def get_vm_extra_config_spec(client_factory, extra_opts):
     return config_spec
 
 
+def get_vmdk_path(session, vm_ref, instance):
+    """Gets the vmdk file path for specified instance."""
+    hardware_devices = session._call_method(vim_util,
+            "get_dynamic_property", vm_ref, "VirtualMachine",
+            "config.hardware.device")
+    (vmdk_path, adapter_type, disk_type) = get_vmdk_path_and_adapter_type(
+            hardware_devices, uuid=instance['uuid'])
+    return vmdk_path
+
+
 def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
     """Gets the vmdk file path and the storage adapter type."""
     if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
@@ -400,11 +432,11 @@ def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
         elif device.__class__.__name__ == "VirtualLsiLogicController":
             adapter_type_dict[device.key] = constants.DEFAULT_ADAPTER_TYPE
         elif device.__class__.__name__ == "VirtualBusLogicController":
-            adapter_type_dict[device.key] = "busLogic"
+            adapter_type_dict[device.key] = constants.ADAPTER_TYPE_BUSLOGIC
         elif device.__class__.__name__ == "VirtualIDEController":
-            adapter_type_dict[device.key] = "ide"
+            adapter_type_dict[device.key] = constants.ADAPTER_TYPE_IDE
         elif device.__class__.__name__ == "VirtualLsiLogicSASController":
-            adapter_type_dict[device.key] = "lsiLogicsas"
+            adapter_type_dict[device.key] = constants.ADAPTER_TYPE_LSILOGICSAS
 
     adapter_type = adapter_type_dict.get(vmdk_controller_key, "")
 
@@ -456,11 +488,12 @@ def allocate_controller_key_and_unit_number(client_factory, devices,
     taken = _find_allocated_slots(devices)
 
     ret = None
-    if adapter_type == 'ide':
+    if adapter_type == constants.ADAPTER_TYPE_IDE:
         ide_keys = [dev.key for dev in devices if _is_ide_controller(dev)]
         ret = _find_controller_slot(ide_keys, taken, 2)
-    elif adapter_type in [constants.DEFAULT_ADAPTER_TYPE, 'lsiLogicsas',
-                          'busLogic']:
+    elif adapter_type in [constants.DEFAULT_ADAPTER_TYPE,
+                          constants.ADAPTER_TYPE_LSILOGICSAS,
+                          constants.ADAPTER_TYPE_BUSLOGIC]:
         scsi_keys = [dev.key for dev in devices if _is_scsi_controller(dev)]
         ret = _find_controller_slot(scsi_keys, taken, 16)
     if ret:
@@ -821,7 +854,7 @@ def _get_vm_ref_from_vm_uuid(session, instance_uuid):
     vm_refs = session._call_method(
         session._get_vim(),
         "FindAllByUuid",
-        session._get_vim().get_service_content().searchIndex,
+        session._get_vim().service_content.searchIndex,
         uuid=instance_uuid,
         vmSearch=True,
         instanceUuid=True)
@@ -1038,9 +1071,9 @@ def propset_dict(propset):
     that are returned by the VMware API.
 
     You can read more about these at:
-    http://pubs.vmware.com/vsphere-51/index.jsp
-        #com.vmware.wssdk.apiref.doc/
-            vmodl.query.PropertyCollector.ObjectContent.html
+    | http://pubs.vmware.com/vsphere-51/index.jsp
+    |    #com.vmware.wssdk.apiref.doc/
+    |        vmodl.query.PropertyCollector.ObjectContent.html
 
     :param propset: a property "set" from ObjectContent
     :return: dictionary representing property set
@@ -1048,7 +1081,7 @@ def propset_dict(propset):
     if propset is None:
         return {}
 
-    #TODO(hartsocks): once support for Python 2.6 is dropped
+    # TODO(hartsocks): once support for Python 2.6 is dropped
     # change to {[(prop.name, prop.val) for prop in propset]}
     return dict([(prop.name, prop.val) for prop in propset])
 
@@ -1176,14 +1209,15 @@ def get_dict_mor(session, list_obj):
     { value = "domain-1002", _type = "ClusterComputeResource" }
 
     Output data format:
-    dict_mors = {
-                  'respool-1001': { 'cluster_mor': clusterMor,
-                                    'res_pool_mor': resourcePoolMor,
-                                    'name': display_name },
-                  'domain-1002': { 'cluster_mor': clusterMor,
-                                    'res_pool_mor': resourcePoolMor,
-                                    'name': display_name },
-                }
+    | dict_mors = {
+    |              'respool-1001': { 'cluster_mor': clusterMor,
+    |                                'res_pool_mor': resourcePoolMor,
+    |                                'name': display_name },
+    |              'domain-1002': { 'cluster_mor': clusterMor,
+    |                                'res_pool_mor': resourcePoolMor,
+    |                                'name': display_name },
+    |            }
+
     """
     dict_mors = {}
     for obj_ref, path in list_obj:
@@ -1224,7 +1258,7 @@ def get_vmdk_adapter_type(adapter_type):
     because Virtual Disk Manager API does not recognize the newer controller
     types.
     """
-    if adapter_type == "lsiLogicsas":
+    if adapter_type == constants.ADAPTER_TYPE_LSILOGICSAS:
         vmdk_adapter_type = constants.DEFAULT_ADAPTER_TYPE
     else:
         vmdk_adapter_type = adapter_type
@@ -1264,7 +1298,7 @@ def create_virtual_disk(session, dc_ref, adapter_type, disk_type,
     vmdk_create_task = session._call_method(
             session._get_vim(),
             "CreateVirtualDisk_Task",
-            session._get_vim().get_service_content().virtualDiskManager,
+            session._get_vim().service_content.virtualDiskManager,
             name=virtual_disk_path,
             datacenter=dc_ref,
             spec=vmdk_create_spec)
@@ -1294,7 +1328,7 @@ def copy_virtual_disk(session, dc_ref, source, dest, copy_spec=None):
     vmdk_copy_task = session._call_method(
             vim,
             "CopyVirtualDisk_Task",
-            vim.get_service_content().virtualDiskManager,
+            vim.service_content.virtualDiskManager,
             sourceName=source,
             sourceDatacenter=dc_ref,
             destName=dest,
@@ -1322,10 +1356,11 @@ def clone_vmref_for_instance(session, instance, vm_ref, host_ref, ds_ref,
     if vm_ref is None:
         LOG.warn(_("vmwareapi:vm_util:clone_vmref_for_instance, called "
                    "with vm_ref=None"))
-        raise error_util.MissingParameter(param="vm_ref")
+        raise vexc.MissingParameter(param="vm_ref")
     # Get the clone vm spec
     client_factory = session._get_vim().client.factory
-    rel_spec = relocate_vm_spec(client_factory, ds_ref, host_ref)
+    rel_spec = relocate_vm_spec(client_factory, ds_ref, host_ref,
+                    disk_move_type='moveAllDiskBackingsAndDisallowSharing')
     extra_opts = {'nvp.vm-uuid': instance['uuid']}
     config_spec = get_vm_extra_config_spec(client_factory, extra_opts)
     config_spec.instanceUuid = instance['uuid']
@@ -1414,7 +1449,7 @@ def power_on_instance(session, instance, vm_ref=None):
                                     "PowerOnVM_Task", vm_ref)
         session._wait_for_task(poweron_task)
         LOG.debug("Powered on the VM", instance=instance)
-    except error_util.InvalidPowerStateException:
+    except vexc.InvalidPowerStateException:
         LOG.debug("VM already powered on", instance=instance)
 
 
@@ -1479,3 +1514,19 @@ def get_vm_detach_port_index(session, vm_ref, iface_id):
             if (option.key.startswith('nvp.iface-id.') and
                 option.value == iface_id):
                 return int(option.key.split('.')[2])
+
+
+def power_off_instance(session, instance, vm_ref=None):
+    """Power off the specified instance."""
+
+    if vm_ref is None:
+        vm_ref = get_vm_ref(session, instance)
+
+    LOG.debug("Powering off the VM", instance=instance)
+    try:
+        poweroff_task = session._call_method(session._get_vim(),
+                                         "PowerOffVM_Task", vm_ref)
+        session._wait_for_task(poweroff_task)
+        LOG.debug("Powered off the VM", instance=instance)
+    except vexc.InvalidPowerStateException:
+        LOG.debug("VM already powered off", instance=instance)

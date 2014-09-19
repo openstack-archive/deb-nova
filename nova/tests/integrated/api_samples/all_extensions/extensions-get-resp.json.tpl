@@ -489,6 +489,14 @@
             "updated": "%(isotime)s"
         },
         {
+            "alias": "os-extended-networks",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ExtendedNetworks",
+            "namespace": "http://docs.openstack.org/compute/ext/extended_networks/api/v2",
+            "updated": "%(isotime)s"
+        },
+        {
             "alias": "os-extended-quotas",
             "description": "%(text)s",
             "links": [],
@@ -550,6 +558,14 @@
             "links": [],
             "name": "ServerDiagnostics",
             "namespace": "http://docs.openstack.org/compute/ext/server-diagnostics/api/v1.1",
+            "updated": "%(isotime)s"
+        },
+        {
+            "alias": "os-server-list-multi-status",
+            "description": "%(text)s",
+            "links": [],
+            "name": "ServerListMultiStatus",
+            "namespace": "http://docs.openstack.org/compute/ext/os-server-list-multi-status/api/v2",
             "updated": "%(isotime)s"
         },
         {

@@ -70,6 +70,28 @@ class LibvirtConfigCapsTest(LibvirtConfigBaseTest):
               <feature name='ibs'/>
               <feature name='osvw'/>
             </cpu>
+            <topology>
+              <cells num='2'>
+                <cell id='0'>
+                  <memory unit='KiB'>4048280</memory>
+                  <cpus num='4'>
+                    <cpu id='0' socket_id='0' core_id='0' siblings='0'/>
+                    <cpu id='1' socket_id='0' core_id='1' siblings='1'/>
+                    <cpu id='2' socket_id='0' core_id='2' siblings='2'/>
+                    <cpu id='3' socket_id='0' core_id='3' siblings='3'/>
+                  </cpus>
+                </cell>
+                <cell id='1'>
+                  <memory unit='KiB'>4127684</memory>
+                  <cpus num='4'>
+                    <cpu id='4' socket_id='1' core_id='0' siblings='4'/>
+                    <cpu id='5' socket_id='1' core_id='1' siblings='5'/>
+                    <cpu id='6' socket_id='1' core_id='2' siblings='6'/>
+                    <cpu id='7' socket_id='1' core_id='3' siblings='7'/>
+                  </cpus>
+                </cell>
+              </cells>
+            </topology>
           </host>
           <guest>
             <os_type>hvm</os_type>
@@ -207,6 +229,34 @@ class LibvirtConfigGuestCPUFeatureTest(LibvirtConfigBaseTest):
         """)
 
 
+class LibvirtConfigGuestCPUNUMATest(LibvirtConfigBaseTest):
+
+    def test_config_simple(self):
+        obj = config.LibvirtConfigGuestCPUNUMA()
+
+        cell = config.LibvirtConfigGuestCPUNUMACell()
+        cell.id = 0
+        cell.cpus = set([0, 1])
+        cell.memory = 1000000
+
+        obj.cells.append(cell)
+
+        cell = config.LibvirtConfigGuestCPUNUMACell()
+        cell.id = 1
+        cell.cpus = set([2, 3])
+        cell.memory = 1500000
+
+        obj.cells.append(cell)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <numa>
+              <cell id="0" cpus="0-1" memory="1000000"/>
+              <cell id="1" cpus="2-3" memory="1500000"/>
+            </numa>
+        """)
+
+
 class LibvirtConfigCPUTest(LibvirtConfigBaseTest):
 
     def test_config_simple(self):
@@ -320,6 +370,39 @@ class LibvirtConfigGuestCPUTest(LibvirtConfigBaseTest):
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
             <cpu mode="host-model" match="exact"/>
+        """)
+
+    def test_config_host_with_numa(self):
+        obj = config.LibvirtConfigGuestCPU()
+        obj.mode = "host-model"
+        obj.match = "exact"
+
+        numa = config.LibvirtConfigGuestCPUNUMA()
+
+        cell = config.LibvirtConfigGuestCPUNUMACell()
+        cell.id = 0
+        cell.cpus = set([0, 1])
+        cell.memory = 1000000
+
+        numa.cells.append(cell)
+
+        cell = config.LibvirtConfigGuestCPUNUMACell()
+        cell.id = 1
+        cell.cpus = set([2, 3])
+        cell.memory = 1500000
+
+        numa.cells.append(cell)
+
+        obj.numa = numa
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <cpu mode="host-model" match="exact">
+              <numa>
+                <cell id="0" cpus="0-1" memory="1000000"/>
+                <cell id="1" cpus="2-3" memory="1500000"/>
+              </numa>
+            </cpu>
         """)
 
 
@@ -681,6 +764,67 @@ class LibvirtConfigGuestSnapshotDiskTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.target_bus, 'ide')
 
 
+class LibvirtConfigGuestDiskBackingStoreTest(LibvirtConfigBaseTest):
+
+    def test_config_file_parse(self):
+        xml = """<backingStore type='file'>
+                   <driver name='qemu' type='qcow2'/>
+                   <source file='/var/lib/libvirt/images/mid.qcow2'/>
+                   <backingStore type='file'>
+                     <driver name='qemu' type='qcow2'/>
+                     <source file='/var/lib/libvirt/images/base.qcow2'/>
+                     <backingStore/>
+                   </backingStore>
+                 </backingStore>
+              """
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDiskBackingStore()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.driver_name, 'qemu')
+        self.assertEqual(obj.driver_format, 'qcow2')
+        self.assertEqual(obj.source_type, 'file')
+        self.assertEqual(obj.source_file, '/var/lib/libvirt/images/mid.qcow2')
+        self.assertEqual(obj.backing_store.driver_name, 'qemu')
+        self.assertEqual(obj.backing_store.source_type, 'file')
+        self.assertEqual(obj.backing_store.source_file,
+                         '/var/lib/libvirt/images/base.qcow2')
+        self.assertIsNone(obj.backing_store.backing_store)
+
+    def test_config_network_parse(self):
+        xml = """<backingStore type='network' index='1'>
+                   <format type='qcow2'/>
+                   <source protocol='gluster' name='volume1/img1'>
+                     <host name='host1' port='24007'/>
+                   </source>
+                   <backingStore type='network' index='2'>
+                     <format type='qcow2'/>
+                     <source protocol='gluster' name='volume1/img2'>
+                       <host name='host1' port='24007'/>
+                     </source>
+                     <backingStore/>
+                   </backingStore>
+                 </backingStore>
+              """
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDiskBackingStore()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'network')
+        self.assertEqual(obj.source_protocol, 'gluster')
+        self.assertEqual(obj.source_name, 'volume1/img1')
+        self.assertEqual(obj.source_hosts[0], 'host1')
+        self.assertEqual(obj.source_ports[0], '24007')
+        self.assertEqual(obj.index, '1')
+        self.assertEqual(obj.backing_store.source_name, 'volume1/img2')
+        self.assertEqual(obj.backing_store.index, '2')
+        self.assertEqual(obj.backing_store.source_hosts[0], 'host1')
+        self.assertEqual(obj.backing_store.source_ports[0], '24007')
+        self.assertIsNone(obj.backing_store.backing_store)
+
+
 class LibvirtConfigGuestFilesysTest(LibvirtConfigBaseTest):
 
     def test_config_mount(self):
@@ -806,6 +950,18 @@ class LibvirtConfigGuestSerialTest(LibvirtConfigBaseTest):
         self.assertXmlEqual(xml, """
             <serial type="file">
               <source path="/tmp/vm.log"/>
+            </serial>""")
+
+    def test_config_serial_port(self):
+        obj = config.LibvirtConfigGuestSerial()
+        obj.type = "tcp"
+        obj.listen_port = 11111
+        obj.listen_host = "0.0.0.0"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <serial type="tcp">
+              <source host="0.0.0.0" service="11111" mode="bind"/>
             </serial>""")
 
 
@@ -1012,6 +1168,55 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               </devices>
             </domain>""")
 
+    def test_config_lxc_with_idmap(self):
+        obj = config.LibvirtConfigGuest()
+        obj.virt_type = "lxc"
+        obj.memory = 100 * units.Mi
+        obj.vcpus = 2
+        obj.cpuset = set([0, 1, 3, 4, 5])
+        obj.name = "demo"
+        obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
+        obj.os_type = "exe"
+        obj.os_init_path = "/sbin/init"
+
+        uidmap = config.LibvirtConfigGuestUIDMap()
+        uidmap.target = "10000"
+        uidmap.count = "1"
+        obj.idmaps.append(uidmap)
+        gidmap = config.LibvirtConfigGuestGIDMap()
+        gidmap.target = "10000"
+        gidmap.count = "1"
+        obj.idmaps.append(gidmap)
+
+        fs = config.LibvirtConfigGuestFilesys()
+        fs.source_dir = "/root/lxc"
+        fs.target_dir = "/"
+
+        obj.add_device(fs)
+
+        xml = obj.to_xml()
+        self.assertXmlEqual("""
+            <domain type="lxc">
+              <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
+              <name>demo</name>
+              <memory>104857600</memory>
+              <vcpu cpuset="0-1,3-5">2</vcpu>
+              <os>
+                <type>exe</type>
+                <init>/sbin/init</init>
+              </os>
+              <devices>
+                <filesystem type="mount">
+                  <source dir="/root/lxc"/>
+                  <target dir="/"/>
+                </filesystem>
+              </devices>
+              <idmap>
+                <uid start="0" target="10000" count="1"/>
+                <gid start="0" target="10000" count="1"/>
+              </idmap>
+            </domain>""", xml)
+
     def test_config_xen_pv(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "xen"
@@ -1114,6 +1319,15 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.cputune.quota = 50000
         obj.cputune.period = 25000
 
+        obj.membacking = config.LibvirtConfigGuestMemoryBacking()
+        obj.membacking.hugepages = True
+
+        obj.memtune = config.LibvirtConfigGuestMemoryTune()
+        obj.memtune.hard_limit = 496
+        obj.memtune.soft_limit = 672
+        obj.memtune.swap_hard_limit = 1638
+        obj.memtune.min_guarantee = 2970
+
         obj.name = "demo"
         obj.uuid = "b38a3f43-4be2-4046-897f-b67c2f5e0147"
         obj.os_type = "linux"
@@ -1140,6 +1354,15 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <uuid>b38a3f43-4be2-4046-897f-b67c2f5e0147</uuid>
               <name>demo</name>
               <memory>104857600</memory>
+              <memoryBacking>
+                <hugepages/>
+              </memoryBacking>
+              <memtune>
+                <hard_limit units="K">496</hard_limit>
+                <soft_limit units="K">672</soft_limit>
+                <swap_hard_limit units="K">1638</swap_hard_limit>
+                <min_guarantee units="K">2970</min_guarantee>
+              </memtune>
               <vcpu cpuset="0-1,3-5">2</vcpu>
               <sysinfo type='smbios'>
                  <bios>
@@ -1736,6 +1959,78 @@ class LibvirtConfigGuestCPUTuneTest(LibvirtConfigBaseTest):
             <period>25000</period>
           </cputune>""")
 
+    def test_config_cputune_vcpus(self):
+        cputune = config.LibvirtConfigGuestCPUTune()
+
+        vcpu0 = config.LibvirtConfigGuestCPUTuneVCPUPin()
+        vcpu0.id = 0
+        vcpu0.cpuset = set([0, 1])
+        vcpu1 = config.LibvirtConfigGuestCPUTuneVCPUPin()
+        vcpu1.id = 1
+        vcpu1.cpuset = set([2, 3])
+        vcpu2 = config.LibvirtConfigGuestCPUTuneVCPUPin()
+        vcpu2.id = 2
+        vcpu2.cpuset = set([4, 5])
+        vcpu3 = config.LibvirtConfigGuestCPUTuneVCPUPin()
+        vcpu3.id = 3
+        vcpu3.cpuset = set([6, 7])
+        cputune.vcpupin.extend([vcpu0, vcpu1, vcpu2, vcpu3])
+
+        xml = cputune.to_xml()
+        self.assertXmlEqual(xml, """
+          <cputune>
+            <vcpupin vcpu="0" cpuset="0-1"/>
+            <vcpupin vcpu="1" cpuset="2-3"/>
+            <vcpupin vcpu="2" cpuset="4-5"/>
+            <vcpupin vcpu="3" cpuset="6-7"/>
+          </cputune>""")
+
+
+class LibvirtConfigGuestMemoryBackingTest(LibvirtConfigBaseTest):
+    def test_config_memory_backing_none(self):
+        obj = config.LibvirtConfigGuestMemoryBacking()
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, "<memoryBacking/>")
+
+    def test_config_memory_backing_all(self):
+        obj = config.LibvirtConfigGuestMemoryBacking()
+        obj.locked = True
+        obj.sharedpages = False
+        obj.hugepages = True
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+          <memoryBacking>
+            <hugepages/>
+            <nosharedpages/>
+            <locked/>
+          </memoryBacking>""")
+
+
+class LibvirtConfigGuestMemoryTuneTest(LibvirtConfigBaseTest):
+    def test_config_memory_backing_none(self):
+        obj = config.LibvirtConfigGuestMemoryTune()
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, "<memtune/>")
+
+    def test_config_memory_backing_all(self):
+        obj = config.LibvirtConfigGuestMemoryTune()
+        obj.soft_limit = 6
+        obj.hard_limit = 28
+        obj.swap_hard_limit = 140
+        obj.min_guarantee = 270
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+          <memtune>
+            <hard_limit units="K">28</hard_limit>
+            <soft_limit units="K">6</soft_limit>
+            <swap_hard_limit units="K">140</swap_hard_limit>
+            <min_guarantee units="K">270</min_guarantee>
+          </memtune>""")
+
 
 class LibvirtConfigGuestMetadataNovaTest(LibvirtConfigBaseTest):
 
@@ -1787,3 +2082,75 @@ class LibvirtConfigGuestMetadataNovaTest(LibvirtConfigBaseTest):
       <nova:root type="image" uuid="fe55c69a-8b2e-4bbc-811a-9ad2023a0426"/>
     </nova:instance>
         """)
+
+
+class LibvirtConfigGuestIDMap(LibvirtConfigBaseTest):
+    def test_config_id_map_parse_start_not_int(self):
+        xmlin = "<uid start='a' target='20000' count='5'/>"
+        obj = config.LibvirtConfigGuestIDMap()
+
+        self.assertRaises(ValueError, obj.parse_str, xmlin)
+
+    def test_config_id_map_parse_target_not_int(self):
+        xmlin = "<uid start='2' target='a' count='5'/>"
+        obj = config.LibvirtConfigGuestIDMap()
+
+        self.assertRaises(ValueError, obj.parse_str, xmlin)
+
+    def test_config_id_map_parse_count_not_int(self):
+        xmlin = "<uid start='2' target='20000' count='a'/>"
+        obj = config.LibvirtConfigGuestIDMap()
+
+        self.assertRaises(ValueError, obj.parse_str, xmlin)
+
+    def test_config_uid_map(self):
+        obj = config.LibvirtConfigGuestUIDMap()
+        obj.start = 1
+        obj.target = 10000
+        obj.count = 2
+
+        xml = obj.to_xml()
+        self.assertXmlEqual("<uid start='1' target='10000' count='2'/>", xml)
+
+    def test_config_uid_map_parse(self):
+        xmlin = "<uid start='2' target='20000' count='5'/>"
+        obj = config.LibvirtConfigGuestUIDMap()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(2, obj.start)
+        self.assertEqual(20000, obj.target)
+        self.assertEqual(5, obj.count)
+
+    def test_config_gid_map(self):
+        obj = config.LibvirtConfigGuestGIDMap()
+        obj.start = 1
+        obj.target = 10000
+        obj.count = 2
+
+        xml = obj.to_xml()
+        self.assertXmlEqual("<gid start='1' target='10000' count='2'/>", xml)
+
+    def test_config_gid_map_parse(self):
+        xmlin = "<gid start='2' target='20000' count='5'/>"
+        obj = config.LibvirtConfigGuestGIDMap()
+        obj.parse_str(xmlin)
+
+        self.assertEqual(2, obj.start)
+        self.assertEqual(20000, obj.target)
+        self.assertEqual(5, obj.count)
+
+
+class LibvirtConfigMemoryBalloonTest(LibvirtConfigBaseTest):
+
+    def test_config_memory_balloon_period(self):
+        balloon = config.LibvirtConfigMemoryBalloon()
+        balloon.model = 'fake_virtio'
+        balloon.period = 11
+
+        xml = balloon.to_xml()
+        expected_xml = """
+        <memballoon model='fake_virtio'>
+            <stats period='11'/>
+        </memballoon>"""
+
+        self.assertXmlEqual(expected_xml, xml)

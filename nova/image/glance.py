@@ -19,7 +19,6 @@ from __future__ import absolute_import
 
 import copy
 import itertools
-import json
 import random
 import sys
 import time
@@ -126,7 +125,7 @@ def generate_identity_headers(context, status='Confirmed'):
         'X-Tenant-Id': getattr(context, 'tenant', None),
         'X-Roles': ','.join(context.roles),
         'X-Identity-Status': status,
-        'X-Service-Catalog': json.dumps(context.service_catalog),
+        'X-Service-Catalog': jsonutils.dumps(context.service_catalog),
     }
 
 
@@ -148,7 +147,7 @@ def _create_glance_client(context, host, port, use_ssl, version=1):
         params['token'] = context.auth_token
         params['identity_headers'] = generate_identity_headers(context)
     if utils.is_valid_ipv6(host):
-        #if so, it is ipv6 address, need to wrap it with '[]'
+        # if so, it is ipv6 address, need to wrap it with '[]'
         host = '[%s]' % host
     endpoint = '%s://%s:%s' % (scheme, host, port)
     return glanceclient.Client(str(version), endpoint, **params)
@@ -241,7 +240,7 @@ class GlanceClientWrapper(object):
                 LOG.exception(error_msg)
                 if attempt == num_attempts:
                     raise exception.GlanceConnectionFailed(
-                            host=host, port=port, reason=str(e))
+                            host=host, port=port, reason=six.text_type(e))
                 time.sleep(1)
 
 
@@ -250,7 +249,7 @@ class GlanceImageService(object):
 
     def __init__(self, client=None):
         self._client = client or GlanceClientWrapper()
-        #NOTE(jbresnah) build the table of download handlers at the beginning
+        # NOTE(jbresnah) build the table of download handlers at the beginning
         # so that operators can catch errors at load time rather than whenever
         # a user attempts to use a module.  Note this cannot be done in glance
         # space when this python module is loaded because the download module
@@ -284,18 +283,39 @@ class GlanceImageService(object):
 
         return _images
 
-    def show(self, context, image_id):
-        """Returns a dict with image data for the given opaque image id."""
+    def show(self, context, image_id, include_locations=False):
+        """Returns a dict with image data for the given opaque image id.
+
+        :param context: The context object to pass to image client
+        :param image_id: The UUID of the image
+        :param include_locations: (Optional) include locations in the returned
+                                  dict of information if the image service API
+                                  supports it. If the image service API does
+                                  not support the locations attribute, it will
+                                  still be included in the returned dict, as an
+                                  empty list.
+        """
+        version = 1
+        if include_locations:
+            version = 2
         try:
-            image = self._client.call(context, 1, 'get', image_id)
+            image = self._client.call(context, version, 'get', image_id)
         except Exception:
             _reraise_translated_image_exception(image_id)
 
         if not _is_image_available(context, image):
             raise exception.ImageNotFound(image_id=image_id)
 
-        base_image_meta = _translate_from_glance(image)
-        return base_image_meta
+        image = _translate_from_glance(image,
+                                       include_locations=include_locations)
+        if include_locations:
+            locations = image.get('locations', None) or []
+            du = image.get('direct_url', None)
+            if du:
+                locations.append({'url': du, 'metadata': {}})
+            image['locations'] = locations
+
+        return image
 
     def _get_transfer_module(self, scheme):
         try:
@@ -310,8 +330,8 @@ class GlanceImageService(object):
     def download(self, context, image_id, data=None, dst_path=None):
         """Calls out to Glance for data and writes data."""
         if CONF.glance.allowed_direct_url_schemes and dst_path is not None:
-            locations = _get_locations(self._client, context, image_id)
-            for entry in locations:
+            image = self.show(context, image_id, include_locations=True)
+            for entry in image.get('locations', []):
                 loc_url = entry['url']
                 loc_meta = entry['metadata']
                 o = urlparse.urlparse(loc_url)
@@ -366,7 +386,7 @@ class GlanceImageService(object):
         """Modify the given image with the new data."""
         image_meta = _translate_to_glance(image_meta)
         image_meta['purge_props'] = purge_props
-        #NOTE(bcwaldon): id is not an editable field, but it is likely to be
+        # NOTE(bcwaldon): id is not an editable field, but it is likely to be
         # passed in by calling code. Let's be nice and ignore it.
         image_meta.pop('id', None)
         if data:
@@ -394,25 +414,6 @@ class GlanceImageService(object):
         except glanceclient.exc.HTTPForbidden:
             raise exception.ImageNotAuthorized(image_id=image_id)
         return True
-
-
-def _get_locations(client, context, image_id):
-    """Returns the direct url representing the backend storage location,
-    or None if this attribute is not shown by Glance.
-    """
-    try:
-        image_meta = client.call(context, 2, 'get', image_id)
-    except Exception:
-        _reraise_translated_image_exception(image_id)
-
-    if not _is_image_available(context, image_meta):
-        raise exception.ImageNotFound(image_id=image_id)
-
-    locations = getattr(image_meta, 'locations', [])
-    du = getattr(image_meta, 'direct_url', None)
-    if du:
-        locations.append({'url': du, 'metadata': {}})
-    return locations
 
 
 def _extract_query_params(params):
@@ -478,8 +479,9 @@ def _translate_to_glance(image_meta):
     return image_meta
 
 
-def _translate_from_glance(image):
-    image_meta = _extract_attributes(image)
+def _translate_from_glance(image, include_locations=False):
+    image_meta = _extract_attributes(image,
+                                     include_locations=include_locations)
     image_meta = _convert_timestamps_to_datetimes(image_meta)
     image_meta = _convert_from_string(image_meta)
     return image_meta
@@ -528,8 +530,8 @@ def _convert_to_string(metadata):
     return _convert(_json_dumps, metadata)
 
 
-def _extract_attributes(image):
-    #NOTE(hdd): If a key is not found, base.Resource.__getattr__() may perform
+def _extract_attributes(image, include_locations=False):
+    # NOTE(hdd): If a key is not found, base.Resource.__getattr__() may perform
     # a get(), resulting in a useless request back to glance. This list is
     # therefore sorted, with dependent attributes as the end
     # 'deleted_at' depends on 'deleted'
@@ -538,10 +540,12 @@ def _extract_attributes(image):
                         'container_format', 'status', 'id',
                         'name', 'created_at', 'updated_at',
                         'deleted', 'deleted_at', 'checksum',
-                        'min_disk', 'min_ram', 'is_public']
+                        'min_disk', 'min_ram', 'is_public',
+                        'direct_url', 'locations']
 
     queued = getattr(image, 'status') == 'queued'
     queued_exclude_attrs = ['disk_format', 'container_format']
+    include_locations_attrs = ['direct_url', 'locations']
     output = {}
 
     for attr in IMAGE_ATTRIBUTES:
@@ -552,9 +556,13 @@ def _extract_attributes(image):
         # image may not have 'name' attr
         elif attr == 'name':
             output[attr] = getattr(image, attr, None)
-        #NOTE(liusheng): queued image may not have these attributes and 'name'
+        # NOTE(liusheng): queued image may not have these attributes and 'name'
         elif queued and attr in queued_exclude_attrs:
             output[attr] = getattr(image, attr, None)
+        # NOTE(mriedem): Only get location attrs if including locations.
+        elif attr in include_locations_attrs:
+            if include_locations:
+                output[attr] = getattr(image, attr, None)
         else:
             # NOTE(xarses): Anything that is caught with the default value
             # will result in a additional lookup to glance for said attr.
@@ -624,7 +632,7 @@ def get_remote_image_service(context, image_href):
     :returns: a tuple of the form (image_service, image_id)
 
     """
-    #NOTE(bcwaldon): If image_href doesn't look like a URI, assume its a
+    # NOTE(bcwaldon): If image_href doesn't look like a URI, assume its a
     # standalone image ID
     if '/' not in str(image_href):
         image_service = get_default_image_service()

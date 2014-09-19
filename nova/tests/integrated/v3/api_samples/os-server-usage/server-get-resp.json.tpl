@@ -1,7 +1,7 @@
 {
     "server": {
-        "os-server-usage:launched_at": "%(strtime)s",
-        "os-server-usage:terminated_at": null,
+        "OS-SRV-USG:launched_at": "%(strtime)s",
+        "OS-SRV-USG:terminated_at": null,
         "addresses": {
             "private": [
                 {
@@ -22,13 +22,13 @@
                 }
             ]
         },
-        "host_id": "%(hostid)s",
+        "hostId": "%(hostid)s",
         "id": "%(id)s",
         "image": {
             "id": "%(uuid)s",
             "links": [
                 {
-                    "href": "%(glance_host)s/images/%(uuid)s",
+                    "href": "%(host)s/images/%(uuid)s",
                     "rel": "bookmark"
                 }
             ]

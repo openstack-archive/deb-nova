@@ -22,6 +22,8 @@ from nova import compute
 from nova import exception
 from nova.i18n import _
 
+ALIAS = 'server-metadata'
+
 
 class ServerMetadataController(wsgi.Controller):
     """The server metadata API controller for the OpenStack API."""
@@ -51,8 +53,9 @@ class ServerMetadataController(wsgi.Controller):
         context = req.environ['nova.context']
         return {'metadata': self._get_metadata(context, server_id)}
 
-    @extensions.expected_errors((400, 404, 409, 413))
-    @wsgi.response(201)
+    @extensions.expected_errors((400, 403, 404, 409, 413))
+    # NOTE(gmann): Returns 200 for backwards compatibility but should be 201
+    # as this operation complete the creation of metadata.
     def create(self, req, server_id, body):
         if not self.is_valid_body(body, 'metadata'):
             msg = _("Malformed request body")
@@ -67,12 +70,12 @@ class ServerMetadataController(wsgi.Controller):
 
         return {'metadata': new_metadata}
 
-    @extensions.expected_errors((400, 404, 409, 413))
+    @extensions.expected_errors((400, 403, 404, 409, 413))
     def update(self, req, server_id, id, body):
-        if not self.is_valid_body(body, 'metadata'):
+        if not self.is_valid_body(body, 'meta'):
             msg = _("Malformed request body")
             raise exc.HTTPBadRequest(explanation=msg)
-        meta_item = body['metadata']
+        meta_item = body['meta']
         if id not in meta_item:
             expl = _('Request body and URI mismatch')
             raise exc.HTTPBadRequest(explanation=expl)
@@ -87,9 +90,9 @@ class ServerMetadataController(wsgi.Controller):
                                        meta_item,
                                        delete=False)
 
-        return {'metadata': meta_item}
+        return {'meta': meta_item}
 
-    @extensions.expected_errors((400, 404, 409, 413))
+    @extensions.expected_errors((400, 403, 404, 409, 413))
     def update_all(self, req, server_id, body):
         if not self.is_valid_body(body, 'metadata'):
             msg = _("Malformed request body")
@@ -121,9 +124,7 @@ class ServerMetadataController(wsgi.Controller):
                 explanation=error.format_message())
 
         except exception.QuotaError as error:
-            raise exc.HTTPRequestEntityTooLarge(
-                explanation=error.format_message(),
-                headers={'Retry-After': 0})
+            raise exc.HTTPForbidden(explanation=error.format_message())
 
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
@@ -139,7 +140,7 @@ class ServerMetadataController(wsgi.Controller):
         data = self._get_metadata(context, server_id)
 
         try:
-            return {'metadata': {id: data[id]}}
+            return {'meta': {id: data[id]}}
         except KeyError:
             msg = _("Metadata item was not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -172,7 +173,7 @@ class ServerMetadataController(wsgi.Controller):
 class ServerMetadata(extensions.V3APIExtensionBase):
     """Server Metadata API."""
     name = "ServerMetadata"
-    alias = "server-metadata"
+    alias = ALIAS
     version = 1
 
     def get_resources(self):

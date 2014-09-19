@@ -16,17 +16,47 @@ Internal implementation of request Body validating middleware.
 
 """
 
+import base64
+
 import jsonschema
+import rfc3986
 import six
 
 from nova import exception
 from nova.i18n import _
+from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
+
+
+@jsonschema.FormatChecker.cls_checks('date-time')
+def _validate_datetime_format(instance):
+    try:
+        timeutils.parse_isotime(instance)
+    except ValueError:
+        return False
+    else:
+        return True
+
+
+@jsonschema.FormatChecker.cls_checks('base64')
+def _validate_base64_format(instance):
+    try:
+        base64.decodestring(instance)
+    except base64.binascii.Error:
+        return False
+
+    return True
 
 
 @jsonschema.FormatChecker.cls_checks('uuid')
 def _validate_uuid_format(instance):
     return uuidutils.is_uuid_like(instance)
+
+
+@jsonschema.FormatChecker.cls_checks('uri')
+def _validate_uri(instance):
+    return rfc3986.is_valid_uri(instance, require_scheme=True,
+                                require_authority=True)
 
 
 class _SchemaValidator(object):

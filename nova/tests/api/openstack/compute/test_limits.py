@@ -22,10 +22,14 @@ import StringIO
 from xml.dom import minidom
 
 from lxml import etree
+import mock
+import six
 import webob
 
 from nova.api.openstack.compute import limits
+from nova.api.openstack.compute.plugins.v3 import limits as limits_v3
 from nova.api.openstack.compute import views
+from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 import nova.context
 from nova.openstack.common import jsonutils
@@ -72,18 +76,23 @@ class BaseLimitTestSuite(test.NoDBTestCase):
         return self.time
 
 
-class LimitsControllerTest(BaseLimitTestSuite):
+class LimitsControllerTestV21(BaseLimitTestSuite):
     """Tests for `limits.LimitsController` class."""
+    limits_controller = limits_v3.LimitsController
 
     def setUp(self):
         """Run before each test."""
-        super(LimitsControllerTest, self).setUp()
-        self.controller = limits.create_resource()
-        self.ctrler = limits.LimitsController()
+        super(LimitsControllerTestV21, self).setUp()
+        self.controller = wsgi.Resource(self.limits_controller())
+        self.ctrler = self.limits_controller()
 
-    def _get_index_request(self, accept_header="application/json"):
+    def _get_index_request(self, accept_header="application/json",
+                           tenant_id=None):
         """Helper to set routing arguments."""
         request = webob.Request.blank("/")
+        if tenant_id:
+            request = webob.Request.blank("/?tenant_id=%s" % tenant_id)
+
         request.accept = accept_header
         request.environ["wsgiorg.routing_args"] = (None, {
             "action": "index",
@@ -118,8 +127,18 @@ class LimitsControllerTest(BaseLimitTestSuite):
         self.assertEqual(expected, body)
 
     def test_index_json(self):
+        self._test_index_json()
+
+    def test_index_json_by_tenant(self):
+        self._test_index_json('faketenant')
+
+    def _test_index_json(self, tenant_id=None):
         # Test getting limit details in JSON.
-        request = self._get_index_request()
+        request = self._get_index_request(tenant_id=tenant_id)
+        context = request.environ["nova.context"]
+        if tenant_id is None:
+            tenant_id = context.project_id
+
         request = self._populate_limits(request)
         self.absolute_limits = {
             'ram': 512,
@@ -130,7 +149,6 @@ class LimitsControllerTest(BaseLimitTestSuite):
             'security_groups': 10,
             'security_group_rules': 20,
         }
-        response = request.get_response(self.controller)
         expected = {
             "limits": {
                 "rate": [
@@ -180,8 +198,25 @@ class LimitsControllerTest(BaseLimitTestSuite):
                     },
             },
         }
-        body = jsonutils.loads(response.body)
-        self.assertEqual(expected, body)
+
+        def _get_project_quotas(context, project_id, usages=True):
+            return dict((k, dict(limit=v))
+                        for k, v in self.absolute_limits.items())
+
+        with mock.patch('nova.quota.QUOTAS.get_project_quotas') as \
+                get_project_quotas:
+            get_project_quotas.side_effect = _get_project_quotas
+
+            response = request.get_response(self.controller)
+
+            body = jsonutils.loads(response.body)
+            self.assertEqual(expected, body)
+            get_project_quotas.assert_called_once_with(context, tenant_id,
+                                                       usages=False)
+
+
+class LimitsControllerTestV2(LimitsControllerTestV21):
+    limits_controller = limits.LimitsController
 
     def _populate_limits_diff_regex(self, request):
         """Put limit info into a request."""
@@ -460,7 +495,7 @@ class ParseLimitsTest(BaseLimitTestSuite):
                                             '(POST, /bar*, /bar.*, 5, second);'
                                             '(Say, /derp*, /derp.*, 1, day)')
         except ValueError as e:
-            assert False, str(e)
+            assert False, six.text_type(e)
 
         # Make sure the number of returned limits are correct
         self.assertEqual(len(l), 4)
@@ -938,7 +973,7 @@ class LimitsXMLSerializationTest(test.NoDBTestCase):
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'limits')
 
-        #verify absolute limits
+        # verify absolute limits
         absolutes = root.xpath('ns:absolute/ns:limit', namespaces=NS)
         self.assertEqual(len(absolutes), 4)
         for limit in absolutes:
@@ -946,7 +981,7 @@ class LimitsXMLSerializationTest(test.NoDBTestCase):
             value = limit.get('value')
             self.assertEqual(value, str(fixture['limits']['absolute'][name]))
 
-        #verify rate limits
+        # verify rate limits
         rates = root.xpath('ns:rates/ns:rate', namespaces=NS)
         self.assertEqual(len(rates), 2)
         for i, rate in enumerate(rates):
@@ -972,10 +1007,10 @@ class LimitsXMLSerializationTest(test.NoDBTestCase):
         root = etree.XML(output)
         xmlutil.validate_schema(root, 'limits')
 
-        #verify absolute limits
+        # verify absolute limits
         absolutes = root.xpath('ns:absolute/ns:limit', namespaces=NS)
         self.assertEqual(len(absolutes), 0)
 
-        #verify rate limits
+        # verify rate limits
         rates = root.xpath('ns:rates/ns:rate', namespaces=NS)
         self.assertEqual(len(rates), 0)

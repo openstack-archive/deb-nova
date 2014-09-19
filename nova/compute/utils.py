@@ -25,7 +25,7 @@ from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LW
 from nova.network import model as network_model
 from nova import notifications
 from nova import objects
@@ -42,7 +42,7 @@ LOG = log.getLogger(__name__)
 
 def exception_to_dict(fault):
     """Converts exceptions to a dict for use in notifications."""
-    #TODO(johngarbutt) move to nova/exception.py to share with wrap_exception
+    # TODO(johngarbutt) move to nova/exception.py to share with wrap_exception
 
     code = 500
     if hasattr(fault, "kwargs"):
@@ -148,7 +148,8 @@ def get_next_device_name(instance, device_name_list,
         root_device_name = block_device.DEFAULT_ROOT_DEV_NAME
 
     try:
-        prefix = block_device.match_device(root_device_name)[0]
+        prefix = block_device.match_device(
+                block_device.prepend_dev(root_device_name))[0]
     except (TypeError, AttributeError, ValueError):
         raise exception.InvalidDevicePath(path=root_device_name)
 
@@ -201,7 +202,7 @@ def get_image_metadata(context, image_api, image_id_or_uri, instance):
     except (exception.ImageNotAuthorized,
             exception.ImageNotFound,
             exception.Invalid) as e:
-        LOG.warning(_("Can't access image %(image_id)s: %(error)s"),
+        LOG.warning(_LW("Can't access image %(image_id)s: %(error)s"),
                     {"image_id": image_id_or_uri, "error": e},
                     instance=instance)
         image_system_meta = {}
@@ -217,6 +218,25 @@ def get_image_metadata(context, image_api, image_id_or_uri, instance):
 
     # Convert the system metadata to image metadata
     return utils.get_image_from_system_metadata(system_meta)
+
+
+def get_value_from_system_metadata(instance, key, type, default):
+    """Get a value of a specified type from image metadata.
+
+    @param instance: The instance object
+    @param key: The name of the property to get
+    @param type: The python type the value is be returned as
+    @param default: The value to return if key is not set or not the right type
+    """
+    value = instance.system_metadata.get(key, default)
+    try:
+        return type(value)
+    except ValueError:
+        LOG.warning(_LW("Metadata value %(value)s for %(key)s is not of "
+                        "type %(type)s. Using default value %(default)s."),
+                    {'value': value, 'key': key, 'type': type,
+                     'default': default}, instance=instance)
+        return default
 
 
 def notify_usage_exists(notifier, context, instance_ref, current_period=False,
@@ -325,7 +345,7 @@ def notify_about_host_update(context, event_suffix, host_payload):
     """
     host_identifier = host_payload.get('host_name')
     if not host_identifier:
-        LOG.warn(_("No host name specified for the notification of "
+        LOG.warn(_LW("No host name specified for the notification of "
                    "HostAPI.%s and it will be ignored"), event_suffix)
         return
 
@@ -453,7 +473,7 @@ def periodic_task_spacing_warn(config_option_name):
     def wrapper(f):
         if (hasattr(f, "_periodic_spacing") and
                 (f._periodic_spacing == 0 or f._periodic_spacing is None)):
-            LOG.warning(_("Value of 0 or None specified for %s."
+            LOG.warning(_LW("Value of 0 or None specified for %s."
                 " This behaviour will change in meaning in the K release, to"
                 " mean 'call at the default rate' rather than 'do not call'."
                 " To keep the 'do not call' behaviour, use a negative value."),

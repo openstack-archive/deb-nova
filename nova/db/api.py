@@ -133,10 +133,12 @@ def service_destroy(context, service_id):
     return IMPL.service_destroy(context, service_id)
 
 
-def service_get(context, service_id, with_compute_node=False):
+def service_get(context, service_id, with_compute_node=False,
+                use_slave=False):
     """Get a service or raise if it does not exist."""
     return IMPL.service_get(context, service_id,
-                            with_compute_node=with_compute_node)
+                            with_compute_node=with_compute_node,
+                            use_slave=use_slave)
 
 
 def service_get_by_host_and_topic(context, host, topic):
@@ -159,12 +161,13 @@ def service_get_all_by_host(context, host):
     return IMPL.service_get_all_by_host(context, host)
 
 
-def service_get_by_compute_host(context, host):
+def service_get_by_compute_host(context, host, use_slave=False):
     """Get the service entry for a given compute host.
 
     Returns the service entry joined with the compute_node entry.
     """
-    return IMPL.service_get_by_compute_host(context, host)
+    return IMPL.service_get_by_compute_host(context, host,
+                                            use_slave=use_slave)
 
 
 def service_get_by_args(context, host, binary):
@@ -699,14 +702,16 @@ def instance_get_all_by_filters(context, filters, sort_key='created_at',
 
 
 def instance_get_active_by_window_joined(context, begin, end=None,
-                                         project_id=None, host=None):
+                                         project_id=None, host=None,
+                                         use_slave=False):
     """Get instances and joins active during a certain time window.
 
     Specifying a project_id will filter for a certain project.
     Specifying a host will filter for instances on a given compute host.
     """
     return IMPL.instance_get_active_by_window_joined(context, begin, end,
-                                              project_id, host)
+                                              project_id, host,
+                                              use_slave=use_slave)
 
 
 def instance_get_all_by_host(context, host,
@@ -801,15 +806,13 @@ def instance_remove_security_group(context, instance_id, security_group_id):
 ####################
 
 
-def instance_group_create(context, values, policies=None, metadata=None,
-                          members=None):
-    """Create a new group with metadata.
+def instance_group_create(context, values, policies=None, members=None):
+    """Create a new group.
 
     Each group will receive a unique uuid. This will be used for access to the
     group.
     """
-    return IMPL.instance_group_create(context, values, policies, metadata,
-                                      members)
+    return IMPL.instance_group_create(context, values, policies, members)
 
 
 def instance_group_get(context, group_uuid):
@@ -914,6 +917,23 @@ def instance_info_cache_delete(context, instance_uuid):
     :param instance_uuid: = uuid of the instance tied to the cache record
     """
     return IMPL.instance_info_cache_delete(context, instance_uuid)
+
+
+###################
+
+
+def instance_extra_create(context, values):
+    """Create the instance extra data record
+    """
+    return IMPL.instance_extra_create(context, values)
+
+
+def instance_extra_get_by_instance_uuid(context, instance_uuid):
+    """Get the instance extra record
+
+    :param instance_uuid: = uuid of the instance tied to the topology record
+    """
+    return IMPL.instance_extra_get_by_instance_uuid(context, instance_uuid)
 
 
 ###################
@@ -1188,16 +1208,16 @@ def ec2_volume_get_by_uuid(context, volume_uuid):
     return IMPL.ec2_volume_get_by_uuid(context, volume_uuid)
 
 
-def get_snapshot_uuid_by_ec2_id(context, ec2_id):
-    return IMPL.get_snapshot_uuid_by_ec2_id(context, ec2_id)
-
-
-def get_ec2_snapshot_id_by_uuid(context, snapshot_id):
-    return IMPL.get_ec2_snapshot_id_by_uuid(context, snapshot_id)
-
-
 def ec2_snapshot_create(context, snapshot_id, forced_id=None):
     return IMPL.ec2_snapshot_create(context, snapshot_id, forced_id)
+
+
+def ec2_snapshot_get_by_ec2_id(context, ec2_id):
+    return IMPL.ec2_snapshot_get_by_ec2_id(context, ec2_id)
+
+
+def ec2_snapshot_get_by_uuid(context, snapshot_uuid):
+    return IMPL.ec2_snapshot_get_by_uuid(context, snapshot_uuid)
 
 
 ####################

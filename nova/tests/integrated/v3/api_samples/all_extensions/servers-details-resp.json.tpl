@@ -1,8 +1,8 @@
 {
     "servers": [
         {
-            "os-access-ips:access_ip_v4": "",
-            "os-access-ips:access_ip_v6": "",
+            "accessIPv4": "",
+            "accessIPv6": "",
             "addresses": {
                 "private": [
                     {
@@ -23,13 +23,13 @@
                     }
                 ]
             },
-            "host_id": "%(hostid)s",
+            "hostId": "%(hostid)s",
             "id": "%(id)s",
             "image": {
                 "id": "%(uuid)s",
                 "links": [
                     {
-                        "href": "%(glance_host)s/images/%(uuid)s",
+                        "href": "%(host)s/images/%(uuid)s",
                         "rel": "bookmark"
                     }
                 ]
@@ -49,19 +49,19 @@
                 "My Server Name": "Apache1"
             },
             "name": "new-server-test",
-            "os-config-drive:config_drive": "",
+            "config_drive": "",
             "os-extended-availability-zone:availability_zone": "nova",
-            "os-extended-server-attributes:host": "%(compute_host)s",
-            "os-extended-server-attributes:hypervisor_hostname": "%(hypervisor_hostname)s",
-            "os-extended-server-attributes:instance_name": "instance-00000001",
-            "os-extended-status:locked_by": null,
-            "os-extended-status:power_state": 1,
-            "os-extended-status:task_state": null,
-            "os-extended-status:vm_state": "active",
+            "OS-EXT-SRV-ATTR:host": "%(compute_host)s",
+            "OS-EXT-SRV-ATTR:hypervisor_hostname": "%(hypervisor_hostname)s",
+            "OS-EXT-SRV-ATTR:instance_name": "instance-00000001",
+            "OS-EXT-STS:locked_by": null,
+            "OS-EXT-STS:power_state": 1,
+            "OS-EXT-STS:task_state": null,
+            "OS-EXT-STS:vm_state": "active",
             "os-extended-volumes:volumes_attached": [],
             "os-pci:pci_devices": [{"id": 1}],
-            "os-server-usage:launched_at": "%(strtime)s",
-            "os-server-usage:terminated_at": null,
+            "OS-SRV-USG:launched_at": "%(strtime)s",
+            "OS-SRV-USG:terminated_at": null,
             "progress": 0,
             "os-security-groups:security_groups": [
                 {

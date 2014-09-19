@@ -44,7 +44,10 @@ class HyperVDriver(driver.ComputeDriver):
         self._rdpconsoleops = rdpconsoleops.RDPConsoleOps()
 
     def init_host(self, host):
-        pass
+        self._vmops.restart_vm_log_writers()
+
+    def list_instance_uuids(self):
+        return self._vmops.list_instance_uuids()
 
     def list_instances(self):
         return self._vmops.list_instances()
@@ -64,7 +67,7 @@ class HyperVDriver(driver.ComputeDriver):
                             destroy_disks)
 
     def cleanup(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True, migrate_data=None):
+                destroy_disks=True, migrate_data=None, destroy_vifs=True):
         """Cleanup after instance being destroyed by Hypervisor."""
         pass
 
@@ -109,8 +112,8 @@ class HyperVDriver(driver.ComputeDriver):
     def resume(self, context, instance, network_info, block_device_info=None):
         self._vmops.resume(instance)
 
-    def power_off(self, instance):
-        self._vmops.power_off(instance)
+    def power_off(self, instance, timeout=0, retry_interval=0):
+        self._vmops.power_off(instance, timeout, retry_interval)
 
     def power_on(self, context, instance, network_info,
                  block_device_info=None):
@@ -164,6 +167,9 @@ class HyperVDriver(driver.ComputeDriver):
         return self._livemigrationops.check_can_live_migrate_source(
             context, instance, dest_check_data)
 
+    def get_instance_disk_info(self, instance_name, block_device_info=None):
+        pass
+
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""
         msg = _("VIF plugging is not supported by the Hyper-V driver.")
@@ -183,12 +189,15 @@ class HyperVDriver(driver.ComputeDriver):
 
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    flavor, network_info,
-                                   block_device_info=None):
+                                   block_device_info=None,
+                                   timeout=0, retry_interval=0):
         return self._migrationops.migrate_disk_and_power_off(context,
                                                              instance, dest,
                                                              flavor,
                                                              network_info,
-                                                             block_device_info)
+                                                             block_device_info,
+                                                             timeout,
+                                                             retry_interval)
 
     def confirm_migration(self, migration, instance, network_info):
         self._migrationops.confirm_migration(migration, instance, network_info)
@@ -210,5 +219,11 @@ class HyperVDriver(driver.ComputeDriver):
     def get_host_ip_addr(self):
         return self._hostops.get_host_ip_addr()
 
+    def get_host_uptime(self, host):
+        return self._hostops.get_host_uptime()
+
     def get_rdp_console(self, context, instance):
         return self._rdpconsoleops.get_rdp_console(instance)
+
+    def get_console_output(self, context, instance):
+        return self._vmops.get_console_output(instance)

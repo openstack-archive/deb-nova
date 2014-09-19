@@ -15,16 +15,15 @@
 
 from webob import exc
 
+from nova.api.openstack.compute.schemas.v3 import multiple_create as \
+                                                  schema_multiple_create
 from nova.api.openstack import extensions
-from nova import exception
 from nova.i18n import _
-from nova.openstack.common import strutils
-from nova import utils
 
 ALIAS = "os-multiple-create"
-MIN_ATTRIBUTE_NAME = "%s:min_count" % ALIAS
-MAX_ATTRIBUTE_NAME = "%s:max_count" % ALIAS
-RRID_ATTRIBUTE_NAME = "%s:return_reservation_id" % ALIAS
+MIN_ATTRIBUTE_NAME = "min_count"
+MAX_ATTRIBUTE_NAME = "max_count"
+RRID_ATTRIBUTE_NAME = "return_reservation_id"
 
 
 class MultipleCreate(extensions.V3APIExtensionBase):
@@ -42,23 +41,16 @@ class MultipleCreate(extensions.V3APIExtensionBase):
 
     # use nova.api.extensions.server.extensions entry point to modify
     # server create kwargs
-    def server_create(self, server_dict, create_kwargs):
+    # NOTE(gmann): This function is not supposed to use 'body_deprecated_param'
+    # parameter as this is placed to handle scheduler_hint extension for V2.1.
+    def server_create(self, server_dict, create_kwargs, body_deprecated_param):
         # min_count and max_count are optional.  If they exist, they may come
         # in as strings.  Verify that they are valid integers and > 0.
         # Also, we want to default 'min_count' to 1, and default
         # 'max_count' to be 'min_count'.
-        min_count = server_dict.get(MIN_ATTRIBUTE_NAME, 1)
-        max_count = server_dict.get(MAX_ATTRIBUTE_NAME, min_count)
+        min_count = int(server_dict.get(MIN_ATTRIBUTE_NAME, 1))
+        max_count = int(server_dict.get(MAX_ATTRIBUTE_NAME, min_count))
         return_id = server_dict.get(RRID_ATTRIBUTE_NAME, False)
-
-        try:
-            min_count = utils.validate_integer(min_count,
-                                               "min_count", min_value=1)
-            max_count = utils.validate_integer(max_count,
-                                               "max_count", min_value=1)
-            return_id = strutils.bool_from_string(return_id, strict=True)
-        except exception.InvalidInput as e:
-            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         if min_count > max_count:
             msg = _('min_count must be <= max_count')
@@ -67,3 +59,6 @@ class MultipleCreate(extensions.V3APIExtensionBase):
         create_kwargs['min_count'] = min_count
         create_kwargs['max_count'] = max_count
         create_kwargs['return_reservation_id'] = return_id
+
+    def get_server_create_schema(self):
+        return schema_multiple_create.server_create

@@ -19,6 +19,7 @@ CellState Manager
 import copy
 import datetime
 import functools
+import time
 
 from oslo.config import cfg
 
@@ -27,6 +28,7 @@ from nova import context
 from nova.db import base
 from nova import exception
 from nova.i18n import _
+from nova.openstack.common.db import exception as db_exc
 from nova.openstack.common import fileutils
 from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
@@ -36,14 +38,14 @@ from nova import rpc
 from nova import utils
 
 cell_state_manager_opts = [
-        cfg.IntOpt('db_check_interval',
-                default=60,
-                help='Interval, in seconds, for getting fresh cell '
-                   'information from the database.'),
-        cfg.StrOpt('cells_config',
-                   help='Configuration file from which to read cells '
-                   'configuration.  If given, overrides reading cells '
-                   'from the database.'),
+    cfg.IntOpt('db_check_interval',
+               default=60,
+               help='Interval, in seconds, for getting fresh cell '
+               'information from the database.'),
+    cfg.StrOpt('cells_config',
+               help='Configuration file from which to read cells '
+               'configuration.  If given, overrides reading cells '
+               'from the database.'),
 ]
 
 
@@ -53,7 +55,6 @@ CONF = cfg.CONF
 CONF.import_opt('name', 'nova.cells.opts', group='cells')
 CONF.import_opt('reserve_percent', 'nova.cells.opts', group='cells')
 CONF.import_opt('mute_child_interval', 'nova.cells.opts', group='cells')
-#CONF.import_opt('capabilities', 'nova.cells.opts', group='cells')
 CONF.register_opts(cell_state_manager_opts, group='cells')
 
 
@@ -152,10 +153,7 @@ class CellStateManager(base.Base):
             cells_config = CONF.cells.cells_config
 
         if cells_config:
-            config_path = CONF.find_file(cells_config)
-            if not config_path:
-                raise cfg.ConfigFilesNotFoundError(config_files=[cells_config])
-            return CellStateManagerFile(cell_state_cls, config_path)
+            return CellStateManagerFile(cell_state_cls)
 
         return CellStateManagerDB(cell_state_cls)
 
@@ -169,7 +167,17 @@ class CellStateManager(base.Base):
         self.child_cells = {}
         self.last_cell_db_check = datetime.datetime.min
 
-        self._cell_data_sync(force=True)
+        attempts = 0
+        while True:
+            try:
+                self._cell_data_sync(force=True)
+                break
+            except db_exc.DBError as e:
+                attempts += 1
+                if attempts > 120:
+                    raise
+                LOG.exception(_('DB error: %s') % e)
+                time.sleep(30)
 
         my_cell_capabs = {}
         for cap in CONF.cells.capabilities:
@@ -450,8 +458,11 @@ class CellStateManagerDB(CellStateManager):
 
 
 class CellStateManagerFile(CellStateManager):
-    def __init__(self, cell_state_cls, cells_config_path):
-        self.cells_config_path = cells_config_path
+    def __init__(self, cell_state_cls=None):
+        cells_config = CONF.cells.cells_config
+        self.cells_config_path = CONF.find_file(cells_config)
+        if not self.cells_config_path:
+            raise cfg.ConfigFilesNotFoundError(config_files=[cells_config])
         super(CellStateManagerFile, self).__init__(cell_state_cls)
 
     def _cell_data_sync(self, force=False):

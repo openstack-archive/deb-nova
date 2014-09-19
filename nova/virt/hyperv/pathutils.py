@@ -21,6 +21,7 @@ from oslo.config import cfg
 from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova import utils
+from nova.virt.hyperv import constants
 
 LOG = logging.getLogger(__name__)
 
@@ -132,6 +133,15 @@ class PathUtils(object):
     def lookup_root_vhd_path(self, instance_name):
         return self._lookup_vhd_path(instance_name, self.get_root_vhd_path)
 
+    def lookup_configdrive_path(self, instance_name):
+        configdrive_path = None
+        for format_ext in constants.DISK_FORMAT_MAP:
+            test_path = self.get_configdrive_path(instance_name, format_ext)
+            if self.exists(test_path):
+                configdrive_path = test_path
+                break
+        return configdrive_path
+
     def lookup_ephemeral_vhd_path(self, instance_name):
         return self._lookup_vhd_path(instance_name,
                                      self.get_ephemeral_vhd_path)
@@ -139,6 +149,10 @@ class PathUtils(object):
     def get_root_vhd_path(self, instance_name, format_ext):
         instance_path = self.get_instance_dir(instance_name)
         return os.path.join(instance_path, 'root.' + format_ext.lower())
+
+    def get_configdrive_path(self, instance_name, format_ext):
+        instance_path = self.get_instance_dir(instance_name)
+        return os.path.join(instance_path, 'configdrive.' + format_ext.lower())
 
     def get_ephemeral_vhd_path(self, instance_name, format_ext):
         instance_path = self.get_instance_dir(instance_name)
@@ -151,3 +165,9 @@ class PathUtils(object):
         dir_name = os.path.join('export', instance_name)
         return self._get_instances_sub_dir(dir_name, create_dir=True,
                                            remove_dir=True)
+
+    def get_vm_console_log_paths(self, vm_name, remote_server=None):
+        instance_dir = self.get_instance_dir(vm_name,
+                                             remote_server)
+        console_log_path = os.path.join(instance_dir, 'console.log')
+        return console_log_path, console_log_path + '.1'

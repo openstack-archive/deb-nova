@@ -20,10 +20,12 @@ Stubouts for the test suite
 import contextlib
 
 import mock
+from oslo.vmware import exceptions as vexc
 
+from nova import db
+from nova.tests import test_flavors
 from nova.tests.virt.vmwareapi import fake
 from nova.virt.vmwareapi import driver
-from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import network_util
 from nova.virt.vmwareapi import vmware_images
 
@@ -33,44 +35,63 @@ def fake_get_vim_object(arg):
     return fake.FakeVim()
 
 
+@property
+def fake_vim_prop(arg):
+    """Stubs out the VMwareAPISession's vim property access method."""
+    return fake.get_fake_vim_object(arg)
+
+
 def fake_is_vim_object(arg, module):
     """Stubs out the VMwareAPISession's is_vim_object method."""
     return isinstance(module, fake.FakeVim)
 
 
 def fake_temp_method_exception():
-    raise error_util.VimFaultException(
-            [error_util.NOT_AUTHENTICATED],
+    raise vexc.VimFaultException(
+            [vexc.NOT_AUTHENTICATED],
             "Session Empty/Not Authenticated")
 
 
 def fake_temp_session_exception():
-    raise error_util.SessionConnectionException("it's a fake!",
+    raise vexc.VimConnectionException("it's a fake!",
             "Session Exception")
 
 
 def fake_session_file_exception():
-    fault_list = [error_util.FILE_ALREADY_EXISTS]
-    raise error_util.VimFaultException(fault_list, 'fake')
+    fault_list = [vexc.FILE_ALREADY_EXISTS]
+    raise vexc.VimFaultException(fault_list,
+                                 Exception('fake'))
 
 
 def fake_session_permission_exception():
-    fault_list = [error_util.NO_PERMISSION]
+    fault_list = [vexc.NO_PERMISSION]
     fault_string = 'Permission to perform this operation was denied.'
     details = {'privilegeId': 'Resource.AssignVMToPool', 'object': 'domain-c7'}
-    raise error_util.VimFaultException(fault_list, fault_string, details)
+    raise vexc.VimFaultException(fault_list, fault_string, details=details)
+
+
+def _fake_flavor_get(context, id):
+    for instance_type in test_flavors.DEFAULT_FLAVORS:
+        if instance_type['id'] == id:
+            return instance_type
+    return {'memory_mb': 128, 'root_gb': 0, 'deleted_at': None,
+            'name': 'm1.micro', 'deleted': 0, 'created_at': None,
+            'ephemeral_gb': 0, 'updated_at': None,
+            'disabled': False, 'vcpus': 1, 'extra_specs': {},
+            'swap': 0, 'rxtx_factor': 1.0, 'is_public': True,
+            'flavorid': '1', 'vcpu_weight': None, 'id': 2}
 
 
 def set_stubs(stubs):
     """Set the stubs."""
     stubs.Set(network_util, 'get_network_with_the_name',
               fake.fake_get_network)
-    stubs.Set(vmware_images, 'get_vmdk_size_and_properties',
-              fake.fake_get_vmdk_size_and_properties)
-    stubs.Set(driver.VMwareAPISession, "_get_vim_object",
-              fake_get_vim_object)
+    stubs.Set(vmware_images, 'upload_image', fake.fake_upload_image)
+    stubs.Set(vmware_images, 'fetch_image', fake.fake_fetch_image)
+    stubs.Set(driver.VMwareAPISession, "vim", fake_vim_prop)
     stubs.Set(driver.VMwareAPISession, "_is_vim_object",
               fake_is_vim_object)
+    stubs.Set(db, 'flavor_get', _fake_flavor_get)
 
 
 def fake_suds_context(calls=None):

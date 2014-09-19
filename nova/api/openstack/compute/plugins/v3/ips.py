@@ -22,6 +22,8 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.i18n import _
 
+ALIAS = 'ips'
+
 
 class IPsController(wsgi.Controller):
     """The servers addresses API controller for the OpenStack API."""
@@ -39,12 +41,6 @@ class IPsController(wsgi.Controller):
             msg = _("Instance does not exist")
             raise exc.HTTPNotFound(explanation=msg)
         return instance
-
-    def create(self, req, server_id, body):
-        raise exc.HTTPNotImplemented()
-
-    def delete(self, req, server_id, id):
-        raise exc.HTTPNotImplemented()
 
     def index(self, req, server_id):
         context = req.environ["nova.context"]
@@ -67,7 +63,7 @@ class IPs(extensions.V3APIExtensionBase):
     """Server addresses."""
 
     name = "Ips"
-    alias = "ips"
+    alias = ALIAS
     version = 1
 
     def get_resources(self):
@@ -75,7 +71,7 @@ class IPs(extensions.V3APIExtensionBase):
                   'collection_name': 'servers'}
         resources = [
             extensions.ResourceExtension(
-                'ips', IPsController(), parent=parent, member_name='ip')]
+                ALIAS, IPsController(), parent=parent, member_name='ip')]
 
         return resources
 

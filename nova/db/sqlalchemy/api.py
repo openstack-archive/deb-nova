@@ -40,9 +40,9 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import joinedload_all
 from sqlalchemy.orm import noload
 from sqlalchemy.schema import Table
+from sqlalchemy import sql
 from sqlalchemy.sql.expression import asc
 from sqlalchemy.sql.expression import desc
-from sqlalchemy.sql.expression import select
 from sqlalchemy.sql import false
 from sqlalchemy.sql import func
 from sqlalchemy.sql import null
@@ -430,8 +430,10 @@ def service_destroy(context, service_id):
                     soft_delete(synchronize_session=False)
 
 
-def _service_get(context, service_id, with_compute_node=True, session=None):
-    query = model_query(context, models.Service, session=session).\
+def _service_get(context, service_id, with_compute_node=True, session=None,
+                 use_slave=False):
+    query = model_query(context, models.Service, session=session,
+                        use_slave=use_slave).\
                      filter_by(id=service_id)
 
     if with_compute_node:
@@ -445,9 +447,11 @@ def _service_get(context, service_id, with_compute_node=True, session=None):
 
 
 @require_admin_context
-def service_get(context, service_id, with_compute_node=False):
+def service_get(context, service_id, with_compute_node=False,
+                use_slave=False):
     return _service_get(context, service_id,
-                        with_compute_node=with_compute_node)
+                        with_compute_node=with_compute_node,
+                        use_slave=use_slave)
 
 
 @require_admin_context
@@ -485,8 +489,9 @@ def service_get_all_by_host(context, host):
 
 
 @require_admin_context
-def service_get_by_compute_host(context, host):
-    result = model_query(context, models.Service, read_deleted="no").\
+def service_get_by_compute_host(context, host, use_slave=False):
+    result = model_query(context, models.Service, read_deleted="no",
+                         use_slave=use_slave).\
                 options(joinedload('compute_node')).\
                 filter_by(host=host).\
                 filter_by(topic=CONF.compute_topic).\
@@ -589,12 +594,12 @@ def compute_node_get_all(context, no_date_fields):
         def filter_columns(table):
             return [c for c in table.c if c.name not in redundant_columns]
 
-        compute_node_query = select(filter_columns(compute_node)).\
+        compute_node_query = sql.select(filter_columns(compute_node)).\
                                 where(compute_node.c.deleted == 0).\
                                 order_by(compute_node.c.service_id)
         compute_node_rows = conn.execute(compute_node_query).fetchall()
 
-        service_query = select(filter_columns(service)).\
+        service_query = sql.select(filter_columns(service)).\
                             where((service.c.deleted == 0) &
                                   (service.c.binary == 'nova-compute')).\
                             order_by(service.c.id)
@@ -905,21 +910,14 @@ def floating_ip_fixed_ip_associate(context, floating_address,
 @_retry_on_deadlock
 def floating_ip_deallocate(context, address):
     session = get_session()
-
     with session.begin():
-        floating_ip_ref = model_query(context, models.FloatingIp,
-                                      session=session).\
-                          filter_by(address=address).\
-                          filter(models.FloatingIp.project_id != null()).\
-                          with_lockmode('update').\
-                          first()
-
-        if floating_ip_ref:
-            floating_ip_ref.update({'project_id': None,
-                                    'host': None,
-                                    'auto_assigned': False})
-
-    return floating_ip_ref
+        return model_query(context, models.FloatingIp, session=session).\
+            filter_by(address=address).\
+            filter(models.FloatingIp.project_id != null()).\
+            update({'project_id': None,
+                    'host': None,
+                    'auto_assigned': False},
+                   synchronize_session=False)
 
 
 @require_context
@@ -1050,6 +1048,7 @@ def floating_ip_update(context, address, values):
             float_ip_ref.save(session=session)
         except db_exc.DBDuplicateEntry:
             raise exception.FloatingIpExists(address=values['address'])
+        return float_ip_ref
 
 
 def _dnsdomain_get(context, session, fqdomain):
@@ -1705,6 +1704,9 @@ def instance_destroy(context, instance_uuid, constraint=None):
         model_query(context, models.InstanceFault, session=session).\
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
+        model_query(context, models.InstanceExtra, session=session).\
+                filter_by(instance_uuid=instance_uuid).\
+                soft_delete()
     return instance_ref
 
 
@@ -1759,7 +1761,7 @@ def _build_instance_get(context, session=None,
             # Already always joined above
             continue
         query = query.options(joinedload(column))
-    #NOTE(alaski) Stop lazy loading of columns not needed.
+    # NOTE(alaski) Stop lazy loading of columns not needed.
     for col in ['metadata', 'system_metadata']:
         if col not in columns_to_join:
             query = query.options(noload(col))
@@ -1850,32 +1852,33 @@ def instance_get_all_by_filters(context, filters, sort_key, sort_dir,
 
     Depending on the name of a filter, matching for that filter is
     performed using either exact matching or as regular expression
-    matching. Exact matching is applied for the following filters:
+    matching. Exact matching is applied for the following filters::
 
-        ['project_id', 'user_id', 'image_ref',
-         'vm_state', 'instance_type_id', 'uuid',
-         'metadata', 'host', 'system_metadata']
+    |   ['project_id', 'user_id', 'image_ref',
+    |    'vm_state', 'instance_type_id', 'uuid',
+    |    'metadata', 'host', 'system_metadata']
 
 
     A third type of filter (also using exact matching), filters
     based on instance metadata tags when supplied under a special
-    key named 'filter'.
+    key named 'filter'::
 
-        filters = {
-            'filter': [
-                {'name': 'tag-key', 'value': '<metakey>'},
-                {'name': 'tag-value', 'value': '<metaval>'},
-                {'name': 'tag:<metakey>', 'value': '<metaval>'}
-            ]
-        }
+    |   filters = {
+    |       'filter': [
+    |           {'name': 'tag-key', 'value': '<metakey>'},
+    |           {'name': 'tag-value', 'value': '<metaval>'},
+    |           {'name': 'tag:<metakey>', 'value': '<metaval>'}
+    |       ]
+    |   }
 
-    Special keys are used to tweek the query further:
+    Special keys are used to tweek the query further::
 
-        'changes-since' - only return instances updated after
-        'deleted' - only return (or exclude) deleted instances
-        'soft_deleted' - modify behavior of 'deleted' to either
-                         include or exclude instances whose
-                         vm_state is SOFT_DELETED.
+    |   'changes-since' - only return instances updated after
+    |   'deleted' - only return (or exclude) deleted instances
+    |   'soft_deleted' - modify behavior of 'deleted' to either
+    |                    include or exclude instances whose
+    |                    vm_state is SOFT_DELETED.
+
     """
     # NOTE(mriedem): If the limit is 0 there is no point in even going
     # to the database since nothing is going to be returned anyway.
@@ -2073,11 +2076,74 @@ def regex_filter(query, model, filters):
     return query
 
 
+def process_sort_params(sort_keys, sort_dirs,
+                        default_keys=['created_at', 'id'],
+                        default_dir='asc'):
+    """Process the sort parameters to include default keys.
+
+    Creates a list of sort keys and a list of sort directions. Adds the default
+    keys to the end of the list if they are not already included.
+
+    When adding the default keys to the sort keys list, the associated
+    direction is:
+    1) The first element in the 'sort_dirs' list (if specified), else
+    2) 'default_dir' value (Note that 'asc' is the default value since this is
+    the default in sqlalchemy.utils.paginate_query)
+
+    :param sort_keys: List of sort keys to include in the processed list
+    :param sort_dirs: List of sort directions to include in the processed list
+    :param default_keys: List of sort keys that need to be included in the
+                         processed list, they are added at the end of the list
+                         if not already specified.
+    :param default_dir: Sort direction associated with each of the default
+                        keys that are not supplied, used when they are added
+                        to the processed list
+    :returns: list of sort keys, list of sort directions
+    :raise exception.InvalidInput: If more sort directions than sort keys
+                                   are specified
+    """
+    # Determine direction to use for when adding default keys
+    if sort_dirs and len(sort_dirs) != 0:
+        default_dir_value = sort_dirs[0]
+    else:
+        default_dir_value = default_dir
+
+    # Create list of keys (do not modify the input list)
+    if sort_keys:
+        result_keys = list(sort_keys)
+    else:
+        result_keys = []
+
+    # If a list of directions is not provided, use the default sort direction
+    # for all provided keys
+    if sort_dirs:
+        result_dirs = list(sort_dirs)
+    else:
+        result_dirs = [default_dir_value for _sort_key in result_keys]
+
+    # Ensure that the key and direction length match
+    while len(result_dirs) < len(result_keys):
+        result_dirs.append(default_dir_value)
+    # Unless more direction are specified, which is an error
+    if len(result_dirs) > len(result_keys):
+        msg = _("Sort direction size exceeds sort key size")
+        raise exception.InvalidInput(reason=msg)
+
+    # Ensure defaults are included
+    for key in default_keys:
+        if key not in result_keys:
+            result_keys.append(key)
+            result_dirs.append(default_dir_value)
+
+    return result_keys, result_dirs
+
+
 @require_context
 def instance_get_active_by_window_joined(context, begin, end=None,
-                                         project_id=None, host=None):
+                                         project_id=None, host=None,
+                                         use_slave=False):
     """Return instances and joins that were active during window."""
-    session = get_session()
+    session = get_session(use_slave=use_slave)
     query = session.query(models.Instance)
 
     query = query.options(joinedload('info_cache')).\
@@ -2176,19 +2242,12 @@ def instance_floating_address_get_all(context, instance_uuid):
     if not uuidutils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(uuid=instance_uuid)
 
-    fixed_ip_ids = model_query(context, models.FixedIp.id,
-                               base_model=models.FixedIp).\
-                        filter_by(instance_uuid=instance_uuid).\
-                        all()
-    if not fixed_ip_ids:
-        raise exception.FixedIpNotFoundForInstance(instance_uuid=instance_uuid)
-
-    fixed_ip_ids = [fixed_ip_id.id for fixed_ip_id in fixed_ip_ids]
-
-    floating_ips = model_query(context, models.FloatingIp.address,
+    floating_ips = model_query(context,
+                               models.FloatingIp.address,
                                base_model=models.FloatingIp).\
-                    filter(models.FloatingIp.fixed_ip_id.in_(fixed_ip_ids)).\
-                    all()
+        join(models.FloatingIp.fixed_ip).\
+        filter_by(instance_uuid=instance_uuid)
+
     return [floating_ip.address for floating_ip in floating_ips]
 
 
@@ -2412,6 +2471,28 @@ def instance_info_cache_delete(context, instance_uuid):
 ###################
 
 
+def instance_extra_create(context, values):
+    inst_extra_ref = models.InstanceExtra()
+    inst_extra_ref.update(values)
+    inst_extra_ref.save()
+    return inst_extra_ref
+
+
+def _instance_extra_get_by_instance_uuid_query(context, instance_uuid):
+    return (model_query(context, models.InstanceExtra)
+                         .filter_by(instance_uuid=instance_uuid))
+
+
+def instance_extra_get_by_instance_uuid(context, instance_uuid):
+    query = _instance_extra_get_by_instance_uuid_query(
+        context, instance_uuid)
+    instance_extra = query.first()
+    return instance_extra
+
+
+###################
+
+
 @require_context
 def key_pair_create(context, values):
     try:
@@ -2612,8 +2693,8 @@ def network_get_all_by_uuids(context, network_uuids, project_only):
     if not result:
         raise exception.NoNetworksFound()
 
-    #check if the result contains all the networks
-    #we are looking for
+    # check if the result contains all the networks
+    # we are looking for
     for network_uuid in network_uuids:
         for network in result:
             if network['uuid'] == network_uuid:
@@ -3377,6 +3458,7 @@ def quota_destroy_all_by_project(context, project_id):
 
 
 @require_admin_context
+@_retry_on_deadlock
 def reservation_expire(context):
     session = get_session()
     with session.begin():
@@ -3457,19 +3539,7 @@ def ec2_snapshot_create(context, snapshot_uuid, id=None):
 
 
 @require_context
-def get_ec2_snapshot_id_by_uuid(context, snapshot_id):
-    result = _ec2_snapshot_get_query(context).\
-                    filter_by(uuid=snapshot_id).\
-                    first()
-
-    if not result:
-        raise exception.SnapshotNotFound(snapshot_id=snapshot_id)
-
-    return result['id']
-
-
-@require_context
-def get_snapshot_uuid_by_ec2_id(context, ec2_id):
+def ec2_snapshot_get_by_ec2_id(context, ec2_id):
     result = _ec2_snapshot_get_query(context).\
                     filter_by(id=ec2_id).\
                     first()
@@ -3477,7 +3547,19 @@ def get_snapshot_uuid_by_ec2_id(context, ec2_id):
     if not result:
         raise exception.SnapshotNotFound(snapshot_id=ec2_id)
 
-    return result['uuid']
+    return result
+
+
+@require_context
+def ec2_snapshot_get_by_uuid(context, snapshot_uuid):
+    result = _ec2_snapshot_get_query(context).\
+                    filter_by(uuid=snapshot_uuid).\
+                    first()
+
+    if not result:
+        raise exception.SnapshotNotFound(snapshot_id=snapshot_uuid)
+
+    return result
 
 
 ###################
@@ -5181,7 +5263,7 @@ def aggregate_delete(context, aggregate_id):
         if count == 0:
             raise exception.AggregateNotFound(aggregate_id=aggregate_id)
 
-        #Delete Metadata
+        # Delete Metadata
         model_query(context,
                     models.AggregateMetadata, session=session).\
                     filter_by(aggregate_id=aggregate_id).\
@@ -5246,14 +5328,17 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False,
                     meta_ref.update({"value": metadata[key]})
                     already_existing_keys.add(key)
 
+                new_entries = []
                 for key, value in metadata.iteritems():
                     if key in already_existing_keys:
                         continue
-                    meta_ref = models.AggregateMetadata()
-                    meta_ref.update({"key": key,
-                                     "value": value,
-                                     "aggregate_id": aggregate_id})
-                    session.add(meta_ref)
+                    new_entries.append({"key": key,
+                                        "value": value,
+                                        "aggregate_id": aggregate_id})
+                if new_entries:
+                    session.execute(
+                        models.AggregateMetadata.__table__.insert(),
+                        new_entries)
 
             return metadata
         except db_exc.DBDuplicateEntry:
@@ -5578,7 +5663,7 @@ def task_log_end_task(context, task_name, period_beginning, period_ending,
                                        period_ending, host, session=session).\
                         update(values)
         if rows == 0:
-            #It's not running!
+            # It's not running!
             raise exception.TaskNotRunning(task_name=task_name, host=host)
 
 
@@ -5634,10 +5719,10 @@ def archive_deleted_rows_for_table(context, tablename, max_rows):
         column = table.c.id
     # NOTE(guochbo): Use InsertFromSelect and DeleteFromSelect to avoid
     # database's limit of maximum parameter in one SQL statement.
-    query_insert = select([table],
+    query_insert = sql.select([table],
                           table.c.deleted != default_deleted_value).\
                           order_by(column).limit(max_rows)
-    query_delete = select([column],
+    query_delete = sql.select([column],
                           table.c.deleted != default_deleted_value).\
                           order_by(column).limit(max_rows)
 
@@ -5688,8 +5773,7 @@ def archive_deleted_rows(context, max_rows=None):
 
 def _instance_group_get_query(context, model_class, id_field=None, id=None,
                               session=None, read_deleted=None):
-    columns_to_join = {models.InstanceGroup: ['_policies', '_metadata',
-                                              '_members']}
+    columns_to_join = {models.InstanceGroup: ['_policies', '_members']}
     query = model_query(context, model_class, session=session,
                         read_deleted=read_deleted)
 
@@ -5702,9 +5786,9 @@ def _instance_group_get_query(context, model_class, id_field=None, id=None,
     return query
 
 
-def instance_group_create(context, values, policies=None, metadata=None,
+def instance_group_create(context, values, policies=None,
                           members=None):
-    """Create a new group with metadata."""
+    """Create a new group."""
     uuid = values.get('uuid', None)
     if uuid is None:
         uuid = uuidutils.generate_uuid()
@@ -5721,13 +5805,9 @@ def instance_group_create(context, values, policies=None, metadata=None,
         # We don't want these to be lazy loaded later. We know there is
         # nothing here since we just created this instance group.
         group._policies = []
-        group._metadata = []
         group._members = []
         if policies:
             _instance_group_policies_add(context, group.id, policies,
-                                         session=session)
-        if metadata:
-            _instance_group_metadata_add(context, group.id, metadata,
                                          session=session)
         if members:
             _instance_group_members_add(context, group.id, members,
@@ -5770,13 +5850,6 @@ def instance_group_update(context, group_uuid, values):
                                          values.pop('policies'),
                                          set_delete=True,
                                          session=session)
-        metadata = values.get('metadata')
-        if metadata is not None:
-            _instance_group_metadata_add(context,
-                                         group.id,
-                                         values.pop('metadata'),
-                                         set_delete=True,
-                                         session=session)
         members = values.get('members')
         if members is not None:
             _instance_group_members_add(context,
@@ -5789,8 +5862,6 @@ def instance_group_update(context, group_uuid, values):
 
         if policies:
             values['policies'] = policies
-        if metadata:
-            values['metadata'] = metadata
         if members:
             values['members'] = members
 
@@ -5811,7 +5882,6 @@ def instance_group_delete(context, group_uuid):
 
         # Delete policies, metadata and members
         instance_models = [models.InstanceGroupPolicy,
-                           models.InstanceGroupMetadata,
                            models.InstanceGroupMember]
         for model in instance_models:
             model_query(context, model, session=session).\
@@ -5852,70 +5922,6 @@ def _instance_group_id(context, group_uuid, session=None):
     if not result:
         raise exception.InstanceGroupNotFound(group_uuid=group_uuid)
     return result.id
-
-
-def _instance_group_metadata_add(context, id, metadata, set_delete=False,
-                                 session=None):
-    if not session:
-        session = get_session()
-
-    with session.begin(subtransactions=True):
-        all_keys = metadata.keys()
-        query = _instance_group_model_get_query(context,
-                                                models.InstanceGroupMetadata,
-                                                id,
-                                                session=session)
-        if set_delete:
-            query.filter(~models.InstanceGroupMetadata.key.in_(all_keys)).\
-                         soft_delete(synchronize_session=False)
-
-        query = query.filter(models.InstanceGroupMetadata.key.in_(all_keys))
-        already_existing_keys = set()
-        for meta_ref in query.all():
-            key = meta_ref.key
-            meta_ref.update({'value': metadata[key]})
-            already_existing_keys.add(key)
-
-        for key, value in metadata.iteritems():
-            if key in already_existing_keys:
-                continue
-            meta_ref = models.InstanceGroupMetadata()
-            meta_ref.update({'key': key,
-                             'value': value,
-                             'group_id': id})
-            session.add(meta_ref)
-
-        return metadata
-
-
-def instance_group_metadata_add(context, group_uuid, metadata,
-                                set_delete=False):
-    id = _instance_group_id(context, group_uuid)
-    return _instance_group_metadata_add(context, id, metadata,
-                                        set_delete=set_delete)
-
-
-def instance_group_metadata_delete(context, group_uuid, key):
-    id = _instance_group_id(context, group_uuid)
-    count = _instance_group_get_query(context,
-                                      models.InstanceGroupMetadata,
-                                      models.InstanceGroupMetadata.group_id,
-                                      id).\
-                            filter_by(key=key).\
-                            soft_delete()
-    if count == 0:
-        raise exception.InstanceGroupMetadataNotFound(group_uuid=group_uuid,
-                                                      metadata_key=key)
-
-
-def instance_group_metadata_get(context, group_uuid):
-    id = _instance_group_id(context, group_uuid)
-    rows = model_query(context,
-                       models.InstanceGroupMetadata.key,
-                       models.InstanceGroupMetadata.value,
-                       base_model=models.InstanceGroupMetadata).\
-                filter_by(group_id=id).all()
-    return dict((r[0], r[1]) for r in rows)
 
 
 def _instance_group_members_add(context, id, members, set_delete=False,

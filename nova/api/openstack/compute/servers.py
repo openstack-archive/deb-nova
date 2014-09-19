@@ -34,6 +34,7 @@ from nova import compute
 from nova.compute import flavors
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LW
 from nova import objects
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
@@ -78,8 +79,8 @@ def make_server(elem, detailed=False):
 
     global XML_WARNING
     if not XML_WARNING:
-        LOG.warning(_('XML support has been deprecated and may be removed '
-                      'as early as the Juno release.'))
+        LOG.warn(_LW('XML support has been deprecated and may be removed '
+                     'as early as the Juno release.'))
         XML_WARNING = True
 
     if detailed:
@@ -533,9 +534,11 @@ class Controller(wsgi.Controller):
 
         # Verify search by 'status' contains a valid status.
         # Convert it to filter by vm_state or task_state for compute_api.
-        status = search_opts.pop('status', None)
-        if status is not None:
-            vm_state, task_state = common.task_and_vm_state_from_status(status)
+        search_opts.pop('status', None)
+        if 'status' in req.GET.keys():
+            statuses = req.GET.getall('status')
+            states = common.task_and_vm_state_from_status(statuses)
+            vm_state, task_state = states
             if not vm_state and not task_state:
                 return {'servers': []}
             search_opts['vm_state'] = vm_state
@@ -579,7 +582,7 @@ class Controller(wsgi.Controller):
                 if not strutils.bool_from_string(all_tenants, True):
                     del search_opts['all_tenants']
             except ValueError as err:
-                raise exception.InvalidInput(str(err))
+                raise exception.InvalidInput(six.text_type(err))
 
         if 'all_tenants' in search_opts:
             policy.enforce(context, 'compute:get_all_tenants',
@@ -603,8 +606,7 @@ class Controller(wsgi.Controller):
             msg = _('marker [%s] not found') % marker
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.FlavorNotFound:
-            log_msg = _("Flavor '%s' could not be found ")
-            LOG.debug(log_msg, search_opts['flavor'])
+            LOG.debug("Flavor '%s' could not be found", search_opts['flavor'])
             # TODO(mriedem): Move to ObjectListBase.__init__ for empty lists.
             instance_list = objects.InstanceList(objects=[])
 
@@ -667,55 +669,52 @@ class Controller(wsgi.Controller):
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
         networks = []
+        network_uuids = []
         for network in requested_networks:
+            request = objects.NetworkRequest()
             try:
-                port_id = network.get('port', None)
-                if port_id:
-                    network_uuid = None
+                try:
+                    request.port_id = network.get('port', None)
+                except ValueError:
+                    msg = _("Bad port format: port uuid is "
+                            "not in proper format "
+                            "(%s)") % network.get('port')
+                    raise exc.HTTPBadRequest(explanation=msg)
+                if request.port_id:
+                    request.network_id = None
                     if not utils.is_neutron():
                         # port parameter is only for neutron v2.0
                         msg = _("Unknown argument : port")
                         raise exc.HTTPBadRequest(explanation=msg)
-                    if not uuidutils.is_uuid_like(port_id):
-                        msg = _("Bad port format: port uuid is "
-                                "not in proper format "
-                                "(%s)") % port_id
-                        raise exc.HTTPBadRequest(explanation=msg)
                 else:
-                    network_uuid = network['uuid']
+                    request.network_id = network['uuid']
 
-                if not port_id and not uuidutils.is_uuid_like(network_uuid):
-                    br_uuid = network_uuid.split('-', 1)[-1]
+                if (not request.port_id and not
+                        uuidutils.is_uuid_like(request.network_id)):
+                    br_uuid = request.network_id.split('-', 1)[-1]
                     if not uuidutils.is_uuid_like(br_uuid):
                         msg = _("Bad networks format: network uuid is "
                                 "not in proper format "
-                                "(%s)") % network_uuid
+                                "(%s)") % request.network_id
                         raise exc.HTTPBadRequest(explanation=msg)
 
-                #fixed IP address is optional
-                #if the fixed IP address is not provided then
-                #it will use one of the available IP address from the network
-                address = network.get('fixed_ip', None)
-                if address is not None and not utils.is_valid_ip_address(
-                        address):
-                    msg = _("Invalid fixed IP address (%s)") % address
+                # fixed IP address is optional
+                # if the fixed IP address is not provided then
+                # it will use one of the available IP address from the network
+                try:
+                    request.address = network.get('fixed_ip', None)
+                except ValueError:
+                    msg = _("Invalid fixed IP address (%s)") % request.address
                     raise exc.HTTPBadRequest(explanation=msg)
 
-                # For neutronv2, requested_networks
-                # should be tuple of (network_uuid, fixed_ip, port_id)
-                if utils.is_neutron():
-                    networks.append((network_uuid, address, port_id))
-                else:
-                    # check if the network id is already present in the list,
-                    # we don't want duplicate networks to be passed
-                    # at the boot time
-                    for id, ip in networks:
-                        if id == network_uuid:
-                            expl = (_("Duplicate networks"
-                                      " (%s) are not allowed") %
-                                    network_uuid)
-                            raise exc.HTTPBadRequest(explanation=expl)
-                    networks.append((network_uuid, address))
+                if (request.network_id and
+                        request.network_id in network_uuids):
+                    expl = (_("Duplicate networks"
+                              " (%s) are not allowed") %
+                            request.network_id)
+                    raise exc.HTTPBadRequest(explanation=expl)
+                network_uuids.append(request.network_id)
+                networks.append(request)
             except KeyError as key:
                 expl = _('Bad network format: missing %s') % key
                 raise exc.HTTPBadRequest(explanation=expl)
@@ -723,7 +722,7 @@ class Controller(wsgi.Controller):
                 expl = _('Bad networks format')
                 raise exc.HTTPBadRequest(explanation=expl)
 
-        return networks
+        return objects.NetworkRequestList(objects=networks)
 
     # NOTE(vish): Without this regex, b64decode will happily
     #             ignore illegal bytes in the base64 encoded
@@ -955,7 +954,7 @@ class Controller(wsgi.Controller):
                             legacy_bdm=legacy_bdm)
         except (exception.QuotaError,
                 exception.PortLimitExceeded) as error:
-            raise exc.HTTPRequestEntityTooLarge(
+            raise exc.HTTPForbidden(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
         except exception.InvalidMetadataSize as error:
@@ -983,23 +982,18 @@ class Controller(wsgi.Controller):
         except (exception.ImageNotActive,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
-                exception.InvalidMetadata,
-                exception.InvalidRequest,
-                exception.MultiplePortsNotApplicable,
-                exception.InvalidFixedIpAndMaxCountRequest,
                 exception.NetworkNotFound,
                 exception.PortNotFound,
                 exception.FixedIpAlreadyInUse,
                 exception.SecurityGroupNotFound,
-                exception.InvalidBDM,
-                exception.PortRequiresFixedIP,
-                exception.NetworkRequiresSubnet,
                 exception.InstanceUserDataTooLarge,
                 exception.InstanceUserDataMalformed) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
                 exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
+        except exception.Invalid as error:
+            raise exc.HTTPBadRequest(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
         if ret_resv_id:
@@ -1164,7 +1158,7 @@ class Controller(wsgi.Controller):
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
         except exception.QuotaError as error:
-            raise exc.HTTPRequestEntityTooLarge(
+            raise exc.HTTPForbidden(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
         except exception.FlavorNotFound:
@@ -1173,6 +1167,8 @@ class Controller(wsgi.Controller):
         except exception.CannotResizeToSameFlavor:
             msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.CannotResizeDisk as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
@@ -1189,7 +1185,8 @@ class Controller(wsgi.Controller):
         except exception.Invalid:
             msg = _("Invalid instance image.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.NoValidHost as e:
+        except (exception.NoValidHost,
+                exception.AutoDiskConfigDisabledByImage) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return webob.Response(status_int=202)
@@ -1393,10 +1390,13 @@ class Controller(wsgi.Controller):
         except exception.ImageNotFound:
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.QuotaError as error:
+            raise exc.HTTPForbidden(explanation=error.format_message())
         except (exception.ImageNotActive,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
-                exception.InvalidMetadata) as error:
+                exception.InvalidMetadata,
+                exception.AutoDiskConfigDisabledByImage) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 
         instance = self._get_server(context, req, id)
@@ -1446,10 +1446,10 @@ class Controller(wsgi.Controller):
                                                           bdms):
                 img = instance['image_ref']
                 if not img:
-                    props = bdms.root_metadata(
+                    properties = bdms.root_metadata(
                             context, self.compute_api.image_api,
                             self.compute_api.volume_api)
-                    image_meta = {'properties': props}
+                    image_meta = {'properties': properties}
                 else:
                     image_meta = self.compute_api.image_api.get(context, img)
 

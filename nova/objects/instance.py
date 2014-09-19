@@ -17,7 +17,7 @@ from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import flavors
 from nova import db
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LE
 from nova import notifications
 from nova import objects
 from nova.objects import base
@@ -38,7 +38,7 @@ _INSTANCE_OPTIONAL_JOINED_FIELDS = ['metadata', 'system_metadata',
                                     'info_cache', 'security_groups',
                                     'pci_devices']
 # These are fields that are optional but don't translate to db columns
-_INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault']
+_INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault', 'numa_topology']
 
 # These are fields that can be specified as expected_attrs
 INSTANCE_OPTIONAL_ATTRS = (_INSTANCE_OPTIONAL_JOINED_FIELDS +
@@ -72,7 +72,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
     # Version 1.11: Update instance from database during destroy
     # Version 1.12: Added ephemeral_key_uuid
     # Version 1.13: Added delete_metadata_key()
-    VERSION = '1.13'
+    # Version 1.14: Added numa_topology
+    VERSION = '1.14'
 
     fields = {
         'id': fields.IntegerField(),
@@ -158,6 +159,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         'cleaned': fields.BooleanField(default=False),
 
         'pci_devices': fields.ObjectField('PciDeviceList', nullable=True),
+        'numa_topology': fields.ObjectField('InstanceNUMATopology',
+                                            nullable=True)
         }
 
     obj_extra_fields = ['name']
@@ -195,8 +198,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         return self
 
     def obj_make_compatible(self, primitive, target_version):
-        target_version = (int(target_version.split('.')[0]),
-                          int(target_version.split('.')[1]))
+        target_version = utils.convert_version_to_tuple(target_version)
         unicode_attributes = ['user_id', 'project_id', 'image_ref',
                               'kernel_id', 'ramdisk_id', 'hostname',
                               'key_name', 'key_data', 'host', 'node',
@@ -207,6 +209,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                               'default_ephemeral_device',
                               'default_swap_device', 'config_drive',
                               'cell_name']
+        if target_version < (1, 14) and 'numa_topology' in primitive:
+            del primitive['numa_topology']
         if target_version < (1, 10) and 'info_cache' in primitive:
             # NOTE(danms): Instance <= 1.9 (havana) had info_cache 1.4
             self.info_cache.obj_make_compatible(primitive['info_cache'],
@@ -252,6 +256,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
 
         Converts a database entity to a formal object.
         """
+        instance._context = context
         if expected_attrs is None:
             expected_attrs = []
         # Most of the field names match right now, so be quick
@@ -273,12 +278,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             instance['fault'] = (
                 objects.InstanceFault.get_latest_for_instance(
                     context, instance.uuid))
+        if 'numa_topology' in expected_attrs:
+            instance._load_numa_topology()
 
-        if 'pci_devices' in expected_attrs:
-            pci_devices = base.obj_make_list(
-                    context, objects.PciDeviceList(context),
-                    objects.PciDevice, db_inst['pci_devices'])
-            instance['pci_devices'] = pci_devices
         if 'info_cache' in expected_attrs:
             if db_inst['info_cache'] is None:
                 instance.info_cache = None
@@ -290,13 +292,21 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                 instance.info_cache._from_db_object(context,
                                                     instance.info_cache,
                                                     db_inst['info_cache'])
+
+        # TODO(danms): If we are updating these on a backlevel instance,
+        # we'll end up sending back new versions of these objects (see
+        # above note for new info_caches
+        if 'pci_devices' in expected_attrs:
+            pci_devices = base.obj_make_list(
+                    context, objects.PciDeviceList(context),
+                    objects.PciDevice, db_inst['pci_devices'])
+            instance['pci_devices'] = pci_devices
         if 'security_groups' in expected_attrs:
             sec_groups = base.obj_make_list(
                     context, objects.SecurityGroupList(context),
                     objects.SecurityGroup, db_inst['security_groups'])
             instance['security_groups'] = sec_groups
 
-        instance._context = context
         instance.obj_reset_changes()
         return instance
 
@@ -336,7 +346,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             updates['info_cache'] = {
                 'network_info': updates['info_cache'].network_info.json()
                 }
+        numa_topology = updates.pop('numa_topology', None)
         db_inst = db.instance_create(context, updates)
+        if numa_topology:
+            expected_attrs.append('numa_topology')
+            numa_topology.instance_uuid = db_inst['uuid']
+            numa_topology.create(context)
         self._from_db_object(context, self, db_inst, expected_attrs)
 
     @base.remotable
@@ -374,6 +389,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         # NOTE(danms): I don't think we need to worry about this, do we?
         pass
 
+    def _save_numa_topology(self, context):
+        # NOTE(ndipanov): No need for this yet.
+        pass
+
     def _save_pci_devices(self, context):
         # NOTE(yjiang5): All devices held by PCI tracker, only PCI tracker
         # permitted to update the DB. all change to devices from here will
@@ -389,13 +408,15 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         self.what_changed(). If expected_task_state is provided,
         it will be checked against the in-database copy of the
         instance before updates are made.
-        :param context: Security context
-        :param expected_task_state: Optional tuple of valid task states
-                                    for the instance to be in.
-        :param expected_vm_state: Optional tuple of valid vm states
-                                  for the instance to be in.
+
+        :param:context: Security context
+        :param:expected_task_state: Optional tuple of valid task states
+        for the instance to be in
+        :param:expected_vm_state: Optional tuple of valid vm states
+        for the instance to be in
         :param admin_state_reset: True if admin API is forcing setting
-                                  of task_state/vm_state.
+        of task_state/vm_state
+
         """
 
         cell_type = cells_opts.get_cell_type()
@@ -428,7 +449,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                 try:
                     getattr(self, '_save_%s' % field)(context)
                 except AttributeError:
-                    LOG.exception(_('No save handler for %s') % field,
+                    LOG.exception(_LE('No save handler for %s'), field,
                                   instance=self)
             elif field in changes:
                 updates[field] = self[field]
@@ -459,6 +480,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
 
         expected_attrs = [attr for attr in _INSTANCE_OPTIONAL_JOINED_FIELDS
                                if self.obj_attr_is_set(attr)]
+        if 'pci_devices' in expected_attrs:
+            # NOTE(danms): We don't refresh pci_devices on save right now
+            expected_attrs.remove('pci_devices')
+
         # NOTE(alaski): We need to pull system_metadata for the
         # notification.send_update() below.  If we don't there's a KeyError
         # when it tries to extract the flavor.
@@ -474,7 +499,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             cells_api = cells_rpcapi.CellsAPI()
             cells_api.instance_update_at_top(context, inst_ref)
 
-        self._from_db_object(context, self, inst_ref, expected_attrs)
+        self._from_db_object(context, self, inst_ref,
+                             expected_attrs=expected_attrs)
         notifications.send_update(context, old_ref, inst_ref)
         self.obj_reset_changes()
 
@@ -500,6 +526,31 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                     self[field] = current[field]
         self.obj_reset_changes()
 
+    def _load_generic(self, attrname):
+        instance = self.__class__.get_by_uuid(self._context,
+                                              uuid=self.uuid,
+                                              expected_attrs=[attrname])
+
+        # NOTE(danms): Never allow us to recursively-load
+        if instance.obj_attr_is_set(attrname):
+            self[attrname] = instance[attrname]
+        else:
+            raise exception.ObjectActionError(
+                action='obj_load_attr',
+                reason='loading %s requires recursion' % attrname)
+
+    def _load_fault(self):
+        self.fault = objects.InstanceFault.get_latest_for_instance(
+            self._context, self.uuid)
+
+    def _load_numa_topology(self):
+        try:
+            self.numa_topology = \
+                objects.InstanceNUMATopology.get_by_instance_uuid(
+                    self._context, self.uuid)
+        except exception.NumaTopologyNotFound:
+            self.numa_topology = None
+
     def obj_load_attr(self, attrname):
         if attrname not in INSTANCE_OPTIONAL_ATTRS:
             raise exception.ObjectActionError(
@@ -515,17 +566,15 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                    'uuid': self.uuid,
                    })
         # FIXME(comstud): This should be optimized to only load the attr.
-        instance = self.__class__.get_by_uuid(self._context,
-                                              uuid=self.uuid,
-                                              expected_attrs=[attrname])
-
-        # NOTE(danms): Never allow us to recursively-load
-        if instance.obj_attr_is_set(attrname):
-            self[attrname] = instance[attrname]
+        if attrname == 'fault':
+            # NOTE(danms): We handle fault differently here so that we
+            # can be more efficient
+            self._load_fault()
+        elif attrname == 'numa_topology':
+            self._load_numa_topology()
         else:
-            raise exception.ObjectActionError(
-                action='obj_load_attr',
-                reason='loading %s requires recursion' % attrname)
+            self._load_generic(attrname)
+        self.obj_reset_changes([attrname])
 
     def get_flavor(self, namespace=None):
         prefix = ('%s_' % namespace) if namespace is not None else ''
@@ -601,7 +650,9 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.4: Instance <= version 1.12
     # Version 1.5: Added method get_active_by_window_joined.
     # Version 1.6: Instance <= version 1.13
-    VERSION = '1.6'
+    # Version 1.7: Added use_slave to get_active_by_window_joined
+    # Version 1.8: Instance <= version 1.14
+    VERSION = '1.8'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -614,6 +665,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         '1.4': '1.12',
         '1.5': '1.12',
         '1.6': '1.13',
+        '1.7': '1.13',
+        '1.8': '1.14',
         }
 
     @base.remotable_classmethod
@@ -661,7 +714,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def _get_active_by_window_joined(cls, context, begin, end=None,
                                     project_id=None, host=None,
-                                    expected_attrs=None):
+                                    expected_attrs=None,
+                                    use_slave=False):
         # NOTE(mriedem): We need to convert the begin/end timestamp strings
         # to timezone-aware datetime objects for the DB API call.
         begin = timeutils.parse_isotime(begin)
@@ -677,17 +731,20 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     @classmethod
     def get_active_by_window_joined(cls, context, begin, end=None,
                                     project_id=None, host=None,
-                                    expected_attrs=None):
+                                    expected_attrs=None,
+                                    use_slave=False):
         """Get instances and joins active during a certain time window.
 
-        :param context: nova request context
-        :param begin: datetime for the start of the time window
-        :param end: datetime for the end of the time window
-        :param project_id: used to filter instances by project
-        :param host: used to filter instances on a given compute host
-        :param expected_attrs: list of related fields that can be joined
+        :param:context: nova request context
+        :param:begin: datetime for the start of the time window
+        :param:end: datetime for the end of the time window
+        :param:project_id: used to filter instances by project
+        :param:host: used to filter instances on a given compute host
+        :param:expected_attrs: list of related fields that can be joined
         in the database layer when querying for instances
+        :param use_slave if True, ship this query off to a DB slave
         :returns: InstanceList
+
         """
         # NOTE(mriedem): We have to convert the datetime objects to string
         # primitives for the remote call.
@@ -695,7 +752,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         end = timeutils.isotime(end) if end else None
         return cls._get_active_by_window_joined(context, begin, end,
                                                 project_id, host,
-                                                expected_attrs)
+                                                expected_attrs,
+                                                use_slave=use_slave)
 
     @base.remotable_classmethod
     def get_by_security_group_id(cls, context, security_group_id):

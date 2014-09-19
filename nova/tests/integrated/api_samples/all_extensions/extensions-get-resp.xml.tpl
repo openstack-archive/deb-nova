@@ -174,6 +174,9 @@
   <extension alias="os-quota-class-sets" updated="%(isotime)s" namespace="http://docs.openstack.org/compute/ext/quota-classes-sets/api/v1.1" name="QuotaClasses">
     <description>%(text)s</description>
   </extension>
+  <extension alias="os-extended-networks" updated="%(isotime)s" namespace="http://docs.openstack.org/compute/ext/extended_networks/api/v2" name="ExtendedNetworks">
+    <description>%(text)s</description>
+  </extension>
   <extension alias="os-extended-quotas" updated="%(isotime)s" namespace="http://docs.openstack.org/compute/ext/extended_quotas/api/v1.1" name="ExtendedQuotas">
     <description>%(text)s</description>
   </extension>
@@ -196,6 +199,9 @@
     <description>%(text)s</description>
   </extension>
   <extension alias="os-server-diagnostics" updated="%(isotime)s" namespace="http://docs.openstack.org/compute/ext/server-diagnostics/api/v1.1" name="ServerDiagnostics">
+    <description>%(text)s</description>
+  </extension>
+  <extension alias="os-server-list-multi-status" updated="%(isotime)s" namespace="http://docs.openstack.org/compute/ext/os-server-list-multi-status/api/v2" name="ServerListMultiStatus">
     <description>%(text)s</description>
   </extension>
   <extension alias="os-server-password" updated="%(isotime)s" namespace="http://docs.openstack.org/compute/ext/server-password/api/v2" name="ServerPassword">

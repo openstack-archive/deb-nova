@@ -44,6 +44,7 @@ class VMUtilsV2(vmutils.VMUtils):
     _IDE_DVD_RES_SUB_TYPE = 'Microsoft:Hyper-V:Virtual CD/DVD Disk'
     _IDE_CTRL_RES_SUB_TYPE = 'Microsoft:Hyper-V:Emulated IDE Controller'
     _SCSI_CTRL_RES_SUB_TYPE = 'Microsoft:Hyper-V:Synthetic SCSI Controller'
+    _SERIAL_PORT_RES_SUB_TYPE = 'Microsoft:Hyper-V:Serial Port'
 
     _VIRTUAL_SYSTEM_TYPE_REALIZED = 'Microsoft:Hyper-V:System:Realized'
 
@@ -58,6 +59,7 @@ class VMUtilsV2(vmutils.VMUtils):
 
     _vm_power_states_map = {constants.HYPERV_VM_STATE_ENABLED: 2,
                             constants.HYPERV_VM_STATE_DISABLED: 3,
+                            constants.HYPERV_VM_STATE_SHUTTING_DOWN: 4,
                             constants.HYPERV_VM_STATE_REBOOT: 11,
                             constants.HYPERV_VM_STATE_PAUSED: 9,
                             constants.HYPERV_VM_STATE_SUSPENDED: 6}
@@ -68,9 +70,20 @@ class VMUtilsV2(vmutils.VMUtils):
     def _init_hyperv_wmi_conn(self, host):
         self._conn = wmi.WMI(moniker='//%s/root/virtualization/v2' % host)
 
-    def _create_vm_obj(self, vs_man_svc, vm_name):
+    def list_instance_notes(self):
+        instance_notes = []
+
+        for vs in self._conn.Msvm_VirtualSystemSettingData(
+                ['ElementName', 'Notes'],
+                VirtualSystemType=self._VIRTUAL_SYSTEM_TYPE_REALIZED):
+            instance_notes.append((vs.ElementName, [v for v in vs.Notes if v]))
+
+        return instance_notes
+
+    def _create_vm_obj(self, vs_man_svc, vm_name, notes):
         vs_data = self._conn.Msvm_VirtualSystemSettingData.new()
         vs_data.ElementName = vm_name
+        vs_data.Notes = notes
 
         (job_path,
          vm_path,
@@ -104,11 +117,11 @@ class VMUtilsV2(vmutils.VMUtils):
 
         drive = self._get_new_resource_setting_data(res_sub_type)
 
-        #Set the IDE ctrller as parent.
+        # Set the IDE ctrller as parent.
         drive.Parent = ctrller_path
         drive.Address = drive_addr
         drive.AddressOnParent = drive_addr
-        #Add the cloned disk drive object to the vm.
+        # Add the cloned disk drive object to the vm.
         new_resources = self._add_virt_resource(drive, vm.path_())
         drive_path = new_resources[0]
 
@@ -157,7 +170,7 @@ class VMUtilsV2(vmutils.VMUtils):
         vm = self._lookup_vm_check(vm_name)
 
         vs_man_svc = self._conn.Msvm_VirtualSystemManagementService()[0]
-        #Remove the VM. It does not destroy any associated virtual disk.
+        # Remove the VM. It does not destroy any associated virtual disk.
         (job_path, ret_val) = vs_man_svc.DestroySystem(vm.path_())
         self.check_ret_val(ret_val, job_path)
 

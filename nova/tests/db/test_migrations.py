@@ -31,14 +31,14 @@ and 'openstack_baremetal_citest' with user 'openstack_citest' and password
 'openstack_citest' on localhost. The test will then use that db and u/p combo
 to run the tests.
 
-For postgres on Ubuntu this can be done with the following commands:
+For postgres on Ubuntu this can be done with the following commands::
 
-sudo -u postgres psql
-postgres=# create user openstack_citest with createdb login password
-      'openstack_citest';
-postgres=# create database openstack_citest with owner openstack_citest;
-postgres=# create database openstack_baremetal_citest with owner
-            openstack_citest;
+| sudo -u postgres psql
+| postgres=# create user openstack_citest with createdb login password
+|       'openstack_citest';
+| postgres=# create database openstack_citest with owner openstack_citest;
+| postgres=# create database openstack_baremetal_citest with owner
+|             openstack_citest;
 
 """
 
@@ -716,6 +716,90 @@ class TestNovaMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):
         pci_devices = oslodbutils.get_table(engine, 'pci_devices')
         self.assertEqual(0, len([fk for fk in pci_devices.foreign_keys
                                  if fk.parent.name == 'compute_node_id']))
+
+    def _check_247(self, engine, data):
+        quota_usages = oslodbutils.get_table(engine, 'quota_usages')
+        self.assertFalse(quota_usages.c.resource.nullable)
+
+        pci_devices = oslodbutils.get_table(engine, 'pci_devices')
+        self.assertTrue(pci_devices.c.deleted.nullable)
+        self.assertFalse(pci_devices.c.product_id.nullable)
+        self.assertFalse(pci_devices.c.vendor_id.nullable)
+        self.assertFalse(pci_devices.c.dev_type.nullable)
+
+    def _post_downgrade_247(self, engine):
+        quota_usages = oslodbutils.get_table(engine, 'quota_usages')
+        self.assertTrue(quota_usages.c.resource.nullable)
+
+        pci_devices = oslodbutils.get_table(engine, 'pci_devices')
+        self.assertFalse(pci_devices.c.deleted.nullable)
+        self.assertTrue(pci_devices.c.product_id.nullable)
+        self.assertTrue(pci_devices.c.vendor_id.nullable)
+        self.assertTrue(pci_devices.c.dev_type.nullable)
+
+    def _check_248(self, engine, data):
+        self.assertIndexMembers(engine, 'reservations',
+                                'reservations_deleted_expire_idx',
+                                ['deleted', 'expire'])
+
+    def _post_downgrade_248(self, engine):
+        reservations = oslodbutils.get_table(engine, 'reservations')
+        index_names = [idx.name for idx in reservations.indexes]
+        self.assertNotIn('reservations_deleted_expire_idx', index_names)
+
+    def _check_249(self, engine, data):
+        # Assert that only one index exists that covers columns
+        # instance_uuid and device_name
+        bdm = oslodbutils.get_table(engine, 'block_device_mapping')
+        self.assertEqual(1, len([i for i in bdm.indexes
+                                 if [c.name for c in i.columns] ==
+                                    ['instance_uuid', 'device_name']]))
+
+    def _post_downgrade_249(self, engine):
+        # The duplicate index is not created on downgrade, so this
+        # asserts that only one index exists that covers columns
+        # instance_uuid and device_name
+        bdm = oslodbutils.get_table(engine, 'block_device_mapping')
+        self.assertEqual(1, len([i for i in bdm.indexes
+                                 if [c.name for c in i.columns] ==
+                                    ['instance_uuid', 'device_name']]))
+
+    def _check_250(self, engine, data):
+        self.assertTableNotExists(engine, 'instance_group_metadata')
+        self.assertTableNotExists(engine, 'shadow_instance_group_metadata')
+
+    def _post_downgrade_250(self, engine):
+        oslodbutils.get_table(engine, 'instance_group_metadata')
+        oslodbutils.get_table(engine, 'shadow_instance_group_metadata')
+
+    def _check_251(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes', 'numa_topology')
+        self.assertColumnExists(
+                engine, 'shadow_compute_nodes', 'numa_topology')
+
+        compute_nodes = oslodbutils.get_table(engine, 'compute_nodes')
+        shadow_compute_nodes = oslodbutils.get_table(
+                engine, 'shadow_compute_nodes')
+        self.assertIsInstance(compute_nodes.c.numa_topology.type,
+                              sqlalchemy.types.Text)
+        self.assertIsInstance(shadow_compute_nodes.c.numa_topology.type,
+                              sqlalchemy.types.Text)
+
+    def _post_downgrade_251(self, engine):
+        self.assertColumnNotExists(engine, 'compute_nodes', 'numa_topology')
+        self.assertColumnNotExists(
+                engine, 'shadow_compute_nodes', 'numa_topology')
+
+    def _check_252(self, engine, data):
+        oslodbutils.get_table(engine, 'instance_extra')
+        oslodbutils.get_table(engine, 'shadow_instance_extra')
+        self.assertIndexMembers(engine, 'instance_extra',
+                                'instance_extra_idx',
+                                ['instance_uuid'])
+
+    def _post_downgrade_252(self, engine):
+        self.assertTableNotExists(engine, 'instance_extra')
+        self.assertTableNotExists(engine, 'shadow_instance_extra')
 
 
 class TestBaremetalMigrations(BaseWalkMigrationTestCase, CommonTestsMixIn):

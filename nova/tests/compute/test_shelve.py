@@ -45,7 +45,7 @@ def _fake_resources():
 
 
 class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
-    def _shelve_instance(self, shelved_offload_time):
+    def _shelve_instance(self, shelved_offload_time, clean_shutdown=True):
         CONF.set_override('shelved_offload_time', shelved_offload_time)
         db_instance = jsonutils.to_primitive(self._create_fake_instance())
         instance = objects.Instance.get_by_uuid(
@@ -71,7 +71,12 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
 
         self.compute._notify_about_instance_usage(self.context, instance,
                 'shelve.start')
-        self.compute.driver.power_off(instance)
+        if clean_shutdown:
+            self.compute.driver.power_off(instance,
+                                          CONF.shutdown_timeout,
+                                          self.compute.SHUTDOWN_RETRY_INTERVAL)
+        else:
+            self.compute.driver.power_off(instance, 0, 0)
         self.compute._get_power_state(self.context,
                 instance).AndReturn(123)
         self.compute.driver.snapshot(self.context, instance, 'fake_image_id',
@@ -113,10 +118,13 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.mox.ReplayAll()
 
         self.compute.shelve_instance(self.context, instance,
-                image_id=image_id)
+                image_id=image_id, clean_shutdown=clean_shutdown)
 
     def test_shelve(self):
         self._shelve_instance(-1)
+
+    def test_shelve_forced_shutdown(self):
+        self._shelve_instance(-1, clean_shutdown=False)
 
     def test_shelve_offload(self):
         self._shelve_instance(0)
@@ -211,7 +219,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                 columns_to_join=['metadata', 'system_metadata'],
                 ).AndReturn((db_instance, db_instance))
         self.compute._prep_block_device(self.context, instance,
-                mox.IgnoreArg()).AndReturn('fake_bdm')
+                mox.IgnoreArg(), do_check_attach=False).AndReturn('fake_bdm')
         db_instance['key_data'] = None
         db_instance['auto_disk_config'] = None
         self.compute.network_api.migrate_instance_finish(
@@ -250,7 +258,6 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
 
     def test_unshelve_volume_backed(self):
         db_instance = jsonutils.to_primitive(self._create_fake_instance())
-        host = 'fake-mini'
         node = test_compute.NODENAME
         limits = {}
         filter_properties = {'limits': limits}
@@ -262,10 +269,6 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
             expected_attrs=['metadata', 'system_metadata'])
         instance.task_state = task_states.UNSHELVING
         instance.save()
-        sys_meta = dict(instance.system_metadata)
-        sys_meta['shelved_at'] = timeutils.strtime(at=cur_time)
-        sys_meta['shelved_image_id'] = None
-        sys_meta['shelved_host'] = host
 
         self.mox.StubOutWithMock(self.compute, '_notify_about_instance_usage')
         self.mox.StubOutWithMock(self.compute, '_prep_block_device')
@@ -284,7 +287,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                 columns_to_join=['metadata', 'system_metadata']
                 ).AndReturn((db_instance, db_instance))
         self.compute._prep_block_device(self.context, instance,
-                mox.IgnoreArg()).AndReturn('fake_bdm')
+                mox.IgnoreArg(), do_check_attach=False).AndReturn('fake_bdm')
         db_instance['key_data'] = None
         db_instance['auto_disk_config'] = None
         self.compute.network_api.migrate_instance_finish(

@@ -10,7 +10,7 @@
                 }
             ]
         },
-        "admin_password": "%(password)s",
+        "adminPass": "%(password)s",
         "created": "%(isotime)s",
         "flavor": {
             "id": "1",
@@ -21,13 +21,13 @@
                 }
             ]
         },
-        "host_id": "%(hostid)s",
+        "hostId": "%(hostid)s",
         "id": "%(uuid)s",
         "image": {
             "id": "%(uuid)s",
             "links": [
                 {
-                    "href": "%(glance_host)s/images/%(uuid)s",
+                    "href": "%(host)s/images/%(uuid)s",
                     "rel": "bookmark"
                 }
             ]

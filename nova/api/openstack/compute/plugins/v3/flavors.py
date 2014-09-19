@@ -24,6 +24,8 @@ from nova.i18n import _
 from nova.openstack.common import strutils
 from nova import utils
 
+ALIAS = 'flavors'
+
 
 class FlavorsController(wsgi.Controller):
     """Flavor controller for the OpenStack API."""
@@ -87,19 +89,19 @@ class FlavorsController(wsgi.Controller):
             filters['is_public'] = True
             filters['disabled'] = False
 
-        if 'min_ram' in req.params:
+        if 'minRam' in req.params:
             try:
-                filters['min_memory_mb'] = int(req.params['min_ram'])
+                filters['min_memory_mb'] = int(req.params['minRam'])
             except ValueError:
-                msg = _('Invalid min_ram filter [%s]') % req.params['min_ram']
+                msg = _('Invalid min_ram filter [%s]') % req.params['minRam']
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        if 'min_disk' in req.params:
+        if 'minDisk' in req.params:
             try:
-                filters['min_root_gb'] = int(req.params['min_disk'])
+                filters['min_root_gb'] = int(req.params['minDisk'])
             except ValueError:
-                msg = (_('Invalid min_disk filter [%s]') %
-                       req.params['min_disk'])
+                msg = (_('Invalid minDisk filter [%s]') %
+                       req.params['minDisk'])
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
         try:
@@ -116,7 +118,7 @@ class FlavorsController(wsgi.Controller):
 class Flavors(extensions.V3APIExtensionBase):
     """Flavors Extension."""
     name = "Flavors"
-    alias = "flavors"
+    alias = ALIAS
     version = 1
 
     def get_resources(self):
@@ -124,7 +126,7 @@ class Flavors(extensions.V3APIExtensionBase):
         member_actions = {'action': 'POST'}
 
         resources = [
-            extensions.ResourceExtension('flavors',
+            extensions.ResourceExtension(ALIAS,
                                          FlavorsController(),
                                          member_name='flavor',
                                          collection_actions=collection_actions,

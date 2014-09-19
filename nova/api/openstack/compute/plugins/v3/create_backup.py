@@ -24,9 +24,7 @@ from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova import exception
-from nova.openstack.common import log as logging
 
-LOG = logging.getLogger(__name__)
 ALIAS = "os-create-backup"
 authorize = extensions.extension_authorizer('compute', "v3:" + ALIAS)
 
@@ -36,8 +34,8 @@ class CreateBackupController(wsgi.Controller):
         super(CreateBackupController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
-    @extensions.expected_errors((400, 404, 409, 413))
-    @wsgi.action('create_backup')
+    @extensions.expected_errors((400, 403, 404, 409))
+    @wsgi.action('createBackup')
     @validation.schema(create_backup.create_backup)
     def _create_backup(self, req, id, body):
         """Backup a server instance.
@@ -52,7 +50,7 @@ class CreateBackupController(wsgi.Controller):
         """
         context = req.environ["nova.context"]
         authorize(context)
-        entity = body["create_backup"]
+        entity = body["createBackup"]
 
         image_name = entity["name"]
         backup_type = entity["backup_type"]
@@ -71,7 +69,7 @@ class CreateBackupController(wsgi.Controller):
                     backup_type, rotation, extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'create_backup')
+                    'createBackup')
 
         resp = webob.Response(status_int=202)
 

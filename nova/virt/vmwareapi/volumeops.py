@@ -22,7 +22,6 @@ from oslo.config import cfg
 from nova import exception
 from nova.i18n import _
 from nova.openstack.common import log as logging
-from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 
@@ -33,10 +32,9 @@ LOG = logging.getLogger(__name__)
 class VMwareVolumeOps(object):
     """Management class for Volume-related tasks."""
 
-    def __init__(self, session, cluster=None, vc_support=False):
+    def __init__(self, session, cluster=None):
         self._session = session
         self._cluster = cluster
-        self._vc_support = vc_support
 
     def attach_disk_to_vm(self, vm_ref, instance,
                           adapter_type, disk_type, vmdk_path=None,
@@ -301,7 +299,7 @@ class VMwareVolumeOps(object):
 
     def _get_volume_ref(self, volume_ref_name):
         """Get the volume moref from the ref name."""
-        return vim.get_moref(volume_ref_name, 'VirtualMachine')
+        return vim_util.get_moref(volume_ref_name, 'VirtualMachine')
 
     def _get_vmdk_base_volume_device(self, volume_ref):
         # Get the vmdk file name that the VM is pointing to
@@ -439,10 +437,6 @@ class VMwareVolumeOps(object):
         is on the datastore of the instance.
         """
 
-        # Consolidation only supported with VC driver
-        if not self._vc_support:
-            return
-
         original_device = self._get_vmdk_base_volume_device(volume_ref)
 
         original_device_path = original_device.backing.fileName
@@ -568,7 +562,7 @@ class VMwareVolumeOps(object):
         driver_type = connection_info['driver_volume_type']
         LOG.debug("Root volume attach. Driver type: %s", driver_type,
                   instance=instance)
-        if self._vc_support and driver_type == 'vmdk':
+        if driver_type == 'vmdk':
             vm_ref = vm_util.get_vm_ref(self._session, instance)
             data = connection_info['data']
             # Get the volume ref

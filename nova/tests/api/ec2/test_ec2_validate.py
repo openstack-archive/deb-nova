@@ -28,6 +28,7 @@ from nova.openstack.common import timeutils
 from nova import test
 from nova.tests import cast_as_call
 from nova.tests import fake_network
+from nova.tests import fake_notifier
 from nova.tests.image import fake
 
 CONF = cfg.CONF
@@ -47,6 +48,15 @@ class EC2ValidateTestCase(test.TestCase):
 
         # set up our cloud
         self.cloud = cloud.CloudController()
+
+        # Short-circuit the conductor service
+        self.flags(use_local=True, group='conductor')
+
+        # Stub out the notification service so we use the no-op serializer
+        # and avoid lazy-load traces with the wrap_exception decorator in
+        # the compute service.
+        fake_notifier.stub_notifier(self.stubs)
+        self.addCleanup(fake_notifier.reset)
 
         # set up services
         self.conductor = self.start_service('conductor',
@@ -71,12 +81,12 @@ class EC2ValidateTestCase(test.TestCase):
         self.ec2_id_exception_map.extend([(x, exception.InstanceNotFound)
                 for x in self.EC2_VALID__IDS])
         self.volume_id_exception_map = [(x,
-                exception.InvalidInstanceIDMalformed)
+                exception.InvalidVolumeIDMalformed)
                 for x in self.EC2_MALFORMED_IDS]
         self.volume_id_exception_map.extend([(x, exception.VolumeNotFound)
                 for x in self.EC2_VALID__IDS])
 
-        def fake_show(meh, context, id):
+        def fake_show(meh, context, id, **kwargs):
             return {'id': id,
                     'container_format': 'ami',
                     'properties': {
@@ -106,7 +116,7 @@ class EC2ValidateTestCase(test.TestCase):
         super(EC2ValidateTestCase, self).tearDown()
         fake.FakeImageService_reset()
 
-    #EC2_API tests (InvalidInstanceID.Malformed)
+    # EC2_API tests (InvalidInstanceID.Malformed)
     def test_console_output(self):
         for ec2_id, e in self.ec2_id_exception_map:
             self.assertRaises(e,
@@ -171,7 +181,7 @@ class EC2ValidateTestCase(test.TestCase):
                               volume_id=ec2_id)
 
 
-class EC2TimestampValidationTestCase(test.TestCase):
+class EC2TimestampValidationTestCase(test.NoDBTestCase):
     """Test case for EC2 request timestamp validation."""
 
     def test_validate_ec2_timestamp_valid(self):
@@ -215,7 +225,7 @@ class EC2TimestampValidationTestCase(test.TestCase):
 
     def test_validate_ec2_timestamp_advanced_time(self):
 
-        #EC2 request with Timestamp in advanced time
+        # EC2 request with Timestamp in advanced time
         timestamp = timeutils.utcnow() + datetime.timedelta(seconds=250)
         params = {'Timestamp': timeutils.strtime(timestamp,
                                            "%Y-%m-%dT%H:%M:%SZ")}
@@ -252,14 +262,14 @@ class EC2TimestampValidationTestCase(test.TestCase):
 
     def test_validate_Expires_timestamp_invalid_format(self):
 
-        #EC2 request with invalid Expires
+        # EC2 request with invalid Expires
         params = {'Expires': '2011-04-22T11:29:49'}
         expired = ec2utils.is_ec2_timestamp_expired(params)
         self.assertTrue(expired)
 
     def test_validate_ec2_req_timestamp_Expires(self):
 
-        #EC2 request with both Timestamp and Expires
+        # EC2 request with both Timestamp and Expires
         params = {'Timestamp': '2011-04-22T11:29:49Z',
                   'Expires': timeutils.isotime()}
         self.assertRaises(exception.InvalidRequest,

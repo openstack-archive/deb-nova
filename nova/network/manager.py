@@ -22,23 +22,6 @@ There are multiple backend drivers that handle specific types of networking
 topologies.  All of the network commands are issued to a subclass of
 :class:`NetworkManager`.
 
-**Related Flags**
-
-:network_driver:  Driver to use for network creation
-:flat_network_bridge:  Bridge device for simple network instances
-:flat_interface:  FlatDhcp will bridge into this interface if set
-:flat_network_dns:  Dns for simple network
-:vlan_start:  First VLAN for private networks
-:vpn_ip:  Public IP for the cloudpipe VPN servers
-:vpn_start:  First Vpn port for private networks
-:cnt_vpn_clients:  Number of addresses reserved for vpn clients
-:network_size:  Number of addresses in each private subnet
-:fixed_range:  Fixed IP address block
-:fixed_ip_disassociate_timeout:  Seconds after which a deallocated ip
-                                 is disassociated
-:create_unique_mac_address_attempts:  Number of times to attempt creating
-                                      a unique mac address
-
 """
 
 import datetime
@@ -313,8 +296,10 @@ class NetworkManager(manager.Manager):
     @utils.synchronized('get_dhcp')
     def _get_dhcp_ip(self, context, network_ref, host=None):
         """Get the proper dhcp address to listen on."""
+        # NOTE(vish): If we are sharing the dhcp_address then we can just
+        #             return the dhcp_server from the database.
         if self._uses_shared_ip(network_ref):
-            return network_ref['gateway']
+            return network_ref.get('dhcp_server') or network_ref['gateway']
 
         if not host:
             host = self.host
@@ -494,7 +479,7 @@ class NetworkManager(manager.Manager):
         admin_context = context.elevated()
         LOG.debug("Allocate network for instance", instance_uuid=instance_uuid,
                   context=context)
-        networks = self._get_networks_for_instance(admin_context,
+        networks = self._get_networks_for_instance(context,
                                         instance_uuid, project_id,
                                         requested_networks=requested_networks)
         networks_list = [self._get_network_dict(network)
@@ -503,8 +488,8 @@ class NetworkManager(manager.Manager):
                   networks_list, context=context, instance_uuid=instance_uuid)
 
         try:
-            self._allocate_mac_addresses(context, instance_uuid, networks,
-                                         macs)
+            self._allocate_mac_addresses(admin_context, instance_uuid,
+                                         networks, macs)
         except Exception:
             with excutils.save_and_reraise_exception():
                 # If we fail to allocate any one mac address, clean up all
@@ -520,8 +505,8 @@ class NetworkManager(manager.Manager):
             network_ids = [network['id'] for network in networks]
             self.network_rpcapi.update_dns(context, network_ids)
 
-        return self.get_instance_nw_info(context, instance_uuid, rxtx_factor,
-                                         host)
+        return self.get_instance_nw_info(admin_context, instance_uuid,
+                                         rxtx_factor, host)
 
     def deallocate_for_instance(self, context, **kwargs):
         """Handles deallocating various network resources for an instance.
@@ -871,28 +856,43 @@ class NetworkManager(manager.Manager):
                            user_id=quota_user)
             cleanup.append(functools.partial(quotas.rollback, context))
         except exception.OverQuota:
-            LOG.warn(_("Quota exceeded for %s, tried to allocate "
-                       "fixed IP"), context.project_id)
+            LOG.debug("Quota exceeded for %s, tried to allocate "
+                      "fixed IP", context.project_id)
             raise exception.FixedIpLimitExceeded()
 
         try:
             if network['cidr']:
                 address = kwargs.get('address', None)
                 if address:
+                    LOG.debug('Associating instance with specified fixed IP '
+                              '%(address)s in network %(network)s on subnet '
+                              '%(cidr)s.' %
+                              {'address': address, 'network': network['id'],
+                               'cidr': network['cidr']},
+                              instance=instance)
                     fip = objects.FixedIP.associate(context,
                                                     str(address),
                                                     instance_id,
                                                     network['id'])
                 else:
+                    LOG.debug('Associating instance with fixed IP from pool '
+                              'in network %(network)s on subnet %(cidr)s.' %
+                              {'network': network['id'],
+                               'cidr': network['cidr']},
+                              instance=instance)
                     fip = objects.FixedIP.associate_pool(
                         context.elevated(), network['id'], instance_id)
+                    address = str(fip.address)
+
                 vif = objects.VirtualInterface.get_by_instance_and_network(
                         context, instance_id, network['id'])
                 fip.allocated = True
                 fip.virtual_interface_id = vif.id
                 fip.save()
-                cleanup.append(fip.disassociate)
+                cleanup.append(functools.partial(fip.disassociate, context))
 
+                LOG.debug('Refreshing security group members for instance.',
+                          instance=instance)
                 self._do_trigger_security_group_members_refresh_for_instance(
                     instance_id)
                 cleanup.append(functools.partial(
@@ -915,14 +915,23 @@ class NetworkManager(manager.Manager):
                         self.instance_dns_manager.delete_entry,
                         instance_id, self.instance_dns_domain))
 
+            LOG.debug('Setting up network %(network)s on host %(host)s.' %
+                      {'network': network['id'], 'host': self.host},
+                      instance=instance)
             self._setup_network_on_host(context, network)
             cleanup.append(functools.partial(
                     self._teardown_network_on_host,
                     context, network))
 
             quotas.commit(context)
-            LOG.debug('Allocated fixed ip %s on network %s', address,
-                      network['uuid'], instance=instance)
+            if address is None:
+                # TODO(mriedem): should _setup_network_on_host return the addr?
+                LOG.debug('Fixed IP is setup on network %s but not returning '
+                          'the specific IP from the base network manager.',
+                          network['uuid'], instance=instance)
+            else:
+                LOG.debug('Allocated fixed ip %s on network %s', address,
+                          network['uuid'], instance=instance)
             return address
 
         except Exception:
@@ -1063,19 +1072,20 @@ class NetworkManager(manager.Manager):
                     continue
                 kwargs[key] = int(value)
             except ValueError:
-                raise ValueError(_("%s must be an integer") % key)
+                raise exception.InvalidIntValue(key=key)
 
     def create_networks(self, context,
                         label, cidr=None, multi_host=None, num_networks=None,
                         network_size=None, cidr_v6=None,
                         gateway=None, gateway_v6=None, bridge=None,
                         bridge_interface=None, dns1=None, dns2=None,
-                        fixed_cidr=None, **kwargs):
+                        fixed_cidr=None, allowed_start=None,
+                        allowed_end=None, **kwargs):
         arg_names = ("label", "cidr", "multi_host", "num_networks",
                      "network_size", "cidr_v6",
                      "gateway", "gateway_v6", "bridge",
                      "bridge_interface", "dns1", "dns2",
-                     "fixed_cidr")
+                     "fixed_cidr", "allowed_start", "allowed_end")
         if 'mtu' not in kwargs:
             kwargs['mtu'] = CONF.network_device_mtu
         if 'dhcp_server' not in kwargs:
@@ -1095,7 +1105,7 @@ class NetworkManager(manager.Manager):
 
         # Size of "label" column in nova.networks is 255, hence the restriction
         if len(label) > 255:
-            raise ValueError(_("Maximum allowed length for 'label' is 255."))
+            raise exception.LabelTooLong()
 
         if not (kwargs["cidr"] or kwargs["cidr_v6"]):
             raise exception.NetworkNotCreated(req="cidr or cidr_v6")
@@ -1108,10 +1118,22 @@ class NetworkManager(manager.Manager):
             if not kwargs[fld]:
                 raise exception.NetworkNotCreated(req=fld)
 
+        if kwargs["cidr_v6"]:
+            # NOTE(vish): just for validation
+            try:
+                netaddr.IPNetwork(kwargs["cidr_v6"])
+            except netaddr.AddrFormatError:
+                raise exception.InvalidCidr(cidr=kwargs["cidr_v6"])
+
+        if kwargs["cidr"]:
+            try:
+                fixnet = netaddr.IPNetwork(kwargs["cidr"])
+            except netaddr.AddrFormatError:
+                raise exception.InvalidCidr(cidr=kwargs["cidr"])
+
         kwargs["num_networks"] = kwargs["num_networks"] or CONF.num_networks
         if not kwargs["network_size"]:
             if kwargs["cidr"]:
-                fixnet = netaddr.IPNetwork(kwargs["cidr"])
                 each_subnet_size = fixnet.size / kwargs["num_networks"]
                 if each_subnet_size > CONF.network_size:
                     subnet = 32 - int(math.log(CONF.network_size, 2))
@@ -1135,17 +1157,32 @@ class NetworkManager(manager.Manager):
         kwargs["dns1"] = kwargs["dns1"] or CONF.flat_network_dns
 
         if kwargs["fixed_cidr"]:
-            kwargs["fixed_cidr"] = netaddr.IPNetwork(kwargs["fixed_cidr"])
+            try:
+                kwargs["fixed_cidr"] = netaddr.IPNetwork(kwargs["fixed_cidr"])
+            except netaddr.AddrFormatError:
+                raise exception.InvalidCidr(cidr=kwargs["fixed_cidr"])
 
         LOG.debug('Create network: |%s|', kwargs)
         return self._do_create_networks(context, **kwargs)
+
+    @staticmethod
+    def _index_of(subnet, ip):
+        try:
+            start = netaddr.IPAddress(ip)
+        except netaddr.AddrFormatError:
+            raise exception.InvalidAddress(address=ip)
+        index = start.value - subnet.value
+        if index < 0 or index >= subnet.size:
+            raise exception.AddressOutOfRange(address=ip, cidr=str(subnet))
+        return index
 
     def _do_create_networks(self, context,
                             label, cidr, multi_host, num_networks,
                             network_size, cidr_v6, gateway, gateway_v6, bridge,
                             bridge_interface, dns1=None, dns2=None,
                             fixed_cidr=None, mtu=None, dhcp_server=None,
-                            enable_dhcp=None, share_address=None, **kwargs):
+                            enable_dhcp=None, share_address=None,
+                            allowed_start=None, allowed_end=None, **kwargs):
         """Create networks based on parameters."""
         # NOTE(jkoelker): these are dummy values to make sure iter works
         # TODO(tr3buchet): disallow carving up networks
@@ -1200,13 +1237,12 @@ class NetworkManager(manager.Manager):
                         subnets_v4.append(next_subnet)
                         subnet = next_subnet
                     else:
-                        raise exception.CidrConflict(_('cidr already in use'))
+                        raise exception.CidrConflict(cidr=subnet,
+                                                     other=subnet)
                 for used_subnet in used_subnets:
                     if subnet in used_subnet:
-                        msg = _('requested cidr (%(cidr)s) conflicts with '
-                                'existing supernet (%(super)s)')
-                        raise exception.CidrConflict(
-                                  msg % {'cidr': subnet, 'super': used_subnet})
+                        raise exception.CidrConflict(cidr=subnet,
+                                                     other=used_subnet)
                     if used_subnet in subnet:
                         next_subnet = find_next(subnet)
                         if next_subnet:
@@ -1214,11 +1250,8 @@ class NetworkManager(manager.Manager):
                             subnets_v4.append(next_subnet)
                             subnet = next_subnet
                         else:
-                            msg = _('requested cidr (%(cidr)s) conflicts '
-                                    'with existing smaller cidr '
-                                    '(%(smaller)s)')
-                            raise exception.CidrConflict(
-                                msg % {'cidr': subnet, 'smaller': used_subnet})
+                            raise exception.CidrConflict(cidr=subnet,
+                                                         other=used_subnet)
 
         networks = objects.NetworkList(context=context, objects=[])
         subnets = itertools.izip_longest(subnets_v4, subnets_v6)
@@ -1241,17 +1274,32 @@ class NetworkManager(manager.Manager):
             else:
                 net.label = label
 
+            bottom_reserved = self._bottom_reserved_ips
+            top_reserved = self._top_reserved_ips
             extra_reserved = []
             if cidr and subnet_v4:
+                current = subnet_v4[1]
+                if allowed_start:
+                    val = self._index_of(subnet_v4, allowed_start)
+                    current = netaddr.IPAddress(allowed_start)
+                    bottom_reserved = val
+                if allowed_end:
+                    val = self._index_of(subnet_v4, allowed_end)
+                    top_reserved = subnet_v4.size - 1 - val
                 net.cidr = str(subnet_v4)
                 net.netmask = str(subnet_v4.netmask)
-                net.gateway = gateway or str(subnet_v4[1])
                 net.broadcast = str(subnet_v4.broadcast)
-                net.dhcp_start = str(subnet_v4[2])
+                if gateway:
+                    net.gateway = gateway
+                else:
+                    net.gateway = current
+                    current += 1
                 if not dhcp_server:
                     dhcp_server = net.gateway
-                if net.dhcp_start == dhcp_server:
-                    net.dhcp_start = str(subnet_v4[3])
+                net.dhcp_start = current
+                current += 1
+                if str(net.dhcp_start) == dhcp_server:
+                    net.dhcp_start = current
                 net.dhcp_server = dhcp_server
                 extra_reserved.append(str(net.dhcp_server))
                 extra_reserved.append(str(net.gateway))
@@ -1277,8 +1325,9 @@ class NetworkManager(manager.Manager):
                         used_vlans.sort()
                         vlan = used_vlans[-1] + 1
 
-                net.vpn_private_address = str(subnet_v4[2])
-                net.dhcp_start = str(subnet_v4[3])
+                net.vpn_private_address = net.dhcp_start
+                extra_reserved.append(str(net.vpn_private_address))
+                net.dhcp_start = net.dhcp_start + 1
                 net.vlan = vlan
                 net.bridge = 'br%s' % vlan
 
@@ -1292,7 +1341,8 @@ class NetworkManager(manager.Manager):
 
             if cidr and subnet_v4:
                 self._create_fixed_ips(context, net.id, fixed_cidr,
-                                       extra_reserved)
+                                       extra_reserved, bottom_reserved,
+                                       top_reserved)
         # NOTE(danms): Remove this in RPC API v2.0
         return obj_base.obj_to_primitive(networks)
 
@@ -1308,8 +1358,7 @@ class NetworkManager(manager.Manager):
         LOG.debug('Delete network %s', network['uuid'])
 
         if require_disassociated and network.project_id is not None:
-            raise ValueError(_('Network must be disassociated from project %s'
-                               ' before delete') % network.project_id)
+            raise exception.NetworkHasProject(project_id=network.project_id)
         network.destroy()
 
     @property
@@ -1323,16 +1372,12 @@ class NetworkManager(manager.Manager):
         return 1  # broadcast
 
     def _create_fixed_ips(self, context, network_id, fixed_cidr=None,
-                          extra_reserved=None):
+                          extra_reserved=None, bottom_reserved=0,
+                          top_reserved=0):
         """Create all fixed ips for network."""
         network = self._get_network_by_id(context, network_id)
-        # NOTE(vish): Should these be properties of the network as opposed
-        #             to properties of the manager class?
-        bottom_reserved = self._bottom_reserved_ips
-        top_reserved = self._top_reserved_ips
         if extra_reserved is None:
             extra_reserved = []
-
         if not fixed_cidr:
             fixed_cidr = netaddr.IPNetwork(network['cidr'])
         num_ips = len(fixed_cidr)
@@ -1372,7 +1417,7 @@ class NetworkManager(manager.Manager):
         for vif in vifs:
             network = objects.Network.get_by_id(context, vif.network_id)
             if not network.multi_host:
-                #NOTE (tr3buchet): if using multi_host, host is instance[host]
+                # NOTE (tr3buchet): if using multi_host, host is instance[host]
                 host = network['host']
             if self.host == host or host is None:
                 # at this point i am the correct host, or host doesn't
@@ -1397,6 +1442,13 @@ class NetworkManager(manager.Manager):
         # subcall from original setup_networks_on_host
         network = objects.Network.get_by_id(context, network_id)
         call_func(context, network)
+
+    def _initialize_network(self, network):
+        if network.enable_dhcp:
+            is_ext = (network.dhcp_server is not None and
+                      network.dhcp_server != network.gateway)
+            self.l3driver.initialize_network(network.cidr, is_ext)
+        self.l3driver.initialize_gateway(network)
 
     def _setup_network_on_host(self, context, network):
         """Sets up network on this host."""
@@ -1728,12 +1780,12 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
 
     def _setup_network_on_host(self, context, network):
         """Sets up network on this host."""
-        network['dhcp_server'] = self._get_dhcp_ip(context, network)
+        network.dhcp_server = self._get_dhcp_ip(context, network)
 
-        self.l3driver.initialize_network(network.get('cidr'))
-        self.l3driver.initialize_gateway(network)
+        self._initialize_network(network)
 
-        if not CONF.fake_network:
+        # NOTE(vish): if dhcp server is not set then don't dhcp
+        if not CONF.fake_network and network.enable_dhcp:
             dev = self.driver.get_dev(network)
             # NOTE(dprince): dhcp DB queries require elevated context
             elevated = context.elevated()
@@ -1745,7 +1797,8 @@ class FlatDHCPManager(RPCAllocateFixedIP, floating_ips.FloatingIP,
                 network.save()
 
     def _teardown_network_on_host(self, context, network):
-        if not CONF.fake_network:
+        # NOTE(vish): if dhcp server is not set then don't dhcp
+        if not CONF.fake_network and network.enable_dhcp:
             network['dhcp_server'] = self._get_dhcp_ip(context, network)
             dev = self.driver.get_dev(network)
             # NOTE(dprince): dhcp DB queries require elevated context
@@ -1919,8 +1972,9 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             network_uuids = [uuid for (uuid, fixed_ip) in requested_networks]
             networks = self._get_networks_by_uuids(context, network_uuids)
         else:
-            networks = objects.NetworkList.get_by_project(context,
-                                                          project_id)
+            # NOTE(vish): Allocates network on demand so requires admin.
+            networks = objects.NetworkList.get_by_project(
+                    context.elevated(), project_id)
         return networks
 
     def create_networks(self, context, **kwargs):
@@ -1937,6 +1991,19 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             raise ValueError(_('The sum between the number of networks and'
                                ' the vlan start cannot be greater'
                                ' than 4094'))
+
+        # Check that vlan is not greater than 4094 or less then 1
+        vlan_num = kwargs.get("vlan", None)
+        if vlan_num is not None:
+            try:
+                vlan_num = int(vlan_num)
+            except ValueError:
+                raise ValueError(_("vlan must be an integer"))
+            if vlan_num > 4094:
+                raise ValueError(_('The vlan number cannot be greater than'
+                                   ' 4094'))
+            if vlan_num < 1:
+                raise ValueError(_('The vlan number cannot be less than 1'))
 
         # check that num networks and network size fits in fixed_net
         fixed_net = netaddr.IPNetwork(kwargs['cidr'])
@@ -1962,8 +2029,7 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             address = network.vpn_public_address
         network.dhcp_server = self._get_dhcp_ip(context, network)
 
-        self.l3driver.initialize_network(network.get('cidr'))
-        self.l3driver.initialize_gateway(network)
+        self._initialize_network(network)
 
         # NOTE(vish): only ensure this forward if the address hasn't been set
         #             manually.
@@ -1975,8 +2041,9 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         if not CONF.fake_network:
             dev = self.driver.get_dev(network)
             # NOTE(dprince): dhcp DB queries require elevated context
-            elevated = context.elevated()
-            self.driver.update_dhcp(elevated, dev, network)
+            if network.enable_dhcp:
+                elevated = context.elevated()
+                self.driver.update_dhcp(elevated, dev, network)
             if CONF.use_ipv6:
                 self.driver.update_ra(context, dev, network)
                 gateway = utils.get_my_linklocal(dev)
@@ -1988,9 +2055,6 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
         if not CONF.fake_network:
             network['dhcp_server'] = self._get_dhcp_ip(context, network)
             dev = self.driver.get_dev(network)
-            # NOTE(dprince): dhcp DB queries require elevated context
-            elevated = context.elevated()
-            self.driver.update_dhcp(elevated, dev, network)
 
             # NOTE(ethuleau): For multi hosted networks, if the network is no
             # more used on this host and if VPN forwarding rule aren't handed
@@ -2001,7 +2065,8 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                 not objects.Network.in_use_on_host(context, network['id'],
                                                    self.host)):
                 LOG.debug("Remove unused gateway %s", network['bridge'])
-                self.driver.kill_dhcp(dev)
+                if network.enable_dhcp:
+                    self.driver.kill_dhcp(dev)
                 self.l3driver.remove_gateway(network)
                 if not self._uses_shared_ip(network):
                     fip = objects.FixedIP.get_by_address(context,
@@ -2009,7 +2074,10 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                     fip.allocated = False
                     fip.host = None
                     fip.save()
-            else:
+            # NOTE(vish): if dhcp server is not set then don't dhcp
+            elif network.enable_dhcp:
+                # NOTE(dprince): dhcp DB queries require elevated context
+                elevated = context.elevated()
                 self.driver.update_dhcp(elevated, dev, network)
 
     def _get_network_dict(self, network):

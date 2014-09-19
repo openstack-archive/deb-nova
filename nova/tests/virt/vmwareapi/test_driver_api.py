@@ -23,11 +23,13 @@ import collections
 import contextlib
 import copy
 import datetime
-import time
 
+from eventlet import greenthread
 import mock
 import mox
 from oslo.config import cfg
+from oslo.vmware import exceptions as vexc
+from oslo.vmware import vim
 import suds
 
 from nova import block_device
@@ -54,14 +56,12 @@ from nova.tests.virt.vmwareapi import fake as vmwareapi_fake
 from nova.tests.virt.vmwareapi import stubs
 from nova import utils as nova_utils
 from nova.virt import driver as v_driver
-from nova.virt import fake
+from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import driver
 from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import error_util
 from nova.virt.vmwareapi import imagecache
-from nova.virt.vmwareapi import read_write_util
 from nova.virt.vmwareapi import vif
-from nova.virt.vmwareapi import vim
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
@@ -99,18 +99,17 @@ class VMwareSudsTest(test.NoDBTestCase):
         self.vim = self._vim_create()
         self.addCleanup(mock.patch.stopall)
 
+    def _mock_getattr(self, attr_name):
+        self.assertEqual("RetrieveServiceContent", attr_name)
+        return lambda obj, **kwargs: fake_service_content()
+
     def _vim_create(self):
-
-        def fake_retrieve_service_content(fake):
-            return fake_service_content()
-
-        self.stubs.Set(vim.Vim, 'retrieve_service_content',
-                fake_retrieve_service_content)
-        return vim.Vim()
+        with mock.patch.object(vim.Vim, '__getattr__', self._mock_getattr):
+            return vim.Vim()
 
     def test_exception_with_deepcopy(self):
         self.assertIsNotNone(self.vim)
-        self.assertRaises(error_util.VimException,
+        self.assertRaises(vexc.VimException,
                           copy.deepcopy, self.vim)
 
 
@@ -121,196 +120,86 @@ def _fake_create_session(inst):
     inst._session = session
 
 
+class VMwareDriverStartupTestCase(test.NoDBTestCase):
+    def _start_driver_with_flags(self, expected_exception_type, startup_flags):
+        self.flags(**startup_flags)
+        with mock.patch(
+                'nova.virt.vmwareapi.driver.VMwareAPISession.__init__'):
+            e = self.assertRaises(
+                    Exception, driver.VMwareVCDriver, None)  # noqa
+            self.assertIs(type(e), expected_exception_type)
+
+    def test_start_driver_no_user(self):
+        self._start_driver_with_flags(
+                Exception,
+                dict(host_ip='ip', host_password='password',
+                     group='vmware'))
+
+    def test_start_driver_no_host(self):
+        self._start_driver_with_flags(
+                Exception,
+                dict(host_username='username', host_password='password',
+                     group='vmware'))
+
+    def test_start_driver_no_password(self):
+        self._start_driver_with_flags(
+                Exception,
+                dict(host_ip='ip', host_username='username',
+                     group='vmware'))
+
+    def test_start_driver_with_user_host_password(self):
+        # Getting the InvalidInput exception signifies that no exception
+        # is raised regarding missing user/password/host
+        self._start_driver_with_flags(
+                nova.exception.InvalidInput,
+                dict(host_ip='ip', host_password='password',
+                     host_username="user", datastore_regex="bad(regex",
+                     group='vmware'))
+
+
 class VMwareSessionTestCase(test.NoDBTestCase):
 
-    def _fake_is_vim_object(self, module):
-        return True
-
-    @mock.patch('time.sleep')
-    def test_call_method_vim_fault(self, mock_sleep):
-
-        def _fake_session_is_active(self):
-            return False
-
+    @mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
+                       return_value=False)
+    def test_call_method(self, mock_is_vim):
         with contextlib.nested(
-            mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
-                              self._fake_is_vim_object),
-            mock.patch.object(driver.VMwareAPISession, '_create_session',
-                              _fake_create_session),
-            mock.patch.object(driver.VMwareAPISession, '_session_is_active',
-                              _fake_session_is_active)
-        ) as (_fake_vim, _fake_create, _fake_is_active):
-            api_session = driver.VMwareAPISession()
-            args = ()
-            kwargs = {}
-            self.assertRaises(error_util.VimFaultException,
-                              api_session._call_method,
-                              stubs, 'fake_temp_method_exception',
-                              *args, **kwargs)
+                mock.patch.object(driver.VMwareAPISession, '_create_session',
+                                  _fake_create_session),
+                mock.patch.object(driver.VMwareAPISession, 'invoke_api'),
+        ) as (fake_create, fake_invoke):
+            session = driver.VMwareAPISession()
+            session._vim = mock.Mock()
+            module = mock.Mock()
+            session._call_method(module, 'fira')
+            fake_invoke.assert_called_once_with(module, 'fira', session._vim)
 
-    def test_call_method_vim_empty(self):
-
-        def _fake_session_is_active(self):
-            return True
-
+    @mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
+                       return_value=True)
+    def test_call_method_vim(self, mock_is_vim):
         with contextlib.nested(
-            mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
-                              self._fake_is_vim_object),
-            mock.patch.object(driver.VMwareAPISession, '_create_session',
-                              _fake_create_session),
-            mock.patch.object(driver.VMwareAPISession, '_session_is_active',
-                              _fake_session_is_active)
-        ) as (_fake_vim, _fake_create, _fake_is_active):
-            api_session = driver.VMwareAPISession()
-            args = ()
-            kwargs = {}
-            res = api_session._call_method(stubs, 'fake_temp_method_exception',
-                                           *args, **kwargs)
-            self.assertEqual([], res)
-
-    @mock.patch('time.sleep')
-    def test_call_method_session_exception(self, mock_sleep):
-        with contextlib.nested(
-            mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
-                              self._fake_is_vim_object),
-            mock.patch.object(driver.VMwareAPISession, '_create_session',
-                              _fake_create_session),
-        ) as (_fake_vim, _fake_create):
-            api_session = driver.VMwareAPISession()
-            args = ()
-            kwargs = {}
-            self.assertRaises(error_util.SessionConnectionException,
-                              api_session._call_method,
-                              stubs, 'fake_temp_session_exception',
-                              *args, **kwargs)
-
-    def test_call_method_session_file_exists_exception(self):
-        with contextlib.nested(
-            mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
-                              self._fake_is_vim_object),
-            mock.patch.object(driver.VMwareAPISession, '_create_session',
-                              _fake_create_session),
-        ) as (_fake_vim, _fake_create):
-            api_session = driver.VMwareAPISession()
-            args = ()
-            kwargs = {}
-            self.assertRaises(error_util.FileAlreadyExistsException,
-                              api_session._call_method,
-                              stubs, 'fake_session_file_exception',
-                              *args, **kwargs)
-
-    def test_call_method_session_no_permission_exception(self):
-        with contextlib.nested(
-            mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
-                              self._fake_is_vim_object),
-            mock.patch.object(driver.VMwareAPISession, '_create_session',
-                              _fake_create_session),
-        ) as (_fake_vim, _fake_create):
-            api_session = driver.VMwareAPISession()
-            args = ()
-            kwargs = {}
-            e = self.assertRaises(error_util.NoPermissionException,
-                                  api_session._call_method,
-                                  stubs, 'fake_session_permission_exception',
-                                  *args, **kwargs)
-            fault_string = 'Permission to perform this operation was denied.'
-            details = {'privilegeId': 'Resource.AssignVMToPool',
-                       'object': 'domain-c7'}
-            exception_string = '%s %s' % (fault_string, details)
-            self.assertEqual(exception_string, str(e))
+                mock.patch.object(driver.VMwareAPISession, '_create_session',
+                                  _fake_create_session),
+                mock.patch.object(driver.VMwareAPISession, 'invoke_api'),
+        ) as (fake_create, fake_invoke):
+            session = driver.VMwareAPISession()
+            module = mock.Mock()
+            session._call_method(module, 'fira')
+            fake_invoke.assert_called_once_with(module, 'fira')
 
 
-class VMwareAPIConfTestCase(test.NoDBTestCase):
-    """Unit tests for VMWare API configurations."""
-    def setUp(self):
-        super(VMwareAPIConfTestCase, self).setUp()
-        vm_util.vm_refs_cache_reset()
-
-    def tearDown(self):
-        super(VMwareAPIConfTestCase, self).tearDown()
-
-    def test_configure_without_wsdl_loc_override(self):
-        # Test the default configuration behavior. By default,
-        # use the WSDL sitting on the host we are talking to in
-        # order to bind the SOAP client.
-        wsdl_loc = cfg.CONF.vmware.wsdl_location
-        self.assertIsNone(wsdl_loc)
-        wsdl_url = vim.Vim.get_wsdl_url("https", "www.example.com", 443)
-        url = vim.Vim.get_soap_url("https", "www.example.com", 443)
-        self.assertEqual("https://www.example.com:443/sdk/vimService.wsdl",
-                         wsdl_url)
-        self.assertEqual("https://www.example.com:443/sdk", url)
-
-    def test_configure_without_wsdl_loc_override_using_ipv6(self):
-        # Same as above but with ipv6 based host ip
-        wsdl_loc = cfg.CONF.vmware.wsdl_location
-        self.assertIsNone(wsdl_loc)
-        wsdl_url = vim.Vim.get_wsdl_url("https", "::1", 443)
-        url = vim.Vim.get_soap_url("https", "::1", 443)
-        self.assertEqual("https://[::1]:443/sdk/vimService.wsdl",
-                         wsdl_url)
-        self.assertEqual("https://[::1]:443/sdk", url)
-
-    def test_configure_with_wsdl_loc_override(self):
-        # Use the setting vmwareapi_wsdl_loc to override the
-        # default path to the WSDL.
-        #
-        # This is useful as a work-around for XML parsing issues
-        # found when using some WSDL in combination with some XML
-        # parsers.
-        #
-        # The wsdl_url should point to a different host than the one we
-        # are actually going to send commands to.
-        fake_wsdl = "https://www.test.com:443/sdk/foo.wsdl"
-        self.flags(wsdl_location=fake_wsdl, group='vmware')
-        wsdl_loc = cfg.CONF.vmware.wsdl_location
-        self.assertIsNotNone(wsdl_loc)
-        self.assertEqual(fake_wsdl, wsdl_loc)
-        wsdl_url = vim.Vim.get_wsdl_url("https", "www.example.com", 443)
-        url = vim.Vim.get_soap_url("https", "www.example.com", 443)
-        self.assertEqual(fake_wsdl, wsdl_url)
-        self.assertEqual("https://www.example.com:443/sdk", url)
-
-    def test_configure_non_default_host_port(self):
-        def _fake_create_session(self):
-            pass
-
-        def _fake_retrieve_service_content(self):
-            return None
-
-        with contextlib.nested(
-            mock.patch.object(driver.VMwareAPISession, '_create_session',
-                              _fake_create_session),
-            mock.patch.object(vim.Vim, 'retrieve_service_content',
-                              _fake_retrieve_service_content),
-            mock.patch('suds.client.Client')
-        ):
-            self.flags(host_ip='www.test.com',
-                       host_port=12345, group='vmware')
-            host_ip = cfg.CONF.vmware.host_ip
-            host_port = cfg.CONF.vmware.host_port
-            self.assertEqual('www.test.com', host_ip)
-            self.assertEqual(12345, host_port)
-            api_session = driver.VMwareAPISession(host_ip=host_ip,
-                                                  host_port=host_port)
-            vim_obj = api_session._get_vim_object()
-            self.assertEqual("https://www.test.com:12345/sdk/vimService.wsdl",
-                             vim_obj.wsdl_url)
-            self.assertEqual("https://www.test.com:12345/sdk", vim_obj.url)
-
-
-@mock.patch.object(driver, 'TIME_BETWEEN_API_CALL_RETRIES', 0)
 class VMwareAPIVMTestCase(test.NoDBTestCase):
     """Unit tests for Vmware API connection calls."""
 
-    def setUp(self):
+    def setUp(self, create_connection=True):
         super(VMwareAPIVMTestCase, self).setUp()
         vm_util.vm_refs_cache_reset()
         self.context = context.RequestContext('fake', 'fake', is_admin=False)
-        self.flags(host_ip='test_url',
+        cluster_name = 'test_cluster'
+        cluster_name2 = 'test_cluster2'
+        self.flags(cluster_name=[cluster_name, cluster_name2],
+                   host_ip='test_url',
                    host_username='test_username',
                    host_password='test_pass',
-                   datastore_regex='.*',
                    api_retry_count=1,
                    use_linked_clone=False, group='vmware')
         self.flags(vnc_enabled=False,
@@ -318,13 +207,20 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                    my_ip='')
         self.user_id = 'fake'
         self.project_id = 'fake'
-        self.node_name = 'test_url'
-        self.ds = 'ds1'
         self.context = context.RequestContext(self.user_id, self.project_id)
         stubs.set_stubs(self.stubs)
         vmwareapi_fake.reset()
         nova.tests.image.fake.stub_out_image_service(self.stubs)
-        self.conn = driver.VMwareESXDriver(fake.FakeVirtAPI)
+        if create_connection:
+            self.conn = driver.VMwareVCDriver(None, False)
+            self._set_exception_vars()
+            self.node_name = self.conn._resources.keys()[0]
+            self.node_name2 = self.conn._resources.keys()[1]
+            if cluster_name2 in self.node_name2:
+                self.ds = 'ds1'
+            else:
+                self.ds = 'ds2'
+
         self.vim = vmwareapi_fake.FakeVim()
 
         # NOTE(vish): none of the network plugging code is actually
@@ -341,8 +237,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         }
         self.fake_image_uuid = self.image['id']
         nova.tests.image.fake.stub_out_image_service(self.stubs)
-        self.vnc_host = 'test_url'
-        self._set_exception_vars()
+        self.vnc_host = 'ha-host'
         self.instance_without_compute = {'node': None,
                                          'vm_state': 'building',
                                          'project_id': 'fake',
@@ -372,11 +267,52 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         vmwareapi_fake.cleanup()
         nova.tests.image.fake.FakeImageService_reset()
 
+    def test_get_host_ip_addr(self):
+        self.assertEqual('test_url', self.conn.get_host_ip_addr())
+
+    def test_init_host_with_no_session(self):
+        self.conn._session = mock.Mock()
+        self.conn._session.vim = None
+        self.conn.init_host('fake_host')
+        self.conn._session._create_session.assert_called_once_with()
+
+    def test_init_host(self):
+        try:
+            self.conn.init_host("fake_host")
+        except Exception as ex:
+            self.fail("init_host raised: %s" % ex)
+
     def _set_exception_vars(self):
         self.wait_task = self.conn._session._wait_for_task
         self.call_method = self.conn._session._call_method
         self.task_ref = None
         self.exception = False
+
+    def test_cleanup_host(self):
+        self.conn.init_host("fake_host")
+        try:
+            self.conn.cleanup_host("fake_host")
+        except Exception as ex:
+            self.fail("cleanup_host raised: %s" % ex)
+
+    @mock.patch('nova.virt.vmwareapi.driver.VMwareVCDriver.__init__')
+    def test_cleanup_host_direct(self, mock_init):
+        mock_init.return_value = None
+        vcdriver = driver.VMwareVCDriver(None, False)
+        vcdriver._session = mock.Mock()
+        vcdriver.cleanup_host("foo")
+        vcdriver._session.vim.client.service.Logout.assert_called_once_with(
+            vcdriver._session.vim.service_content.sessionManager
+        )
+
+    @mock.patch('nova.virt.vmwareapi.driver.VMwareVCDriver.__init__')
+    def test_cleanup_host_direct_with_bad_logout(self, mock_init):
+        mock_init.return_value = None
+        vcdriver = driver.VMwareVCDriver(None, False)
+        vcdriver._session = mock.Mock()
+        fault = suds.WebFault(mock.Mock(), mock.Mock())
+        vcdriver._session.vim.client.service.Logout.side_effect = fault
+        vcdriver.cleanup_host("foo")
 
     def test_driver_capabilities(self):
         self.assertTrue(self.conn.capabilities['has_imagecache'])
@@ -389,44 +325,19 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         def _fake_login(_self):
             self.attempts += 1
             if self.attempts == 1:
-                raise exception.NovaException('Here is my fake exception')
+                raise vexc.VimConnectionException('Here is my fake exception')
             return self.login_session
 
         def _fake_check_session(_self):
             return True
 
         self.stubs.Set(vmwareapi_fake.FakeVim, '_login', _fake_login)
-        self.stubs.Set(time, 'sleep', lambda x: None)
         self.stubs.Set(vmwareapi_fake.FakeVim, '_check_session',
                        _fake_check_session)
-        self.conn = driver.VMwareAPISession()
+
+        with mock.patch.object(greenthread, 'sleep'):
+            self.conn = driver.VMwareAPISession()
         self.assertEqual(self.attempts, 2)
-
-    def test_wait_for_task_exception(self):
-        self.flags(task_poll_interval=1, group='vmware')
-        self.login_session = vmwareapi_fake.FakeVim()._login()
-        self.stop_called = 0
-
-        def _fake_login(_self):
-            return self.login_session
-
-        self.stubs.Set(vmwareapi_fake.FakeVim, '_login', _fake_login)
-
-        def fake_poll_task(task_ref, done):
-            done.send_exception(exception.NovaException('fake exception'))
-
-        def fake_stop_loop(loop):
-            self.stop_called += 1
-            return loop.stop()
-
-        self.conn = driver.VMwareAPISession()
-        self.stubs.Set(self.conn, "_poll_task",
-                       fake_poll_task)
-        self.stubs.Set(self.conn, "_stop_loop",
-                       fake_stop_loop)
-        self.assertRaises(exception.NovaException,
-                          self.conn._wait_for_task, 'fake-ref')
-        self.assertEqual(self.stop_called, 1)
 
     def _get_instance_type_by_name(self, type):
         for instance_type in test_flavors.DEFAULT_FLAVORS:
@@ -473,48 +384,17 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def _create_vm(self, node=None, num_instances=1, uuid=None,
                    instance_type='m1.large', powered_on=True):
         """Create and spawn the VM."""
-
-        read_file_handle = mock.MagicMock()
-        write_file_handle = mock.MagicMock()
-
-        def fake_read_handle(read_iter):
-            return read_file_handle
-
-        def _fake_write_mock(host, dc_name, ds_name, cookies,
-                 file_path, file_size, scheme="https"):
-            self.vim.fake_transfer_file(ds_name=ds_name,
-                                        file_path=file_path)
-            image_ref = self.image['id']
-            self.assertIn(dc_name, ['dc1', 'dc2'])
-            self.assertIn(ds_name, ['ds1', 'ds2'])
-            self.assertEqual('Fake-CookieJar', cookies)
-            split_file_path = file_path.split('/')
-            self.assertEqual('vmware_temp', split_file_path[0])
-            self.assertEqual(image_ref, split_file_path[2])
-            self.assertEqual(int(self.image['size']), file_size)
-            return write_file_handle
-
         if not node:
             node = self.node_name
         self._create_instance(node=node, uuid=uuid,
                               instance_type=instance_type)
         self.assertIsNone(vm_util.vm_ref_cache_get(self.uuid))
-        with contextlib.nested(
-             mock.patch.object(read_write_util, 'VMwareHTTPWriteFile',
-                               _fake_write_mock),
-             mock.patch.object(read_write_util, 'GlanceFileRead',
-                               fake_read_handle),
-             mock.patch.object(vmware_images, 'start_transfer')
-        ) as (fake_http_write, fake_glance_read, fake_start_transfer):
-            self.conn.spawn(self.context, self.instance, self.image,
-                            injected_files=[], admin_password=None,
-                            network_info=self.network_info,
-                            block_device_info=None)
-            fake_start_transfer.assert_called_once_with(self.context,
-                read_file_handle, self.image['size'],
-                write_file_handle=write_file_handle)
-            self._check_vm_record(num_instances=num_instances,
-                                  powered_on=powered_on)
+        self.conn.spawn(self.context, self.instance, self.image,
+                        injected_files=[], admin_password=None,
+                        network_info=self.network_info,
+                        block_device_info=None)
+        self._check_vm_record(num_instances=num_instances,
+                              powered_on=powered_on)
         self.assertIsNotNone(vm_util.vm_ref_cache_get(self.uuid))
 
     def _get_vm_record(self):
@@ -550,7 +430,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                          self.type_data['memory_mb'])
 
         self.assertEqual(
-            vm.get("config.hardware.device")[2].device.obj_name,
+            vm.get("config.hardware.device").VirtualDevice[2].obj_name,
             "ns0:VirtualE1000")
         if powered_on:
             # Check that the VM is running according to Nova
@@ -613,73 +493,103 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(len(uuids), 0)
 
     def _cached_files_exist(self, exists=True):
-        cache = ('[%s] vmware_base/%s/%s.vmdk' %
-                 (self.ds, self.fake_image_uuid, self.fake_image_uuid))
+        cache = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                      self.fake_image_uuid,
+                                      '%s.vmdk' % self.fake_image_uuid)
         if exists:
-            self.assertTrue(vmwareapi_fake.get_file(cache))
+            self.assertTrue(vmwareapi_fake.get_file(str(cache)))
         else:
-            self.assertFalse(vmwareapi_fake.get_file(cache))
+            self.assertFalse(vmwareapi_fake.get_file(str(cache)))
 
-    def test_instance_dir_disk_created(self):
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    def test_instance_dir_disk_created(self, mock_from_image):
         """Test image file is cached when even when use_linked_clone
             is False
         """
+        img_props = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            linked_clone=False)
 
+        mock_from_image.return_value = img_props
         self._create_vm()
-        inst_file_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
-        self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
+        path = ds_util.DatastorePath(self.ds, self.uuid, '%s.vmdk' % self.uuid)
+        self.assertTrue(vmwareapi_fake.get_file(str(path)))
         self._cached_files_exist()
 
-    def test_cache_dir_disk_created(self):
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    def test_cache_dir_disk_created(self, mock_from_image):
         """Test image disk is cached when use_linked_clone is True."""
         self.flags(use_linked_clone=True, group='vmware')
+
+        img_props = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            file_size=1 * units.Ki,
+            disk_type=constants.DISK_TYPE_SPARSE)
+
+        mock_from_image.return_value = img_props
+
         self._create_vm()
-        file = '[%s] vmware_base/%s/%s.vmdk' % (self.ds, self.fake_image_uuid,
-                                                self.fake_image_uuid)
-        root = '[%s] vmware_base/%s/%s.80.vmdk' % (self.ds,
-                                                   self.fake_image_uuid,
-                                                   self.fake_image_uuid)
-        self.assertTrue(vmwareapi_fake.get_file(file))
-        self.assertTrue(vmwareapi_fake.get_file(root))
+        path = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                     self.fake_image_uuid,
+                                     '%s.vmdk' % self.fake_image_uuid)
+        root = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                     self.fake_image_uuid,
+                                     '%s.80.vmdk' % self.fake_image_uuid)
+        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        self.assertTrue(vmwareapi_fake.get_file(str(root)))
 
     def _iso_disk_type_created(self, instance_type='m1.large'):
         self.image['disk_format'] = 'iso'
         self._create_vm(instance_type=instance_type)
-        file = '[%s] vmware_base/%s/%s.iso' % (self.ds, self.fake_image_uuid,
-                                               self.fake_image_uuid)
-        self.assertTrue(vmwareapi_fake.get_file(file))
+        path = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                     self.fake_image_uuid,
+                                     '%s.iso' % self.fake_image_uuid)
+        self.assertTrue(vmwareapi_fake.get_file(str(path)))
 
     def test_iso_disk_type_created(self):
         self._iso_disk_type_created()
-        vmdk_file_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
-        self.assertTrue(vmwareapi_fake.get_file(vmdk_file_path))
+        path = ds_util.DatastorePath(self.ds, self.uuid, '%s.vmdk' % self.uuid)
+        self.assertTrue(vmwareapi_fake.get_file(str(path)))
 
     def test_iso_disk_type_created_with_root_gb_0(self):
         self._iso_disk_type_created(instance_type='m1.micro')
-        vmdk_file_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
-        self.assertFalse(vmwareapi_fake.get_file(vmdk_file_path))
+        path = ds_util.DatastorePath(self.ds, self.uuid, '%s.vmdk' % self.uuid)
+        self.assertFalse(vmwareapi_fake.get_file(str(path)))
 
     def test_iso_disk_cdrom_attach(self):
-        self.iso_path = (
-            '[%s] vmware_base/%s/%s.iso' % (self.ds, self.fake_image_uuid,
-                                            self.fake_image_uuid))
+        iso_path = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                         self.fake_image_uuid,
+                                         '%s.iso' % self.fake_image_uuid)
 
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
                               iso_uploaded_path):
-            self.assertEqual(iso_uploaded_path, self.iso_path)
+            self.assertEqual(iso_uploaded_path, str(iso_path))
 
         self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
                        fake_attach_cdrom)
         self.image['disk_format'] = 'iso'
         self._create_vm()
 
-    def test_iso_disk_cdrom_attach_with_config_drive(self):
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    def test_iso_disk_cdrom_attach_with_config_drive(self,
+                                                     mock_from_image):
+        img_props = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            file_size=80 * units.Gi,
+            file_type='iso',
+            linked_clone=False)
+
+        mock_from_image.return_value = img_props
+
         self.flags(force_config_drive=True)
-        self.iso_path = [
-            '[%s] vmware_base/%s/%s.iso' %
-             (self.ds, self.fake_image_uuid, self.fake_image_uuid),
-            '[%s] fake-config-drive' % self.ds]
-        self.iso_unit_nos = [0, 1]
+        iso_path = [
+            ds_util.DatastorePath(self.ds, 'vmware_base',
+                                  self.fake_image_uuid,
+                                  '%s.iso' % self.fake_image_uuid),
+            ds_util.DatastorePath(self.ds, 'fake-config-drive')]
         self.iso_index = 0
 
         def fake_create_config_drive(instance, injected_files, password,
@@ -688,7 +598,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
                               iso_uploaded_path):
-            self.assertEqual(iso_uploaded_path, self.iso_path[self.iso_index])
+            self.assertEqual(iso_uploaded_path, str(iso_path[self.iso_index]))
             self.iso_index += 1
 
         self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
@@ -702,7 +612,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_cdrom_attach_with_config_drive(self):
         self.flags(force_config_drive=True)
-        self.iso_path = '[%s] fake-config-drive' % self.ds
+
+        iso_path = ds_util.DatastorePath(self.ds, 'fake-config-drive')
         self.cd_attach_called = False
 
         def fake_create_config_drive(instance, injected_files, password,
@@ -711,7 +622,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
                               iso_uploaded_path):
-            self.assertEqual(iso_uploaded_path, self.iso_path)
+            self.assertEqual(iso_uploaded_path, str(iso_path))
             self.cd_attach_called = True
 
         self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
@@ -764,6 +675,18 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def test_spawn_power_on(self):
         self._spawn_power_state(True)
 
+    def test_spawn_root_size_0(self):
+        self._create_vm(instance_type='m1.micro')
+        info = self.conn.get_info({'uuid': self.uuid,
+                                   'node': self.instance_node})
+        self._check_vm_info(info, power_state.RUNNING)
+        cache = ('[%s] vmware_base/%s/%s.vmdk' %
+                 (self.ds, self.fake_image_uuid, self.fake_image_uuid))
+        gb_cache = ('[%s] vmware_base/%s/%s.0.vmdk' %
+                    (self.ds, self.fake_image_uuid, self.fake_image_uuid))
+        self.assertTrue(vmwareapi_fake.get_file(cache))
+        self.assertFalse(vmwareapi_fake.get_file(gb_cache))
+
     def _spawn_with_delete_exception(self, fault=None):
 
         def fake_call_method(module, method, *args, **kwargs):
@@ -785,8 +708,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                            'node': self.instance_node})
                 self._check_vm_info(info, power_state.RUNNING)
             else:
-                self.assertRaises(error_util.VMwareDriverException,
-                                  self._create_vm)
+                self.assertRaises(vexc.VMwareDriverException, self._create_vm)
             self.assertTrue(self.exception)
 
     def test_spawn_with_delete_exception_not_found(self):
@@ -816,12 +738,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._check_vm_info(info, power_state.RUNNING)
 
     def test_spawn_disk_extend_exists(self):
-        root = ('[%s] vmware_base/%s/%s.80.vmdk' %
-                (self.ds, self.fake_image_uuid, self.fake_image_uuid))
-        self.root = root
+        root = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                     self.fake_image_uuid,
+                                     '%s.80.vmdk' % self.fake_image_uuid)
 
         def _fake_extend(instance, requested_size, name, dc_ref):
-            vmwareapi_fake._add_file(self.root)
+            vmwareapi_fake._add_file(str(root))
 
         self.stubs.Set(self.conn._vmops, '_extend_virtual_disk',
                        _fake_extend)
@@ -830,59 +752,34 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         info = self.conn.get_info({'uuid': self.uuid,
                                    'node': self.instance_node})
         self._check_vm_info(info, power_state.RUNNING)
-        self.assertTrue(vmwareapi_fake.get_file(root))
+        self.assertTrue(vmwareapi_fake.get_file(str(root)))
 
-    def test_spawn_disk_extend_sparse(self):
-        self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [1024, {"vmware_ostype": "otherGuest",
-                         "vmware_adaptertype": "lsiLogic",
-                         "vmware_disktype": "sparse"}]
-        vmware_images.get_vmdk_size_and_properties(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(result)
-        self.mox.StubOutWithMock(self.conn._vmops, '_extend_virtual_disk')
-        requested_size = 80 * units.Mi
-        self.conn._vmops._extend_virtual_disk(mox.IgnoreArg(),
-                requested_size, mox.IgnoreArg(), mox.IgnoreArg())
-        self.mox.ReplayAll()
-        self._create_vm()
-        info = self.conn.get_info({'uuid': self.uuid,
-                                   'node': self.instance_node})
-        self._check_vm_info(info, power_state.RUNNING)
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    def test_spawn_disk_extend_sparse(self, mock_from_image):
+        img_props = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            file_size=units.Ki,
+            disk_type=constants.DISK_TYPE_SPARSE,
+            linked_clone=True)
 
-    def test_spawn_disk_extend_insufficient_disk_space(self):
-        self.flags(use_linked_clone=True, group='vmware')
-        self.wait_task = self.conn._session._wait_for_task
-        self.call_method = self.conn._session._call_method
-        self.task_ref = None
-        id = self.fake_image_uuid
-        cached_image = '[%s] vmware_base/%s/%s.80.vmdk' % (self.ds,
-                                                           id, id)
-        tmp_file = '[%s] vmware_base/%s/%s.80-flat.vmdk' % (self.ds,
-                                                            id, id)
+        mock_from_image.return_value = img_props
 
-        def fake_wait_for_task(task_ref):
-            if task_ref == self.task_ref:
-                self.task_ref = None
-                self.assertTrue(vmwareapi_fake.get_file(cached_image))
-                self.assertTrue(vmwareapi_fake.get_file(tmp_file))
-                raise exception.NovaException('No space!')
-            return self.wait_task(task_ref)
-
-        def fake_call_method(module, method, *args, **kwargs):
-            task_ref = self.call_method(module, method, *args, **kwargs)
-            if method == "ExtendVirtualDisk_Task":
-                self.task_ref = task_ref
-            return task_ref
-
-        self.stubs.Set(self.conn._session, "_call_method", fake_call_method)
-        self.stubs.Set(self.conn._session, "_wait_for_task",
-                       fake_wait_for_task)
-
-        self.assertRaises(exception.NovaException,
-                          self._create_vm)
-        self.assertFalse(vmwareapi_fake.get_file(cached_image))
-        self.assertFalse(vmwareapi_fake.get_file(tmp_file))
+        with contextlib.nested(
+            mock.patch.object(self.conn._vmops, '_extend_virtual_disk'),
+            mock.patch.object(self.conn._vmops, 'get_datacenter_ref_and_name'),
+        ) as (mock_extend, mock_get_dc):
+            dc_val = mock.Mock()
+            dc_val.ref = "fake_dc_ref"
+            dc_val.name = "dc1"
+            mock_get_dc.return_value = dc_val
+            self._create_vm()
+            iid = img_props.image_id
+            cached_image = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                                 iid, '%s.80.vmdk' % iid)
+            mock_extend.assert_called_once_with(
+                    self.instance, self.instance.root_gb * units.Mi,
+                    str(cached_image), "fake_dc_ref")
 
     def test_spawn_disk_extend_failed_copy(self):
         # Spawn instance
@@ -890,10 +787,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         #
         # Expect the copy error to be raised
         self.flags(use_linked_clone=True, group='vmware')
-        self.wait_task = self.conn._session._wait_for_task
-        self.call_method = self.conn._session._call_method
 
-        CopyError = error_util.FileFaultException
+        CopyError = vexc.FileFaultException
 
         def fake_wait_for_task(task_ref):
             if task_ref == 'fake-copy-task':
@@ -920,14 +815,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         # Expect the file to be cleaned up
         # Expect the copy error to be raised
         self.flags(use_linked_clone=True, group='vmware')
-        self.wait_task = self.conn._session._wait_for_task
-        self.call_method = self.conn._session._call_method
         self.task_ref = None
         uuid = self.fake_image_uuid
         cached_image = '[%s] vmware_base/%s/%s.80.vmdk' % (self.ds,
                                                            uuid, uuid)
 
-        CopyError = error_util.FileFaultException
+        CopyError = vexc.FileFaultException
 
         def fake_wait_for_task(task_ref):
             if task_ref == self.task_ref:
@@ -960,15 +853,13 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         # Expect file to be left behind
         # Expect file cleanup error to be raised
         self.flags(use_linked_clone=True, group='vmware')
-        self.wait_task = self.conn._session._wait_for_task
-        self.call_method = self.conn._session._call_method
         self.task_ref = None
         uuid = self.fake_image_uuid
         cached_image = '[%s] vmware_base/%s/%s.80.vmdk' % (self.ds,
                                                            uuid, uuid)
 
-        CopyError = error_util.FileFaultException
-        DeleteError = error_util.CannotDeleteFileException
+        CopyError = vexc.FileFaultException
+        DeleteError = vexc.CannotDeleteFileException
 
         def fake_wait_for_task(task_ref):
             if task_ref == self.task_ref:
@@ -998,28 +889,63 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             self.assertRaises(DeleteError, self._create_vm)
         self.assertTrue(vmwareapi_fake.get_file(cached_image))
 
-    def test_spawn_disk_invalid_disk_size(self):
-        self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [82 * units.Gi,
-                  {"vmware_ostype": "otherGuest",
-                   "vmware_adaptertype": "lsiLogic",
-                   "vmware_disktype": "sparse"}]
-        vmware_images.get_vmdk_size_and_properties(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(result)
-        self.mox.ReplayAll()
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    def test_spawn_disk_invalid_disk_size(self, mock_from_image):
+        img_props = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            file_size=82 * units.Gi,
+            disk_type=constants.DISK_TYPE_SPARSE,
+            linked_clone=True)
+
+        mock_from_image.return_value = img_props
+
         self.assertRaises(exception.InstanceUnacceptable,
                           self._create_vm)
 
-    def test_spawn_invalid_disk_format(self):
-        self._create_instance()
-        self.image['disk_format'] = 'invalid'
-        self.assertRaises(exception.InvalidDiskFormat,
-                          self.conn.spawn, self.context,
-                          self.instance, self.image,
-                          injected_files=[], admin_password=None,
-                          network_info=self.network_info,
-                          block_device_info=None)
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    def test_spawn_disk_extend_insufficient_disk_space(self, mock_from_image):
+        img_props = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            file_size=1024,
+            disk_type=constants.DISK_TYPE_SPARSE,
+            linked_clone=True)
+
+        mock_from_image.return_value = img_props
+
+        cached_image = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                             self.fake_image_uuid,
+                                             '%s.80.vmdk' %
+                                              self.fake_image_uuid)
+        tmp_file = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                         self.fake_image_uuid,
+                                         '%s.80-flat.vmdk' %
+                                          self.fake_image_uuid)
+
+        NoDiskSpace = vexc.get_fault_class('NoDiskSpace')
+
+        def fake_wait_for_task(task_ref):
+            if task_ref == self.task_ref:
+                self.task_ref = None
+                raise NoDiskSpace()
+            return self.wait_task(task_ref)
+
+        def fake_call_method(module, method, *args, **kwargs):
+            task_ref = self.call_method(module, method, *args, **kwargs)
+            if method == 'ExtendVirtualDisk_Task':
+                self.task_ref = task_ref
+            return task_ref
+
+        with contextlib.nested(
+            mock.patch.object(self.conn._session, '_wait_for_task',
+                              fake_wait_for_task),
+            mock.patch.object(self.conn._session, '_call_method',
+                              fake_call_method)
+        ) as (mock_wait_for_task, mock_call_method):
+            self.assertRaises(NoDiskSpace, self._create_vm)
+            self.assertFalse(vmwareapi_fake.get_file(str(cached_image)))
+            self.assertFalse(vmwareapi_fake.get_file(str(tmp_file)))
 
     def test_spawn_with_move_file_exists_exception(self):
         # The test will validate that the spawn completes
@@ -1032,7 +958,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             if task_ref == self.task_ref:
                 self.task_ref = None
                 self.exception = True
-                raise error_util.FileAlreadyExistsException()
+                raise vexc.FileAlreadyExistsException()
             return self.wait_task(task_ref)
 
         def fake_call_method(module, method, *args, **kwargs):
@@ -1064,7 +990,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             if task_ref == self.task_ref:
                 self.task_ref = None
                 self.exception = True
-                raise error_util.VMwareDriverException('Exception!')
+                raise vexc.VMwareDriverException('Exception!')
             return self.wait_task(task_ref)
 
         def fake_call_method(module, method, *args, **kwargs):
@@ -1079,7 +1005,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             mock.patch.object(self.conn._session, '_call_method',
                               fake_call_method)
         ) as (_wait_for_task, _call_method):
-            self.assertRaises(error_util.VMwareDriverException,
+            self.assertRaises(vexc.VMwareDriverException,
                               self._create_vm)
             self.assertTrue(self.exception)
 
@@ -1097,7 +1023,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             mock.patch.object(self.conn._session, '_call_method',
                               fake_call_method)
         ):
-            self.assertRaises(error_util.VMwareDriverException,
+            self.assertRaises(vexc.VMwareDriverException,
                               self._create_vm)
 
     def test_spawn_with_move_file_exists_poll_exception(self):
@@ -1153,12 +1079,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                         injected_files=[], admin_password=None,
                         network_info=self.network_info,
                         block_device_info=block_device_info)
-
-    def test_spawn_attach_volume_vmdk(self):
-        self._spawn_attach_volume_vmdk()
-
-    def test_spawn_attach_volume_vmdk_no_image_ref(self):
-        self._spawn_attach_volume_vmdk(set_image_ref=False)
 
     def test_spawn_attach_volume_iscsi(self):
         self._create_instance()
@@ -1282,6 +1202,37 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
 
         self._test_snapshot()
+
+    def _snapshot_delete_vm_snapshot_exception(self, exception, call_count=1):
+        self._create_vm()
+        fake_vm = vmwareapi_fake._get_objects("VirtualMachine").objects[0].obj
+        snapshot_ref = vmwareapi_fake.ManagedObjectReference(
+                               value="Snapshot-123",
+                               name="VirtualMachineSnapshot")
+
+        with contextlib.nested(
+            mock.patch.object(self.conn._session, '_wait_for_task',
+                              side_effect=exception),
+            mock.patch.object(vmops, '_time_sleep_wrapper')
+        ) as (_fake_wait, _fake_sleep):
+            if exception != error_util.TaskInProgress:
+                self.assertRaises(exception,
+                                  self.conn._vmops._delete_vm_snapshot,
+                                  self.instance, fake_vm, snapshot_ref)
+                self.assertEqual(0, _fake_sleep.call_count)
+            else:
+                self.conn._vmops._delete_vm_snapshot(self.instance, fake_vm,
+                                                     snapshot_ref)
+                self.assertEqual(call_count - 1, _fake_sleep.call_count)
+            self.assertEqual(call_count, _fake_wait.call_count)
+
+    def test_snapshot_delete_vm_snapshot_exception(self):
+        self._snapshot_delete_vm_snapshot_exception(exception.NovaException)
+
+    def test_snapshot_delete_vm_snapshot_exception_retry(self):
+        self.flags(api_retry_count=5, group='vmware')
+        self._snapshot_delete_vm_snapshot_exception(error_util.TaskInProgress,
+                                                    5)
 
     def test_reboot(self):
         self._create_vm()
@@ -1412,15 +1363,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertRaises(exception.InstanceNotFound, self.conn.power_off,
                           self.instance)
 
-    def test_power_off_suspended(self):
-        self._create_vm()
-        self.conn.suspend(self.instance)
-        info = self.conn.get_info({'uuid': self.uuid,
-                                   'node': self.instance_node})
-        self._check_vm_info(info, power_state.SUSPENDED)
-        self.assertRaises(exception.InstancePowerOffFailure,
-                          self.conn.power_off, self.instance)
-
     def test_resume_state_on_host_boot(self):
         self._create_vm()
         self.mox.StubOutWithMock(vm_util, 'get_vm_state_from_name')
@@ -1464,12 +1406,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         ) as (fake_detach, fake_power_on):
             self.instance['vm_state'] = vm_states.RESCUED
             self.conn.destroy(self.context, self.instance, self.network_info)
-            inst_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
-            self.assertFalse(vmwareapi_fake.get_file(inst_path))
-            rescue_file_path = '[%s] %s-rescue/%s-rescue.vmdk' % (self.ds,
-                                                                  self.uuid,
-                                                                  self.uuid)
-            self.assertFalse(vmwareapi_fake.get_file(rescue_file_path))
+            inst_path = ds_util.DatastorePath(self.ds, self.uuid,
+                                              '%s.vmdk' % self.uuid)
+            self.assertFalse(vmwareapi_fake.get_file(str(inst_path)))
+            rescue_file_path = ds_util.DatastorePath(
+                self.ds, '%s-rescue' % self.uuid, '%s-rescue.vmdk' % self.uuid)
+            self.assertFalse(vmwareapi_fake.get_file(str(rescue_file_path)))
             # Unrescue does not power on with destroy
             self.assertFalse(fake_power_on.called)
 
@@ -1562,7 +1504,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                          data_store_name, folder,
                                          instance_uuid, cookies):
                 self.assertTrue(uuidutils.is_uuid_like(instance['uuid']))
-                return "[%s] %s/fake.iso" % (data_store_name, instance_uuid)
+                return str(ds_util.DatastorePath(data_store_name,
+                                                 instance_uuid, 'fake.iso'))
 
             self.stubs.Set(self.conn._vmops, '_create_config_drive',
                            fake_create_config_drive)
@@ -1581,20 +1524,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.stubs.Set(self.conn._volumeops, "attach_disk_to_vm",
                        fake_attach_disk_to_vm)
 
-        def _fake_http_write(host, data_center_name, datastore_name,
-                             cookies, file_path, file_size, scheme="https"):
-            self.vim.fake_transfer_file(ds_name=datastore_name,
-                                        file_path=file_path)
-
-        with contextlib.nested(
-             mock.patch.object(read_write_util, 'VMwareHTTPWriteFile',
-                               _fake_http_write),
-             mock.patch.object(read_write_util, 'GlanceFileRead'),
-             mock.patch.object(vmware_images, 'start_transfer')
-
-        ) as (http_write, glance_read, fake_start_transfer):
-            self.conn.rescue(self.context, self.instance, self.network_info,
+        self.conn.rescue(self.context, self.instance, self.network_info,
                          self.image, 'fake-password')
+
         info = self.conn.get_info({'name': '1-rescue',
                                    'uuid': '%s-rescue' % self.uuid,
                                    'node': self.instance_node})
@@ -1607,12 +1539,13 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_rescue(self):
         self._rescue()
-        inst_file_path = '[%s] %s/%s.vmdk' % (self.ds, self.uuid, self.uuid)
-        self.assertTrue(vmwareapi_fake.get_file(inst_file_path))
-        rescue_file_path = '[%s] %s-rescue/%s-rescue.vmdk' % (self.ds,
-                                                              self.uuid,
-                                                              self.uuid)
-        self.assertTrue(vmwareapi_fake.get_file(rescue_file_path))
+        inst_file_path = ds_util.DatastorePath(self.ds, self.uuid,
+                                               '%s.vmdk' % self.uuid)
+        self.assertTrue(vmwareapi_fake.get_file(str(inst_file_path)))
+        rescue_file_path = ds_util.DatastorePath(self.ds,
+                                                 '%s-rescue' % self.uuid,
+                                                 '%s-rescue.vmdk' % self.uuid)
+        self.assertTrue(vmwareapi_fake.get_file(str(rescue_file_path)))
 
     def test_rescue_with_config_drive(self):
         self.flags(force_config_drive=True)
@@ -1623,14 +1556,18 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         # with power_on=True, the test_destroy_rescued tests the
         # vmops.unrescue with power_on=False
         self._rescue()
-        self.test_vm_ref = None
-        self.test_device_name = None
         vm_ref = vm_util.get_vm_ref(self.conn._session,
                                     self.instance)
+        vm_rescue_ref = vm_util.get_vm_ref_from_name(self.conn._session,
+                                                     '%s-rescue' % self.uuid)
 
-        def fake_power_off_vm_ref(vm_ref):
-            self.test_vm_ref = vm_ref
-            self.assertIsNotNone(vm_ref)
+        self.poweroff_instance = vm_util.power_off_instance
+
+        def fake_power_off_instance(session, instance, vm_ref):
+            # This is called so that we actually poweroff the simulated vm.
+            # The reason for this is that there is a validation in destroy
+            # that the instance is not powered on.
+            self.poweroff_instance(session, instance, vm_ref)
 
         def fake_detach_disk_from_vm(vm_ref, instance,
                                      device_name, destroy_disk=False):
@@ -1639,30 +1576,22 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             self._check_vm_info(info, power_state.SHUTDOWN)
 
         with contextlib.nested(
-            mock.patch.object(self.conn._vmops, "_power_off_vm_ref",
-                              side_effect=fake_power_off_vm_ref),
+            mock.patch.object(vm_util, "power_off_instance",
+                              side_effect=fake_power_off_instance),
             mock.patch.object(self.conn._volumeops, "detach_disk_from_vm",
                               side_effect=fake_detach_disk_from_vm),
             mock.patch.object(vm_util, "power_on_instance"),
         ) as (poweroff, detach, fake_power_on):
             self.conn.unrescue(self.instance, None)
-            poweroff.assert_called_once_with(self.test_vm_ref)
-            detach.assert_called_once_with(self.test_vm_ref, mock.ANY,
+            poweroff.assert_called_once_with(self.conn._session, mock.ANY,
+                                             vm_rescue_ref)
+            detach.assert_called_once_with(vm_rescue_ref, mock.ANY,
                                            self.test_device_name)
             fake_power_on.assert_called_once_with(self.conn._session,
                                                   self.instance,
                                                   vm_ref=vm_ref)
             self.test_vm_ref = None
             self.test_device_name = None
-
-    def test_pause(self):
-        # Tests that the VMwareESXDriver does not implement the pause method.
-        self.assertRaises(NotImplementedError, self.conn.pause, instance=None)
-
-    def test_unpause(self):
-        # Tests that the VMwareESXDriver does not implement the unpause method.
-        self.assertRaises(NotImplementedError, self.conn.unpause,
-                          instance=None)
 
     def test_get_diagnostics(self):
         self._create_vm()
@@ -1715,12 +1644,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                    image_meta=None,
                                    power_on=power_on)
 
-    def test_confirm_migration(self):
-        self._create_vm()
-        self.assertRaises(NotImplementedError,
-                          self.conn.confirm_migration, self.context,
-                          self.instance, None)
-
     def _test_finish_revert_migration(self, power_on):
         self._create_vm()
         # Ensure ESX driver throws an error
@@ -1729,18 +1652,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                           self.context,
                           instance=self.instance,
                           network_info=None)
-
-    def test_finish_revert_migration_power_on(self):
-        self._test_finish_revert_migration(power_on=True)
-
-    def test_finish_revert_migration_power_off(self):
-        self._test_finish_revert_migration(power_on=False)
-
-    def test_get_console_pool_info(self):
-        info = self.conn.get_console_pool_info("console_type")
-        self.assertEqual(info['address'], 'test_url')
-        self.assertEqual(info['username'], 'test_username')
-        self.assertEqual(info['password'], 'test_pass')
 
     def test_get_vnc_console_non_existent(self):
         self._create_instance()
@@ -1768,9 +1679,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                           self.conn.get_vnc_console,
                           self.context,
                           self.instance)
-
-    def test_host_ip_addr(self):
-        self.assertEqual(self.conn.get_host_ip_addr(), "test_url")
 
     def test_get_volume_connector(self):
         self._create_vm()
@@ -2007,13 +1915,13 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                        _fake_get_timestamp_filename)
 
     def _timestamp_file_exists(self, exists=True):
-        timestamp = ('[%s] vmware_base/%s/%s/' %
-                 (self.ds, self.fake_image_uuid,
-                  self._get_timestamp_filename()))
+        timestamp = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                          self.fake_image_uuid,
+                                          self._get_timestamp_filename() + '/')
         if exists:
-            self.assertTrue(vmwareapi_fake.get_file(timestamp))
+            self.assertTrue(vmwareapi_fake.get_file(str(timestamp)))
         else:
-            self.assertFalse(vmwareapi_fake.get_file(timestamp))
+            self.assertFalse(vmwareapi_fake.get_file(str(timestamp)))
 
     def _image_aging_image_marked_for_deletion(self):
         self._create_vm(uuid=uuidutils.generate_uuid())
@@ -2040,9 +1948,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def test_timestamp_file_removed_aging(self):
         self._timestamp_file_removed()
         ts = self._get_timestamp_filename()
-        ts_path = ('[%s] vmware_base/%s/%s/' %
-                   (self.ds, self.fake_image_uuid, ts))
-        vmwareapi_fake._add_file(ts_path)
+        ts_path = ds_util.DatastorePath(self.ds, 'vmware_base',
+                                        self.fake_image_uuid, ts + '/')
+        vmwareapi_fake._add_file(str(ts_path))
         self._timestamp_file_exists()
         all_instances = [self.instance]
         self.conn.manage_image_cache(self.context, all_instances)
@@ -2076,71 +1984,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._cached_files_exist()
 
 
-class VMwareAPIHostTestCase(test.NoDBTestCase,
-                            test_driver.DriverAPITestHelper):
-    """Unit tests for Vmware API host calls."""
-
-    def setUp(self):
-        super(VMwareAPIHostTestCase, self).setUp()
-        self.flags(image_cache_subdirectory_name='vmware_base')
-        vm_util.vm_refs_cache_reset()
-        self.flags(host_ip='test_url',
-                   host_username='test_username',
-                   host_password='test_pass', group='vmware')
-        vmwareapi_fake.reset()
-        stubs.set_stubs(self.stubs)
-        self.conn = driver.VMwareESXDriver(False)
-
-    def tearDown(self):
-        super(VMwareAPIHostTestCase, self).tearDown()
-        vmwareapi_fake.cleanup()
-
-    def test_public_api_signatures(self):
-        self.assertPublicAPISignatures(self.conn)
-
-    def test_host_state(self):
-        stats = self.conn.get_host_stats()
-        self.assertEqual(stats['vcpus'], 16)
-        self.assertEqual(stats['disk_total'], 1024)
-        self.assertEqual(stats['disk_available'], 500)
-        self.assertEqual(stats['disk_used'], 1024 - 500)
-        self.assertEqual(stats['host_memory_total'], 1024)
-        self.assertEqual(stats['host_memory_free'], 1024 - 500)
-        self.assertEqual(stats['hypervisor_version'], 5000000)
-        supported_instances = [('i686', 'vmware', 'hvm'),
-                               ('x86_64', 'vmware', 'hvm')]
-        self.assertEqual(stats['supported_instances'], supported_instances)
-
-    def _test_host_action(self, method, action, expected=None):
-        result = method('host', action)
-        self.assertEqual(result, expected)
-
-    def test_host_reboot(self):
-        self._test_host_action(self.conn.host_power_action, 'reboot')
-
-    def test_host_shutdown(self):
-        self._test_host_action(self.conn.host_power_action, 'shutdown')
-
-    def test_host_startup(self):
-        self._test_host_action(self.conn.host_power_action, 'startup')
-
-    def test_host_maintenance_on(self):
-        self._test_host_action(self.conn.host_maintenance_mode, True)
-
-    def test_host_maintenance_off(self):
-        self._test_host_action(self.conn.host_maintenance_mode, False)
-
-    def test_get_host_uptime(self):
-        result = self.conn.get_host_uptime('host')
-        self.assertEqual('Please refer to test_url for the uptime', result)
-
-
 class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                                 test_driver.DriverAPITestHelper):
 
     def setUp(self):
-        super(VMwareAPIVCDriverTestCase, self).setUp()
 
+        super(VMwareAPIVCDriverTestCase, self).setUp(create_connection=False)
         cluster_name = 'test_cluster'
         cluster_name2 = 'test_cluster2'
         self.flags(cluster_name=[cluster_name, cluster_name2],
@@ -2148,8 +1997,9 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                    task_poll_interval=10, datastore_regex='.*', group='vmware')
         self.flags(vnc_enabled=False,
                    image_cache_subdirectory_name='vmware_base')
-        vmwareapi_fake.reset(vc=True)
+        vmwareapi_fake.reset()
         self.conn = driver.VMwareVCDriver(None, False)
+        self._set_exception_vars()
         self.node_name = self.conn._resources.keys()[0]
         self.node_name2 = self.conn._resources.keys()[1]
         if cluster_name2 in self.node_name2:
@@ -2192,36 +2042,6 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
             vcdriver._session.vim = mock.Mock()
         vcdriver._session._create_session.side_effect = side_effect
         return vcdriver
-
-    @mock.patch('nova.virt.vmwareapi.driver.VMwareVCDriver.__init__')
-    def test_init_host_and_cleanup_host(self, mock_init):
-        vcdriver = self._setup_mocks_for_session(mock_init)
-        vcdriver.init_host("foo")
-        vcdriver._session._create_session.assert_called_once_with()
-
-        vcdriver.cleanup_host("foo")
-        vcdriver._session.vim.client.service.Logout.assert_called_once_with(
-            mock.ANY)
-
-    @mock.patch('nova.virt.vmwareapi.driver.LOG')
-    @mock.patch('nova.virt.vmwareapi.driver.VMwareVCDriver.__init__')
-    def test_cleanup_host_with_no_login(self, mock_init, mock_logger):
-        vcdriver = self._setup_mocks_for_session(mock_init)
-        vcdriver.init_host("foo")
-        vcdriver._session._create_session.assert_called_once_with()
-
-        # Not logged in...
-        # observe that no exceptions were thrown
-        mock_sc = mock.Mock()
-        vcdriver._session.vim.retrieve_service_content.return_value = mock_sc
-        web_fault = suds.WebFault(mock.Mock(), mock.Mock())
-        vcdriver._session.vim.client.service.Logout.side_effect = web_fault
-        vcdriver.cleanup_host("foo")
-
-        # assert that the mock Logout method was never called
-        vcdriver._session.vim.client.service.Logout.assert_called_once_with(
-            mock.ANY)
-        mock_logger.debug.assert_called_once_with(mock.ANY)
 
     def test_host_power_action(self):
         self.assertRaises(NotImplementedError,
@@ -2339,28 +2159,20 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                           network_info=self.network_info,
                           block_device_info=None)
 
-    def test_spawn_with_sparse_image(self):
-        # Only a sparse disk image triggers the copy
-        self.mox.StubOutWithMock(vmware_images, 'get_vmdk_size_and_properties')
-        result = [1024, {"vmware_ostype": "otherGuest",
-                         "vmware_adaptertype": "lsiLogic",
-                         "vmware_disktype": "sparse"}]
-        vmware_images.get_vmdk_size_and_properties(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(result)
+    @mock.patch.object(nova.virt.vmwareapi.vmware_images.VMwareImage,
+                       'from_image')
+    @mock.patch.object(vmops.VMwareVCVMOps, 'get_copy_virtual_disk_spec')
+    def test_spawn_with_sparse_image(self, mock_get_copy_virtual_disk_spec,
+                                     mock_from_image):
+        img_info = vmware_images.VMwareImage(
+            image_id=self.fake_image_uuid,
+            file_size=1024,
+            disk_type=constants.DISK_TYPE_SPARSE,
+            linked_clone=False)
 
-        # Ensure VMwareVCVMOps's get_copy_virtual_disk_spec is getting called
-        # two times
-        self.mox.StubOutWithMock(vmops.VMwareVCVMOps,
-                                 'get_copy_virtual_disk_spec')
-        self.conn._vmops.get_copy_virtual_disk_spec(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(None)
-        self.conn._vmops.get_copy_virtual_disk_spec(
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(None)
+        mock_from_image.return_value = img_info
+        mock_get_copy_virtual_disk_spec.return_value = None
 
-        self.mox.ReplayAll()
         self._create_vm()
         info = self.conn.get_info({'uuid': self.uuid,
                                    'node': self.instance_node})
@@ -2499,9 +2311,9 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
         def fake_get_host_ref_from_name(dest):
             return None
 
-        self._create_vm()
+        self._create_vm(instance_type='m1.large')
         vm_ref_orig = vm_util.get_vm_ref(self.conn._session, self.instance)
-        flavor = {'name': 'fake', 'flavorid': 'fake_id'}
+        flavor = self._get_instance_type_by_name('m1.large')
         self.stubs.Set(self.conn._vmops, "_update_instance_progress",
                        fake_update_instance_progress)
         self.stubs.Set(self.conn._vmops, "_get_host_ref_from_name",
@@ -2544,7 +2356,7 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                        "Original VM name should be with suffix -backup")
         self.assertEqual(cloned_vm_obj.name, self.instance['uuid'],
                        "VM name does not match instance['uuid']")
-        self.assertRaises(error_util.MissingParameter,
+        self.assertRaises(vexc.MissingParameter,
                           vm_util.clone_vmref_for_instance, self.conn._session,
                           self.instance, None, host_ref, ds_ref,
                           dc_obj.get("vmFolder"))
@@ -2571,6 +2383,13 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
     def test_confirm_migration(self):
         self._create_vm()
         self.conn.confirm_migration(self.context, self.instance, None)
+
+    def test_resize_to_smaller_disk(self):
+        self._create_vm(instance_type='m1.large')
+        flavor = self._get_instance_type_by_name('m1.small')
+        self.assertRaises(exception.InstanceFaultRollback,
+                          self.conn.migrate_disk_and_power_off, self.context,
+                          self.instance, 'fake_dest', flavor, None)
 
     def test_spawn_attach_volume_vmdk(self):
         self._spawn_attach_volume_vmdk(vc_support=True)
@@ -2602,6 +2421,15 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                     "instance", [], None)
             mock_destroy.assert_called_once_with(self.context,
                     "instance", [], None)
+
+    def test_get_instance_disk_info_is_implemented(self):
+        # Ensure that the method has been implemented in the driver
+        try:
+            disk_info = self.conn.get_instance_disk_info('fake_instance_name')
+            self.assertIsNone(disk_info)
+        except NotImplementedError:
+            self.fail("test_get_instance_disk_info() should not raise "
+                      "NotImplementedError")
 
     def test_destroy(self):
         self._create_vm()
@@ -2657,8 +2485,12 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
         """Tests the finish_migration method on VC Driver."""
         # setup the test instance in the database
         self._create_vm()
-        vm_ref = vm_util.get_vm_ref(self.conn._session,
-                                    self.instance)
+        if resize_instance:
+            self.instance.system_metadata = {'old_instance_type_root_gb': '0'}
+        vm_ref = vm_util.get_vm_ref(self.conn._session, self.instance)
+        datastore = ds_util.Datastore(ref='fake-ref', name='fake')
+        dc_info = vmops.DcInfo(ref='fake_ref', name='fake',
+                               vmFolder='fake_folder')
         with contextlib.nested(
                 mock.patch.object(self.conn._session, "_call_method",
                                   return_value='fake-task'),
@@ -2667,9 +2499,17 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                 mock.patch.object(self.conn._session, "_wait_for_task"),
                 mock.patch.object(vm_util, "get_vm_resize_spec",
                                   return_value='fake-spec'),
+                mock.patch.object(ds_util, "get_datastore",
+                                  return_value=datastore),
+                mock.patch.object(self.conn._vmops,
+                                  'get_datacenter_ref_and_name',
+                                  return_value=dc_info),
+                mock.patch.object(self.conn._vmops, '_extend_virtual_disk'),
                 mock.patch.object(vm_util, "power_on_instance")
         ) as (fake_call_method, fake_update_instance_progress,
-              fake_wait_for_task, fake_vm_resize_spec, fake_power_on):
+              fake_wait_for_task, fake_vm_resize_spec,
+              fake_get_datastore, fake_get_datacenter_ref_and_name,
+              fake_extend_virtual_disk, fake_power_on):
             self.conn.finish_migration(context=self.context,
                                        migration=None,
                                        instance=self.instance,
@@ -2683,16 +2523,20 @@ class VMwareAPIVCDriverTestCase(VMwareAPIVMTestCase,
                 fake_vm_resize_spec.assert_called_once_with(
                     self.conn._session._get_vim().client.factory,
                     self.instance)
-                fake_call_method.assert_called_once_with(
+                fake_call_method.assert_any_call(
                     self.conn._session._get_vim(),
                     "ReconfigVM_Task",
                     vm_ref,
                     spec='fake-spec')
                 fake_wait_for_task.assert_called_once_with('fake-task')
+                fake_extend_virtual_disk.assert_called_once_with(
+                    self.instance, self.instance['root_gb'] * units.Mi,
+                    None, dc_info.ref)
             else:
                 self.assertFalse(fake_vm_resize_spec.called)
                 self.assertFalse(fake_call_method.called)
                 self.assertFalse(fake_wait_for_task.called)
+                self.assertFalse(fake_extend_virtual_disk.called)
 
             if power_on:
                 fake_power_on.assert_called_once_with(self.conn._session,

@@ -310,7 +310,7 @@ class IPAddress(FieldType):
         try:
             return netaddr.IPAddress(value)
         except netaddr.AddrFormatError as e:
-            raise ValueError(str(e))
+            raise ValueError(six.text_type(e))
 
     def from_primitive(self, obj, attr, value):
         return self.coerce(obj, attr, value)
@@ -353,7 +353,7 @@ class IPNetwork(IPAddress):
         try:
             return netaddr.IPNetwork(value)
         except netaddr.AddrFormatError as e:
-            raise ValueError(str(e))
+            raise ValueError(six.text_type(e))
 
 
 class IPV4Network(IPNetwork):
@@ -362,7 +362,7 @@ class IPV4Network(IPNetwork):
         try:
             return netaddr.IPNetwork(value, version=4)
         except netaddr.AddrFormatError as e:
-            raise ValueError(str(e))
+            raise ValueError(six.text_type(e))
 
 
 class IPV6Network(IPNetwork):
@@ -371,7 +371,7 @@ class IPV6Network(IPNetwork):
         try:
             return netaddr.IPNetwork(value, version=6)
         except netaddr.AddrFormatError as e:
-            raise ValueError(str(e))
+            raise ValueError(six.text_type(e))
 
 
 class CompoundFieldType(FieldType):
@@ -405,10 +405,10 @@ class Dict(CompoundFieldType):
             raise ValueError(_('A dict is required here'))
         for key, element in value.items():
             if not isinstance(key, six.string_types):
-                #NOTE(guohliu) In order to keep compatibility with python3
-                #we need to use six.string_types rather than basestring here,
-                #since six.string_types is a tuple, so we need to pass the
-                #real type in.
+                # NOTE(guohliu) In order to keep compatibility with python3
+                # we need to use six.string_types rather than basestring here,
+                # since six.string_types is a tuple, so we need to pass the
+                # real type in.
                 raise KeyTypeError(six.string_types[0], key)
             value[key] = self._element_type.coerce(
                 obj, '%s["%s"]' % (attr, key), element)
@@ -432,6 +432,30 @@ class Dict(CompoundFieldType):
         return '{%s}' % (
             ','.join(['%s=%s' % (key, self._element_type.stringify(val))
                       for key, val in sorted(value.items())]))
+
+
+class Set(CompoundFieldType):
+    def coerce(self, obj, attr, value):
+        if not isinstance(value, set):
+            raise ValueError(_('A set is required here'))
+
+        coerced = set()
+        for element in value:
+            coerced.add(self._element_type.coerce(
+                obj, '%s["%s"]' % (attr, element), element))
+        return coerced
+
+    def to_primitive(self, obj, attr, value):
+        return tuple(
+            self._element_type.to_primitive(obj, attr, x) for x in value)
+
+    def from_primitive(self, obj, attr, value):
+        return set([self._element_type.from_primitive(obj, attr, x)
+                    for x in value])
+
+    def stringify(self, value):
+        return 'set([%s])' % (
+            ','.join([self._element_type.stringify(x) for x in value]))
 
 
 class Object(FieldType):
@@ -458,6 +482,10 @@ class Object(FieldType):
     def from_primitive(obj, attr, value):
         # FIXME(danms): Avoid circular import from base.py
         from nova.objects import base as obj_base
+        # NOTE (ndipanov): If they already got hydrated by the serializer, just
+        # pass them back unchanged
+        if isinstance(value, obj_base.NovaObject):
+            return value
         return obj_base.NovaObject.obj_from_primitive(value, obj._context)
 
     def describe(self):
@@ -569,6 +597,14 @@ class DictOfNullableStringsField(AutoTypedField):
 
 class ListOfStringsField(AutoTypedField):
     AUTO_TYPE = List(String())
+
+
+class SetOfIntegersField(AutoTypedField):
+    AUTO_TYPE = Set(Integer())
+
+
+class ListOfDictOfNullableStringsField(AutoTypedField):
+    AUTO_TYPE = List(Dict(String(), nullable=True))
 
 
 class ObjectField(AutoTypedField):

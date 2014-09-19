@@ -18,6 +18,7 @@ import mock
 
 from nova.compute import power_state
 from nova.compute import task_states
+from nova import context
 from nova import exception
 from nova import objects
 from nova.pci import pci_manager
@@ -211,7 +212,7 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.StubOutWithMock(self.vmops, '_ensure_enough_free_mem')
         self.mox.StubOutWithMock(self.vmops, '_update_instance_progress')
         self.mox.StubOutWithMock(vm_utils, 'determine_disk_image_type')
-        self.mox.StubOutWithMock(vm_utils, 'get_vdis_for_instance')
+        self.mox.StubOutWithMock(self.vmops, '_get_vdis_for_instance')
         self.mox.StubOutWithMock(vm_utils, 'safe_destroy_vdis')
         self.mox.StubOutWithMock(self.vmops._volumeops,
                                  'safe_cleanup_from_vdis')
@@ -224,7 +225,7 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.StubOutWithMock(self.vmops, '_attach_disks')
         self.mox.StubOutWithMock(pci_manager, 'get_instance_pci_devs')
         self.mox.StubOutWithMock(vm_utils, 'set_other_config_pci')
-        self.mox.StubOutWithMock(self.vmops, '_attach_orig_disk_for_rescue')
+        self.mox.StubOutWithMock(self.vmops, '_attach_orig_disks')
         self.mox.StubOutWithMock(self.vmops, 'inject_network_info')
         self.mox.StubOutWithMock(self.vmops, '_inject_hostname')
         self.mox.StubOutWithMock(self.vmops, '_inject_instance_metadata')
@@ -276,9 +277,9 @@ class SpawnTestCase(VMOpsTestBase):
         vdis = {"other": {"ref": "fake_ref_2", "osvol": True}}
         if include_root_vdi:
             vdis["root"] = {"ref": "fake_ref"}
-        vm_utils.get_vdis_for_instance(context, session, instance, name_label,
-                    "image_id", di_type,
-                    block_device_info=block_device_info).AndReturn(vdis)
+        self.vmops._get_vdis_for_instance(context, instance,
+                name_label, "image_id", di_type,
+                block_device_info).AndReturn(vdis)
         self.vmops._resize_up_vdis(instance, vdis)
         step += 1
         self.vmops._update_instance_progress(context, instance, step, steps)
@@ -300,7 +301,7 @@ class SpawnTestCase(VMOpsTestBase):
         self.vmops._update_instance_progress(context, instance, step, steps)
 
         self.vmops._attach_disks(instance, vm_ref, name_label, vdis, di_type,
-                          network_info, admin_password, injected_files)
+                          network_info, rescue, admin_password, injected_files)
         if attach_pci_dev:
             fake_dev = {
                 'created_at': None,
@@ -346,7 +347,7 @@ class SpawnTestCase(VMOpsTestBase):
         self.vmops._update_instance_progress(context, instance, step, steps)
 
         if rescue:
-            self.vmops._attach_orig_disk_for_rescue(instance, vm_ref)
+            self.vmops._attach_orig_disks(instance, vm_ref)
             step += 1
             self.vmops._update_instance_progress(context, instance, step,
                                                  steps)
@@ -435,7 +436,7 @@ class SpawnTestCase(VMOpsTestBase):
         if resize_instance:
             self.vmops._resize_up_vdis(instance, vdis)
         self.vmops._attach_disks(instance, vm_ref, name_label, vdis, di_type,
-                                 network_info, None, None)
+                                 network_info, False, None, None)
         self.vmops._attach_mapped_block_devices(instance, block_device_info)
         pci_manager.get_instance_pci_devs(instance).AndReturn([])
 
@@ -569,21 +570,23 @@ class SpawnTestCase(VMOpsTestBase):
         self.mox.ReplayAll()
         self.vmops._wait_for_instance_to_start(instance, vm_ref)
 
-    def test_attach_orig_disk_for_rescue(self):
+    def test_attach_orig_disks(self):
         instance = {"name": "dummy"}
         vm_ref = "vm_ref"
+        vbd_refs = {vmops.DEVICE_ROOT: "vdi_ref"}
 
         self.mox.StubOutWithMock(vm_utils, 'lookup')
-        self.mox.StubOutWithMock(self.vmops, '_find_root_vdi_ref')
+        self.mox.StubOutWithMock(self.vmops, '_find_vdi_refs')
         self.mox.StubOutWithMock(vm_utils, 'create_vbd')
 
         vm_utils.lookup(self.vmops._session, "dummy").AndReturn("ref")
-        self.vmops._find_root_vdi_ref("ref").AndReturn("vdi_ref")
+        self.vmops._find_vdi_refs("ref", exclude_volumes=True).AndReturn(
+                vbd_refs)
         vm_utils.create_vbd(self.vmops._session, vm_ref, "vdi_ref",
                             vmops.DEVICE_RESCUE, bootable=False)
 
         self.mox.ReplayAll()
-        self.vmops._attach_orig_disk_for_rescue(instance, vm_ref)
+        self.vmops._attach_orig_disks(instance, vm_ref)
 
     def test_agent_update_setup(self):
         # agent updates need to occur after networking is configured
@@ -933,6 +936,18 @@ class ResizeVdisTestCase(VMOpsTestBase):
                                               None, 5, 1000)
 
 
+@mock.patch.object(vm_utils, 'remove_old_snapshots')
+class CleanupFailedSnapshotTestCase(VMOpsTestBase):
+    def test_post_interrupted_snapshot_cleanup(self, mock_remove):
+        self.vmops._get_vm_opaque_ref = mock.Mock()
+        self.vmops._get_vm_opaque_ref.return_value = "vm_ref"
+
+        self.vmops.post_interrupted_snapshot_cleanup("context", "instance")
+
+        mock_remove.assert_called_once_with(self.vmops._session,
+                "instance", "vm_ref")
+
+
 class LiveMigrateHelperTestCase(VMOpsTestBase):
     def test_connect_block_device_volumes_none(self):
         self.assertEqual({}, self.vmops.connect_block_device_volumes(None))
@@ -1019,3 +1034,49 @@ class MigrateDiskResizingDownTestCase(VMOpsTestBase):
             ]
         self.assertEqual(prog_expected,
                          mock_update_instance_progress.call_args_list)
+
+
+class GetVdisForInstanceTestCase(VMOpsTestBase):
+    """Tests get_vdis_for_instance utility method."""
+    def setUp(self):
+        super(GetVdisForInstanceTestCase, self).setUp()
+        self.context = context.get_admin_context()
+        self.context.auth_token = 'auth_token'
+        self.session = mock.Mock()
+        self.vmops._session = self.session
+        self.instance = fake_instance.fake_instance_obj(self.context)
+        self.name_label = 'name'
+        self.image = 'fake_image_id'
+
+    @mock.patch.object(volumeops.VolumeOps, "connect_volume",
+                       return_value=("sr", "vdi_uuid"))
+    def test_vdis_for_instance_bdi_password_scrubbed(self, get_uuid_mock):
+        # setup fake data
+        data = {'name_label': self.name_label,
+                'sr_uuid': 'fake',
+                'auth_password': 'scrubme'}
+        bdm = [{'mount_device': '/dev/vda',
+                'connection_info': {'data': data}}]
+        bdi = {'root_device_name': 'vda',
+               'block_device_mapping': bdm}
+
+        # Tests that the parameters to the to_xml method are sanitized for
+        # passwords when logged.
+        def fake_debug(*args, **kwargs):
+            if 'auth_password' in args[0]:
+                self.assertNotIn('scrubme', args[0])
+                fake_debug.matched = True
+
+        fake_debug.matched = False
+
+        with mock.patch.object(vmops.LOG, 'debug',
+                               side_effect=fake_debug) as debug_mock:
+            vdis = self.vmops._get_vdis_for_instance(self.context,
+                    self.instance, self.name_label, self.image,
+                    image_type=4, block_device_info=bdi)
+            self.assertEqual(1, len(vdis))
+            get_uuid_mock.assert_called_once_with({"data": data})
+            # we don't care what the log message is, we just want to make sure
+            # our stub method is called which asserts the password is scrubbed
+            self.assertTrue(debug_mock.called)
+            self.assertTrue(fake_debug.matched)

@@ -28,6 +28,8 @@ from nova.api.metadata import base
 from nova import conductor
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LE
+from nova.i18n import _LW
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
 from nova import utils
@@ -40,17 +42,22 @@ CONF.import_opt('use_forwarded_for', 'nova.api.auth')
 
 metadata_proxy_opts = [
     cfg.BoolOpt(
-        'service_neutron_metadata_proxy',
+        'service_metadata_proxy',
         default=False,
         help='Set flag to indicate Neutron will proxy metadata requests and '
-             'resolve instance ids.'),
+             'resolve instance ids.',
+        deprecated_group='DEFAULT',
+        deprecated_name='service_neutron_metadata_proxy'),
      cfg.StrOpt(
-         'neutron_metadata_proxy_shared_secret',
+         'metadata_proxy_shared_secret',
          default='', secret=True,
-         help='Shared secret to validate proxies Neutron metadata requests')
+         help='Shared secret to validate proxies Neutron metadata requests',
+         deprecated_group='DEFAULT',
+         deprecated_name='neutron_metadata_proxy_shared_secret')
 ]
 
-CONF.register_opts(metadata_proxy_opts)
+# metadata_proxy_opts options in the DEFAULT group were deprecated in Juno
+CONF.register_opts(metadata_proxy_opts, 'neutron')
 
 LOG = logging.getLogger(__name__)
 
@@ -104,14 +111,14 @@ class MetadataRequestHandler(wsgi.Application):
             req.response.content_type = base.MIME_TYPE_TEXT_PLAIN
             return req.response
 
-        if CONF.service_neutron_metadata_proxy:
+        if CONF.neutron.service_metadata_proxy:
             meta_data = self._handle_instance_id_request(req)
         else:
             if req.headers.get('X-Instance-ID'):
                 LOG.warn(
-                    _("X-Instance-ID present in request headers. The "
-                      "'service_neutron_metadata_proxy' option must be enabled"
-                      " to process this header."))
+                    _LW("X-Instance-ID present in request headers. The "
+                        "'service_metadata_proxy' option must be "
+                        "enabled to process this header."))
             meta_data = self._handle_remote_ip_request(req)
 
         if meta_data is None:
@@ -145,7 +152,8 @@ class MetadataRequestHandler(wsgi.Application):
             raise webob.exc.HTTPInternalServerError(explanation=unicode(msg))
 
         if meta_data is None:
-            LOG.error(_('Failed to get metadata for ip: %s'), remote_address)
+            LOG.error(_LE('Failed to get metadata for ip: %s'),
+                      remote_address)
 
         return meta_data
 
@@ -172,16 +180,16 @@ class MetadataRequestHandler(wsgi.Application):
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
         expected_signature = hmac.new(
-            CONF.neutron_metadata_proxy_shared_secret,
+            CONF.neutron.metadata_proxy_shared_secret,
             instance_id,
             hashlib.sha256).hexdigest()
 
         if not utils.constant_time_compare(expected_signature, signature):
             if instance_id:
-                LOG.warn(_('X-Instance-ID-Signature: %(signature)s does not '
-                           'match the expected value: %(expected_signature)s '
-                           'for id: %(instance_id)s.  Request From: '
-                            '%(remote_address)s'),
+                LOG.warn(_LW('X-Instance-ID-Signature: %(signature)s does '
+                             'not match the expected value: '
+                             '%(expected_signature)s for id: %(instance_id)s.'
+                             '  Request From: %(remote_address)s'),
                          {'signature': signature,
                           'expected_signature': expected_signature,
                           'instance_id': instance_id,
@@ -201,14 +209,12 @@ class MetadataRequestHandler(wsgi.Application):
             raise webob.exc.HTTPInternalServerError(explanation=unicode(msg))
 
         if meta_data is None:
-            LOG.error(_('Failed to get metadata for instance id: %s'),
+            LOG.error(_LE('Failed to get metadata for instance id: %s'),
                       instance_id)
-
-        if meta_data.instance['project_id'] != tenant_id:
-            LOG.warning(_("Tenant_id %(tenant_id)s does not match tenant_id "
-                          "of instance %(instance_id)s."),
-                        {'tenant_id': tenant_id,
-                         'instance_id': instance_id})
+        elif meta_data.instance['project_id'] != tenant_id:
+            LOG.warn(_LW("Tenant_id %(tenant_id)s does not match tenant_id "
+                         "of instance %(instance_id)s."),
+                     {'tenant_id': tenant_id, 'instance_id': instance_id})
             # causes a 404 to be raised
             meta_data = None
 

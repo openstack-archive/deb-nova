@@ -666,29 +666,37 @@ def metadata_accept():
     iptables_manager.apply()
 
 
-def add_snat_rule(ip_range):
+def add_snat_rule(ip_range, is_external=False):
     if CONF.routing_source_ip:
-        for dest_range in CONF.force_snat_range or ['0.0.0.0/0']:
+        if is_external:
+            if CONF.force_snat_range:
+                snat_range = CONF.force_snat_range
+            else:
+                snat_range = []
+        else:
+            snat_range = ['0.0.0.0/0']
+        for dest_range in snat_range:
             rule = ('-s %s -d %s -j SNAT --to-source %s'
                     % (ip_range, dest_range, CONF.routing_source_ip))
-            if CONF.public_interface:
+            if not is_external and CONF.public_interface:
                 rule += ' -o %s' % CONF.public_interface
             iptables_manager.ipv4['nat'].add_rule('snat', rule)
         iptables_manager.apply()
 
 
-def init_host(ip_range):
+def init_host(ip_range, is_external=False):
     """Basic networking setup goes here."""
     # NOTE(devcamcar): Cloud public SNAT entries and the default
     # SNAT rule for outbound traffic.
 
-    add_snat_rule(ip_range)
+    add_snat_rule(ip_range, is_external)
 
     rules = []
-    for snat_range in CONF.force_snat_range:
-        rules.append('PREROUTING -p ipv4 --ip-src %s --ip-dst %s '
-                     '-j redirect --redirect-target ACCEPT' %
-                     (ip_range, snat_range))
+    if is_external:
+        for snat_range in CONF.force_snat_range:
+            rules.append('PREROUTING -p ipv4 --ip-src %s --ip-dst %s '
+                         '-j redirect --redirect-target ACCEPT' %
+                         (ip_range, snat_range))
     if rules:
         ensure_ebtables_rules(rules, 'nat')
 
@@ -967,30 +975,44 @@ def _remove_dhcp_mangle_rule(dev):
 
 def get_dhcp_opts(context, network_ref):
     """Get network's hosts config in dhcp-opts format."""
+    gateway = network_ref['gateway']
+    # NOTE(vish): if we are in multi-host mode and we are not sharing
+    #             addresses, then we actually need to hand out the
+    #             dhcp server address as the gateway.
+    if network_ref['multi_host'] and not (network_ref['share_address'] or
+                                          CONF.share_dhcp_address):
+        gateway = network_ref['dhcp_server']
     hosts = []
-    host = None
-    if network_ref['multi_host']:
-        host = CONF.host
-    fixedips = objects.FixedIPList.get_by_network(context, network_ref,
-                                                  host=host)
-    if fixedips:
-        instance_set = set([fixedip.instance_uuid for fixedip in fixedips])
-        default_gw_vif = {}
-        for instance_uuid in instance_set:
-            vifs = objects.VirtualInterfaceList.get_by_instance_uuid(
-                    context, instance_uuid)
-            if vifs:
-                #offer a default gateway to the first virtual interface
-                default_gw_vif[instance_uuid] = vifs[0].id
+    if CONF.use_single_default_gateway:
+        # NOTE(vish): this will have serious performance implications if we
+        #             are not in multi_host mode.
+        host = None
+        if network_ref['multi_host']:
+            host = CONF.host
+        fixedips = objects.FixedIPList.get_by_network(context, network_ref,
+                                                      host=host)
+        if fixedips:
+            instance_set = set([fixedip.instance_uuid for fixedip in fixedips])
+            default_gw_vif = {}
+            for instance_uuid in instance_set:
+                vifs = objects.VirtualInterfaceList.get_by_instance_uuid(
+                        context, instance_uuid)
+                if vifs:
+                    # offer a default gateway to the first virtual interface
+                    default_gw_vif[instance_uuid] = vifs[0].id
 
-        for fixedip in fixedips:
-            if fixedip.allocated:
-                instance_uuid = fixedip.instance_uuid
-                if instance_uuid in default_gw_vif:
-                    # we don't want default gateway for this fixed ip
-                    if (default_gw_vif[instance_uuid] !=
-                            fixedip.virtual_interface_id):
-                        hosts.append(_host_dhcp_opts(fixedip))
+            for fixedip in fixedips:
+                if fixedip.allocated:
+                    instance_uuid = fixedip.instance_uuid
+                    if instance_uuid in default_gw_vif:
+                        # we don't want default gateway for this fixed ip
+                        if (default_gw_vif[instance_uuid] !=
+                                fixedip.virtual_interface_id):
+                            hosts.append(_host_dhcp_opts(fixedip))
+                        else:
+                            hosts.append(_host_dhcp_opts(fixedip, gateway))
+    else:
+        hosts.append(_host_dhcp_opts(None, gateway))
     return '\n'.join(hosts)
 
 
@@ -1043,12 +1065,9 @@ def restart_dhcp(context, dev, network_ref):
     """
     conffile = _dhcp_file(dev, 'conf')
 
-    if CONF.use_single_default_gateway:
-        # NOTE(vish): this will have serious performance implications if we
-        #             are not in multi_host mode.
-        optsfile = _dhcp_file(dev, 'opts')
-        write_to_file(optsfile, get_dhcp_opts(context, network_ref))
-        os.chmod(optsfile, 0o644)
+    optsfile = _dhcp_file(dev, 'opts')
+    write_to_file(optsfile, get_dhcp_opts(context, network_ref))
+    os.chmod(optsfile, 0o644)
 
     _add_dhcp_mangle_rule(dev)
 
@@ -1081,6 +1100,7 @@ def restart_dhcp(context, dev, network_ref):
            '--bind-interfaces',
            '--conf-file=%s' % CONF.dnsmasq_config_file,
            '--pid-file=%s' % _dhcp_file(dev, 'pid'),
+           '--dhcp-optsfile=%s' % _dhcp_file(dev, 'opts'),
            '--listen-address=%s' % network_ref['dhcp_server'],
            '--except-interface=lo',
            '--dhcp-range=set:%s,%s,static,%s,%ss' %
@@ -1112,8 +1132,6 @@ def restart_dhcp(context, dev, network_ref):
         cmd.append('--no-resolv')
     for dns_server in dns_servers:
         cmd.append('--server=%s' % dns_server)
-    if CONF.use_single_default_gateway:
-        cmd += ['--dhcp-optsfile=%s' % _dhcp_file(dev, 'opts')]
 
     _execute(*cmd, run_as_root=True)
 
@@ -1197,9 +1215,16 @@ def _host_dns(fixedip):
                           CONF.dhcp_domain)
 
 
-def _host_dhcp_opts(fixedip):
+def _host_dhcp_opts(fixedip=None, gateway=None):
     """Return an empty gateway option."""
-    return '%s,%s' % (_host_dhcp_network(fixedip), 3)
+    values = []
+    if fixedip:
+        values.append(_host_dhcp_network(fixedip))
+    # NOTE(vish): 3 is the dhcp option for gateway.
+    values.append('3')
+    if gateway:
+        values.append('%s' % gateway)
+    return ','.join(values)
 
 
 def _execute(*cmd, **kwargs):

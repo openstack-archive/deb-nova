@@ -85,9 +85,10 @@ class LinuxNetL3(L3Driver):
         networks = kwargs.get('networks', None)
         if not fixed_range and networks is not None:
             for network in networks:
-                self.initialize_network(network['cidr'])
-        else:
-            linux_net.init_host()
+                if network['enable_dhcp']:
+                    is_ext = (network['dhcp_server'] is not None and
+                              network['dhcp_server'] != network['gateway'])
+                    self.initialize_network(network['cidr'], is_ext)
         linux_net.ensure_metadata_ip()
         linux_net.metadata_forward()
         self.initialized = True
@@ -95,8 +96,8 @@ class LinuxNetL3(L3Driver):
     def is_initialized(self):
         return self.initialized
 
-    def initialize_network(self, cidr):
-        linux_net.init_host(cidr)
+    def initialize_network(self, cidr, is_external):
+        linux_net.init_host(cidr, is_external)
 
     def initialize_gateway(self, network_ref):
         mac_address = utils.generate_mac_address()

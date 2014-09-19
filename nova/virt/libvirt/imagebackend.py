@@ -23,6 +23,7 @@ import six
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
+from nova import image
 from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
 from nova.openstack.common import jsonutils
@@ -33,16 +34,8 @@ from nova.virt.disk import api as disk
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import lvm
+from nova.virt.libvirt import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
-
-
-try:
-    import rados
-    import rbd
-except ImportError:
-    rados = None
-    rbd = None
-
 
 __imagebackend_opts = [
     cfg.StrOpt('images_type',
@@ -76,12 +69,17 @@ CONF = cfg.CONF
 CONF.register_opts(__imagebackend_opts, 'libvirt')
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('preallocate_images', 'nova.virt.driver')
+CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume', group='libvirt')
+CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume', group='libvirt')
 
 LOG = logging.getLogger(__name__)
+IMAGE_API = image.API()
 
 
 @six.add_metaclass(abc.ABCMeta)
 class Image(object):
+
+    SUPPORTS_CLONE = False
 
     def __init__(self, source_type, driver_format, is_block_dev=False):
         """Image initialization.
@@ -112,9 +110,10 @@ class Image(object):
         Contains specific behavior for each image type.
 
         :prepare_template: function, that creates template.
-        Should accept `target` argument.
+                           Should accept `target` argument.
         :base: Template name
         :size: Size of created image in bytes
+
         """
         pass
 
@@ -143,14 +142,11 @@ class Image(object):
         tune_items = ['disk_read_bytes_sec', 'disk_read_iops_sec',
             'disk_write_bytes_sec', 'disk_write_iops_sec',
             'disk_total_bytes_sec', 'disk_total_iops_sec']
-        # Note(yaguang): Currently, the only tuning available is Block I/O
-        # throttling for qemu.
-        if self.source_type in ['file', 'block']:
-            for key, value in extra_specs.iteritems():
-                scope = key.split(':')
-                if len(scope) > 1 and scope[0] == 'quota':
-                    if scope[1] in tune_items:
-                        setattr(info, scope[1], value)
+        for key, value in extra_specs.iteritems():
+            scope = key.split(':')
+            if len(scope) > 1 and scope[0] == 'quota':
+                if scope[1] in tune_items:
+                    setattr(info, scope[1], value)
         return info
 
     def check_image_exists(self):
@@ -203,8 +199,7 @@ class Image(object):
                                             'path': self.path})
         return can_fallocate
 
-    @staticmethod
-    def verify_base_size(base, size, base_size=0):
+    def verify_base_size(self, base, size, base_size=0):
         """Check that the base image is not larger than size.
            Since images can't be generally shrunk, enforce this
            constraint taking account of virtual image size.
@@ -223,7 +218,7 @@ class Image(object):
             return
 
         if size and not base_size:
-            base_size = disk.get_disk_size(base)
+            base_size = self.get_disk_size(base)
 
         if size < base_size:
             msg = _LE('%(base)s virtual size %(base_size)s '
@@ -232,6 +227,9 @@ class Image(object):
                               'base_size': base_size,
                               'size': size})
             raise exception.FlavorDiskTooSmall()
+
+    def get_disk_size(self, name):
+        disk.get_disk_size(name)
 
     def snapshot_extract(self, target, out_format):
         raise NotImplementedError()
@@ -301,6 +299,21 @@ class Image(object):
         """True if the backend puts images on a shared block storage."""
         return False
 
+    def clone(self, context, image_id_or_uri):
+        """Clone an image.
+
+        Note that clone operation is backend-dependent. The backend may ask
+        the image API for a list of image "locations" and select one or more
+        of those locations to clone an image from.
+
+        :param image_id_or_uri: The ID or URI of an image to clone.
+
+        :raises: exception.ImageUnacceptable if it cannot be cloned
+        """
+        reason = _('clone() is not implemented')
+        raise exception.ImageUnacceptable(image_id=image_id_or_uri,
+                                          reason=reason)
+
 
 class Raw(Image):
     def __init__(self, instance=None, disk_name=None, path=None):
@@ -336,7 +349,7 @@ class Raw(Image):
         generating = 'image_id' not in kwargs
         if generating:
             if not self.check_image_exists():
-                #Generating image in place
+                # Generating image in place
                 prepare_template(target=self.path, *args, **kwargs)
         else:
             if not os.path.exists(base):
@@ -463,7 +476,7 @@ class Lvm(Image):
 
         generated = 'ephemeral_size' in kwargs
 
-        #Generate images with specified size right on volume
+        # Generate images with specified size right on volume
         if generated and size:
             lvm.create_volume(self.vg, self.lv,
                                          size, sparse=self.sparse)
@@ -488,52 +501,10 @@ class Lvm(Image):
                              run_as_root=True)
 
 
-class RBDVolumeProxy(object):
-    """Context manager for dealing with an existing rbd volume.
-
-    This handles connecting to rados and opening an ioctx automatically, and
-    otherwise acts like a librbd Image object.
-
-    The underlying librados client and ioctx can be accessed as the attributes
-    'client' and 'ioctx'.
-    """
-    def __init__(self, driver, name, pool=None):
-        client, ioctx = driver._connect_to_rados(pool)
-        try:
-            self.volume = driver.rbd.Image(ioctx, str(name), snapshot=None)
-        except driver.rbd.Error:
-            LOG.exception(_LE("error opening rbd image %s"), name)
-            driver._disconnect_from_rados(client, ioctx)
-            raise
-        self.driver = driver
-        self.client = client
-        self.ioctx = ioctx
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, type_, value, traceback):
-        try:
-            self.volume.close()
-        finally:
-            self.driver._disconnect_from_rados(self.client, self.ioctx)
-
-    def __getattr__(self, attrib):
-        return getattr(self.volume, attrib)
-
-
-def ascii_str(s):
-    """Convert a string to ascii, or return None if the input is None.
-
-    This is useful when a parameter is None by default, or a string. LibRBD
-    only accepts ascii, hence the need for conversion.
-    """
-    if s is None:
-        return s
-    return str(s)
-
-
 class Rbd(Image):
+
+    SUPPORTS_CLONE = True
+
     def __init__(self, instance=None, disk_name=None, path=None, **kwargs):
         super(Rbd, self).__init__("block", "rbd", is_block_dev=True)
         if path:
@@ -549,62 +520,19 @@ class Rbd(Image):
                                  ' images_rbd_pool'
                                  ' flag to use rbd images.'))
         self.pool = CONF.libvirt.images_rbd_pool
-        self.ceph_conf = ascii_str(CONF.libvirt.images_rbd_ceph_conf)
-        self.rbd_user = ascii_str(CONF.libvirt.rbd_user)
-        self.rbd = kwargs.get('rbd', rbd)
-        self.rados = kwargs.get('rados', rados)
+        self.rbd_user = CONF.libvirt.rbd_user
+        self.ceph_conf = CONF.libvirt.images_rbd_ceph_conf
+
+        self.driver = rbd_utils.RBDDriver(
+            pool=self.pool,
+            ceph_conf=self.ceph_conf,
+            rbd_user=self.rbd_user)
 
         self.path = 'rbd:%s/%s' % (self.pool, self.rbd_name)
         if self.rbd_user:
             self.path += ':id=' + self.rbd_user
         if self.ceph_conf:
             self.path += ':conf=' + self.ceph_conf
-
-    def _connect_to_rados(self, pool=None):
-        client = self.rados.Rados(rados_id=self.rbd_user,
-                                  conffile=self.ceph_conf)
-        try:
-            client.connect()
-            pool_to_open = str(pool or self.pool)
-            ioctx = client.open_ioctx(pool_to_open)
-            return client, ioctx
-        except self.rados.Error:
-            # shutdown cannot raise an exception
-            client.shutdown()
-            raise
-
-    def _disconnect_from_rados(self, client, ioctx):
-        # closing an ioctx cannot raise an exception
-        ioctx.close()
-        client.shutdown()
-
-    def _supports_layering(self):
-        return hasattr(self.rbd, 'RBD_FEATURE_LAYERING')
-
-    def _ceph_args(self):
-        args = []
-        if self.rbd_user:
-            args.extend(['--id', self.rbd_user])
-        if self.ceph_conf:
-            args.extend(['--conf', self.ceph_conf])
-        return args
-
-    def _get_mon_addrs(self):
-        args = ['ceph', 'mon', 'dump', '--format=json'] + self._ceph_args()
-        out, _ = utils.execute(*args)
-        lines = out.split('\n')
-        if lines[0].startswith('dumped monmap epoch'):
-            lines = lines[1:]
-        monmap = jsonutils.loads('\n'.join(lines))
-        addrs = [mon['addr'] for mon in monmap['mons']]
-        hosts = []
-        ports = []
-        for addr in addrs:
-            host_port = addr[:addr.rindex('/')]
-            host, port = host_port.rsplit(':', 1)
-            hosts.append(host.strip('[]'))
-            ports.append(port)
-        return hosts, ports
 
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
             extra_specs, hypervisor_version):
@@ -618,8 +546,8 @@ class Rbd(Image):
         """
         info = vconfig.LibvirtConfigGuestDisk()
 
-        hosts, ports = self._get_mon_addrs()
-        info.device_type = device_type
+        hosts, ports = self.driver.get_mon_addrs()
+        info.source_device = device_type
         info.driver_format = 'raw'
         info.driver_cache = cache_mode
         info.target_bus = disk_bus
@@ -644,38 +572,30 @@ class Rbd(Image):
         return False
 
     def check_image_exists(self):
-        rbd_volumes = libvirt_utils.list_rbd_volumes(self.pool)
-        for vol in rbd_volumes:
-            if vol.startswith(self.rbd_name):
-                return True
+        return self.driver.exists(self.rbd_name)
 
-        return False
+    def get_disk_size(self, name):
+        """Returns the size of the virtual disk in bytes.
 
-    def _resize(self, volume_name, size):
-        with RBDVolumeProxy(self, volume_name) as vol:
-            vol.resize(int(size))
+        The name argument is ignored since this backend already knows
+        its name, and callers may pass a non-existent local file path.
+        """
+        return self.driver.size(self.rbd_name)
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        if self.rbd is None:
-            raise RuntimeError(_('rbd python libraries not found'))
 
-        if not os.path.exists(base):
+        if not self.check_image_exists():
             prepare_template(target=base, max_size=size, *args, **kwargs)
         else:
             self.verify_base_size(base, size)
 
-        # keep using the command line import instead of librbd since it
-        # detects zeroes to preserve sparseness in the image
-        args = ['--pool', self.pool, base, self.rbd_name]
-        if self._supports_layering():
-            args += ['--new-format']
-        args += self._ceph_args()
-        libvirt_utils.import_rbd_image(*args)
+        # prepare_template() may have cloned the image into a new rbd
+        # image already instead of downloading it locally
+        if not self.check_image_exists():
+            self.driver.import_image(base, self.rbd_name)
 
-        base_size = disk.get_disk_size(base)
-
-        if size and size > base_size:
-            self._resize(self.rbd_name, size)
+        if size and size > self.get_disk_size(self.rbd_name):
+            self.driver.resize(self.rbd_name, size)
 
     def snapshot_extract(self, target, out_format):
         images.convert_image(self.path, target, out_format)
@@ -683,6 +603,31 @@ class Rbd(Image):
     @staticmethod
     def is_shared_block_storage():
         return True
+
+    def clone(self, context, image_id_or_uri):
+        if not self.driver.supports_layering():
+            reason = _('installed version of librbd does not support cloning')
+            raise exception.ImageUnacceptable(image_id=image_id_or_uri,
+                                              reason=reason)
+
+        image_meta = IMAGE_API.get(context, image_id_or_uri,
+                                   include_locations=True)
+        locations = image_meta['locations']
+
+        LOG.debug('Image locations are: %(locs)s' % {'locs': locations})
+
+        if image_meta.get('disk_format') not in ['raw', 'iso']:
+            reason = _('Image is not raw format')
+            raise exception.ImageUnacceptable(image_id=image_id_or_uri,
+                                              reason=reason)
+
+        for location in locations:
+            if self.driver.is_cloneable(location, image_meta):
+                return self.driver.clone(location, self.rbd_name)
+
+        reason = _('No image locations are accessible')
+        raise exception.ImageUnacceptable(image_id=image_id_or_uri,
+                                          reason=reason)
 
 
 class Backend(object):
@@ -709,7 +654,8 @@ class Backend(object):
         :instance: Instance name.
         :name: Image name.
         :image_type: Image type.
-        Optional, is CONF.libvirt.images_type by default.
+                     Optional, is CONF.libvirt.images_type by default.
+
         """
         backend = self.backend(image_type)
         return backend(instance=instance, disk_name=disk_name)

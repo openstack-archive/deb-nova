@@ -15,11 +15,13 @@
 
 """Config Drive extension."""
 
+from nova.api.openstack.compute.schemas.v3 import config_drive as \
+                                                  schema_config_drive
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 
 ALIAS = "os-config-drive"
-ATTRIBUTE_NAME = "%s:config_drive" % ALIAS
+ATTRIBUTE_NAME = "config_drive"
 authorize = extensions.soft_extension_authorizer('compute', 'v3:' + ALIAS)
 
 
@@ -66,5 +68,10 @@ class ConfigDrive(extensions.V3APIExtensionBase):
     def get_resources(self):
         return []
 
-    def server_create(self, server_dict, create_kwargs):
+    # NOTE(gmann): This function is not supposed to use 'body_deprecated_param'
+    # parameter as this is placed to handle scheduler_hint extension for V2.1.
+    def server_create(self, server_dict, create_kwargs, body_deprecated_param):
         create_kwargs['config_drive'] = server_dict.get(ATTRIBUTE_NAME)
+
+    def get_server_create_schema(self):
+        return schema_config_drive.server_create

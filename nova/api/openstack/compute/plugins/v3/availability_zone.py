@@ -14,6 +14,7 @@
 
 from oslo.config import cfg
 
+from nova.api.openstack.compute.schemas.v3 import availability_zone as schema
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import availability_zones
@@ -22,7 +23,7 @@ from nova import servicegroup
 
 CONF = cfg.CONF
 ALIAS = "os-availability-zone"
-ATTRIBUTE_NAME = "%s:availability_zone" % ALIAS
+ATTRIBUTE_NAME = "availability_zone"
 authorize_list = extensions.extension_authorizer('compute',
                                                  'v3:' + ALIAS + ':list')
 authorize_detail = extensions.extension_authorizer('compute',
@@ -42,8 +43,8 @@ class AvailabilityZoneController(wsgi.Controller):
             # Hide internal_service_availability_zone
             if zone == CONF.internal_service_availability_zone:
                 continue
-            result.append({'zone_name': zone,
-                           'zone_state': {'available': is_available},
+            result.append({'zoneName': zone,
+                           'zoneState': {'available': is_available},
                            "hosts": None})
         return result
 
@@ -56,7 +57,7 @@ class AvailabilityZoneController(wsgi.Controller):
             self._get_filtered_availability_zones(available_zones, True)
         filtered_not_available_zones = \
             self._get_filtered_availability_zones(not_available_zones, False)
-        return {'availability_zone_info': filtered_available_zones +
+        return {'availabilityZoneInfo': filtered_available_zones +
                                         filtered_not_available_zones}
 
     def _describe_availability_zones_verbose(self, context, **kwargs):
@@ -91,15 +92,15 @@ class AvailabilityZoneController(wsgi.Controller):
                     hosts[host][service['binary']] = {'available': alive,
                                       'active': True != service['disabled'],
                                       'updated_at': service['updated_at']}
-            result.append({'zone_name': zone,
-                           'zone_state': {'available': True},
+            result.append({'zoneName': zone,
+                           'zoneState': {'available': True},
                            "hosts": hosts})
 
         for zone in not_available_zones:
-            result.append({'zone_name': zone,
-                           'zone_state': {'available': False},
+            result.append({'zoneName': zone,
+                           'zoneState': {'available': False},
                            "hosts": None})
-        return {'availability_zone_info': result}
+        return {'availabilityZoneInfo': result}
 
     @extensions.expected_errors(())
     def index(self, req):
@@ -139,5 +140,10 @@ class AvailabilityZone(extensions.V3APIExtensionBase):
         """
         return []
 
-    def server_create(self, server_dict, create_kwargs):
+    # NOTE(gmann): This function is not supposed to use 'body_deprecated_param'
+    # parameter as this is placed to handle scheduler_hint extension for V2.1.
+    def server_create(self, server_dict, create_kwargs, body_deprecated_param):
         create_kwargs['availability_zone'] = server_dict.get(ATTRIBUTE_NAME)
+
+    def get_server_create_schema(self):
+        return schema.server_create

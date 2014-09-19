@@ -16,8 +16,8 @@
 
 """The security groups extension."""
 
-import json
-
+from nova.api.openstack.compute.schemas.v3 import security_groups as \
+                                                  schema_security_groups
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
@@ -25,6 +25,7 @@ from nova.compute import api as compute_api
 from nova import exception
 from nova.network.security_group import neutron_driver
 from nova.network.security_group import openstack_driver
+from nova.openstack.common import jsonutils
 
 
 ALIAS = 'os-security-groups'
@@ -79,7 +80,7 @@ class SecurityGroupsOutputController(wsgi.Controller):
             # one server in an API request.
             else:
                 # try converting to json
-                req_obj = json.loads(req.body)
+                req_obj = jsonutils.loads(req.body)
                 # Add security group to server, if no security group was in
                 # request add default since that is the group it is part of
                 servers[0][ATTRIBUTE_NAME] = req_obj['server'].get(
@@ -120,13 +121,18 @@ class SecurityGroups(extensions.V3APIExtensionBase):
     def get_resources(self):
         return []
 
-    def server_create(self, server_dict, create_kwargs):
+    # NOTE(gmann): This function is not supposed to use 'body_deprecated_param'
+    # parameter as this is placed to handle scheduler_hint extension for V2.1.
+    def server_create(self, server_dict, create_kwargs, body_deprecated_param):
         security_groups = server_dict.get(ATTRIBUTE_NAME)
         if security_groups is not None:
             create_kwargs['security_group'] = [
                 sg['name'] for sg in security_groups if sg.get('name')]
             create_kwargs['security_group'] = list(
                 set(create_kwargs['security_group']))
+
+    def get_server_create_schema(self):
+        return schema_security_groups.server_create
 
 
 class NativeSecurityGroupExceptions(object):

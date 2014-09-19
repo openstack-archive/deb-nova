@@ -69,6 +69,7 @@ class VMUtils(object):
     _IDE_DVD_RES_SUB_TYPE = 'Microsoft Virtual CD/DVD Disk'
     _IDE_CTRL_RES_SUB_TYPE = 'Microsoft Emulated IDE Controller'
     _SCSI_CTRL_RES_SUB_TYPE = 'Microsoft Synthetic SCSI Controller'
+    _SERIAL_PORT_RES_SUB_TYPE = 'Microsoft Serial Port'
 
     _SETTINGS_DEFINE_STATE_CLASS = 'Msvm_SettingsDefineState'
     _VIRTUAL_SYSTEM_SETTING_DATA_CLASS = 'Msvm_VirtualSystemSettingData'
@@ -80,8 +81,12 @@ class VMUtils(object):
     'Msvm_SyntheticEthernetPortSettingData'
     _AFFECTED_JOB_ELEMENT_CLASS = "Msvm_AffectedJobElement"
 
+    _SHUTDOWN_COMPONENT = "Msvm_ShutdownComponent"
+    _VIRTUAL_SYSTEM_CURRENT_SETTINGS = 3
+
     _vm_power_states_map = {constants.HYPERV_VM_STATE_ENABLED: 2,
                             constants.HYPERV_VM_STATE_DISABLED: 3,
+                            constants.HYPERV_VM_STATE_SHUTTING_DOWN: 4,
                             constants.HYPERV_VM_STATE_REBOOT: 10,
                             constants.HYPERV_VM_STATE_PAUSED: 32768,
                             constants.HYPERV_VM_STATE_SUSPENDED: 32769}
@@ -95,6 +100,17 @@ class VMUtils(object):
 
     def _init_hyperv_wmi_conn(self, host):
         self._conn = wmi.WMI(moniker='//%s/root/virtualization' % host)
+
+    def list_instance_notes(self):
+        instance_notes = []
+
+        for vs in self._conn.Msvm_VirtualSystemSettingData(
+                ['ElementName', 'Notes'],
+                SettingType=self._VIRTUAL_SYSTEM_CURRENT_SETTINGS):
+            instance_notes.append((vs.ElementName,
+                                  [v for v in vs.Notes.split('\n') if v]))
+
+        return instance_notes
 
     def list_instances(self):
         """Return the names of all the instances known to Hyper-V."""
@@ -111,7 +127,7 @@ class VMUtils(object):
             wmi_association_class=self._SETTINGS_DEFINE_STATE_CLASS,
             wmi_result_class=self._VIRTUAL_SYSTEM_SETTING_DATA_CLASS)
         settings_paths = [v.path_() for v in vmsettings]
-        #See http://msdn.microsoft.com/en-us/library/cc160706%28VS.85%29.aspx
+        # See http://msdn.microsoft.com/en-us/library/cc160706%28VS.85%29.aspx
         (ret_val, summary_info) = vs_man_svc.GetSummaryInformation(
             [constants.VM_SUMMARY_NUM_PROCS,
              constants.VM_SUMMARY_ENABLED_STATE,
@@ -130,7 +146,13 @@ class VMUtils(object):
         if si.UpTime is not None:
             up_time = long(si.UpTime)
 
-        enabled_state = self._enabled_states_map[si.EnabledState]
+        # Nova requires a valid state to be returned. Hyper-V has more
+        # states than Nova, typically intermediate ones and since there is
+        # no direct mapping for those, ENABLED is the only reasonable option
+        # considering that in all the non mappable states the instance
+        # is running.
+        enabled_state = self._enabled_states_map.get(si.EnabledState,
+            constants.HYPERV_VM_STATE_ENABLED)
 
         summary_info_dict = {'NumberOfProcessors': si.NumberOfProcessors,
                              'EnabledState': enabled_state,
@@ -216,12 +238,12 @@ class VMUtils(object):
             raise HyperVAuthorizationException(msg)
 
     def create_vm(self, vm_name, memory_mb, vcpus_num, limit_cpu_features,
-                  dynamic_memory_ratio):
+                  dynamic_memory_ratio, notes=None):
         """Creates a VM."""
         vs_man_svc = self._conn.Msvm_VirtualSystemManagementService()[0]
 
         LOG.debug('Creating VM %s', vm_name)
-        vm = self._create_vm_obj(vs_man_svc, vm_name)
+        vm = self._create_vm_obj(vs_man_svc, vm_name, notes)
 
         vmsetting = self._get_vm_setting_data(vm)
 
@@ -231,16 +253,30 @@ class VMUtils(object):
         LOG.debug('Set vCPUs for vm %s', vm_name)
         self._set_vm_vcpus(vm, vmsetting, vcpus_num, limit_cpu_features)
 
-    def _create_vm_obj(self, vs_man_svc, vm_name):
+    def _create_vm_obj(self, vs_man_svc, vm_name, notes):
         vs_gs_data = self._conn.Msvm_VirtualSystemGlobalSettingData.new()
         vs_gs_data.ElementName = vm_name
 
-        (job_path,
+        (vm_path,
+         job_path,
          ret_val) = vs_man_svc.DefineVirtualSystem([], None,
-                                                   vs_gs_data.GetText_(1))[1:]
+                                                   vs_gs_data.GetText_(1))
         self.check_ret_val(ret_val, job_path)
 
-        return self._lookup_vm_check(vm_name)
+        vm = self._get_wmi_obj(vm_path)
+
+        if notes:
+            vmsetting = self._get_vm_setting_data(vm)
+            vmsetting.Notes = '\n'.join(notes)
+            self._modify_virtual_system(vs_man_svc, vm_path, vmsetting)
+
+        return self._get_wmi_obj(vm_path)
+
+    def _modify_virtual_system(self, vs_man_svc, vm_path, vmsetting):
+        (job_path, ret_val) = vs_man_svc.ModifyVirtualSystem(
+            ComputerSystem=vm_path,
+            SystemSettingData=vmsetting.GetText_(1))[1:]
+        self.check_ret_val(ret_val, job_path)
 
     def get_vm_scsi_controller(self, vm_name):
         vm = self._lookup_vm_check(vm_name)
@@ -309,10 +345,10 @@ class VMUtils(object):
 
         drive = self._get_new_resource_setting_data(res_sub_type)
 
-        #Set the IDE ctrller as parent.
+        # Set the IDE ctrller as parent.
         drive.Parent = ctrller_path
         drive.Address = drive_addr
-        #Add the cloned disk drive object to the vm.
+        # Add the cloned disk drive object to the vm.
         new_resources = self._add_virt_resource(drive, vm.path_())
         drive_path = new_resources[0]
 
@@ -322,11 +358,11 @@ class VMUtils(object):
             res_sub_type = self._IDE_DVD_RES_SUB_TYPE
 
         res = self._get_new_resource_setting_data(res_sub_type)
-        #Set the new drive as the parent.
+        # Set the new drive as the parent.
         res.Parent = drive_path
         res.Connection = [path]
 
-        #Add the new vhd object as a virtual hard disk to the vm.
+        # Add the new vhd object as a virtual hard disk to the vm.
         self._add_virt_resource(res, vm.path_())
 
     def create_scsi_controller(self, vm_name):
@@ -366,28 +402,43 @@ class VMUtils(object):
 
     def create_nic(self, vm_name, nic_name, mac_address):
         """Create a (synthetic) nic and attach it to the vm."""
-        #Create a new nic
+        # Create a new nic
         new_nic_data = self._get_new_setting_data(
             self._SYNTHETIC_ETHERNET_PORT_SETTING_DATA_CLASS)
 
-        #Configure the nic
+        # Configure the nic
         new_nic_data.ElementName = nic_name
         new_nic_data.Address = mac_address.replace(':', '')
         new_nic_data.StaticMacAddress = 'True'
         new_nic_data.VirtualSystemIdentifiers = ['{' + str(uuid.uuid4()) + '}']
 
-        #Add the new nic to the vm
+        # Add the new nic to the vm
         vm = self._lookup_vm_check(vm_name)
 
         self._add_virt_resource(new_nic_data, vm.path_())
+
+    def soft_shutdown_vm(self, vm_name):
+        vm = self._lookup_vm_check(vm_name)
+        shutdown_component = vm.associators(
+            wmi_result_class=self._SHUTDOWN_COMPONENT)
+
+        if not shutdown_component:
+            # If no shutdown_component is found, it means the VM is already
+            # in a shutdown state.
+            return
+
+        reason = 'Soft shutdown requested by OpenStack Nova.'
+        (ret_val, ) = shutdown_component[0].InitiateShutdown(Force=False,
+                                                             Reason=reason)
+        self.check_ret_val(ret_val, None)
 
     def set_vm_state(self, vm_name, req_state):
         """Set the desired state of the VM."""
         vm = self._lookup_vm_check(vm_name)
         (job_path,
          ret_val) = vm.RequestStateChange(self._vm_power_states_map[req_state])
-        #Invalid state for current operation (32775) typically means that
-        #the VM is already in the state requested
+        # Invalid state for current operation (32775) typically means that
+        # the VM is already in the state requested
         self.check_ret_val(ret_val, job_path, [0, 32775])
         LOG.debug("Successfully changed vm state of %(vm_name)s "
                   "to %(req_state)s",
@@ -430,7 +481,7 @@ class VMUtils(object):
         vm = self._lookup_vm_check(vm_name)
 
         vs_man_svc = self._conn.Msvm_VirtualSystemManagementService()[0]
-        #Remove the VM. Does not destroy disks.
+        # Remove the VM. Does not destroy disks.
         (job_path, ret_val) = vs_man_svc.DestroyVirtualSystem(vm.path_())
         self.check_ret_val(ret_val, job_path)
 
@@ -576,3 +627,28 @@ class VMUtils(object):
     def enable_vm_metrics_collection(self, vm_name):
         raise NotImplementedError(_("Metrics collection is not supported on "
                                     "this version of Hyper-V"))
+
+    def get_vm_serial_port_connection(self, vm_name, update_connection=None):
+        vm = self._lookup_vm_check(vm_name)
+
+        vmsettings = vm.associators(
+            wmi_result_class=self._VIRTUAL_SYSTEM_SETTING_DATA_CLASS)
+        rasds = vmsettings[0].associators(
+            wmi_result_class=self._RESOURCE_ALLOC_SETTING_DATA_CLASS)
+        serial_port = (
+            [r for r in rasds if
+             r.ResourceSubType == self._SERIAL_PORT_RES_SUB_TYPE][0])
+
+        if update_connection:
+            serial_port.Connection = [update_connection]
+            self._modify_virt_resource(serial_port, vm.path_())
+
+        return serial_port.Connection
+
+    def get_active_instances(self):
+        """Return the names of all the active instances known to Hyper-V."""
+        vm_names = [v.ElementName for v in
+                    self._conn.Msvm_ComputerSystem(Caption="Virtual Machine")
+                    if v.EnabledState == constants.HYPERV_VM_STATE_ENABLED]
+
+        return vm_names

@@ -20,9 +20,11 @@ from webob import exc
 from nova.api.openstack import extensions
 from nova import block_device
 from nova import exception
+from nova.i18n import _
 
 ALIAS = "os-block-device-mapping"
-ATTRIBUTE_NAME = "%s:block_device_mapping" % ALIAS
+ATTRIBUTE_NAME = "block_device_mapping_v2"
+LEGACY_ATTRIBUTE_NAME = "block_device_mapping"
 
 
 class BlockDeviceMapping(extensions.V3APIExtensionBase):
@@ -40,19 +42,26 @@ class BlockDeviceMapping(extensions.V3APIExtensionBase):
 
     # use nova.api.extensions.server.extensions entry point to modify
     # server create kwargs
-    def server_create(self, server_dict, create_kwargs):
-        block_device_mapping = server_dict.get(ATTRIBUTE_NAME, [])
+    # NOTE(gmann): This function is not supposed to use 'body_deprecated_param'
+    # parameter as this is placed to handle scheduler_hint extension for V2.1.
+    def server_create(self, server_dict, create_kwargs, body_deprecated_param):
+        bdm = server_dict.get(ATTRIBUTE_NAME, [])
+        legacy_bdm = server_dict.get(LEGACY_ATTRIBUTE_NAME, [])
+
+        if bdm and legacy_bdm:
+            expl = _('Using different block_device_mapping syntaxes '
+                     'is not allowed in the same request.')
+            raise exc.HTTPBadRequest(explanation=expl)
 
         try:
             block_device_mapping = [
                 block_device.BlockDeviceDict.from_api(bdm_dict)
-                for bdm_dict in block_device_mapping]
+                for bdm_dict in bdm]
         except (exception.InvalidBDMFormat,
                 exception.InvalidBDMVolumeNotBootable) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
-        create_kwargs['block_device_mapping'] = block_device_mapping
-
-        # Unset the legacy_bdm flag if we got a block device mapping.
         if block_device_mapping:
+            create_kwargs['block_device_mapping'] = block_device_mapping
+            # Unset the legacy_bdm flag if we got a block device mapping.
             create_kwargs['legacy_bdm'] = False

@@ -17,7 +17,6 @@ import base64
 import copy
 import datetime
 import inspect
-import json
 import os
 import re
 import urllib
@@ -233,6 +232,23 @@ class ServersSampleHideAddressesJsonTest(ServersSampleJsonTest):
 
 
 class ServersSampleHideAddressesXMLTest(ServersSampleHideAddressesJsonTest):
+    ctype = 'xml'
+
+
+class ServersSampleMultiStatusJsonTest(ServersSampleBase):
+    extension_name = '.'.join(('nova.api.openstack.compute.contrib',
+                               'server_list_multi_status',
+                               'Server_list_multi_status'))
+
+    def test_servers_list(self):
+        uuid = self._post_server()
+        response = self._do_get('servers?status=active&status=error')
+        subs = self._get_regexes()
+        subs['id'] = uuid
+        self._verify_response('servers-list-resp', subs, response, 200)
+
+
+class ServersSampleMultiStatusXMLTest(ServersSampleMultiStatusJsonTest):
     ctype = 'xml'
 
 
@@ -989,6 +1005,7 @@ class FloatingIpsJsonTest(ApiSampleTestBaseV2):
         self.test_floating_ips_create()
         response = self._do_delete('os-floating-ips/%d' % 1)
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
 
 class ExtendedFloatingIpsJsonTest(FloatingIpsJsonTest):
@@ -1345,6 +1362,7 @@ class CloudPipeUpdateJsonTest(ApiSampleTestBaseV2):
                                 'cloud-pipe-update-req',
                                 subs)
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
 
 class CloudPipeUpdateXmlTest(CloudPipeUpdateJsonTest):
@@ -1362,7 +1380,7 @@ class AgentsJsonTest(ApiSampleTestBaseV2):
     def setUp(self):
         super(AgentsJsonTest, self).setUp()
 
-        fake_agents_list = [{'url': 'xxxxxxxxxxxx',
+        fake_agents_list = [{'url': 'http://example.com/path/to/resource',
                              'hypervisor': 'hypervisor',
                              'architecture': 'x86',
                              'os': 'os',
@@ -1403,7 +1421,7 @@ class AgentsJsonTest(ApiSampleTestBaseV2):
 
     def test_agent_create(self):
         # Creates a new agent build.
-        project = {'url': 'xxxxxxxxxxxx',
+        project = {'url': 'http://example.com/path/to/resource',
                 'hypervisor': 'hypervisor',
                 'architecture': 'x86',
                 'os': 'os',
@@ -1419,7 +1437,7 @@ class AgentsJsonTest(ApiSampleTestBaseV2):
     def test_agent_list(self):
         # Return a list of all agent builds.
         response = self._do_get('os-agents')
-        project = {'url': 'xxxxxxxxxxxx',
+        project = {'url': 'http://example.com/path/to/resource',
                 'hypervisor': 'hypervisor',
                 'architecture': 'x86',
                 'os': 'os',
@@ -1433,7 +1451,7 @@ class AgentsJsonTest(ApiSampleTestBaseV2):
         # Update an existing agent build.
         agent_id = 1
         subs = {'version': '7.0',
-                'url': 'xxx://xxxx/xxx/xxx',
+                'url': 'http://example.com/path/to/resource',
                 'md5hash': 'add6bb58e139be103324d04d82d8f545'}
         response = self._do_put('os-agents/%s' % agent_id,
                                 'agent-update-put-req', subs)
@@ -1534,6 +1552,7 @@ class FixedIpJsonTest(ApiSampleTestBaseV2):
                                  'fixedip-post-req',
                                  project)
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
     def test_get_fixed_ip(self):
         # Return data about the given fixed ip.
@@ -2111,7 +2130,7 @@ class ConsoleAuthTokensSampleJsonTests(ServersSampleBase):
                       "Console_auth_tokens")
 
     def _get_console_url(self, data):
-        return json.loads(data)["console"]["url"]
+        return jsonutils.loads(data)["console"]["url"]
 
     def _get_console_token(self, uuid):
         response = self._do_post('servers/%s/action' % uuid,
@@ -2583,10 +2602,11 @@ class OsNetworksJsonTests(ApiSampleTestBaseV2):
 
     def test_delete_network(self):
         response = self._do_post('os-tenant-networks', "networks-post-req", {})
-        net = json.loads(response.read())
+        net = jsonutils.loads(response.read())
         response = self._do_delete('os-tenant-networks/%s' %
                                                 net["network"]["id"])
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
 
 class OsNetworksXmlTests(OsNetworksJsonTests):
@@ -2598,6 +2618,7 @@ class OsNetworksXmlTests(OsNetworksJsonTests):
         network_id = net.find('id').text
         response = self._do_delete('os-tenant-networks/%s' % network_id)
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
 
 class NetworksJsonTests(ApiSampleTestBaseV2):
@@ -2630,6 +2651,7 @@ class NetworksJsonTests(ApiSampleTestBaseV2):
         response = self._do_post('os-networks/%s/action' % uuid,
                                  'networks-disassociate-req', {})
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
     def test_network_show(self):
         uuid = test_networks.FAKE_NETWORKS[0]['uuid']
@@ -2647,9 +2669,59 @@ class NetworksJsonTests(ApiSampleTestBaseV2):
         response = self._do_post("os-networks/add",
                                  'network-add-req', {})
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
+
+    def test_network_delete(self):
+        response = self._do_delete('os-networks/always_delete')
+        self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
 
 class NetworksXmlTests(NetworksJsonTests):
+    ctype = 'xml'
+
+
+class ExtendedNetworksJsonTests(ApiSampleTestBaseV2):
+    extends_name = ("nova.api.openstack.compute.contrib."
+                    "os_networks.Os_networks")
+    extension_name = ("nova.api.openstack.compute.contrib."
+                      "extended_networks.Extended_networks")
+
+    def setUp(self):
+        super(ExtendedNetworksJsonTests, self).setUp()
+        fake_network_api = test_networks.FakeNetworkAPI()
+        self.stubs.Set(network_api.API, "get_all",
+                       fake_network_api.get_all)
+        self.stubs.Set(network_api.API, "get",
+                       fake_network_api.get)
+        self.stubs.Set(network_api.API, "associate",
+                       fake_network_api.associate)
+        self.stubs.Set(network_api.API, "delete",
+                       fake_network_api.delete)
+        self.stubs.Set(network_api.API, "create",
+                       fake_network_api.create)
+        self.stubs.Set(network_api.API, "add_network_to_project",
+                       fake_network_api.add_network_to_project)
+
+    def test_network_list(self):
+        response = self._do_get('os-networks')
+        subs = self._get_regexes()
+        self._verify_response('networks-list-resp', subs, response, 200)
+
+    def test_network_show(self):
+        uuid = test_networks.FAKE_NETWORKS[0]['uuid']
+        response = self._do_get('os-networks/%s' % uuid)
+        subs = self._get_regexes()
+        self._verify_response('network-show-resp', subs, response, 200)
+
+    def test_network_create(self):
+        response = self._do_post("os-networks",
+                                 'network-create-req', {})
+        subs = self._get_regexes()
+        self._verify_response('network-create-resp', subs, response, 200)
+
+
+class ExtendedNetworksXmlTests(ExtendedNetworksJsonTests):
     ctype = 'xml'
 
 
@@ -2682,24 +2754,28 @@ class NetworksAssociateJsonTests(ApiSampleTestBaseV2):
                                  'network-disassociate-req',
                                  {})
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
     def test_disassociate_host(self):
         response = self._do_post('os-networks/1/action',
                                  'network-disassociate-host-req',
                                  {})
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
     def test_disassociate_project(self):
         response = self._do_post('os-networks/1/action',
                                  'network-disassociate-project-req',
                                  {})
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
     def test_associate_host(self):
         response = self._do_post('os-networks/1/action',
                                  'network-associate-host-req',
                                  {"host": "testHost"})
         self.assertEqual(response.status, 202)
+        self.assertEqual(response.read(), "")
 
 
 class NetworksAssociateXmlTests(NetworksAssociateJsonTests):
@@ -3005,8 +3081,7 @@ class FloatingIPPoolsSampleJsonTests(ApiSampleTestBaseV2):
         pool_list = ["pool1", "pool2"]
 
         def fake_get_floating_ip_pools(self, context):
-            return [{'name': pool_list[0]},
-                    {'name': pool_list[1]}]
+            return pool_list
 
         self.stubs.Set(network_api.API, "get_floating_ip_pools",
                        fake_get_floating_ip_pools)

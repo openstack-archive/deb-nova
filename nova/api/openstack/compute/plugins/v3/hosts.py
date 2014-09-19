@@ -39,41 +39,42 @@ class HostController(wsgi.Controller):
 
     @extensions.expected_errors(())
     def index(self, req):
-        """:returns: A dict in the format:
+        """Returns a dict in the format
 
-            {'hosts': [{'host_name': 'some.host.name',
-               'service': 'cells',
-               'zone': 'internal'},
-              {'host_name': 'some.other.host.name',
-               'service': 'cells',
-               'zone': 'internal'},
-              {'host_name': 'some.celly.host.name',
-               'service': 'cells',
-               'zone': 'internal'},
-              {'host_name': 'console1.host.com',
-               'service': 'consoleauth',
-               'zone': 'internal'},
-              {'host_name': 'network1.host.com',
-               'service': 'network',
-               'zone': 'internal'},
-              {'host_name': 'netwwork2.host.com',
-               'service': 'network',
-               'zone': 'internal'},
-              {'host_name': 'compute1.host.com',
-               'service': 'compute',
-               'zone': 'nova'},
-              {'host_name': 'compute2.host.com',
-               'service': 'compute',
-               'zone': 'nova'},
-              {'host_name': 'sched1.host.com',
-               'service': 'scheduler',
-               'zone': 'internal'},
-              {'host_name': 'sched2.host.com',
-               'service': 'scheduler',
-               'zone': 'internal'},
-              {'host_name': 'vol1.host.com',
-               'service': 'volume'},
-               'zone': 'internal']}
+        |   {'hosts': [{'host_name': 'some.host.name',
+        |     'service': 'cells',
+        |     'zone': 'internal'},
+        |    {'host_name': 'some.other.host.name',
+        |     'service': 'cells',
+        |     'zone': 'internal'},
+        |    {'host_name': 'some.celly.host.name',
+        |     'service': 'cells',
+        |     'zone': 'internal'},
+        |    {'host_name': 'console1.host.com',
+        |     'service': 'consoleauth',
+        |     'zone': 'internal'},
+        |    {'host_name': 'network1.host.com',
+        |     'service': 'network',
+        |     'zone': 'internal'},
+        |    {'host_name': 'netwwork2.host.com',
+        |     'service': 'network',
+        |     'zone': 'internal'},
+        |    {'host_name': 'compute1.host.com',
+        |     'service': 'compute',
+        |     'zone': 'nova'},
+        |    {'host_name': 'compute2.host.com',
+        |     'service': 'compute',
+        |     'zone': 'nova'},
+        |    {'host_name': 'sched1.host.com',
+        |     'service': 'scheduler',
+        |     'zone': 'internal'},
+        |    {'host_name': 'sched2.host.com',
+        |     'service': 'scheduler',
+        |     'zone': 'internal'},
+        |    {'host_name': 'vol1.host.com',
+        |     'service': 'volume'},
+        |     'zone': 'internal']}
+
         """
         context = req.environ['nova.context']
         authorize(context)
@@ -96,8 +97,8 @@ class HostController(wsgi.Controller):
     @extensions.expected_errors((400, 404, 501))
     @validation.schema(hosts.update)
     def update(self, req, id, body):
-        """:param body: example format {'host': {'status': 'enable',
-                                     'maintenance_mode': 'enable'}}
+        """:param body: example format {'status': 'enable',
+                                     'maintenance_mode': 'enable'}
            :returns:
         """
         def read_enabled(orig_val):
@@ -111,8 +112,8 @@ class HostController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
         # See what the user wants to 'update'
-        status = body['host'].get('status')
-        maint_mode = body['host'].get('maintenance_mode')
+        status = body.get('status')
+        maint_mode = body.get('maintenance_mode')
         if status is not None:
             status = read_enabled(status)
         if maint_mode is not None:
@@ -125,7 +126,7 @@ class HostController(wsgi.Controller):
             result['maintenance_mode'] = self._set_host_maintenance(context,
                                                                     id,
                                                                     maint_mode)
-        return {'host': result}
+        return result
 
     def _set_host_maintenance(self, context, host_name, mode=True):
         """Start/Stop host maintenance window. On start, it triggers
@@ -153,9 +154,9 @@ class HostController(wsgi.Controller):
                         on the host.
         """
         if enabled:
-            LOG.audit(_("Enabling host %s.") % host_name)
+            LOG.audit(_("Enabling host %s."), host_name)
         else:
-            LOG.audit(_("Disabling host %s.") % host_name)
+            LOG.audit(_("Disabling host %s."), host_name)
         try:
             result = self.api.set_host_enabled(context, host_name=host_name,
                                                enabled=enabled)
@@ -184,8 +185,7 @@ class HostController(wsgi.Controller):
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         except exception.ComputeServiceUnavailable as e:
             raise webob.exc.HTTPBadRequest(explanation=e.format_message())
-        return {"host": {"host": host_name,
-                         "power_action": result}}
+        return {"host": host_name, "power_action": result}
 
     @extensions.expected_errors((400, 404, 501))
     def startup(self, req, id):

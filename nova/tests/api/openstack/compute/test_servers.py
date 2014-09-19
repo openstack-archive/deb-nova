@@ -16,13 +16,13 @@
 #    under the License.
 
 import base64
+import contextlib
 import datetime
 import uuid
 
 import iso8601
 from lxml import etree
 import mock
-import mox
 from oslo.config import cfg
 import six.moves.urllib.parse as urlparse
 import testtools
@@ -34,7 +34,6 @@ from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import views
 from nova.api.openstack import extensions
 from nova.api.openstack import xmlutil
-from nova import block_device
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova.compute import task_states
@@ -206,21 +205,21 @@ class ServersControllerTest(ControllerTest):
         uuid = 'br-00000000-0000-0000-0000-000000000000'
         requested_networks = [{'uuid': uuid}]
         res = self.controller._get_requested_networks(requested_networks)
-        self.assertIn((uuid, None), res)
+        self.assertIn((uuid, None), res.as_tuples())
 
     def test_requested_networks_neutronv2_enabled_with_port(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         requested_networks = [{'port': port}]
         res = self.controller._get_requested_networks(requested_networks)
-        self.assertEqual(res, [(None, None, port)])
+        self.assertEqual([(None, None, port)], res.as_tuples())
 
     def test_requested_networks_neutronv2_enabled_with_network(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         requested_networks = [{'uuid': network}]
         res = self.controller._get_requested_networks(requested_networks)
-        self.assertEqual(res, [(network, None, None)])
+        self.assertEqual([(network, None, None)], res.as_tuples())
 
     def test_requested_networks_neutronv2_enabled_with_network_and_port(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
@@ -228,7 +227,7 @@ class ServersControllerTest(ControllerTest):
         port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         requested_networks = [{'uuid': network, 'port': port}]
         res = self.controller._get_requested_networks(requested_networks)
-        self.assertEqual(res, [(None, None, port)])
+        self.assertEqual([(None, None, port)], res.as_tuples())
 
     def test_requested_networks_neutronv2_disabled_with_port(self):
         port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
@@ -244,7 +243,7 @@ class ServersControllerTest(ControllerTest):
         port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         requested_networks = [{'uuid': network, 'port': port}]
         res = self.controller._get_requested_networks(requested_networks)
-        self.assertEqual(res, [(None, None, port)])
+        self.assertEqual([(None, None, port)], res.as_tuples())
 
     def test_requested_networks_neutronv2_subclass_with_port(self):
         cls = 'nova.tests.api.openstack.compute.test_servers.NeutronV2Subclass'
@@ -252,7 +251,7 @@ class ServersControllerTest(ControllerTest):
         port = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
         requested_networks = [{'port': port}]
         res = self.controller._get_requested_networks(requested_networks)
-        self.assertEqual(res, [(None, None, port)])
+        self.assertEqual([(None, None, port)], res.as_tuples())
 
     def test_get_server_by_uuid(self):
         req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
@@ -872,6 +871,51 @@ class ServersControllerTest(ControllerTest):
 
         self.assertEqual(len(servers), 1)
         self.assertEqual(servers[0]['id'], server_uuid)
+
+    @mock.patch.object(compute_api.API, 'get_all')
+    def test_get_servers_allows_multi_status(self, get_all_mock):
+        server_uuid0 = str(uuid.uuid4())
+        server_uuid1 = str(uuid.uuid4())
+        db_list = [fakes.stub_instance(100, uuid=server_uuid0),
+                        fakes.stub_instance(101, uuid=server_uuid1)]
+        get_all_mock.return_value = instance_obj._make_instance_list(
+                        context, instance_obj.InstanceList(), db_list, FIELDS)
+
+        req = fakes.HTTPRequest.blank(
+                        '/fake/servers?status=active&status=error')
+        servers = self.controller.index(req)['servers']
+        self.assertEqual(2, len(servers))
+        self.assertEqual(server_uuid0, servers[0]['id'])
+        self.assertEqual(server_uuid1, servers[1]['id'])
+        expected_search_opts = dict(deleted=False,
+                                    vm_state=[vm_states.ACTIVE,
+                                              vm_states.ERROR],
+                                    project_id='fake')
+        get_all_mock.assert_called_once_with(mock.ANY,
+                        search_opts=expected_search_opts, limit=mock.ANY,
+                        marker=mock.ANY, want_objects=mock.ANY)
+
+    @mock.patch.object(compute_api.API, 'get_all')
+    def test_get_servers_allows_invalid_status(self, get_all_mock):
+        server_uuid0 = str(uuid.uuid4())
+        server_uuid1 = str(uuid.uuid4())
+        db_list = [fakes.stub_instance(100, uuid=server_uuid0),
+                        fakes.stub_instance(101, uuid=server_uuid1)]
+        get_all_mock.return_value = instance_obj._make_instance_list(
+                        context, instance_obj.InstanceList(), db_list, FIELDS)
+
+        req = fakes.HTTPRequest.blank(
+                        '/fake/servers?status=active&status=invalid')
+        servers = self.controller.index(req)['servers']
+        self.assertEqual(2, len(servers))
+        self.assertEqual(server_uuid0, servers[0]['id'])
+        self.assertEqual(server_uuid1, servers[1]['id'])
+        expected_search_opts = dict(deleted=False,
+                                    vm_state=[vm_states.ACTIVE],
+                                    project_id='fake')
+        get_all_mock.assert_called_once_with(mock.ANY,
+                        search_opts=expected_search_opts, limit=mock.ANY,
+                        marker=mock.ANY, want_objects=mock.ANY)
 
     def test_get_servers_allows_task_status(self):
         server_uuid = str(uuid.uuid4())
@@ -1562,7 +1606,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
 
     def test_rebuild_instance_fails_when_min_ram_too_small(self):
         # make min_ram larger than our instance ram size
-        def fake_get_image(self, context, image_href):
+        def fake_get_image(self, context, image_href, **kwargs):
             return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                         name='public image', is_public=True,
                         status='active', properties={'key1': 'value1'},
@@ -1577,7 +1621,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
 
     def test_rebuild_instance_fails_when_min_disk_too_small(self):
         # make min_disk larger than our instance disk size
-        def fake_get_image(self, context, image_href):
+        def fake_get_image(self, context, image_href, **kwargs):
             return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                         name='public image', is_public=True,
                         status='active', properties={'key1': 'value1'},
@@ -1593,7 +1637,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
         # make image size larger than our instance disk size
         size = str(1000 * (1024 ** 3))
 
-        def fake_get_image(self, context, image_href):
+        def fake_get_image(self, context, image_href, **kwargs):
             return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                         name='public image', is_public=True,
                         status='active', size=size)
@@ -1604,7 +1648,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
             self.controller._action_rebuild, self.req, FAKE_UUID, self.body)
 
     def test_rebuild_instance_with_deleted_image(self):
-        def fake_get_image(self, context, image_href):
+        def fake_get_image(self, context, image_href, **kwargs):
             return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                         name='public image', is_public=True,
                         status='DELETED')
@@ -1614,6 +1658,24 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
         self.req.body = jsonutils.dumps(self.body)
         self.assertRaises(webob.exc.HTTPBadRequest,
             self.controller._action_rebuild, self.req, FAKE_UUID, self.body)
+
+    def test_rebuild_instance_onset_file_limit_over_quota(self):
+        def fake_get_image(self, context, image_href, **kwargs):
+            return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
+                        name='public image', is_public=True, status='active')
+
+        with contextlib.nested(
+            mock.patch.object(fake._FakeImageService, 'show',
+                              side_effect=fake_get_image),
+            mock.patch.object(self.controller.compute_api, 'rebuild',
+                              side_effect=exception.OnsetFileLimitExceeded)
+        ) as (
+            show_mock, rebuild_mock
+        ):
+            self.req.body = jsonutils.dumps(self.body)
+            self.assertRaises(webob.exc.HTTPForbidden,
+                              self.controller._action_rebuild,
+                              self.req, FAKE_UUID, body=self.body)
 
     def test_rebuild_instance_with_access_ipv6_bad_format(self):
         # proper local hrefs must start with 'http://localhost/v2/'
@@ -2166,6 +2228,15 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create,
                           self.req, self.body)
 
+    @mock.patch.object(compute_api.API, 'create')
+    def test_create_instance_raise_auto_disk_config_exc(self, mock_create):
+        mock_create.side_effect = exception.AutoDiskConfigDisabledByImage(
+            image='dummy')
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, self.body)
+
     def test_create_instance_with_network_with_no_subnet(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         network = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
@@ -2272,7 +2343,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.body['server']['imageRef'] = image_href
         self.body['server']['metadata']['vote'] = 'fiddletown'
         self.req.body = jsonutils.dumps(self.body)
-        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+        self.assertRaises(webob.exc.HTTPForbidden,
                           self.controller.create, self.req, self.body)
 
     def test_create_instance_metadata_key_too_long(self):
@@ -2523,23 +2594,6 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', create)
         self._test_create_extra(params)
 
-    def test_create_instance_with_volumes_enabled(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        bdm = [{'device_name': 'foo', 'volume_id': 'fake_vol'}]
-        params = {'block_device_mapping': bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['block_device_mapping'], bdm)
-            return old_create(*args, **kwargs)
-
-        def _validate_bdm(*args, **kwargs):
-            pass
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.stubs.Set(compute_api.API, '_validate_bdm', _validate_bdm)
-        self._test_create_extra(params)
-
     def test_create_instance_with_volumes_enabled_no_image(self):
         """Test that the create will fail if there is no image
         and no bdms supplied in the request
@@ -2566,366 +2620,6 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', create)
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self._test_create_extra, {}, no_image=True)
-
-    def test_create_instance_with_volumes_enabled_and_bdms_no_image(self):
-        """Test that the create works if there is no image supplied but
-        os-volumes extension is enabled and bdms are supplied
-        """
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        self.mox.StubOutWithMock(compute_api.API, '_validate_bdm')
-        self.mox.StubOutWithMock(compute_api.API, '_get_bdm_image_metadata')
-        bdm = [{
-            'id': 1,
-            'no_device': None,
-            'virtual_name': None,
-            'snapshot_id': None,
-            'volume_id': self.volume_id,
-            'status': 'active',
-            'device_name': 'vda',
-            'delete_on_termination': False,
-            'volume_image_metadata':
-                {'test_key': 'test_value'}
-        }]
-        volume = bdm[0]
-        compute_api.API._validate_bdm(mox.IgnoreArg(),
-                mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg()).AndReturn(True)
-        compute_api.API._get_bdm_image_metadata(mox.IgnoreArg(),
-                                                bdm, True).AndReturn(volume)
-        params = {'block_device_mapping': bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['block_device_mapping'], bdm)
-            self.assertNotIn('imageRef', kwargs)
-            return old_create(*args, **kwargs)
-
-        def _validate_bdm(*args, **kwargs):
-            pass
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.mox.ReplayAll()
-        self._test_create_extra(params, no_image=True)
-
-    def test_create_instance_with_bdm_v2_enabled_and_bdms_no_image(self):
-        self.ext_mgr.extensions = {
-            'os-volumes': 'fake',
-            'os-block-device-mapping-v2-boot': 'fake'}
-        bdm_v2 = [{
-            'no_device': None,
-            'source_type': 'volume',
-            'destination_type': 'volume',
-            'uuid': self.volume_id,
-            'device_name': 'vda',
-            'delete_on_termination': False,
-        }]
-        params = {'block_device_mapping_v2': bdm_v2}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertThat(block_device.BlockDeviceDict(bdm_v2[0]),
-                            matchers.DictMatches(
-                                kwargs['block_device_mapping'][0]))
-            self.assertNotIn('imageRef', kwargs)
-            return old_create(*args, **kwargs)
-
-        self.mox.StubOutWithMock(compute_api.API, '_validate_bdm')
-        self.mox.StubOutWithMock(compute_api.API, '_get_bdm_image_metadata')
-
-        compute_api.API._validate_bdm(
-            mox.IgnoreArg(), mox.IgnoreArg(),
-            mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(True)
-        compute_api.API._get_bdm_image_metadata(
-            mox.IgnoreArg(), mox.IgnoreArg(), False).AndReturn({})
-        self.mox.ReplayAll()
-        self.stubs.Set(compute_api.API, 'create', create)
-
-        self._test_create_extra(params, no_image=True)
-
-    def test_create_instance_with_volumes_disabled(self):
-        bdm = [{'device_name': 'foo'}]
-        params = {'block_device_mapping': bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertIsNone(kwargs['block_device_mapping'])
-            return old_create(*args, **kwargs)
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self._test_create_extra(params)
-
-    @mock.patch('nova.compute.api.API._get_bdm_image_metadata')
-    def test_create_instance_non_bootable_volume_fails(self, fake_bdm_meta):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        bdm = [{
-            'id': 1,
-            'bootable': False,
-            'volume_id': self.volume_id,
-            'status': 'active',
-            'device_name': 'vda',
-        }]
-        params = {'block_device_mapping': bdm}
-        fake_bdm_meta.side_effect = exception.InvalidBDMVolumeNotBootable(id=1)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params, no_image=True)
-
-    def test_create_instance_with_device_name_not_string(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        old_create = compute_api.API.create
-        self.params = {'block_device_mapping': self.bdm}
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['block_device_mapping'], self.bdm)
-            return old_create(*args, **kwargs)
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, self.params)
-
-    def test_create_instance_with_device_name_empty(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        self.bdm[0]['device_name'] = ''
-        params = {'block_device_mapping': self.bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['block_device_mapping'], self.bdm)
-            return old_create(*args, **kwargs)
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params)
-
-    def test_create_instance_with_device_name_too_long(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        self.bdm[0]['device_name'] = 'a' * 256,
-        params = {'block_device_mapping': self.bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['block_device_mapping'], self.bdm)
-            return old_create(*args, **kwargs)
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params)
-
-    def test_create_instance_with_space_in_device_name(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        self.bdm[0]['device_name'] = 'vd a',
-        params = {'block_device_mapping': self.bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertTrue(kwargs['legacy_bdm'])
-            self.assertEqual(kwargs['block_device_mapping'], self.bdm)
-            return old_create(*args, **kwargs)
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params)
-
-    def test_create_instance_with_invalid_size(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        bdm = [{'delete_on_termination': 1,
-                'device_name': 'vda',
-                'volume_size': "hello world",
-                'volume_id': '11111111-1111-1111-1111-111111111111'}]
-        params = {'block_device_mapping': bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['block_device_mapping'], bdm)
-            return old_create(*args, **kwargs)
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params)
-
-    def test_create_instance_bdm_api_validation_fails(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake',
-                                   'os-block-device-mapping-v2-boot': 'fake'}
-        bdm = {'delete_on_termination': 1,
-                'device_name': 'vda',
-                'source_type': 'volume',
-                'destination_type': 'volume',
-                'volume_size': 1,
-                'boot_index': 0,
-                'uuid': '11111111-1111-1111-1111-111111111111'}
-        self.validation_fail_test_validate_called = False
-        self.validation_fail_instance_destroy_called = False
-
-        bdm_exceptions = ((exception.InvalidBDMSnapshot, {'id': 'fake'}),
-                          (exception.InvalidBDMVolume, {'id': 'fake'}),
-                          (exception.InvalidBDMImage, {'id': 'fake'}),
-                          (exception.InvalidBDMBootSequence, {}),
-                          (exception.InvalidBDMLocalsLimit, {}))
-
-        ex_iter = iter(bdm_exceptions)
-
-        def _validate_bdm(*args, **kwargs):
-            self.validation_fail_test_validate_called = True
-            ex, kargs = ex_iter.next()
-            raise ex(**kargs)
-
-        def _instance_destroy(*args, **kwargs):
-            self.validation_fail_instance_destroy_called = True
-
-        self.stubs.Set(compute_api.API, '_validate_bdm', _validate_bdm)
-        self.stubs.Set(objects.Instance, 'destroy', _instance_destroy)
-
-        for _unused in xrange(len(bdm_exceptions)):
-            params = {'block_device_mapping_v2': [bdm.copy()]}
-            self.assertRaises(webob.exc.HTTPBadRequest,
-                              self._test_create_extra, params)
-            self.assertTrue(self.validation_fail_test_validate_called)
-            self.assertTrue(self.validation_fail_instance_destroy_called)
-            self.validation_fail_test_validate_called = False
-            self.validation_fail_instance_destroy_called = False
-
-    def test_create_instance_with_bdm_delete_on_termination(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake'}
-        bdm = [{'device_name': 'foo1', 'volume_id': 'fake_vol',
-                'delete_on_termination': 1},
-               {'device_name': 'foo2', 'volume_id': 'fake_vol',
-                'delete_on_termination': True},
-               {'device_name': 'foo3', 'volume_id': 'fake_vol',
-                'delete_on_termination': 'invalid'},
-               {'device_name': 'foo4', 'volume_id': 'fake_vol',
-                'delete_on_termination': 0},
-               {'device_name': 'foo5', 'volume_id': 'fake_vol',
-                'delete_on_termination': False}]
-        expected_bdm = [
-            {'device_name': 'foo1', 'volume_id': 'fake_vol',
-             'delete_on_termination': True},
-            {'device_name': 'foo2', 'volume_id': 'fake_vol',
-             'delete_on_termination': True},
-            {'device_name': 'foo3', 'volume_id': 'fake_vol',
-             'delete_on_termination': False},
-            {'device_name': 'foo4', 'volume_id': 'fake_vol',
-             'delete_on_termination': False},
-            {'device_name': 'foo5', 'volume_id': 'fake_vol',
-             'delete_on_termination': False}]
-        params = {'block_device_mapping': bdm}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(expected_bdm, kwargs['block_device_mapping'])
-            return old_create(*args, **kwargs)
-
-        def _validate_bdm(*args, **kwargs):
-            pass
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.stubs.Set(compute_api.API, '_validate_bdm', _validate_bdm)
-        self._test_create_extra(params)
-
-    def test_create_instance_bdm_v2(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake',
-                                   'os-block-device-mapping-v2-boot': 'fake'}
-        bdm_v2 = [{'source_type': 'volume',
-                   'device_name': 'fake_dev',
-                   'uuid': 'fake_vol'}]
-        bdm_v2_expected = [{'source_type': 'volume',
-                            'device_name': 'fake_dev',
-                            'volume_id': 'fake_vol'}]
-        params = {'block_device_mapping_v2': bdm_v2}
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertFalse(kwargs['legacy_bdm'])
-            for expected, received in zip(bdm_v2_expected,
-                                          kwargs['block_device_mapping']):
-                self.assertThat(block_device.BlockDeviceDict(expected),
-                                matchers.DictMatches(received))
-            return old_create(*args, **kwargs)
-
-        def _validate_bdm(*args, **kwargs):
-            pass
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.stubs.Set(compute_api.API, '_validate_bdm', _validate_bdm)
-        self._test_create_extra(params)
-
-    def test_create_instance_decide_format_legacy(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake',
-                                   'os-block-device-mapping-v2-boot': 'fake'}
-        bdm = [{'device_name': 'foo1',
-                'volume_id': 'fake_vol',
-                'delete_on_termination': 1}]
-
-        expected_legacy_flag = True
-
-        old_create = compute_api.API.create
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['legacy_bdm'], expected_legacy_flag)
-            return old_create(*args, **kwargs)
-
-        def _validate_bdm(*args, **kwargs):
-            pass
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.stubs.Set(compute_api.API, '_validate_bdm',
-                       _validate_bdm)
-
-        self._test_create_extra({})
-
-        params = {'block_device_mapping': bdm}
-        self._test_create_extra(params)
-
-    def test_create_instance_decide_format_new(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake',
-                                   'os-block-device-mapping-v2-boot': 'fake'}
-
-        bdm_v2 = [{'source_type': 'volume',
-                   'device_name': 'fake_dev',
-                   'uuid': 'fake_vol'}]
-
-        old_create = compute_api.API.create
-
-        expected_legacy_flag = False
-
-        def create(*args, **kwargs):
-            self.assertEqual(kwargs['legacy_bdm'], expected_legacy_flag)
-            return old_create(*args, **kwargs)
-
-        def _validate_bdm(*args, **kwargs):
-            pass
-
-        self.stubs.Set(compute_api.API, 'create', create)
-        self.stubs.Set(compute_api.API, '_validate_bdm',
-                       _validate_bdm)
-
-        params = {'block_device_mapping_v2': bdm_v2}
-        self._test_create_extra(params)
-
-    def test_create_instance_both_bdm_formats(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake',
-                                   'os-block-device-mapping-v2-boot': 'fake'}
-        bdm = [{'device_name': 'foo'}]
-        bdm_v2 = [{'source_type': 'volume',
-                   'uuid': 'fake_vol'}]
-        params = {'block_device_mapping': bdm,
-                  'block_device_mapping_v2': bdm_v2}
-
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params)
-
-    def test_create_instance_bdm_v2_validation_error(self):
-        self.ext_mgr.extensions = {'os-volumes': 'fake',
-                                   'os-block-device-mapping-v2-boot': 'fake'}
-        bdm_v2 = [{'device_name': 'bogus device'}]
-        params = {'block_device_mapping_v2': bdm_v2}
-
-        def _validate(*args, **kwargs):
-            raise exception.InvalidBDMFormat()
-
-        self.stubs.Set(block_device.BlockDeviceDict,
-                      '_validate', _validate)
-
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self._test_create_extra, params)
 
     def test_create_instance_with_user_data_enabled(self):
         self.ext_mgr.extensions = {'os-user-data': 'fake'}
@@ -3071,7 +2765,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         def create(*args, **kwargs):
             result = [('76fa36fc-c930-4bf3-8c8a-ea2a2420deb6', None)]
-            self.assertEqual(kwargs['requested_networks'], result)
+            self.assertEqual(result, kwargs['requested_networks'].as_tuples())
             return old_create(*args, **kwargs)
 
         self.stubs.Set(compute_api.API, 'create', create)
@@ -3161,7 +2855,7 @@ class ServersControllerCreateTest(test.TestCase):
         def create(*args, **kwargs):
             result = [('76fa36fc-c930-4bf3-8c8a-ea2a2420deb6', None,
                        None)]
-            self.assertEqual(kwargs['requested_networks'], result)
+            self.assertEqual(result, kwargs['requested_networks'].as_tuples())
             return old_create(*args, **kwargs)
 
         self.stubs.Set(compute_api.API, 'create', create)
@@ -3218,7 +2912,7 @@ class ServersControllerCreateTest(test.TestCase):
         try:
             self.controller.create(self.req, self.body).obj['server']
             self.fail('expected quota to be exceeded')
-        except webob.exc.HTTPRequestEntityTooLarge as e:
+        except webob.exc.HTTPForbidden as e:
             self.assertEqual(e.explanation, expected_msg)
 
     def test_create_instance_above_quota_instances(self):
@@ -3819,46 +3513,6 @@ class TestServerCreateRequestXMLDeserializer(test.TestCase):
                 }}
         self.assertEqual(request['body'], expected)
 
-    def test_request_with_block_device_mapping(self):
-        serial_request = """
-    <server xmlns="http://docs.openstack.org/compute/api/v2"
-     name="new-server-test" imageRef="1" flavorRef="1">
-       <block_device_mapping>
-         <mapping volume_id="7329b667-50c7-46a6-b913-cb2a09dfeee0"
-          device_name="/dev/vda" virtual_name="root"
-          delete_on_termination="False" />
-         <mapping snapshot_id="f31efb24-34d2-43e1-8b44-316052956a39"
-          device_name="/dev/vdb" virtual_name="ephemeral0"
-          delete_on_termination="False" />
-         <mapping device_name="/dev/vdc" no_device="True" />
-       </block_device_mapping>
-    </server>"""
-        request = self.deserializer.deserialize(serial_request)
-        expected = {"server": {
-                "name": "new-server-test",
-                "imageRef": "1",
-                "flavorRef": "1",
-                "block_device_mapping": [
-                    {
-                        "volume_id": "7329b667-50c7-46a6-b913-cb2a09dfeee0",
-                        "device_name": "/dev/vda",
-                        "virtual_name": "root",
-                        "delete_on_termination": False,
-                    },
-                    {
-                        "snapshot_id": "f31efb24-34d2-43e1-8b44-316052956a39",
-                        "device_name": "/dev/vdb",
-                        "virtual_name": "ephemeral0",
-                        "delete_on_termination": False,
-                    },
-                    {
-                        "device_name": "/dev/vdc",
-                        "no_device": True,
-                    },
-                ]
-                }}
-        self.assertEqual(request['body'], expected)
-
     def test_request_with_config_drive(self):
         serial_request = """
     <server xmlns="http://docs.openstack.org/compute/api/v2"
@@ -4241,7 +3895,7 @@ class ServersViewBuilderTest(test.TestCase):
         self.assertNotIn('fault', output['server'])
 
     def test_build_server_detail_active_status(self):
-        #set the power state of the instance to running
+        # set the power state of the instance to running
         self.instance['vm_state'] = vm_states.ACTIVE
         self.instance['progress'] = 100
 
@@ -4793,14 +4447,14 @@ class ServersAllExtensionsTestCase(test.TestCase):
     an exception because of a malformed request before the core API
     gets a chance to validate the request and return a 422 response.
 
-    For example, ServerDiskConfigController extends servers.Controller:
+    For example, ServerDiskConfigController extends servers.Controller::
 
-      @wsgi.extends
-      def create(self, req, body):
-          if 'server' in body:
-                self._set_disk_config(body['server'])
-          resp_obj = (yield)
-          self._show(req, resp_obj)
+        |  @wsgi.extends
+        |  def create(self, req, body):
+        |      if 'server' in body:
+        |           self._set_disk_config(body['server'])
+        |     resp_obj = (yield)
+        |     self._show(req, resp_obj)
 
     we want to ensure that the extension isn't barfing on an invalid
     body.
@@ -4828,12 +4482,12 @@ class ServersAllExtensionsTestCase(test.TestCase):
         self.assertEqual(422, res.status_int)
 
     def test_update_missing_server(self):
-        # Test create with malformed body.
+        # Test update with malformed body.
 
         def fake_update(*args, **kwargs):
             raise test.TestingException("Should not reach the compute API.")
 
-        self.stubs.Set(compute_api.API, 'create', fake_update)
+        self.stubs.Set(compute_api.API, 'update', fake_update)
 
         req = fakes.HTTPRequest.blank('/fake/servers/1')
         req.method = 'PUT'

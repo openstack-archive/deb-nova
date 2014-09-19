@@ -27,6 +27,7 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LW
 from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 import nova.policy
@@ -275,8 +276,8 @@ class ExtensionManager(object):
             try:
                 self.load_extension(ext_factory)
             except Exception as exc:
-                LOG.warn(_('Failed to load extension %(ext_factory)s: '
-                           '%(exc)s'),
+                LOG.warn(_LW('Failed to load extension %(ext_factory)s: '
+                             '%(exc)s'),
                          {'ext_factory': ext_factory, 'exc': exc})
 
 
@@ -394,8 +395,8 @@ def extension_authorizer(api_name, extension_name):
     return core_authorizer('%s_extension' % api_name, extension_name)
 
 
-def soft_extension_authorizer(api_name, extension_name):
-    hard_authorize = extension_authorizer(api_name, extension_name)
+def soft_authorizer(hard_authorizer, api_name, extension_name):
+    hard_authorize = hard_authorizer(api_name, extension_name)
 
     def authorize(context, action=None):
         try:
@@ -404,6 +405,14 @@ def soft_extension_authorizer(api_name, extension_name):
         except exception.Forbidden:
             return False
     return authorize
+
+
+def soft_extension_authorizer(api_name, extension_name):
+    return soft_authorizer(extension_authorizer, api_name, extension_name)
+
+
+def soft_core_authorizer(api_name, extension_name):
+    return soft_authorizer(core_authorizer, api_name, extension_name)
 
 
 def check_compute_policy(context, action, target, scope='compute'):

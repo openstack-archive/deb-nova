@@ -47,46 +47,6 @@ blah BLAH: bb
         disk_type = libvirt_utils.get_disk_type(path)
         self.assertEqual(disk_type, 'raw')
 
-    def test_list_rbd_volumes(self):
-        conf = '/etc/ceph/fake_ceph.conf'
-        pool = 'fake_pool'
-        user = 'user'
-        self.flags(images_rbd_ceph_conf=conf, group='libvirt')
-        self.flags(rbd_user=user, group='libvirt')
-        self.mox.StubOutWithMock(libvirt_utils.utils,
-                                 'execute')
-        libvirt_utils.utils.execute('rbd', '-p', pool, 'ls', '--id',
-                                    user,
-                                    '--conf', conf).AndReturn(("Out", "Error"))
-        self.mox.ReplayAll()
-
-        libvirt_utils.list_rbd_volumes(pool)
-
-        self.mox.VerifyAll()
-
-    def test_remove_rbd_volumes(self):
-        conf = '/etc/ceph/fake_ceph.conf'
-        pool = 'fake_pool'
-        user = 'user'
-        names = ['volume1', 'volume2', 'volume3']
-        self.flags(images_rbd_ceph_conf=conf, group='libvirt')
-        self.flags(rbd_user=user, group='libvirt')
-        self.mox.StubOutWithMock(libvirt_utils.utils, 'execute')
-        libvirt_utils.utils.execute('rbd', 'rm', os.path.join(pool, 'volume1'),
-                                    '--id', user, '--conf', conf, attempts=3,
-                                    run_as_root=True)
-        libvirt_utils.utils.execute('rbd', 'rm', os.path.join(pool, 'volume2'),
-                                    '--id', user, '--conf', conf, attempts=3,
-                                    run_as_root=True)
-        libvirt_utils.utils.execute('rbd', 'rm', os.path.join(pool, 'volume3'),
-                                    '--id', user, '--conf', conf, attempts=3,
-                                    run_as_root=True)
-        self.mox.ReplayAll()
-
-        libvirt_utils.remove_rbd_volumes(pool, *names)
-
-        self.mox.VerifyAll()
-
     @mock.patch('nova.utils.execute')
     def test_copy_image_local_cp(self, mock_execute):
         libvirt_utils.copy_image('src', 'dest')
@@ -339,3 +299,15 @@ ID        TAG                 VM SIZE                DATE       VM CLOCK
         self.assertEqual(67108864, image_info.virtual_size)
         self.assertEqual(98304, image_info.disk_size)
         self.assertEqual(3, len(image_info.snapshots))
+
+    def test_valid_hostname_normal(self):
+        self.assertTrue(libvirt_utils.is_valid_hostname("hello.world.com"))
+
+    def test_valid_hostname_ipv4addr(self):
+        self.assertTrue(libvirt_utils.is_valid_hostname("10.0.2.1"))
+
+    def test_valid_hostname_ipv6addr(self):
+        self.assertTrue(libvirt_utils.is_valid_hostname("240:2ac3::2"))
+
+    def test_valid_hostname_bad(self):
+        self.assertFalse(libvirt_utils.is_valid_hostname("foo/?com=/bin/sh"))

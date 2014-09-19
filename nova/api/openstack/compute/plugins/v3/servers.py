@@ -25,13 +25,16 @@ import webob
 from webob import exc
 
 from nova.api.openstack import common
+from nova.api.openstack.compute.schemas.v3 import servers as schema_servers
 from nova.api.openstack.compute.views import servers as views_servers
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import compute
 from nova.compute import flavors
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LW
 from nova.image import glance
 from nova import objects
 from nova.openstack.common import log as logging
@@ -69,6 +72,8 @@ class ServersController(wsgi.Controller):
 
     _view_builder_class = views_servers.ViewBuilderV3
 
+    schema_server_create = schema_servers.base_create
+
     @staticmethod
     def _add_location(robj):
         # Just in case...
@@ -96,13 +101,13 @@ class ServersController(wsgi.Controller):
                     if ext.obj.alias not in CONF.osapi_v3.extensions_blacklist:
                         return True
                     else:
-                        LOG.warning(_("Not loading %s because it is "
-                                      "in the blacklist"), ext.obj.alias)
+                        LOG.warn(_LW("Not loading %s because it is "
+                                     "in the blacklist"), ext.obj.alias)
                         return False
                 else:
-                    LOG.warning(
-                        _("Not loading %s because it is not in the whitelist"),
-                        ext.obj.alias)
+                    LOG.warn(
+                        _LW("Not loading %s because it is not in the "
+                            "whitelist"), ext.obj.alias)
                     return False
 
             def check_load_extension(ext):
@@ -166,6 +171,21 @@ class ServersController(wsgi.Controller):
         if not list(self.update_extension_manager):
             LOG.debug("Did not find any server update extensions")
 
+        # Look for API schema of server create extension
+        self.create_schema_manager = \
+            stevedore.enabled.EnabledExtensionManager(
+                namespace=self.EXTENSION_CREATE_NAMESPACE,
+                check_func=_check_load_extension('get_server_create_schema'),
+                invoke_on_load=True,
+                invoke_kwds={"extension_info": self.extension_info},
+                propagate_map_exceptions=True)
+        if list(self.create_schema_manager):
+            self.create_schema_manager.map(self._create_extension_schema,
+                                           self.schema_server_create)
+        else:
+            LOG.debug("Did not find any server create schemas")
+
+    @extensions.expected_errors((400, 403))
     def index(self, req):
         """Returns a list of server names and ids for a given user."""
         try:
@@ -174,6 +194,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=err.format_message())
         return servers
 
+    @extensions.expected_errors((400, 403))
     def detail(self, req):
         """Returns a list of server details for a given user."""
         try:
@@ -194,9 +215,11 @@ class ServersController(wsgi.Controller):
 
         # Verify search by 'status' contains a valid status.
         # Convert it to filter by vm_state or task_state for compute_api.
-        status = search_opts.pop('status', None)
-        if status is not None:
-            vm_state, task_state = common.task_and_vm_state_from_status(status)
+        search_opts.pop('status', None)
+        if 'status' in req.GET.keys():
+            statuses = req.GET.getall('status')
+            states = common.task_and_vm_state_from_status(statuses)
+            vm_state, task_state = states
             if not vm_state and not task_state:
                 return {'servers': []}
             search_opts['vm_state'] = vm_state
@@ -205,27 +228,24 @@ class ServersController(wsgi.Controller):
             if 'default' not in task_state:
                 search_opts['task_state'] = task_state
 
-        if 'changes_since' in search_opts:
+        if 'changes-since' in search_opts:
             try:
-                parsed = timeutils.parse_isotime(search_opts['changes_since'])
+                parsed = timeutils.parse_isotime(search_opts['changes-since'])
             except ValueError:
-                msg = _('Invalid changes_since value')
+                msg = _('Invalid changes-since value')
                 raise exc.HTTPBadRequest(explanation=msg)
-            search_opts['changes_since'] = parsed
+            search_opts['changes-since'] = parsed
 
         # By default, compute's get_all() will return deleted instances.
         # If an admin hasn't specified a 'deleted' search option, we need
         # to filter out deleted instances by setting the filter ourselves.
-        # ... Unless 'changes_since' is specified, because 'changes_since'
+        # ... Unless 'changes-since' is specified, because 'changes-since'
         # should return recently deleted images according to the API spec.
 
         if 'deleted' not in search_opts:
-            if 'changes_since' not in search_opts:
-                # No 'changes_since', so we only want non-deleted servers
+            if 'changes-since' not in search_opts:
+                # No 'changes-since', so we only want non-deleted servers
                 search_opts['deleted'] = False
-
-        if 'changes_since' in search_opts:
-            search_opts['changes-since'] = search_opts.pop('changes_since')
 
         if search_opts.get("vm_state") == ['deleted']:
             if context.is_admin:
@@ -258,7 +278,7 @@ class ServersController(wsgi.Controller):
                 if not strutils.bool_from_string(all_tenants, True):
                     del search_opts['all_tenants']
             except ValueError as err:
-                raise exception.InvalidInput(str(err))
+                raise exception.InvalidInput(six.text_type(err))
 
         if 'all_tenants' in search_opts:
             policy.enforce(context, 'compute:get_all_tenants',
@@ -316,61 +336,49 @@ class ServersController(wsgi.Controller):
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
         networks = []
+        network_uuids = []
         for network in requested_networks:
+            request = objects.NetworkRequest()
             try:
                 # fixed IP address is optional
                 # if the fixed IP address is not provided then
                 # it will use one of the available IP address from the network
-                address = network.get('fixed_ip', None)
-                if address is not None and not utils.is_valid_ip_address(
-                        address):
-                    msg = _("Invalid fixed IP address (%s)") % address
-                    raise exc.HTTPBadRequest(explanation=msg)
+                request.address = network.get('fixed_ip', None)
+                request.port_id = network.get('port', None)
 
-                port_id = network.get('port', None)
-                if port_id:
-                    network_uuid = None
+                if request.port_id:
+                    request.network_id = None
                     if not utils.is_neutron():
                         # port parameter is only for neutron v2.0
                         msg = _("Unknown argument: port")
                         raise exc.HTTPBadRequest(explanation=msg)
-                    if not uuidutils.is_uuid_like(port_id):
-                        msg = _("Bad port format: port uuid is "
-                                "not in proper format "
-                                "(%s)") % port_id
-                        raise exc.HTTPBadRequest(explanation=msg)
-                    if address is not None:
+                    if request.address is not None:
                         msg = _("Specified Fixed IP '%(addr)s' cannot be used "
                                 "with port '%(port)s': port already has "
-                                "a Fixed IP allocated.") % {"addr": address,
-                                                            "port": port_id}
+                                "a Fixed IP allocated.") % {
+                                    "addr": request.address,
+                                    "port": request.port_id}
                         raise exc.HTTPBadRequest(explanation=msg)
                 else:
-                    network_uuid = network['uuid']
+                    request.network_id = network['uuid']
 
-                if not port_id and not uuidutils.is_uuid_like(network_uuid):
-                    br_uuid = network_uuid.split('-', 1)[-1]
+                if (not request.port_id and
+                        not uuidutils.is_uuid_like(request.network_id)):
+                    br_uuid = request.network_id.split('-', 1)[-1]
                     if not uuidutils.is_uuid_like(br_uuid):
                         msg = _("Bad networks format: network uuid is "
                                 "not in proper format "
-                                "(%s)") % network_uuid
+                                "(%s)") % request.network_id
                         raise exc.HTTPBadRequest(explanation=msg)
 
-                # For neutronv2, requested_networks
-                # should be tuple of (network_uuid, fixed_ip, port_id)
-                if utils.is_neutron():
-                    networks.append((network_uuid, address, port_id))
-                else:
-                    # check if the network id is already present in the list,
-                    # we don't want duplicate networks to be passed
-                    # at the boot time
-                    for id, ip in networks:
-                        if id == network_uuid:
-                            expl = (_("Duplicate networks"
-                                      " (%s) are not allowed") %
-                                    network_uuid)
-                            raise exc.HTTPBadRequest(explanation=expl)
-                    networks.append((network_uuid, address))
+                if (request.network_id and
+                        request.network_id in network_uuids):
+                    expl = (_("Duplicate networks"
+                              " (%s) are not allowed") %
+                            request.network_id)
+                    raise exc.HTTPBadRequest(explanation=expl)
+                network_uuids.append(request.network_id)
+                networks.append(request)
             except KeyError as key:
                 expl = _('Bad network format: missing %s') % key
                 raise exc.HTTPBadRequest(explanation=expl)
@@ -378,7 +386,7 @@ class ServersController(wsgi.Controller):
                 expl = _('Bad networks format')
                 raise exc.HTTPBadRequest(explanation=expl)
 
-        return networks
+        return objects.NetworkRequestList(objects=networks)
 
     # NOTE(vish): Without this regex, b64decode will happily
     #             ignore illegal bytes in the base64 encoded
@@ -396,6 +404,7 @@ class ServersController(wsgi.Controller):
         except TypeError:
             return None
 
+    @extensions.expected_errors(404)
     def show(self, req, id):
         """Returns server details by server id."""
         context = req.environ['nova.context']
@@ -405,23 +414,16 @@ class ServersController(wsgi.Controller):
         req.cache_db_instance(instance)
         return self._view_builder.show(req, instance)
 
+    @extensions.expected_errors((400, 403, 409, 413))
     @wsgi.response(202)
+    @validation.schema(schema_server_create)
     def create(self, req, body):
         """Creates a new server for a given user."""
-        if not self.is_valid_body(body, 'server'):
-            raise exc.HTTPBadRequest(_("The request body is invalid"))
 
         context = req.environ['nova.context']
         server_dict = body['server']
         password = self._get_server_admin_password(server_dict)
-
-        if 'name' not in server_dict:
-            msg = _("Server name is not defined")
-            raise exc.HTTPBadRequest(explanation=msg)
-
         name = server_dict['name']
-        self._validate_server_name(name)
-        name = name.strip()
 
         # Arguments to be passed to instance create function
         create_kwargs = {}
@@ -435,7 +437,7 @@ class ServersController(wsgi.Controller):
         # moved to the extension
         if list(self.create_extension_manager):
             self.create_extension_manager.map(self._create_extension_point,
-                                              server_dict, create_kwargs)
+                                              server_dict, create_kwargs, body)
 
         image_uuid = self._image_from_req_data(server_dict, create_kwargs)
 
@@ -454,7 +456,7 @@ class ServersController(wsgi.Controller):
         # Replace with an extension point when the os-networks
         # extension is ported. Currently reworked
         # to take into account is_neutron
-        #if (self.ext_mgr.is_loaded('os-networks')
+        # if (self.ext_mgr.is_loaded('os-networks')
         #        or utils.is_neutron()):
         #    requested_networks = server_dict.get('networks')
 
@@ -467,7 +469,7 @@ class ServersController(wsgi.Controller):
         try:
             flavor_id = self._flavor_id_from_req_data(body)
         except ValueError as error:
-            msg = _("Invalid flavor_ref provided.")
+            msg = _("Invalid flavorRef provided.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         try:
@@ -485,17 +487,14 @@ class ServersController(wsgi.Controller):
                             **create_kwargs)
         except (exception.QuotaError,
                 exception.PortLimitExceeded) as error:
-            raise exc.HTTPRequestEntityTooLarge(
+            raise exc.HTTPForbidden(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
-        except exception.InvalidMetadataSize as error:
-            raise exc.HTTPRequestEntityTooLarge(
-                explanation=error.format_message())
         except exception.ImageNotFound as error:
             msg = _("Can not find requested image")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.FlavorNotFound as error:
-            msg = _("Invalid flavor_ref provided.")
+            msg = _("Invalid flavorRef provided.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.KeypairNotFound as error:
             msg = _("Invalid key_name provided.")
@@ -524,32 +523,47 @@ class ServersController(wsgi.Controller):
                 exception.SecurityGroupNotFound,
                 exception.PortRequiresFixedIP,
                 exception.NetworkRequiresSubnet,
-                exception.NetworkNotFound) as error:
+                exception.NetworkNotFound,
+                exception.InvalidBDMVolumeNotBootable,
+                exception.InvalidBDMSnapshot,
+                exception.InvalidBDMVolume,
+                exception.InvalidBDMImage,
+                exception.InvalidBDMBootSequence,
+                exception.InvalidBDMLocalsLimit,
+                exception.InvalidBDMVolumeNotBootable) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
+                exception.NetworkAmbiguous,
                 exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
 
         # If the caller wanted a reservation_id, return it
         if return_reservation_id:
-            return wsgi.ResponseObject(
-                {'servers_reservation': {'reservation_id': resv_id}})
+            # NOTE(cyeoh): In v3 reservation_id was wrapped in
+            # servers_reservation but this is reverted for V2 API
+            # compatibility. In the long term with the tasks API we
+            # will probably just drop the concept of reservation_id
+            return wsgi.ResponseObject({'reservation_id': resv_id})
 
         req.cache_db_instances(instances)
         server = self._view_builder.create(req, instances[0])
 
         if CONF.enable_instance_password:
-            server['server']['admin_password'] = password
+            server['server']['adminPass'] = password
 
         robj = wsgi.ResponseObject(server)
 
         return self._add_location(robj)
 
-    def _create_extension_point(self, ext, server_dict, create_kwargs):
+    # NOTE(gmann): Parameter 'req_body' is placed to handle scheduler_hint
+    # extension for V2.1. No other extension supposed to use this as
+    # it will be removed soon.
+    def _create_extension_point(self, ext, server_dict,
+                                create_kwargs, req_body):
         handler = ext.obj
         LOG.debug("Running _create_extension_point for %s", ext.obj)
 
-        handler.server_create(server_dict, create_kwargs)
+        handler.server_create(server_dict, create_kwargs, req_body)
 
     def _rebuild_extension_point(self, ext, rebuild_dict, rebuild_kwargs):
         handler = ext.obj
@@ -568,6 +582,13 @@ class ServersController(wsgi.Controller):
         LOG.debug("Running _update_extension_point for %s", ext.obj)
         handler.server_update(update_dict, update_kwargs)
 
+    def _create_extension_schema(self, ext, create_schema):
+        handler = ext.obj
+        LOG.debug("Running _create_extension_schema for %s", ext.obj)
+
+        schema = handler.get_server_create_schema()
+        create_schema['properties']['server']['properties'].update(schema)
+
     def _delete(self, context, req, instance_uuid):
         instance = self._get_server(context, req, instance_uuid)
         if CONF.reclaim_instance_interval:
@@ -581,6 +602,7 @@ class ServersController(wsgi.Controller):
         else:
             self.compute_api.delete(context, instance)
 
+    @extensions.expected_errors((400, 404))
     def update(self, req, id, body):
         """Update server then pass on to version-specific controller."""
         if not self.is_valid_body(body, 'server'):
@@ -617,6 +639,7 @@ class ServersController(wsgi.Controller):
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
 
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
     @wsgi.action('confirm_resize')
     def _action_confirm_resize(self, req, id, body):
@@ -633,6 +656,7 @@ class ServersController(wsgi.Controller):
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'confirm_resize')
 
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
     @wsgi.action('revert_resize')
     def _action_revert_resize(self, req, id, body):
@@ -653,6 +677,7 @@ class ServersController(wsgi.Controller):
                     'revert_resize')
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
     @wsgi.action('reboot')
     def _action_reboot(self, req, id, body):
@@ -692,7 +717,7 @@ class ServersController(wsgi.Controller):
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
         except exception.QuotaError as error:
-            raise exc.HTTPRequestEntityTooLarge(
+            raise exc.HTTPForbidden(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
         except exception.FlavorNotFound:
@@ -701,6 +726,8 @@ class ServersController(wsgi.Controller):
         except exception.CannotResizeToSameFlavor:
             msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.CannotResizeDisk as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
@@ -720,6 +747,7 @@ class ServersController(wsgi.Controller):
 
         return webob.Response(status_int=202)
 
+    @extensions.expected_errors((404, 409))
     @wsgi.response(204)
     def delete(self, req, id):
         """Destroys a server."""
@@ -740,7 +768,7 @@ class ServersController(wsgi.Controller):
         image_uuid = image_href.split('/').pop()
 
         if not uuidutils.is_uuid_like(image_uuid):
-            msg = _("Invalid image_ref provided.")
+            msg = _("Invalid imageRef provided.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         return image_uuid
@@ -749,46 +777,43 @@ class ServersController(wsgi.Controller):
         """Get image data from the request or raise appropriate
         exceptions.
 
-        The field image_ref is mandatory when no block devices have been
+        The field imageRef is mandatory when no block devices have been
         defined and must be a proper uuid when present.
         """
-        image_href = server_dict.get('image_ref')
+        image_href = server_dict.get('imageRef')
 
         if not image_href and create_kwargs.get('block_device_mapping'):
             return ''
         elif image_href:
             return self._image_uuid_from_href(unicode(image_href))
         else:
-            msg = _("Missing image_ref attribute")
+            msg = _("Missing imageRef attribute")
             raise exc.HTTPBadRequest(explanation=msg)
 
     def _flavor_id_from_req_data(self, data):
-        try:
-            flavor_ref = data['server']['flavor_ref']
-        except (TypeError, KeyError):
-            msg = _("Missing flavor_ref attribute")
-            raise exc.HTTPBadRequest(explanation=msg)
-
+        flavor_ref = data['server']['flavorRef']
         return common.get_id_from_href(flavor_ref)
 
+    @extensions.expected_errors((400, 401, 403, 404, 409))
     @wsgi.response(202)
     @wsgi.action('resize')
     def _action_resize(self, req, id, body):
         """Resizes a given instance to the flavor size requested."""
         resize_dict = body['resize']
         try:
-            flavor_ref = str(resize_dict["flavor_ref"])
+            flavor_ref = str(resize_dict["flavorRef"])
             if not flavor_ref:
-                msg = _("Resize request has invalid 'flavor_ref' attribute.")
+                msg = _("Resize request has invalid 'flavorRef' attribute.")
                 raise exc.HTTPBadRequest(explanation=msg)
         except (KeyError, TypeError):
-            msg = _("Resize requests require 'flavor_ref' attribute.")
+            msg = _("Resize requests require 'flavorRef' attribute.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         resize_kwargs = {}
 
         return self._resize(req, id, flavor_ref, **resize_kwargs)
 
+    @extensions.expected_errors((400, 403, 404, 409, 413))
     @wsgi.response(202)
     @wsgi.action('rebuild')
     def _action_rebuild(self, req, id, body):
@@ -796,9 +821,9 @@ class ServersController(wsgi.Controller):
         rebuild_dict = body['rebuild']
 
         try:
-            image_href = rebuild_dict["image_ref"]
+            image_href = rebuild_dict["imageRef"]
         except (KeyError, TypeError):
-            msg = _("Could not parse image_ref from request.")
+            msg = _("Could not parse imageRef from request.")
             raise exc.HTTPBadRequest(explanation=msg)
 
         image_href = self._image_uuid_from_href(image_href)
@@ -853,6 +878,8 @@ class ServersController(wsgi.Controller):
         except exception.ImageNotFound:
             msg = _("Cannot find image for rebuild")
             raise exc.HTTPBadRequest(explanation=msg)
+        except exception.QuotaError as error:
+            raise exc.HTTPForbidden(explanation=error.format_message())
         except (exception.ImageNotActive,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
@@ -866,11 +893,12 @@ class ServersController(wsgi.Controller):
         # Add on the admin_password attribute since the view doesn't do it
         # unless instance passwords are disabled
         if CONF.enable_instance_password:
-            view['server']['admin_password'] = password
+            view['server']['adminPass'] = password
 
         robj = wsgi.ResponseObject(view)
         return self._add_location(robj)
 
+    @extensions.expected_errors((400, 403, 404, 409))
     @wsgi.response(202)
     @wsgi.action('create_image')
     @common.check_snapshots_enabled
@@ -904,10 +932,10 @@ class ServersController(wsgi.Controller):
                                                           bdms):
                 img = instance['image_ref']
                 if not img:
-                    props = bdms.root_metadata(
+                    properties = bdms.root_metadata(
                             context, self.compute_api.image_api,
                             self.compute_api.volume_api)
-                    image_meta = {'properties': props}
+                    image_meta = {'properties': properties}
                 else:
                     image_meta = self.compute_api.image_api.get(context, img)
 
@@ -939,12 +967,12 @@ class ServersController(wsgi.Controller):
     def _get_server_admin_password(self, server):
         """Determine the admin password for a server on creation."""
         try:
-            password = server['admin_password']
+            password = server['adminPass']
             self._validate_admin_password(password)
         except KeyError:
             password = utils.generate_password()
         except ValueError:
-            raise exc.HTTPBadRequest(explanation=_("Invalid admin_password"))
+            raise exc.HTTPBadRequest(explanation=_("Invalid adminPass"))
 
         return password
 
@@ -955,7 +983,7 @@ class ServersController(wsgi.Controller):
     def _get_server_search_options(self):
         """Return server search options allowed by non-admin."""
         return ('reservation_id', 'name', 'status', 'image', 'flavor',
-                'ip', 'changes_since', 'all_tenants')
+                'ip', 'changes-since', 'all_tenants')
 
     def _get_instance(self, context, instance_uuid):
         try:

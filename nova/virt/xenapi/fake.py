@@ -12,8 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 #
-#============================================================================
-#
+
+
 # Parts of this file are based upon xmlrpclib.py, the XML-RPC client
 # interface included in the Python distribution.
 #
@@ -206,11 +206,15 @@ def after_VDI_create(vdi_ref, vdi_rec):
     vdi_rec.setdefault('VBDs', [])
 
 
-def create_vbd(vm_ref, vdi_ref, userdevice=0):
+def create_vbd(vm_ref, vdi_ref, userdevice=0, other_config=None):
+    if other_config is None:
+        other_config = {}
+
     vbd_rec = {'VM': vm_ref,
                'VDI': vdi_ref,
                'userdevice': str(userdevice),
-               'currently_attached': False}
+               'currently_attached': False,
+               'other_config': other_config}
     vbd_ref = _create_object('VBD', vbd_rec)
     after_VBD_create(vbd_ref, vbd_rec)
     return vbd_ref
@@ -222,6 +226,7 @@ def after_VBD_create(vbd_ref, vbd_rec):
     """
     vbd_rec['currently_attached'] = False
     vbd_rec['device'] = ''
+    vbd_rec.setdefault('other_config', {})
 
     vm_ref = vbd_rec['VM']
     vm_rec = _db_content['VM'][vm_ref]
@@ -630,7 +635,7 @@ class SessionBase(object):
         return self.VDI_copy(_1, vdi_to_clone_ref, sr_ref)
 
     def host_compute_free_memory(self, _1, ref):
-        #Always return 12GB available
+        # Always return 12GB available
         return 12 * units.Gi
 
     def _plugin_agent_version(self, method, args):

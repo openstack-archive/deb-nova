@@ -381,7 +381,7 @@ class AuditPeriodTest(test.NoDBTestCase):
 
     def setUp(self):
         super(AuditPeriodTest, self).setUp()
-        #a fairly random time to test with
+        # a fairly random time to test with
         self.test_time = datetime.datetime(second=23,
                                            minute=12,
                                            hour=8,
@@ -753,6 +753,19 @@ class StringLengthTestCase(test.NoDBTestCase):
         self.assertRaises(exception.InvalidInput,
                           utils.check_string_length,
                           'a' * 256, 'name', max_length=255)
+
+    def test_check_string_length_noname(self):
+        self.assertIsNone(utils.check_string_length(
+                          'test', max_length=255))
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          11, max_length=255)
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          '', min_length=1)
+        self.assertRaises(exception.InvalidInput,
+                          utils.check_string_length,
+                          'a' * 256, max_length=255)
 
 
 class ValidateIntegerTestCase(test.NoDBTestCase):

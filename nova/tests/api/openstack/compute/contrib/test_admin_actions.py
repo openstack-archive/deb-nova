@@ -15,7 +15,10 @@
 import webob
 
 from nova.api.openstack import common
-from nova.api.openstack.compute.contrib import admin_actions
+from nova.api.openstack.compute.contrib import admin_actions as \
+    admin_actions_v2
+from nova.api.openstack.compute.plugins.v3 import admin_actions as \
+    admin_actions_v21
 from nova.compute import vm_states
 import nova.context
 from nova import exception
@@ -29,29 +32,11 @@ from nova.tests import fake_instance
 
 
 class CommonMixin(object):
-    def setUp(self):
-        super(CommonMixin, self).setUp()
-        self.controller = admin_actions.AdminActionsController()
-        self.compute_api = self.controller.compute_api
-        self.context = nova.context.RequestContext('fake', 'fake')
-
-        def _fake_controller(*args, **kwargs):
-            return self.controller
-
-        self.stubs.Set(admin_actions, 'AdminActionsController',
-                       _fake_controller)
-
-        self.flags(
-            osapi_compute_extension=[
-                'nova.api.openstack.compute.contrib.select_extensions'],
-            osapi_compute_ext_list=['Admin_actions'])
-
-        self.app = fakes.wsgi_app(init_only=('servers',),
-                                  fake_auth_context=self.context)
-        self.mox.StubOutWithMock(self.compute_api, 'get')
+    admin_actions = None
+    fake_url = None
 
     def _make_request(self, url, body):
-        req = webob.Request.blank('/v2/fake' + url)
+        req = webob.Request.blank(self.fake_url + url)
         req.method = 'POST'
         req.body = jsonutils.dumps(body)
         req.content_type = 'application/json'
@@ -65,14 +50,14 @@ class CommonMixin(object):
                 task_state=None, launched_at=timeutils.utcnow())
         instance = objects.Instance._from_db_object(
                 self.context, objects.Instance(), instance)
-        self.compute_api.get(self.context, uuid,
+        self.compute_api.get(self.context, uuid, expected_attrs=None,
                              want_objects=True).AndReturn(instance)
         return instance
 
     def _stub_instance_get_failure(self, exc_info, uuid=None):
         if uuid is None:
             uuid = uuidutils.generate_uuid()
-        self.compute_api.get(self.context, uuid,
+        self.compute_api.get(self.context, uuid, expected_attrs=None,
                              want_objects=True).AndRaise(exc_info)
         return uuid
 
@@ -99,7 +84,6 @@ class CommonMixin(object):
         getattr(self.compute_api, method)(self.context, instance)
 
         self.mox.ReplayAll()
-
         res = self._make_request('/servers/%s/action' % instance['uuid'],
                                  {action: None})
         self.assertEqual(202, res.status_int)
@@ -138,28 +122,6 @@ class CommonMixin(object):
         self.mox.VerifyAll()
         self.mox.UnsetStubs()
 
-    def _test_not_implemented_state(self, action, method=None,
-                                    error_text=None):
-        if method is None:
-            method = action
-        body_map = {}
-        compute_api_args_map = {}
-        instance = self._stub_instance_get()
-        args, kwargs = compute_api_args_map.get(action, ((), {}))
-        getattr(self.compute_api, method)(self.context, instance,
-                                          *args, **kwargs).AndRaise(
-                NotImplementedError())
-        self.mox.ReplayAll()
-
-        res = self._make_request('/servers/%s/action' % instance['uuid'],
-                                 {action: body_map.get(action)})
-        self.assertEqual(501, res.status_int)
-        self.assertIn(error_text, res.body)
-        # Do these here instead of tearDown because this method is called
-        # more than once for the same test case
-        self.mox.VerifyAll()
-        self.mox.UnsetStubs()
-
     def _test_locked_instance(self, action, method=None, body_map=None,
                               compute_api_args_map=None):
         if method is None:
@@ -167,23 +129,101 @@ class CommonMixin(object):
 
         instance = self._stub_instance_get()
 
-        args, kwargs = compute_api_args_map.get(action, ((), {}))
+        args, kwargs = (), {}
+        act = None
+
+        if compute_api_args_map:
+            args, kwargs = compute_api_args_map.get(action, ((), {}))
+            act = body_map.get(action)
+
         getattr(self.compute_api, method)(self.context, instance,
                                           *args, **kwargs).AndRaise(
-                exception.InstanceIsLocked(instance_uuid=instance['uuid']))
-
+             exception.InstanceIsLocked(instance_uuid=instance['uuid']))
         self.mox.ReplayAll()
-
         res = self._make_request('/servers/%s/action' % instance['uuid'],
-                                 {action: body_map.get(action)})
+                               {action: act})
         self.assertEqual(409, res.status_int)
+        self.assertIn('Instance %s is locked' % instance['uuid'], res.body)
         # Do these here instead of tearDown because this method is called
         # more than once for the same test case
         self.mox.VerifyAll()
         self.mox.UnsetStubs()
 
 
-class AdminActionsTest(CommonMixin, test.NoDBTestCase):
+class AdminActionsTestV21(CommonMixin, test.NoDBTestCase):
+    admin_actions = admin_actions_v21
+    fake_url = '/v3'
+
+    def setUp(self):
+        super(AdminActionsTestV21, self).setUp()
+        self.controller = self.admin_actions.AdminActionsController()
+        self.compute_api = self.controller.compute_api
+        self.context = nova.context.RequestContext('fake', 'fake')
+
+        def _fake_controller(*args, **kwargs):
+            return self.controller
+
+        self.stubs.Set(self.admin_actions, 'AdminActionsController',
+                       _fake_controller)
+
+        self.app = self._get_app()
+        self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def _get_app(self):
+        return fakes.wsgi_app_v3(init_only=('servers',
+                                            'os-admin-actions'),
+                                 fake_auth_context=self.context)
+
+    def test_actions(self):
+        actions = ['resetNetwork', 'injectNetworkInfo']
+        method_translations = {'resetNetwork': 'reset_network',
+                               'injectNetworkInfo': 'inject_network_info'}
+
+        for action in actions:
+            method = method_translations.get(action)
+            self.mox.StubOutWithMock(self.compute_api, method or action)
+            self._test_action(action, method=method)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def test_actions_with_non_existed_instance(self):
+        actions = ['resetNetwork', 'injectNetworkInfo', 'os-resetState']
+        body_map = {'os-resetState': {'state': 'active'}}
+
+        for action in actions:
+            self._test_non_existing_instance(action,
+                                             body_map=body_map)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def test_actions_with_locked_instance(self):
+        actions = ['resetNetwork', 'injectNetworkInfo']
+        method_translations = {'resetNetwork': 'reset_network',
+                               'injectNetworkInfo': 'inject_network_info'}
+
+        for action in actions:
+            method = method_translations.get(action)
+            self.mox.StubOutWithMock(self.compute_api, method or action)
+            self._test_locked_instance(action, method=method)
+            # Re-mock this.
+            self.mox.StubOutWithMock(self.compute_api, 'get')
+
+
+class AdminActionsTestV2(AdminActionsTestV21):
+    admin_actions = admin_actions_v2
+    fake_url = '/v2/fake'
+
+    def setUp(self):
+        super(AdminActionsTestV2, self).setUp()
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Admin_actions'])
+
+    def _get_app(self):
+        return fakes.wsgi_app(init_only=('servers',),
+                              fake_auth_context=self.context)
+
     def test_actions(self):
         actions = ['pause', 'unpause', 'suspend', 'resume', 'migrate',
                    'resetNetwork', 'injectNetworkInfo', 'lock',
@@ -215,17 +255,6 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
             self.mox.StubOutWithMock(self.compute_api, method or action)
             self._test_invalid_state(action, method=method, body_map=body_map,
                                      compute_api_args_map=args_map)
-            # Re-mock this.
-            self.mox.StubOutWithMock(self.compute_api, 'get')
-
-    def test_actions_raise_on_not_implemented(self):
-        tests = [
-            ('pause', 'Virt driver does not implement pause function.'),
-            ('unpause', 'Virt driver does not implement unpause function.')
-        ]
-        for (action, error_text) in tests:
-            self.mox.StubOutWithMock(self.compute_api, action)
-            self._test_not_implemented_state(action, error_text=error_text)
             # Re-mock this.
             self.mox.StubOutWithMock(self.compute_api, 'get')
 
@@ -402,9 +431,29 @@ class AdminActionsTest(CommonMixin, test.NoDBTestCase):
         self.assertEqual(403, res.status_int)
 
 
-class CreateBackupTests(CommonMixin, test.NoDBTestCase):
+class CreateBackupTestsV2(CommonMixin, test.NoDBTestCase):
+    fake_url = '/v2/fake'
+
     def setUp(self):
-        super(CreateBackupTests, self).setUp()
+        super(CreateBackupTestsV2, self).setUp()
+        self.controller = admin_actions_v2.AdminActionsController()
+        self.compute_api = self.controller.compute_api
+        self.context = nova.context.RequestContext('fake', 'fake')
+
+        def _fake_controller(*args, **kwargs):
+            return self.controller
+
+        self.stubs.Set(admin_actions_v2, 'AdminActionsController',
+                       _fake_controller)
+
+        self.flags(
+            osapi_compute_extension=[
+                'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Admin_actions'])
+
+        self.app = fakes.wsgi_app(init_only=('servers',),
+                                  fake_auth_context=self.context)
+        self.mox.StubOutWithMock(self.compute_api, 'get')
         self.mox.StubOutWithMock(common,
                                  'check_img_metadata_properties_quota')
         self.mox.StubOutWithMock(self.compute_api,
@@ -435,7 +484,7 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
 
         self.mox.ReplayAll()
 
-        res = self._make_request(self._make_url(instance['uuid']), body)
+        res = self._make_request(self._make_url(instance['uuid']), body=body)
         self.assertEqual(202, res.status_int)
         self.assertIn('fake-image-id', res.headers['Location'])
 
@@ -447,7 +496,7 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
                 'rotation': 1,
             },
         }
-        res = self._make_request(self._make_url('fake'), body)
+        res = self._make_request(self._make_url('fake'), body=body)
         self.assertEqual(400, res.status_int)
 
     def test_create_backup_no_rotation(self):
@@ -458,7 +507,7 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
                 'backup_type': 'daily',
             },
         }
-        res = self._make_request(self._make_url('fake'), body)
+        res = self._make_request(self._make_url('fake'), body=body)
         self.assertEqual(400, res.status_int)
 
     def test_create_backup_negative_rotation(self):
@@ -472,7 +521,7 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
                 'rotation': -1,
             },
         }
-        res = self._make_request(self._make_url('fake'), body)
+        res = self._make_request(self._make_url('fake'), body=body)
         self.assertEqual(400, res.status_int)
 
     def test_create_backup_no_backup_type(self):
@@ -483,12 +532,12 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
                 'rotation': 1,
             },
         }
-        res = self._make_request(self._make_url('fake'), body)
+        res = self._make_request(self._make_url('fake'), body=body)
         self.assertEqual(400, res.status_int)
 
     def test_create_backup_bad_entity(self):
         body = {'createBackup': 'go'}
-        res = self._make_request(self._make_url('fake'), body)
+        res = self._make_request(self._make_url('fake'), body=body)
         self.assertEqual(400, res.status_int)
 
     def test_create_backup_rotation_is_zero(self):
@@ -511,7 +560,7 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
 
         self.mox.ReplayAll()
 
-        res = self._make_request(self._make_url(instance['uuid']), body)
+        res = self._make_request(self._make_url(instance['uuid']), body=body)
         self.assertEqual(202, res.status_int)
         self.assertNotIn('Location', res.headers)
 
@@ -535,7 +584,7 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
 
         self.mox.ReplayAll()
 
-        res = self._make_request(self._make_url(instance['uuid']), body)
+        res = self._make_request(self._make_url(instance['uuid']), body=body)
         self.assertEqual(202, res.status_int)
         self.assertIn('fake-image-id', res.headers['Location'])
 
@@ -577,47 +626,51 @@ class CreateBackupTests(CommonMixin, test.NoDBTestCase):
                 'rotation': 1,
             },
         }
-        res = self._make_request(self._make_url('fake'), body)
+        res = self._make_request(self._make_url('fake'), body=body)
         self.assertEqual(400, res.status_int)
 
 
-class ResetStateTests(test.NoDBTestCase):
+class ResetStateTestsV21(test.NoDBTestCase):
+    admin_act = admin_actions_v21
+    bad_request = exception.ValidationError
+    fake_url = '/servers'
+
     def setUp(self):
-        super(ResetStateTests, self).setUp()
-
+        super(ResetStateTestsV21, self).setUp()
         self.uuid = uuidutils.generate_uuid()
-
-        self.admin_api = admin_actions.AdminActionsController()
+        self.admin_api = self.admin_act.AdminActionsController()
         self.compute_api = self.admin_api.compute_api
 
-        url = '/fake/servers/%s/action' % self.uuid
-        self.request = fakes.HTTPRequest.blank(url)
+        url = '%s/%s/action' % (self.fake_url, self.uuid)
+        self.request = self._get_request(url)
         self.context = self.request.environ['nova.context']
 
+    def _get_request(self, url):
+        return fakes.HTTPRequestV3.blank(url)
+
     def test_no_state(self):
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(self.bad_request,
                           self.admin_api._reset_state,
                           self.request, self.uuid,
-                          {"os-resetState": None})
+                          body={"os-resetState": None})
 
     def test_bad_state(self):
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(self.bad_request,
                           self.admin_api._reset_state,
                           self.request, self.uuid,
-                          {"os-resetState": {"state": "spam"}})
+                          body={"os-resetState": {"state": "spam"}})
 
     def test_no_instance(self):
         self.mox.StubOutWithMock(self.compute_api, 'get')
-        exc = exception.InstanceNotFound(instance_id='inst_id')
-        self.compute_api.get(self.context, self.uuid,
+        exc = exception.InstanceNotFound(instance_id='inst_ud')
+        self.compute_api.get(self.context, self.uuid, expected_attrs=None,
                              want_objects=True).AndRaise(exc)
-
         self.mox.ReplayAll()
 
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.admin_api._reset_state,
                           self.request, self.uuid,
-                          {"os-resetState": {"state": "active"}})
+                          body={"os-resetState": {"state": "active"}})
 
     def _setup_mock(self, expected):
         instance = objects.Instance()
@@ -637,7 +690,7 @@ class ResetStateTests(test.NoDBTestCase):
                                  "Instance.%s doesn't match" % k)
             instance.obj_reset_changes()
 
-        self.compute_api.get(self.context, instance.uuid,
+        self.compute_api.get(self.context, instance.uuid, expected_attrs=None,
                              want_objects=True).AndReturn(instance)
         instance.save(admin_state_reset=True).WithSideEffects(check_state)
 
@@ -647,7 +700,8 @@ class ResetStateTests(test.NoDBTestCase):
         self.mox.ReplayAll()
 
         body = {"os-resetState": {"state": "active"}}
-        result = self.admin_api._reset_state(self.request, self.uuid, body)
+        result = self.admin_api._reset_state(self.request, self.uuid,
+                                             body=body)
 
         self.assertEqual(result.status_int, 202)
 
@@ -656,6 +710,16 @@ class ResetStateTests(test.NoDBTestCase):
                               task_state=None))
         self.mox.ReplayAll()
         body = {"os-resetState": {"state": "error"}}
-        result = self.admin_api._reset_state(self.request, self.uuid, body)
+        result = self.admin_api._reset_state(self.request, self.uuid,
+                                             body=body)
 
         self.assertEqual(result.status_int, 202)
+
+
+class ResetStateTestsV2(ResetStateTestsV21):
+    admin_act = admin_actions_v2
+    bad_request = webob.exc.HTTPBadRequest
+    fake_url = '/fake/servers'
+
+    def _get_request(self, url):
+        return fakes.HTTPRequest.blank(url)

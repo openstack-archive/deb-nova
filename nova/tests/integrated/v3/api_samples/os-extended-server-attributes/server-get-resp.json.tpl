@@ -1,8 +1,8 @@
 {
     "server": {
-        "os-extended-server-attributes:host": "%(compute_host)s",
-        "os-extended-server-attributes:hypervisor_hostname": "%(hypervisor_hostname)s",
-        "os-extended-server-attributes:instance_name": "%(instance_name)s",
+        "OS-EXT-SRV-ATTR:host": "%(compute_host)s",
+        "OS-EXT-SRV-ATTR:hypervisor_hostname": "%(hypervisor_hostname)s",
+        "OS-EXT-SRV-ATTR:instance_name": "%(instance_name)s",
         "updated": "%(isotime)s",
         "created": "%(isotime)s",
         "addresses": {
@@ -24,13 +24,13 @@
                 }
             ]
         },
-        "host_id": "%(hostid)s",
+        "hostId": "%(hostid)s",
         "id": "%(uuid)s",
         "image": {
             "id": "%(uuid)s",
             "links": [
                 {
-                    "href": "%(glance_host)s/images/%(uuid)s",
+                    "href": "%(host)s/images/%(uuid)s",
                     "rel": "bookmark"
                 }
             ]

@@ -186,13 +186,6 @@ class _BaseTestCase(object):
             self.context, fake_inst, legacy=False)
         self.assertEqual(result, 'fake-result')
 
-    def test_instance_info_cache_delete(self):
-        self.mox.StubOutWithMock(db, 'instance_info_cache_delete')
-        db.instance_info_cache_delete(self.context, 'fake-uuid')
-        self.mox.ReplayAll()
-        self.conductor.instance_info_cache_delete(self.context,
-                                                  {'uuid': 'fake-uuid'})
-
     def test_vol_usage_update(self):
         self.mox.StubOutWithMock(db, 'vol_usage_update')
         self.mox.StubOutWithMock(compute_utils, 'usage_volume_info')
@@ -1164,7 +1157,7 @@ class _BaseTaskTestCase(object):
         self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
         self.mox.StubOutWithMock(
                 self.conductor_manager.compute_rpcapi, 'prep_resize')
-        self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor_manager.scheduler_client,
                                  'select_destinations')
         inst = fake_instance.fake_db_instance(image_ref='image_ref')
         inst_obj = objects.Instance._from_db_object(
@@ -1183,7 +1176,7 @@ class _BaseTaskTestCase(object):
             instance_type=flavor).AndReturn(request_spec)
 
         hosts = [dict(host='host1', nodename=None, limits={})]
-        self.conductor_manager.scheduler_rpcapi.select_destinations(
+        self.conductor_manager.scheduler_client.select_destinations(
             self.context, request_spec,
             {'retry': {'num_attempts': 1, 'hosts': []}}).AndReturn(hosts)
 
@@ -1223,7 +1216,7 @@ class _BaseTaskTestCase(object):
         instance_properties = jsonutils.to_primitive(instances[0])
 
         self.mox.StubOutWithMock(db, 'flavor_extra_specs_get')
-        self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor_manager.scheduler_client,
                                  'select_destinations')
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
         self.mox.StubOutWithMock(db,
@@ -1234,7 +1227,7 @@ class _BaseTaskTestCase(object):
         db.flavor_extra_specs_get(
                 self.context,
                 instance_type['flavorid']).AndReturn('fake-specs')
-        self.conductor_manager.scheduler_rpcapi.select_destinations(
+        self.conductor_manager.scheduler_client.select_destinations(
                 self.context, {'image': {'fake_data': 'should_pass_silently'},
                     'instance_properties': jsonutils.to_primitive(
                         instances[0]),
@@ -1266,7 +1259,7 @@ class _BaseTaskTestCase(object):
                                    'limits': []},
                 admin_password='admin_password',
                 injected_files='injected_files',
-                requested_networks='requested_networks',
+                requested_networks=None,
                 security_groups='security_groups',
                 block_device_mapping=mox.IgnoreArg(),
                 node='node1', limits=[])
@@ -1292,7 +1285,7 @@ class _BaseTaskTestCase(object):
                                              'hosts': [['host2', 'node2']]}},
                 admin_password='admin_password',
                 injected_files='injected_files',
-                requested_networks='requested_networks',
+                requested_networks=None,
                 security_groups='security_groups',
                 block_device_mapping=mox.IgnoreArg(),
                 node='node2', limits=[])
@@ -1307,7 +1300,7 @@ class _BaseTaskTestCase(object):
                 filter_properties={},
                 admin_password='admin_password',
                 injected_files='injected_files',
-                requested_networks='requested_networks',
+                requested_networks=None,
                 security_groups='security_groups',
                 block_device_mapping='block_device_mapping',
                 legacy_bdm=False)
@@ -1321,12 +1314,12 @@ class _BaseTaskTestCase(object):
         exception = exc.NoValidHost(reason='fake-reason')
         self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
         self.mox.StubOutWithMock(scheduler_driver, 'handle_schedule_error')
-        self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor_manager.scheduler_client,
                 'select_destinations')
 
         scheduler_utils.build_request_spec(self.context, image,
                 mox.IgnoreArg()).AndReturn(spec)
-        self.conductor_manager.scheduler_rpcapi.select_destinations(
+        self.conductor_manager.scheduler_client.select_destinations(
                 self.context, spec,
                 {'retry': {'num_attempts': 1,
                            'hosts': []}}).AndRaise(exception)
@@ -1344,7 +1337,7 @@ class _BaseTaskTestCase(object):
                 filter_properties={},
                 admin_password='admin_password',
                 injected_files='injected_files',
-                requested_networks='requested_networks',
+                requested_networks=None,
                 security_groups='security_groups',
                 block_device_mapping='block_device_mapping',
                 legacy_bdm=False)
@@ -1502,7 +1495,7 @@ class _BaseTaskTestCase(object):
         with contextlib.nested(
             mock.patch.object(self.conductor_manager.compute_rpcapi,
                               'rebuild_instance'),
-            mock.patch.object(self.conductor_manager.scheduler_rpcapi,
+            mock.patch.object(self.conductor_manager.scheduler_client,
                               'select_destinations')
         ) as (rebuild_mock, select_dest_mock):
             self.conductor_manager.rebuild_instance(context=self.context,
@@ -1526,7 +1519,7 @@ class _BaseTaskTestCase(object):
         with contextlib.nested(
             mock.patch.object(self.conductor_manager.compute_rpcapi,
                               'rebuild_instance'),
-            mock.patch.object(self.conductor_manager.scheduler_rpcapi,
+            mock.patch.object(self.conductor_manager.scheduler_client,
                               'select_destinations',
                               return_value=[{'host': expected_host}]),
             mock.patch('nova.scheduler.utils.build_request_spec',
@@ -1555,7 +1548,7 @@ class _BaseTaskTestCase(object):
         with contextlib.nested(
             mock.patch.object(self.conductor_manager.compute_rpcapi,
                               'rebuild_instance'),
-            mock.patch.object(self.conductor_manager.scheduler_rpcapi,
+            mock.patch.object(self.conductor_manager.scheduler_client,
                               'select_destinations',
                               side_effect=exc.NoValidHost(reason='')),
             mock.patch('nova.scheduler.utils.build_request_spec',
@@ -1731,7 +1724,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
 
         self.mox.StubOutWithMock(compute_utils, 'get_image_metadata')
         self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
-        self.mox.StubOutWithMock(self.conductor.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor.scheduler_client,
                                  'select_destinations')
         self.mox.StubOutWithMock(self.conductor,
                                  '_set_vm_state_and_notify')
@@ -1747,7 +1740,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
 
         exc_info = exc.NoValidHost(reason="")
 
-        self.conductor.scheduler_rpcapi.select_destinations(
+        self.conductor.scheduler_client.select_destinations(
                 self.context, request_spec,
                 filter_props).AndRaise(exc_info)
 
@@ -1786,7 +1779,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
 
         self.mox.StubOutWithMock(compute_utils, 'get_image_metadata')
         self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
-        self.mox.StubOutWithMock(self.conductor.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor.scheduler_client,
                                  'select_destinations')
         self.mox.StubOutWithMock(self.conductor,
                                  '_set_vm_state_and_notify')
@@ -1802,7 +1795,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
 
         exc_info = exc.NoValidHost(reason="")
 
-        self.conductor.scheduler_rpcapi.select_destinations(
+        self.conductor.scheduler_client.select_destinations(
                 self.context, request_spec,
                 filter_props).AndRaise(exc_info)
 
@@ -1841,7 +1834,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
 
         self.mox.StubOutWithMock(compute_utils, 'get_image_metadata')
         self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
-        self.mox.StubOutWithMock(self.conductor.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor.scheduler_client,
                                  'select_destinations')
         self.mox.StubOutWithMock(scheduler_utils,
                                  'populate_filter_properties')
@@ -1862,8 +1855,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         expected_filter_props = {'retry': {'num_attempts': 1,
                                  'hosts': []},
                                  'context': None}
-
-        self.conductor.scheduler_rpcapi.select_destinations(
+        self.conductor.scheduler_client.select_destinations(
                 self.context, request_spec,
                 expected_filter_props).AndReturn(hosts)
 
@@ -1912,14 +1904,14 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 'instance_properties': instances[0]}
         self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
         self.mox.StubOutWithMock(scheduler_driver, 'handle_schedule_error')
-        self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
+        self.mox.StubOutWithMock(self.conductor_manager.scheduler_client,
                 'select_destinations')
         self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
                 'build_and_run_instance')
 
         scheduler_utils.build_request_spec(self.context, image,
                 mox.IgnoreArg()).AndReturn(spec)
-        self.conductor_manager.scheduler_rpcapi.select_destinations(
+        self.conductor_manager.scheduler_client.select_destinations(
                 self.context, spec,
                 {'retry': {'num_attempts': 1, 'hosts': []}}).AndReturn(
                         [{'host': 'host1', 'nodename': 'node1', 'limits': []},
@@ -1936,7 +1928,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                                         'node2']]}},
                 admin_password='admin_password',
                 injected_files='injected_files',
-                requested_networks='requested_networks',
+                requested_networks=None,
                 security_groups='security_groups',
                 block_device_mapping=mox.IsA(objects.BlockDeviceMappingList),
                 node='node2', limits=[])
@@ -1951,7 +1943,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 filter_properties={},
                 admin_password='admin_password',
                 injected_files='injected_files',
-                requested_networks='requested_networks',
+                requested_networks=None,
                 security_groups='security_groups',
                 block_device_mapping='block_device_mapping',
                 legacy_bdm=False)
@@ -1971,7 +1963,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                     side_effect=exc.InstanceInfoCacheNotFound(
                         instance_uuid=instances[0].uuid)),
                 mock.patch.object(instances[1], 'refresh'),
-                mock.patch.object(self.conductor_manager.scheduler_rpcapi,
+                mock.patch.object(self.conductor_manager.scheduler_client,
                     'select_destinations', return_value=destinations),
                 mock.patch.object(self.conductor_manager.compute_rpcapi,
                     'build_and_run_instance')
@@ -1987,7 +1979,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                     filter_properties={},
                     admin_password='admin_password',
                     injected_files='injected_files',
-                    requested_networks='requested_networks',
+                    requested_networks=None,
                     security_groups='security_groups',
                     block_device_mapping='block_device_mapping',
                     legacy_bdm=False)
@@ -2001,7 +1993,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                                             'node2']]}},
                     admin_password='admin_password',
                     injected_files='injected_files',
-                    requested_networks='requested_networks',
+                    requested_networks=None,
                     security_groups='security_groups',
                     block_device_mapping=mock.ANY,
                     node='node2', limits=[])

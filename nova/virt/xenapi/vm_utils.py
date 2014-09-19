@@ -28,10 +28,10 @@ from xml.parsers import expat
 
 from eventlet import greenthread
 from oslo.config import cfg
+import six
 import six.moves.urllib.parse as urlparse
 
 from nova.api.metadata import base as instance_metadata
-from nova import block_device
 from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
@@ -57,7 +57,6 @@ from nova.virt import hardware
 from nova.virt import netutils
 from nova.virt.xenapi import agent
 from nova.virt.xenapi.image import utils as image_utils
-from nova.virt.xenapi import volume_utils
 
 
 LOG = logging.getLogger(__name__)
@@ -508,74 +507,6 @@ def create_vdi(session, sr_ref, instance, name_label, disk_type, virtual_size,
     return vdi_ref
 
 
-def get_vdi_uuid_for_volume(session, connection_data):
-    sr_uuid, label, sr_params = volume_utils.parse_sr_info(connection_data)
-    sr_ref = volume_utils.find_sr_by_uuid(session, sr_uuid)
-
-    if not sr_ref:
-        sr_ref = volume_utils.introduce_sr(session, sr_uuid, label, sr_params)
-
-    if sr_ref is None:
-        raise exception.NovaException(_('SR not present and could not be '
-                                        'introduced'))
-
-    vdi_uuid = None
-
-    if 'vdi_uuid' in connection_data:
-        _scan_sr(session, sr_ref)
-        vdi_uuid = connection_data['vdi_uuid']
-    else:
-        try:
-            vdi_ref = volume_utils.introduce_vdi(session, sr_ref)
-            vdi_uuid = session.call_xenapi("VDI.get_uuid", vdi_ref)
-        except exception.StorageError as exc:
-            LOG.exception(exc)
-            volume_utils.forget_sr(session, sr_ref)
-
-    return vdi_uuid
-
-
-def get_vdis_for_instance(context, session, instance, name_label, image,
-                          image_type, block_device_info=None):
-    vdis = {}
-
-    if block_device_info:
-        msg = "block device info: %s" % block_device_info
-        # NOTE(mriedem): block_device_info can contain an auth_password
-        # so we have to scrub the message before logging it.
-        LOG.debug(logging.mask_password(msg), instance=instance)
-        root_device_name = block_device_info['root_device_name']
-
-        for bdm in block_device_info['block_device_mapping']:
-            if (block_device.strip_prefix(bdm['mount_device']) ==
-                    block_device.strip_prefix(root_device_name)):
-                # If we're a root-device, record that fact so we don't download
-                # a root image via Glance
-                type_ = 'root'
-            else:
-                # Otherwise, use mount_device as `type_` so that we have easy
-                # access to it in _attach_disks to create the VBD
-                type_ = bdm['mount_device']
-
-            connection_data = bdm['connection_info']['data']
-            vdi_uuid = get_vdi_uuid_for_volume(session, connection_data)
-            if vdi_uuid:
-                vdis[type_] = dict(uuid=vdi_uuid, file=None, osvol=True)
-
-    # If we didn't get a root VDI from volumes, then use the Glance image as
-    # the root device
-    if 'root' not in vdis:
-        create_image_vdis = _create_image(
-                context, session, instance, name_label, image, image_type)
-        vdis.update(create_image_vdis)
-
-    # Just get the VDI ref once
-    for vdi in vdis.itervalues():
-        vdi['ref'] = session.call_xenapi('VDI.get_by_uuid', vdi['uuid'])
-
-    return vdis
-
-
 @contextlib.contextmanager
 def _dummy_vm(session, instance, vdi_ref):
     """This creates a temporary VM so that we can snapshot a VDI.
@@ -726,6 +657,40 @@ def strip_base_mirror_from_vdis(session, vm_ref):
     for vbd_ref in vbd_refs:
         vdi_ref = session.call_xenapi("VBD.get_VDI", vbd_ref)
         _try_strip_base_mirror_from_vdi(session, vdi_ref)
+
+
+def _get_snapshots_for_vm(session, instance, vm_ref):
+    sr_ref = safe_find_sr(session)
+    vm_vdi_ref, vm_vdi_rec = get_vdi_for_vm_safely(session, vm_ref)
+    parent_uuid = _get_vhd_parent_uuid(session, vm_vdi_ref)
+
+    if not parent_uuid:
+        return []
+
+    return _child_vhds(session, sr_ref, parent_uuid, old_snapshots_only=True)
+
+
+def remove_old_snapshots(session, instance, vm_ref):
+    """See if there is an snapshot present that should be removed."""
+    LOG.debug("Starting remove_old_snapshots for VM", instance=instance)
+
+    snapshot_uuids = _get_snapshots_for_vm(session, instance, vm_ref)
+    number_of_snapshots = len(snapshot_uuids)
+
+    if number_of_snapshots <= 0:
+        LOG.debug("No snapshots to remove.", instance=instance)
+        return
+
+    if number_of_snapshots > 1:
+        LOG.debug("More snapshots than expected, only deleting one.",
+                  instance=instance)
+
+    vdi_uuid = snapshot_uuids[0]
+    vdi_ref = session.VDI.get_by_uuid(vdi_uuid)
+    safe_destroy_vdis(session, [vdi_ref])
+    scan_default_sr(session)
+    # TODO(johnthetubaguy): we could look for older snapshots too
+    LOG.debug("Removed one old snapshot.", instance=instance)
 
 
 @contextlib.contextmanager
@@ -1124,7 +1089,7 @@ def generate_single_ephemeral(session, instance, vm_ref, userdevice,
         instance_name_label = instance["name"]
 
     name_label = "%s ephemeral" % instance_name_label
-    #TODO(johngarbutt) need to move DEVICE_EPHEMERAL from vmops to use it here
+    # TODO(johngarbutt) need to move DEVICE_EPHEMERAL from vmops to use it here
     label_number = int(userdevice) - 4
     if label_number > 0:
         name_label = "%s (%d)" % (name_label, label_number)
@@ -1313,8 +1278,8 @@ def _create_cached_image(context, session, instance, name_label,
     return downloaded, vdis
 
 
-def _create_image(context, session, instance, name_label, image_id,
-                  image_type):
+def create_image(context, session, instance, name_label, image_id,
+                 image_type):
     """Creates VDI from the image stored in the local cache. If the image
     is not present in the cache, it streams it from glance.
 
@@ -1718,8 +1683,8 @@ def lookup_vm_vdis(session, vm_ref):
 
 def lookup(session, name_label, check_rescue=False):
     """Look the instance up and return it if available.
-    :param check_rescue: if True will return the 'name'-rescue vm if it
-                         exists, instead of just 'name'
+    :param:check_rescue: if True will return the 'name'-rescue vm if it
+    exists, instead of just 'name'
     """
     if check_rescue:
         result = lookup(session, name_label + '-rescue', False)
@@ -2048,7 +2013,14 @@ def _walk_vdi_chain(session, vdi_uuid):
         vdi_uuid = parent_uuid
 
 
-def _child_vhds(session, sr_ref, vdi_uuid):
+def _is_vdi_a_snapshot(vdi_rec):
+    """Ensure VDI is a snapshot, and not cached image."""
+    is_a_snapshot = vdi_rec['is_a_snapshot']
+    image_id = vdi_rec['other_config'].get('image-id')
+    return is_a_snapshot and not image_id
+
+
+def _child_vhds(session, sr_ref, vdi_uuid, old_snapshots_only=False):
     """Return the immediate children of a given VHD.
 
     This is not recursive, only the immediate children are returned.
@@ -2064,9 +2036,12 @@ def _child_vhds(session, sr_ref, vdi_uuid):
         if parent_uuid != vdi_uuid:
             continue
 
+        if old_snapshots_only and not _is_vdi_a_snapshot(rec):
+            continue
+
         children.add(rec_uuid)
 
-    return children
+    return list(children)
 
 
 def _count_parents_children(session, vdi_ref, sr_ref):
@@ -2333,7 +2308,7 @@ def _resize_part_and_fs(dev, start, old_sectors, new_sectors, flags):
             utils.execute('resize2fs', partition_path, '%ds' % size,
                           run_as_root=True)
         except processutils.ProcessExecutionError as exc:
-            LOG.error(str(exc))
+            LOG.error(six.text_type(exc))
             reason = _("Shrinking the filesystem down with resize2fs "
                        "has failed, please check if you have "
                        "enough free space on your disk.")
@@ -2451,7 +2426,7 @@ def _mount_filesystem(dev_path, dir):
                                  '-t', 'ext2,ext3,ext4,reiserfs',
                                  dev_path, dir, run_as_root=True)
     except processutils.ProcessExecutionError as e:
-        err = str(e)
+        err = six.text_type(e)
     return err
 
 

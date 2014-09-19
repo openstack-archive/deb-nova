@@ -171,6 +171,9 @@ class _ComputeAPIUnitTestMixIn(object):
             quota.QUOTAS.limit_check(self.context, metadata_items=mox.IsA(int))
             quota.QUOTAS.reserve(self.context, instances=40,
                                  cores=mox.IsA(int),
+                                 expire=mox.IgnoreArg(),
+                                 project_id=mox.IgnoreArg(),
+                                 user_id=mox.IgnoreArg(),
                                  ram=mox.IsA(int)).AndRaise(quota_exception)
 
         self.mox.ReplayAll()
@@ -194,7 +197,9 @@ class _ComputeAPIUnitTestMixIn(object):
         address = '10.0.0.1'
         min_count = 1
         max_count = 2
-        requested_networks = [(None, address, port)]
+        requested_networks = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest(address=address,
+                                            port_id=port)])
 
         self.assertRaises(exception.MultiplePortsNotApplicable,
             self.compute_api.create, self.context, 'fake_flavor', 'image_id',
@@ -215,7 +220,9 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_specified_ip_and_multiple_instances(self):
         network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         address = '10.0.0.1'
-        requested_networks = [(network, address)]
+        requested_networks = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest(network_id=network,
+                                            address=address)])
         self._test_specified_ip_and_multiple_instances_helper(
             requested_networks)
 
@@ -223,7 +230,9 @@ class _ComputeAPIUnitTestMixIn(object):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         address = '10.0.0.1'
-        requested_networks = [(network, address, None)]
+        requested_networks = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest(network_id=network,
+                                            address=address)])
         self._test_specified_ip_and_multiple_instances_helper(
             requested_networks)
 
@@ -568,7 +577,7 @@ class _ComputeAPIUnitTestMixIn(object):
                 system_metadata=inst.system_metadata)
 
     def _test_delete(self, delete_type, **attrs):
-        reservations = 'fake-resv'
+        reservations = ['fake-resv']
         inst = self._create_instance_obj()
         inst.update(attrs)
         inst._context = self.context
@@ -622,6 +631,7 @@ class _ComputeAPIUnitTestMixIn(object):
             self._test_delete_resizing_part(inst, deltas)
         quota.QUOTAS.reserve(self.context, project_id=inst.project_id,
                              user_id=inst.user_id,
+                             expire=mox.IgnoreArg(),
                              **deltas).AndReturn(reservations)
 
         # NOTE(comstud): This is getting messy.  But what we are wanting
@@ -745,6 +755,7 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_delete_fast_if_host_not_set(self):
         inst = self._create_instance_obj()
         inst.host = ''
+        quotas = quotas_obj.Quotas(self.context)
         updates = {'progress': 0, 'task_state': task_states.DELETING}
 
         self.mox.StubOutWithMock(inst, 'save')
@@ -769,7 +780,7 @@ class _ComputeAPIUnitTestMixIn(object):
         self.compute_api._create_reservations(self.context,
                                               inst, inst.task_state,
                                               inst.project_id, inst.user_id
-                                              ).AndReturn(None)
+                                              ).AndReturn(quotas)
 
         if self.cell_type == 'api':
             rpcapi.terminate_instance(
@@ -1644,6 +1655,7 @@ class _ComputeAPIUnitTestMixIn(object):
             'properties': {'mappings': []},
             'status': 'fake-status',
             'location': 'far-away',
+            'owner': 'fake-tenant',
         }
 
         expect_meta = {
@@ -1799,6 +1811,9 @@ class _ComputeAPIUnitTestMixIn(object):
             'delete_on_termination': False,
         }]
 
+        expected_meta = {'min_disk': 0, 'min_ram': 0, 'properties': {},
+                         'size': 0, 'status': 'active'}
+
         with mock.patch.object(self.compute_api.volume_api, 'get',
                                side_effect=get_vol_data):
             if not is_bootable:
@@ -1808,13 +1823,34 @@ class _ComputeAPIUnitTestMixIn(object):
             else:
                 meta = self.compute_api._get_bdm_image_metadata(self.context,
                                     block_device_mapping)
-                self.assertEqual({}, meta)
+                self.assertEqual(expected_meta, meta)
 
     def test_boot_volume_non_bootable(self):
         self._test_boot_volume_bootable(False)
 
     def test_boot_volume_bootable(self):
         self._test_boot_volume_bootable(True)
+
+    def test_boot_volume_basic_property(self):
+        block_device_mapping = [{
+            'id': 1,
+            'device_name': 'vda',
+            'no_device': None,
+            'virtual_name': None,
+            'snapshot_id': None,
+            'volume_id': '1',
+            'delete_on_termination': False,
+        }]
+        fake_volume = {"volume_image_metadata":
+                       {"min_ram": 256, "min_disk": 128, "foo": "bar"}}
+        with mock.patch.object(self.compute_api.volume_api, 'get',
+                               return_value=fake_volume):
+            meta = self.compute_api._get_bdm_image_metadata(
+                self.context, block_device_mapping)
+            self.assertEqual(256, meta['min_ram'])
+            self.assertEqual(128, meta['min_disk'])
+            self.assertEqual('active', meta['status'])
+            self.assertEqual('bar', meta['properties']['foo'])
 
     def _create_instance_with_disabled_disk_config(self, object=False):
         sys_meta = {"image_auto_disk_config": "Disabled"}
@@ -1832,7 +1868,7 @@ class _ComputeAPIUnitTestMixIn(object):
             'properties': {"auto_disk_config": "Disabled"},
         }
 
-        def fake_show(obj, context, image_id):
+        def fake_show(obj, context, image_id, **kwargs):
             return self.fake_image
         fake_image.stub_out_image_service(self.stubs)
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
@@ -1968,8 +2004,44 @@ class _ComputeAPIUnitTestMixIn(object):
                 None, new_image, flavor, {}, [])
         self.assertEqual(vm_mode.XEN, instance.vm_mode)
 
-    @mock.patch('nova.quota.QUOTAS.commit')
-    @mock.patch('nova.quota.QUOTAS.reserve')
+    def _test_check_injected_file_quota_onset_file_limit_exceeded(self,
+                                                                  side_effect):
+        injected_files = [
+            {
+                "path": "/etc/banner.txt",
+                "contents": "foo"
+            }
+        ]
+        with mock.patch.object(quota.QUOTAS, 'limit_check',
+                               side_effect=side_effect):
+            self.compute_api._check_injected_file_quota(
+                self.context, injected_files)
+
+    def test_check_injected_file_quota_onset_file_limit_exceeded(self):
+        # This is the first call to limit_check.
+        side_effect = exception.OverQuota(overs='injected_files')
+        self.assertRaises(exception.OnsetFileLimitExceeded,
+            self._test_check_injected_file_quota_onset_file_limit_exceeded,
+            side_effect)
+
+    def test_check_injected_file_quota_onset_file_path_limit(self):
+        # This is the second call to limit_check.
+        side_effect = (mock.DEFAULT,
+                       exception.OverQuota(overs='injected_file_path_bytes'))
+        self.assertRaises(exception.OnsetFilePathLimitExceeded,
+            self._test_check_injected_file_quota_onset_file_limit_exceeded,
+            side_effect)
+
+    def test_check_injected_file_quota_onset_file_content_limit(self):
+        # This is the second call to limit_check but with different overs.
+        side_effect = (mock.DEFAULT,
+            exception.OverQuota(overs='injected_file_content_bytes'))
+        self.assertRaises(exception.OnsetFileContentLimitExceeded,
+            self._test_check_injected_file_quota_onset_file_limit_exceeded,
+            side_effect)
+
+    @mock.patch('nova.objects.Quotas.commit')
+    @mock.patch('nova.objects.Quotas.reserve')
     @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstanceAction.action_start')
     def test_restore(self, action_start, instance_save, quota_reserve,
@@ -2078,8 +2150,6 @@ class _ComputeAPIUnitTestMixIn(object):
 
     @mock.patch.object(objects.Instance, 'create')
     @mock.patch.object(compute_api.SecurityGroupAPI, 'ensure_default')
-    @mock.patch.object(compute_api.API,
-                       '_populate_instance_shutdown_terminate')
     @mock.patch.object(compute_api.API, '_populate_instance_names')
     @mock.patch.object(compute_api.API, '_populate_instance_for_create')
     @mock.patch.object(cinder.API, 'get',
@@ -2087,7 +2157,6 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_create_db_entry_for_new_instancewith_cinder_down(self, mock_get,
                                                             mock_create,
                                                             mock_names,
-                                                            mock_terminate,
                                                             mock_ensure,
                                                             mock_inst_create):
         instance = self._create_instance_obj()

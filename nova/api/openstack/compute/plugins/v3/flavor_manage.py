@@ -50,7 +50,7 @@ class FlavorManageController(wsgi.Controller):
 
     @wsgi.response(201)
     @wsgi.action("create")
-    @extensions.expected_errors((400, 409))
+    @extensions.expected_errors((400, 409, 500))
     @validation.schema(flavor_manage.create)
     def _create(self, req, body):
         context = req.environ['nova.context']
@@ -65,8 +65,8 @@ class FlavorManageController(wsgi.Controller):
         root_gb = vals['disk']
         ephemeral_gb = vals.get('ephemeral', 0)
         swap = vals.get('swap', 0)
-        rxtx_factor = vals.get('os-flavor-rxtx:rxtx_factor', 1.0)
-        is_public = vals.get('flavor-access:is_public', True)
+        rxtx_factor = vals.get('rxtx_factor', 1.0)
+        is_public = vals.get('os-flavor-access:is_public', True)
 
         try:
             flavor = flavors.create(name, memory, vcpus, root_gb,
@@ -81,6 +81,9 @@ class FlavorManageController(wsgi.Controller):
         except (exception.FlavorExists,
                 exception.FlavorIdExists) as err:
             raise webob.exc.HTTPConflict(explanation=err.format_message())
+        except exception.FlavorCreateFailed as err:
+            raise webob.exc.HTTPInternalServerError(explanation=
+                err.format_message())
 
         return self._view_builder.show(req, flavor)
 

@@ -18,6 +18,7 @@ from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.openstack.common import jsonutils
+from nova import utils
 
 
 class ComputeNode(base.NovaPersistentObject, base.NovaObject):
@@ -26,7 +27,8 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
     # Version 1.2: String attributes updated to support unicode
     # Version 1.3: Added stats field
     # Version 1.4: Added host ip field
-    VERSION = '1.4'
+    # Version 1.5: Added numa_topology field
+    VERSION = '1.5'
 
     fields = {
         'id': fields.IntegerField(read_only=True),
@@ -49,11 +51,13 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
         'metrics': fields.StringField(nullable=True),
         'stats': fields.DictOfNullableStringsField(nullable=True),
         'host_ip': fields.IPAddressField(nullable=True),
+        'numa_topology': fields.StringField(nullable=True),
         }
 
     def obj_make_compatible(self, primitive, target_version):
-        target_version = (int(target_version.split('.')[0]),
-                          int(target_version.split('.')[1]))
+        target_version = utils.convert_version_to_tuple(target_version)
+        if target_version < (1, 5) and 'numa_topology' in primitive:
+            del primitive['numa_topology']
         if target_version < (1, 4) and 'host_ip' in primitive:
             del primitive['host_ip']
         if target_version < (1, 3) and 'stats' in primitive:
@@ -137,7 +141,9 @@ class ComputeNodeList(base.ObjectListBase, base.NovaObject):
     # Version 1.1 ComputeNode version 1.3
     # Version 1.2 Add get_by_service()
     # Version 1.3 ComputeNode version 1.4
-    VERSION = '1.3'
+    # Version 1.4 ComputeNode version 1.5
+    # Version 1.5 Add use_slave to get_by_service
+    VERSION = '1.5'
     fields = {
         'objects': fields.ListOfObjectsField('ComputeNode'),
         }
@@ -147,6 +153,8 @@ class ComputeNodeList(base.ObjectListBase, base.NovaObject):
         '1.1': '1.3',
         '1.2': '1.3',
         '1.3': '1.4',
+        '1.4': '1.5',
+        '1.5': '1.5',
         }
 
     @base.remotable_classmethod
@@ -163,12 +171,13 @@ class ComputeNodeList(base.ObjectListBase, base.NovaObject):
                                   db_computes)
 
     @base.remotable_classmethod
-    def _get_by_service(cls, context, service_id):
+    def _get_by_service(cls, context, service_id, use_slave=False):
         db_service = db.service_get(context, service_id,
-                                    with_compute_node=True)
+                                    with_compute_node=True,
+                                    use_slave=use_slave)
         return base.obj_make_list(context, cls(context), objects.ComputeNode,
                                   db_service['compute_node'])
 
     @classmethod
-    def get_by_service(cls, context, service):
-        return cls._get_by_service(context, service.id)
+    def get_by_service(cls, context, service, use_slave=False):
+        return cls._get_by_service(context, service.id, use_slave=use_slave)

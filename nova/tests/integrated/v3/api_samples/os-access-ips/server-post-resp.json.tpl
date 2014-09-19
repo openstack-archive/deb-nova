@@ -1,8 +1,8 @@
 {
     "server": {
-        "os-access-ips:access_ip_v4": "%(access_ip_v4)s",
-        "os-access-ips:access_ip_v6": "%(access_ip_v6)s",
-        "admin_password": "%(password)s",
+        "accessIPv4": "%(access_ip_v4)s",
+        "accessIPv6": "%(access_ip_v6)s",
+        "adminPass": "%(password)s",
         "id": "%(id)s",
         "links": [
             {

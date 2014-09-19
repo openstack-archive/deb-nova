@@ -37,7 +37,7 @@ from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy.orm import exc as sqlalchemy_orm_exc
 from sqlalchemy.orm import query
-from sqlalchemy.sql.expression import select
+from sqlalchemy import sql
 from sqlalchemy import Table
 
 from nova import block_device
@@ -332,7 +332,7 @@ class AggregateDBApiTestCase(test.TestCase):
                         matchers.DictMatches(_get_fake_aggr_metadata()))
 
     def test_aggregate_create_delete_create_with_metadata(self):
-        #test for bug 1052479
+        # test for bug 1052479
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt)
         expected_metadata = db.aggregate_metadata_get(ctxt, result['id'])
@@ -578,6 +578,18 @@ class AggregateDBApiTestCase(test.TestCase):
         expected = db.aggregate_metadata_get(ctxt, result['id'])
         self.assertThat(metadata, matchers.DictMatches(expected))
 
+    def test_aggregate_metadata_add_and_update(self):
+        ctxt = context.get_admin_context()
+        result = _create_aggregate(context=ctxt)
+        metadata = _get_fake_aggr_metadata()
+        key = metadata.keys()[0]
+        new_metadata = {key: 'foo',
+                        'fake_new_key': 'fake_new_value'}
+        metadata.update(new_metadata)
+        db.aggregate_metadata_add(ctxt, result['id'], new_metadata)
+        expected = db.aggregate_metadata_get(ctxt, result['id'])
+        self.assertThat(metadata, matchers.DictMatches(expected))
+
     def test_aggregate_metadata_add_retry(self):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt, metadata=None)
@@ -738,6 +750,106 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         result = sqlalchemy_api.instance_get_active_by_window_joined(
             ctxt, begin=now2, end=now3)
         self.assertEqual(2, len(result))
+
+
+class ProcessSortParamTestCase(test.TestCase):
+
+    def test_process_sort_params_defaults(self):
+        '''Verifies default sort parameters.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params([], [])
+        self.assertEqual(['created_at', 'id'], sort_keys)
+        self.assertEqual(['asc', 'asc'], sort_dirs)
+
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(None, None)
+        self.assertEqual(['created_at', 'id'], sort_keys)
+        self.assertEqual(['asc', 'asc'], sort_dirs)
+
+    def test_process_sort_params_override_default_keys(self):
+        '''Verifies that the default keys can be overridden.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            [], [], default_keys=['key1', 'key2', 'key3'])
+        self.assertEqual(['key1', 'key2', 'key3'], sort_keys)
+        self.assertEqual(['asc', 'asc', 'asc'], sort_dirs)
+
+    def test_process_sort_params_override_default_dir(self):
+        '''Verifies that the default direction can be overridden.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            [], [], default_dir='dir1')
+        self.assertEqual(['created_at', 'id'], sort_keys)
+        self.assertEqual(['dir1', 'dir1'], sort_dirs)
+
+    def test_process_sort_params_override_default_key_and_dir(self):
+        '''Verifies that the default key and dir can be overridden.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            [], [], default_keys=['key1', 'key2', 'key3'],
+            default_dir='dir1')
+        self.assertEqual(['key1', 'key2', 'key3'], sort_keys)
+        self.assertEqual(['dir1', 'dir1', 'dir1'], sort_dirs)
+
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            [], [], default_keys=[], default_dir='dir1')
+        self.assertEqual([], sort_keys)
+        self.assertEqual([], sort_dirs)
+
+    def test_process_sort_params_non_default(self):
+        '''Verifies that non-default keys are added correctly.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['key1', 'key2'], ['asc', 'desc'])
+        self.assertEqual(['key1', 'key2', 'created_at', 'id'], sort_keys)
+        # First sort_dir in list is used when adding the default keys
+        self.assertEqual(['asc', 'desc', 'asc', 'asc'], sort_dirs)
+
+    def test_process_sort_params_default(self):
+        '''Verifies that default keys are added correctly.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2'], ['asc', 'desc'])
+        self.assertEqual(['id', 'key2', 'created_at'], sort_keys)
+        self.assertEqual(['asc', 'desc', 'asc'], sort_dirs)
+
+        # Include default key value, rely on default direction
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2'], [])
+        self.assertEqual(['id', 'key2', 'created_at'], sort_keys)
+        self.assertEqual(['asc', 'asc', 'asc'], sort_dirs)
+
+    def test_process_sort_params_default_dir(self):
+        '''Verifies that the default dir is applied to all keys.'''
+        # Direction is set, ignore default dir
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2'], ['desc'], default_dir='dir')
+        self.assertEqual(['id', 'key2', 'created_at'], sort_keys)
+        self.assertEqual(['desc', 'desc', 'desc'], sort_dirs)
+
+        # But should be used if no direction is set
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2'], [], default_dir='dir')
+        self.assertEqual(['id', 'key2', 'created_at'], sort_keys)
+        self.assertEqual(['dir', 'dir', 'dir'], sort_dirs)
+
+    def test_process_sort_params_unequal_length(self):
+        '''Verifies that a sort direction list is applied correctly.'''
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2', 'key3'], ['desc'])
+        self.assertEqual(['id', 'key2', 'key3', 'created_at'], sort_keys)
+        self.assertEqual(['desc', 'desc', 'desc', 'desc'], sort_dirs)
+
+        # Default direction is the first key in the list
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2', 'key3'], ['desc', 'asc'])
+        self.assertEqual(['id', 'key2', 'key3', 'created_at'], sort_keys)
+        self.assertEqual(['desc', 'asc', 'desc', 'desc'], sort_dirs)
+
+        sort_keys, sort_dirs = sqlalchemy_api.process_sort_params(
+            ['id', 'key2', 'key3'], ['desc', 'asc', 'asc'])
+        self.assertEqual(['id', 'key2', 'key3', 'created_at'], sort_keys)
+        self.assertEqual(['desc', 'asc', 'asc', 'desc'], sort_dirs)
+
+    def test_process_sort_params_extra_dirs_lengths(self):
+        '''InvalidInput raised if more directions are given.'''
+        self.assertRaises(exception.InvalidInput,
+                          sqlalchemy_api.process_sort_params,
+                          ['key1', 'key2'],
+                          ['asc', 'desc', 'desc'])
 
 
 class MigrationTestCase(test.TestCase):
@@ -1635,29 +1747,29 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         instance = self.create_instance_with_args(
             metadata={'foo': 'bar'})
         self.create_instance_with_args()
-        #For format 'tag-'
+        # For format 'tag-'
         result = db.instance_get_all_by_filters(
             self.ctxt, {'filter': [
                 {'name': 'tag-key', 'value': 'foo'},
                 {'name': 'tag-value', 'value': 'bar'},
             ]})
         self._assertEqualListsOfInstances([instance], result)
-        #For format 'tag:'
+        # For format 'tag:'
         result = db.instance_get_all_by_filters(
             self.ctxt, {'filter': [
                 {'name': 'tag:foo', 'value': 'bar'},
             ]})
         self._assertEqualListsOfInstances([instance], result)
-        #For non-existent tag
+        # For non-existent tag
         result = db.instance_get_all_by_filters(
             self.ctxt, {'filter': [
                 {'name': 'tag:foo', 'value': 'barred'},
             ]})
         self.assertEqual([], result)
 
-        #Confirm with deleted tags
+        # Confirm with deleted tags
         db.instance_metadata_delete(self.ctxt, instance['uuid'], 'foo')
-        #For format 'tag-'
+        # For format 'tag-'
         result = db.instance_get_all_by_filters(
             self.ctxt, {'filter': [
                 {'name': 'tag-key', 'value': 'foo'},
@@ -1668,7 +1780,7 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 {'name': 'tag-value', 'value': 'bar'}
             ]})
         self.assertEqual([], result)
-        #For format 'tag:'
+        # For format 'tag:'
         result = db.instance_get_all_by_filters(
             self.ctxt, {'filter': [
                 {'name': 'tag:foo', 'value': 'bar'},
@@ -2000,6 +2112,10 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 db.instance_floating_address_get_all(ctxt, instance_uuids[2])
         self.assertEqual(set([float_addresses[2]]), set(real_float_addresses))
 
+        self.assertRaises(exception.InvalidUUID,
+                          db.instance_floating_address_get_all,
+                          ctxt, 'invalid_uuid')
+
     def test_instance_stringified_ips(self):
         instance = self.create_instance_with_args()
         instance = db.instance_update(
@@ -2072,6 +2188,37 @@ class InstanceMetadataTestCase(test.TestCase):
                     {'new_key': 'new_value'}, True)
         metadata = db.instance_metadata_get(self.ctxt, instance['uuid'])
         self.assertEqual(metadata, {'new_key': 'new_value'})
+
+
+class InstanceExtraTestCase(test.TestCase):
+    def setUp(self):
+        super(InstanceExtraTestCase, self).setUp()
+        self.ctxt = context.get_admin_context()
+        self.instance = db.instance_create(self.ctxt, {})
+
+    def test_instance_extra_create(self):
+        inst_extra = db.instance_extra_create(
+                self.ctxt, {'instance_uuid': self.instance['uuid'],
+                            'numa_topology': '{"fake": "topology"}'})
+        self.assertIsNotNone(inst_extra)
+
+    def test_instance_extra_create_none(self):
+        inst_extra = db.instance_extra_create(
+                self.ctxt, {'instance_uuid': self.instance['uuid']})
+        self.assertIsNotNone(inst_extra)
+
+    def test_instance_extra_get_by_uuid(self):
+        db.instance_extra_create(
+                self.ctxt, {'instance_uuid': self.instance['uuid'],
+                            'numa_topology': '{"fake": "topology"}'})
+        inst_extra = db.instance_extra_get_by_instance_uuid(
+                self.ctxt, self.instance['uuid'])
+        self.assertEqual('{"fake": "topology"}', inst_extra['numa_topology'])
+
+    def test_instance_extra_get_by_uuid_none(self):
+        inst_extra = db.instance_extra_get_by_instance_uuid(
+                self.ctxt, self.instance['uuid'])
+        self.assertIsNone(inst_extra)
 
 
 class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -2784,10 +2931,10 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
             real_it = db.flavor_get_all(self.ctxt, filters=filters)
             self._assertEqualListsOfObjects(expected_it, real_it)
 
-        #no filter
+        # no filter
         assert_multi_filter_flavor_get()
 
-        #test only with one filter
+        # test only with one filter
         for filt in mem_filts:
             assert_multi_filter_flavor_get(filt)
         for filt in root_filts:
@@ -2797,7 +2944,7 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
         for filt in is_public_filts:
             assert_multi_filter_flavor_get(filt)
 
-        #test all filters together
+        # test all filters together
         for mem in mem_filts:
             for root in root_filts:
                 for disabled in disabled_filts:
@@ -3894,12 +4041,16 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_floating_ip_deallocate(self):
         values = {'address': '1.1.1.1', 'project_id': 'fake', 'host': 'fake'}
         float_ip = self._create_floating_ip(values)
-        db.floating_ip_deallocate(self.ctxt, float_ip.address)
+        rows_updated = db.floating_ip_deallocate(self.ctxt, float_ip.address)
+        self.assertEqual(1, rows_updated)
 
         updated_float_ip = db.floating_ip_get(self.ctxt, float_ip.id)
         self.assertIsNone(updated_float_ip.project_id)
         self.assertIsNone(updated_float_ip.host)
         self.assertFalse(updated_float_ip.auto_assigned)
+
+    def test_floating_ip_deallocate_address_not_found(self):
+        self.assertEqual(0, db.floating_ip_deallocate(self.ctxt, '2.2.2.2'))
 
     def test_floating_ip_destroy(self):
         addresses = ['1.1.1.1', '1.1.1.2', '1.1.1.3']
@@ -4092,7 +4243,9 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'interface': 'some_interface',
             'pool': 'some_pool'
         }
-        db.floating_ip_update(self.ctxt, float_ip['address'], values)
+        floating_ref = db.floating_ip_update(self.ctxt, float_ip['address'],
+                                             values)
+        self.assertIsNotNone(floating_ref)
         updated_float_ip = db.floating_ip_get(self.ctxt, float_ip['id'])
         self._assertEqualObjects(updated_float_ip, values,
                                  ignored_keys=['id', 'address', 'updated_at',
@@ -4617,18 +4770,18 @@ class BlockDeviceMappingTestCase(test.TestCase):
         uuid2 = db.instance_create(self.ctxt, {})['uuid']
 
         bmds_values = [{'instance_uuid': uuid1,
-                        'device_name': 'first'},
+                        'device_name': '/dev/vda'},
                        {'instance_uuid': uuid2,
-                        'device_name': 'second'},
+                        'device_name': '/dev/vdb'},
                        {'instance_uuid': uuid2,
-                        'device_name': 'third'}]
+                        'device_name': '/dev/vdc'}]
 
         for bdm in bmds_values:
             self._create_bdm(bdm)
 
         bmd = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid1)
         self.assertEqual(len(bmd), 1)
-        self.assertEqual(bmd[0]['device_name'], 'first')
+        self.assertEqual(bmd[0]['device_name'], '/dev/vda')
 
         bmd = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid2)
         self.assertEqual(len(bmd), 2)
@@ -4644,27 +4797,27 @@ class BlockDeviceMappingTestCase(test.TestCase):
         vol_id1 = '69f5c254-1a5b-4fff-acf7-cb369904f58f'
         vol_id2 = '69f5c254-1a5b-4fff-acf7-cb369904f59f'
 
-        self._create_bdm({'device_name': 'fake1', 'volume_id': vol_id1})
-        self._create_bdm({'device_name': 'fake2', 'volume_id': vol_id2})
+        self._create_bdm({'device_name': '/dev/vda', 'volume_id': vol_id1})
+        self._create_bdm({'device_name': '/dev/vdb', 'volume_id': vol_id2})
 
         uuid = self.instance['uuid']
         db.block_device_mapping_destroy_by_instance_and_volume(self.ctxt, uuid,
                                                                vol_id1)
         bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
         self.assertEqual(len(bdms), 1)
-        self.assertEqual(bdms[0]['device_name'], 'fake2')
+        self.assertEqual(bdms[0]['device_name'], '/dev/vdb')
 
     def test_block_device_mapping_destroy_by_instance_and_device(self):
-        self._create_bdm({'device_name': 'fake1'})
-        self._create_bdm({'device_name': 'fake2'})
+        self._create_bdm({'device_name': '/dev/vda'})
+        self._create_bdm({'device_name': '/dev/vdb'})
 
         uuid = self.instance['uuid']
-        params = (self.ctxt, uuid, 'fake1')
+        params = (self.ctxt, uuid, '/dev/vdb')
         db.block_device_mapping_destroy_by_instance_and_device(*params)
 
         bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
         self.assertEqual(len(bdms), 1)
-        self.assertEqual(bdms[0]['device_name'], 'fake2')
+        self.assertEqual(bdms[0]['device_name'], '/dev/vda')
 
     def test_block_device_mapping_get_by_volume_id(self):
         self._create_bdm({'volume_id': 'fake_id'})
@@ -5535,7 +5688,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  pci_stats='',
                                  metrics='',
                                  extra_resources='',
-                                 stats='')
+                                 stats='', numa_topology='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
                      num_proj_23456=2, num_vm_building=3)
@@ -6251,10 +6404,10 @@ class Ec2TestCase(test.TestCase):
             except exception.NotFound as exc:
                 self.assertIn(unicode(value), unicode(exc))
 
-        check_exc_format(db.get_ec2_snapshot_id_by_uuid, 'fake')
-        check_exc_format(db.get_snapshot_uuid_by_ec2_id, 123456)
         check_exc_format(db.get_ec2_instance_id_by_uuid, 'fake')
         check_exc_format(db.get_instance_uuid_by_ec2_id, 123456)
+        check_exc_format(db.ec2_snapshot_get_by_ec2_id, 123456)
+        check_exc_format(db.ec2_snapshot_get_by_uuid, 'fake')
 
     def test_ec2_volume_create(self):
         vol = db.ec2_volume_create(self.ctxt, 'fake-uuid')
@@ -6276,25 +6429,25 @@ class Ec2TestCase(test.TestCase):
         self.assertIsNotNone(snap['id'])
         self.assertEqual(snap['uuid'], 'fake-uuid')
 
-    def test_get_ec2_snapshot_id_by_uuid(self):
+    def test_ec2_snapshot_get_by_ec2_id(self):
         snap = db.ec2_snapshot_create(self.ctxt, 'fake-uuid')
-        snap_id = db.get_ec2_snapshot_id_by_uuid(self.ctxt, 'fake-uuid')
-        self.assertEqual(snap['id'], snap_id)
+        snap2 = db.ec2_snapshot_get_by_ec2_id(self.ctxt, snap['id'])
+        self.assertEqual(snap2['uuid'], 'fake-uuid')
 
-    def test_get_snapshot_uuid_by_ec2_id(self):
+    def test_ec2_snapshot_get_by_uuid(self):
         snap = db.ec2_snapshot_create(self.ctxt, 'fake-uuid')
-        snap_uuid = db.get_snapshot_uuid_by_ec2_id(self.ctxt, snap['id'])
-        self.assertEqual(snap_uuid, 'fake-uuid')
+        snap2 = db.ec2_snapshot_get_by_uuid(self.ctxt, 'fake-uuid')
+        self.assertEqual(snap['id'], snap2['id'])
 
-    def test_get_ec2_snapshot_id_by_uuid_not_found(self):
+    def test_ec2_snapshot_get_by_ec2_id_not_found(self):
         self.assertRaises(exception.SnapshotNotFound,
-                          db.get_ec2_snapshot_id_by_uuid,
-                          self.ctxt, 'uuid-not-present')
+                          db.ec2_snapshot_get_by_ec2_id,
+                          self.ctxt, 123456)
 
-    def test_get_snapshot_uuid_by_ec2_id_not_found(self):
+    def test_ec2_snapshot_get_by_uuid_not_found(self):
         self.assertRaises(exception.SnapshotNotFound,
-                          db.get_snapshot_uuid_by_ec2_id,
-                          self.ctxt, 100500)
+                          db.ec2_snapshot_get_by_uuid,
+                          self.ctxt, 'fake-uuid')
 
     def test_ec2_instance_create(self):
         inst = db.ec2_instance_create(self.ctxt, 'fake-uuid')
@@ -6420,12 +6573,12 @@ class ArchiveTestCase(test.TestCase):
                 where(self.instance_id_mappings.c.uuid.in_(self.uuidstrs[:4]))\
                 .values(deleted=1)
         self.conn.execute(update_statement)
-        qiim = select([self.instance_id_mappings]).where(self.
+        qiim = sql.select([self.instance_id_mappings]).where(self.
                                 instance_id_mappings.c.uuid.in_(self.uuidstrs))
         rows = self.conn.execute(qiim).fetchall()
         # Verify we have 6 in main
         self.assertEqual(len(rows), 6)
-        qsiim = select([self.shadow_instance_id_mappings]).\
+        qsiim = sql.select([self.shadow_instance_id_mappings]).\
                 where(self.shadow_instance_id_mappings.c.uuid.in_(
                                                                 self.uuidstrs))
         rows = self.conn.execute(qsiim).fetchall()
@@ -6489,12 +6642,12 @@ class ArchiveTestCase(test.TestCase):
                 where(main_table.c.uuid.in_(self.uuidstrs[:4]))\
                 .values(deleted=1)
         self.conn.execute(update_statement)
-        qmt = select([main_table]).where(main_table.c.uuid.in_(
+        qmt = sql.select([main_table]).where(main_table.c.uuid.in_(
                                              self.uuidstrs))
         rows = self.conn.execute(qmt).fetchall()
         # Verify we have 6 in main
         self.assertEqual(len(rows), 6)
-        qst = select([shadow_table]).\
+        qst = sql.select([shadow_table]).\
                 where(shadow_table.c.uuid.in_(self.uuidstrs))
         rows = self.conn.execute(qst).fetchall()
         # Verify we have 0 in shadow
@@ -6533,11 +6686,11 @@ class ArchiveTestCase(test.TestCase):
                            where(self.dns_domains.c.domain == uuidstr0).\
                            values(deleted=True)
         self.conn.execute(update_statement)
-        qdd = select([self.dns_domains], self.dns_domains.c.domain ==
+        qdd = sql.select([self.dns_domains], self.dns_domains.c.domain ==
                                             uuidstr0)
         rows = self.conn.execute(qdd).fetchall()
         self.assertEqual(len(rows), 1)
-        qsdd = select([self.shadow_dns_domains],
+        qsdd = sql.select([self.shadow_dns_domains],
                         self.shadow_dns_domains.c.domain == uuidstr0)
         rows = self.conn.execute(qsdd).fetchall()
         self.assertEqual(len(rows), 0)
@@ -6598,21 +6751,21 @@ class ArchiveTestCase(test.TestCase):
                 .values(deleted=1)
         self.conn.execute(update_statement2)
         # Verify we have 6 in each main table
-        qiim = select([self.instance_id_mappings]).where(
+        qiim = sql.select([self.instance_id_mappings]).where(
                          self.instance_id_mappings.c.uuid.in_(self.uuidstrs))
         rows = self.conn.execute(qiim).fetchall()
         self.assertEqual(len(rows), 6)
-        qi = select([self.instances]).where(self.instances.c.uuid.in_(
+        qi = sql.select([self.instances]).where(self.instances.c.uuid.in_(
                                              self.uuidstrs))
         rows = self.conn.execute(qi).fetchall()
         self.assertEqual(len(rows), 6)
         # Verify we have 0 in each shadow table
-        qsiim = select([self.shadow_instance_id_mappings]).\
+        qsiim = sql.select([self.shadow_instance_id_mappings]).\
                 where(self.shadow_instance_id_mappings.c.uuid.in_(
                                                             self.uuidstrs))
         rows = self.conn.execute(qsiim).fetchall()
         self.assertEqual(len(rows), 0)
-        qsi = select([self.shadow_instances]).\
+        qsi = sql.select([self.shadow_instances]).\
                 where(self.shadow_instances.c.uuid.in_(self.uuidstrs))
         rows = self.conn.execute(qsi).fetchall()
         self.assertEqual(len(rows), 0)
@@ -6661,9 +6814,9 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'project_id': self.project_id}
 
     def _create_instance_group(self, context, values, policies=None,
-                               metadata=None, members=None):
+                               members=None):
         return db.instance_group_create(context, values, policies=policies,
-                                        metadata=metadata, members=members)
+                                        members=members)
 
     def test_instance_group_create_no_key(self):
         values = self._get_default_values()
@@ -6775,15 +6928,6 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         db.instance_group_update(self.context, id, values)
         result = db.instance_group_get(self.context, id)
         self.assertEqual(result['name'], 'new_fake_name')
-        # update metadata
-        values = self._get_default_values()
-        metadataInput = {'key11': 'value1',
-                         'key12': 'value2'}
-        values['metadata'] = metadataInput
-        db.instance_group_update(self.context, id, values)
-        result = db.instance_group_get(self.context, id)
-        metadata = result['metadetails']
-        self._assertEqualObjects(metadata, metadataInput)
         # update update members
         values = self._get_default_values()
         members = ['instance_id1', 'instance_id2']
@@ -6802,86 +6946,6 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertRaises(exception.InstanceGroupNotFound,
                           db.instance_group_update, self.context,
                           'invalid_id', values)
-
-
-class InstanceGroupMetadataDBApiTestCase(InstanceGroupDBApiTestCase):
-    def test_instance_group_metadata_on_create(self):
-        values = self._get_default_values()
-        values['uuid'] = 'fake_id'
-        metadata = {'key11': 'value1',
-                    'key12': 'value2'}
-        result = self._create_instance_group(self.context, values,
-                                             metadata=metadata)
-        ignored_keys = ['id', 'deleted', 'deleted_at', 'updated_at',
-                        'created_at']
-        self._assertEqualObjects(result, values, ignored_keys)
-        self._assertEqualObjects(metadata, result['metadetails'])
-
-    def test_instance_group_metadata_add(self):
-        values = self._get_default_values()
-        values['uuid'] = 'fake_id'
-        result = self._create_instance_group(self.context, values)
-        id = result['uuid']
-        metadata = db.instance_group_metadata_get(self.context, id)
-        self._assertEqualObjects(metadata, {})
-        metadata = {'key1': 'value1',
-                    'key2': 'value2'}
-        db.instance_group_metadata_add(self.context, id, metadata)
-        metadata2 = db.instance_group_metadata_get(self.context, id)
-        self._assertEqualObjects(metadata, metadata2)
-
-    def test_instance_group_update(self):
-        values = self._get_default_values()
-        values['uuid'] = 'fake_id'
-        result = self._create_instance_group(self.context, values)
-        id = result['uuid']
-        metadata = {'key1': 'value1',
-                    'key2': 'value2'}
-        db.instance_group_metadata_add(self.context, id, metadata)
-        metadata2 = db.instance_group_metadata_get(self.context, id)
-        self._assertEqualObjects(metadata, metadata2)
-        # check add with existing keys
-        metadata = {'key1': 'value1',
-                    'key2': 'value2',
-                    'key3': 'value3'}
-        db.instance_group_metadata_add(self.context, id, metadata)
-        metadata3 = db.instance_group_metadata_get(self.context, id)
-        self._assertEqualObjects(metadata, metadata3)
-
-    def test_instance_group_delete(self):
-        values = self._get_default_values()
-        values['uuid'] = 'fake_id'
-        result = self._create_instance_group(self.context, values)
-        id = result['uuid']
-        metadata = {'key1': 'value1',
-                    'key2': 'value2',
-                    'key3': 'value3'}
-        db.instance_group_metadata_add(self.context, id, metadata)
-        metadata3 = db.instance_group_metadata_get(self.context, id)
-        self._assertEqualObjects(metadata, metadata3)
-        db.instance_group_metadata_delete(self.context, id, 'key1')
-        metadata = db.instance_group_metadata_get(self.context, id)
-        self.assertNotIn('key1', metadata)
-        db.instance_group_metadata_delete(self.context, id, 'key2')
-        metadata = db.instance_group_metadata_get(self.context, id)
-        self.assertNotIn('key2', metadata)
-
-    def test_instance_group_metadata_invalid_ids(self):
-        values = self._get_default_values()
-        result = self._create_instance_group(self.context, values)
-        id = result['uuid']
-        self.assertRaises(exception.InstanceGroupNotFound,
-                          db.instance_group_metadata_get,
-                          self.context, 'invalid')
-        self.assertRaises(exception.InstanceGroupNotFound,
-                          db.instance_group_metadata_delete, self.context,
-                          'invalidid', 'key1')
-        metadata = {'key1': 'value1',
-                    'key2': 'value2'}
-        db.instance_group_metadata_add(self.context, id, metadata)
-        self.assertRaises(exception.InstanceGroupMetadataNotFound,
-                          db.instance_group_metadata_delete,
-                          self.context, id, 'invalidkey')
 
 
 class InstanceGroupMembersDBApiTestCase(InstanceGroupDBApiTestCase):

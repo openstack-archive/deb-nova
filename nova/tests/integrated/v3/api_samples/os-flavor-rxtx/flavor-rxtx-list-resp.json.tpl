@@ -16,9 +16,9 @@
                 }
             ],
             "name": "m1.tiny",
-            "flavor-access:is_public": true,
+            "os-flavor-access:is_public": true,
             "ram": 512,
-            "os-flavor-rxtx:rxtx_factor": 1.0,
+            "rxtx_factor": 1.0,
             "swap": 0,
             "vcpus": 1
         },
@@ -38,9 +38,9 @@
                 }
             ],
             "name": "m1.small",
-            "flavor-access:is_public": true,
+            "os-flavor-access:is_public": true,
             "ram": 2048,
-            "os-flavor-rxtx:rxtx_factor": 1.0,
+            "rxtx_factor": 1.0,
             "swap": 0,
             "vcpus": 1
         },
@@ -60,9 +60,9 @@
                 }
             ],
             "name": "m1.medium",
-            "flavor-access:is_public": true,
+            "os-flavor-access:is_public": true,
             "ram": 4096,
-            "os-flavor-rxtx:rxtx_factor": 1.0,
+            "rxtx_factor": 1.0,
             "swap": 0,
             "vcpus": 2
         },
@@ -82,9 +82,9 @@
                 }
             ],
             "name": "m1.large",
-            "flavor-access:is_public": true,
+            "os-flavor-access:is_public": true,
             "ram": 8192,
-            "os-flavor-rxtx:rxtx_factor": 1.0,
+            "rxtx_factor": 1.0,
             "swap": 0,
             "vcpus": 4
         },
@@ -104,9 +104,9 @@
                 }
             ],
             "name": "m1.xlarge",
-            "flavor-access:is_public": true,
+            "os-flavor-access:is_public": true,
             "ram": 16384,
-            "os-flavor-rxtx:rxtx_factor": 1.0,
+            "rxtx_factor": 1.0,
             "swap": 0,
             "vcpus": 8
         }

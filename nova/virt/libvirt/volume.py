@@ -36,7 +36,7 @@ from nova import paths
 from nova.storage import linuxscsi
 from nova import utils
 from nova.virt.libvirt import config as vconfig
-from nova.virt.libvirt import utils as virtutils
+from nova.virt.libvirt import utils as libvirt_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ class LibvirtBaseVolumeDriver(object):
         """Connect the volume. Returns xml for libvirt."""
 
         conf = vconfig.LibvirtConfigGuestDisk()
-        conf.driver_name = virtutils.pick_disk_driver_name(
+        conf.driver_name = libvirt_utils.pick_disk_driver_name(
             self.connection._get_hypervisor_version(),
             self.is_block_dev
         )
@@ -258,9 +258,9 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
         iscsi_properties = connection_info['data']
 
         if self.use_multipath:
-            #multipath installed, discovering other targets if available
-            #multipath should be configured on the nova-compute node,
-            #in order to fit storage vendor
+            # multipath installed, discovering other targets if available
+            # multipath should be configured on the nova-compute node,
+            # in order to fit storage vendor
             out = self._run_iscsiadm_bare(['-m',
                                           'discovery',
                                           '-t',
@@ -312,7 +312,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                        'tries': tries})
 
         if self.use_multipath:
-            #we use the multipath device instead of the single path device
+            # we use the multipath device instead of the single path device
             self._rescan_multipath()
 
             multipath_device = self._get_multipath_device_name(host_device)
@@ -465,8 +465,8 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                   "node.session.auth.password",
                                   iscsi_properties['auth_password'])
 
-        #duplicate logins crash iscsiadm after load,
-        #so we scan active sessions to see if the node is logged in.
+        # duplicate logins crash iscsiadm after load,
+        # so we scan active sessions to see if the node is logged in.
         out = self._run_iscsiadm_bare(["-m", "session"],
                                       run_as_root=True,
                                       check_exit_code=[0, 1, 21])[0] or ""
@@ -487,8 +487,8 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                    ("--login",),
                                    check_exit_code=[0, 255])
             except processutils.ProcessExecutionError as err:
-                #as this might be one of many paths,
-                #only set successful logins to startup automatically
+                # as this might be one of many paths,
+                # only set successful logins to startup automatically
                 if err.exit_code in [15]:
                     self._iscsiadm_update(iscsi_properties,
                                           "node.startup",
@@ -674,7 +674,7 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
         """
         mount_path = os.path.join(CONF.libvirt.nfs_mount_point_base,
                                   utils.get_hash_str(nfs_export))
-        if not virtutils.is_mounted(mount_path, nfs_export):
+        if not libvirt_utils.is_mounted(mount_path, nfs_export):
             self._mount_nfs(mount_path, nfs_export, options, ensure=True)
         return mount_path
 
@@ -730,7 +730,7 @@ class LibvirtAOEVolumeDriver(LibvirtBaseVolumeDriver):
             # NOTE(jbr_): If aoedevpath does not exist, do a discover.
             self._aoe_discover()
 
-        #NOTE(jbr_): Device path is not always present immediately
+        # NOTE(jbr_): Device path is not always present immediately
         def _wait_for_device_discovery(aoedevpath, mount_device):
             tries = self.tries
             if os.path.exists(aoedevpath):
@@ -824,7 +824,7 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
         """
         mount_path = os.path.join(CONF.libvirt.glusterfs_mount_point_base,
                                   utils.get_hash_str(glusterfs_export))
-        if not virtutils.is_mounted(mount_path, glusterfs_export):
+        if not libvirt_utils.is_mounted(mount_path, glusterfs_export):
             self._mount_glusterfs(mount_path, glusterfs_export,
                                   options, ensure=True)
         return mount_path
@@ -894,7 +894,7 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
         # We need to look for wwns on every hba
         # because we don't know ahead of time
         # where they will show up.
-        hbas = virtutils.get_fc_hbas_info()
+        hbas = libvirt_utils.get_fc_hbas_info()
         host_devices = []
         for hba in hbas:
             pci_num = self._get_pci_num(hba)
@@ -980,7 +980,6 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
         """Detach the volume from instance_name."""
         super(LibvirtFibreChannelVolumeDriver,
               self).disconnect_volume(connection_info, mount_device)
-        devices = connection_info['data']['devices']
 
         # If this is a multipath device, we need to search again
         # and make sure we remove all the devices. Some of them
@@ -990,6 +989,11 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
             mdev_info = linuxscsi.find_multipath_device(multipath_id)
             devices = mdev_info['devices']
             LOG.debug("devices to remove = %s", devices)
+        else:
+            # only needed when multipath-tools work improperly
+            devices = connection_info['data'].get('devices', [])
+            LOG.warn(_LW("multipath-tools probably work improperly. "
+                       "devices to remove = %s.") % devices)
 
         # There may have been more than 1 device mounted
         # by the kernel for this volume.  We have to remove

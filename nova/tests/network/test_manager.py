@@ -23,6 +23,7 @@ import mox
 import netaddr
 from oslo.config import cfg
 from oslo import messaging
+import six
 
 from nova import context
 from nova import db
@@ -76,6 +77,7 @@ networks = [{'id': 0,
              'bridge': 'fa0',
              'bridge_interface': 'fake_fa0',
              'gateway': '192.168.0.1',
+             'dhcp_server': '192.168.0.1',
              'broadcast': '192.168.0.255',
              'dns1': '192.168.0.1',
              'dns2': '192.168.0.2',
@@ -98,6 +100,7 @@ networks = [{'id': 0,
              'bridge': 'fa1',
              'bridge_interface': 'fake_fa1',
              'gateway': '192.168.1.1',
+             'dhcp_server': '192.168.1.1',
              'broadcast': '192.168.1.255',
              'dns1': '192.168.0.1',
              'dns2': '192.168.0.2',
@@ -331,8 +334,62 @@ class FlatNetworkTestCase(test.TestCase):
                                        256, None, None, None, None, None)
         self.assertEqual(1, len(nets))
         network = nets[0]
-        self.assertEqual(3, db.network_count_reserved_ips(context_admin,
+        self.assertEqual(4, db.network_count_reserved_ips(context_admin,
                         network['id']))
+
+    def test_validate_reserved_start_end(self):
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+        nets = self.network.create_networks(context_admin, 'fake',
+                                       '192.168.0.0/24', False, 1,
+                                       256, dhcp_server='192.168.0.11',
+                                       allowed_start='192.168.0.10',
+                                       allowed_end='192.168.0.245')
+        self.assertEqual(1, len(nets))
+        network = nets[0]
+        # gateway defaults to beginning of allowed_start
+        self.assertEqual('192.168.0.10', network['gateway'])
+        # vpn_server doesn't conflict with dhcp_start
+        self.assertEqual('192.168.0.12', network['vpn_private_address'])
+        # dhcp_start doesn't conflict with dhcp_server
+        self.assertEqual('192.168.0.13', network['dhcp_start'])
+        # NOTE(vish): 10 from the beginning, 10 from the end, and
+        #             1 for the gateway, 1 for the dhcp server,
+        #             1 for the vpn server
+        self.assertEqual(23, db.network_count_reserved_ips(context_admin,
+                        network['id']))
+
+    def test_validate_reserved_start_out_of_range(self):
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+        self.assertRaises(exception.AddressOutOfRange,
+                          self.network.create_networks,
+                          context_admin, 'fake', '192.168.0.0/24', False,
+                          1, 256, allowed_start='192.168.1.10')
+
+    def test_validate_reserved_end_invalid(self):
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+        self.assertRaises(exception.InvalidAddress,
+                          self.network.create_networks,
+                          context_admin, 'fake', '192.168.0.0/24', False,
+                          1, 256, allowed_end='invalid')
+
+    def test_validate_cidr_invalid(self):
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+        self.assertRaises(exception.InvalidCidr,
+                          self.network.create_networks,
+                          context_admin, 'fake', 'invalid', False,
+                          1, 256)
+
+    def test_validate_non_int_size(self):
+        context_admin = context.RequestContext('testuser', 'testproject',
+                                              is_admin=True)
+        self.assertRaises(exception.InvalidIntValue,
+                          self.network.create_networks,
+                          context_admin, 'fake', '192.168.0.0/24', False,
+                          1, 'invalid')
 
     def test_validate_networks_none_requested_networks(self):
         self.network.validate_networks(self.context, None)
@@ -730,7 +787,7 @@ class FlatNetworkTestCase(test.TestCase):
                 mock.call(instance.uuid, '')
             ])
 
-        mock_fixedip_disassociate.assert_called_once()
+        mock_fixedip_disassociate.assert_called_once_with(self.context)
 
 
 class FlatDHCPNetworkTestCase(test.TestCase):
@@ -959,6 +1016,35 @@ class VlanNetworkTestCase(test.TestCase):
 
         self.assertEqual(networks[0]["vlan"], 102)
 
+    def test_vlan_parameter(self):
+        # vlan parameter could not be greater than 4094
+        exc = self.assertRaises(ValueError,
+                                self.network.create_networks,
+                                self.context_admin, label="fake",
+                                num_networks=1,
+                                vlan=4095, cidr='192.168.0.1/24')
+        error_msg = 'The vlan number cannot be greater than 4094'
+        self.assertIn(error_msg, six.text_type(exc))
+
+        # vlan parameter could not be less than 1
+        exc = self.assertRaises(ValueError,
+                                self.network.create_networks,
+                                self.context_admin, label="fake",
+                                num_networks=1,
+                                vlan=0, cidr='192.168.0.1/24')
+        error_msg = 'The vlan number cannot be less than 1'
+        self.assertIn(error_msg, six.text_type(exc))
+
+    def test_vlan_be_integer(self):
+        # vlan must be an integer
+        exc = self.assertRaises(ValueError,
+                                self.network.create_networks,
+                                self.context_admin, label="fake",
+                                num_networks=1,
+                                vlan='fake', cidr='192.168.0.1/24')
+        error_msg = 'vlan must be an integer'
+        self.assertIn(error_msg, six.text_type(exc))
+
     @mock.patch('nova.db.network_get')
     def test_validate_networks(self, net_get):
         def network_get(_context, network_id, project_only='allow_none'):
@@ -1101,12 +1187,14 @@ class VlanNetworkTestCase(test.TestCase):
 
         self.network.allocate_floating_ip(ctxt, ctxt.project_id)
 
-    def test_deallocate_floating_ip(self):
+    @mock.patch('nova.quota.QUOTAS.reserve')
+    @mock.patch('nova.quota.QUOTAS.commit')
+    def test_deallocate_floating_ip(self, mock_commit, mock_reserve):
         ctxt = context.RequestContext('testuser', 'testproject',
                                       is_admin=False)
 
         def fake1(*args, **kwargs):
-            pass
+            return dict(test_floating_ip.fake_floating_ip)
 
         def fake2(*args, **kwargs):
             return dict(test_floating_ip.fake_floating_ip,
@@ -1127,9 +1215,13 @@ class VlanNetworkTestCase(test.TestCase):
                           ctxt,
                           mox.IgnoreArg())
 
+        mock_reserve.return_value = 'reserve'
         # this time should not raise
         self.stubs.Set(self.network.db, 'floating_ip_get_by_address', fake3)
         self.network.deallocate_floating_ip(ctxt, ctxt.project_id)
+
+        mock_commit.assert_called_once_with(ctxt, 'reserve',
+                                            project_id='testproject')
 
     @mock.patch('nova.db.fixed_ip_get')
     def test_associate_floating_ip(self, fixed_get):
@@ -1774,7 +1866,8 @@ class CommonNetworkTestCase(test.TestCase):
         self.assertTrue(res)
 
     def fake_create_fixed_ips(self, context, network_id, fixed_cidr=None,
-                              extra_reserved=None):
+                              extra_reserved=None, bottom_reserved=0,
+                              top_reserved=0):
         return None
 
     def test_get_instance_nw_info_client_exceptions(self):
@@ -2281,6 +2374,7 @@ class CommonNetworkTestCase(test.TestCase):
                        'bridge': 'fa1',
                        'bridge_interface': 'fake_fa1',
                        'gateway': '192.168.2.1',
+                       'dhcp_server': '192.168.2.1',
                        'broadcast': '192.168.2.255',
                        'dns1': '192.168.2.1',
                        'dns2': '192.168.2.2',
@@ -2390,6 +2484,8 @@ class TestFloatingIPManager(floating_ips.FloatingIP,
 class AllocateTestCase(test.TestCase):
     def setUp(self):
         super(AllocateTestCase, self).setUp()
+        dns = 'nova.network.noop_dns_driver.NoopDNSDriver'
+        self.flags(instance_dns_manager=dns)
         self.useFixture(test.SampleNetworks())
         self.conductor = self.start_service(
             'conductor', manager=CONF.conductor.manager)
@@ -2401,6 +2497,8 @@ class AllocateTestCase(test.TestCase):
         self.context = context.RequestContext(self.user_id,
                                               self.project_id,
                                               is_admin=True)
+        self.user_context = context.RequestContext('testuser',
+                                                   'testproject')
 
     def test_allocate_for_instance(self):
         address = "10.10.10.10"
@@ -2419,8 +2517,8 @@ class AllocateTestCase(test.TestCase):
         for network in networks:
             db.network_update(self.context, network['id'],
                               {'host': self.network.host})
-        project_id = self.context.project_id
-        nw_info = self.network.allocate_for_instance(self.context,
+        project_id = self.user_context.project_id
+        nw_info = self.network.allocate_for_instance(self.user_context,
             instance_id=inst['id'], instance_uuid=inst['uuid'],
             host=inst['host'], vpn=None, rxtx_factor=3,
             project_id=project_id, macs=None)
@@ -2429,6 +2527,32 @@ class AllocateTestCase(test.TestCase):
         self.assertTrue(utils.is_valid_ipv4(fixed_ip))
         self.network.deallocate_for_instance(self.context,
                 instance=inst)
+
+    def test_allocate_for_instance_illegal_network(self):
+        networks = db.network_get_all(self.context)
+        requested_networks = []
+        for network in networks:
+            # set all networks to other projects
+            db.network_update(self.context, network['id'],
+                              {'host': self.network.host,
+                               'project_id': 'otherid'})
+            requested_networks.append((network['uuid'], None))
+        # set the first network to our project
+        db.network_update(self.context, networks[0]['id'],
+                          {'project_id': self.user_context.project_id})
+
+        inst = objects.Instance()
+        inst.host = self.compute.host
+        inst.display_name = HOST
+        inst.instance_type_id = 1
+        inst.uuid = FAKEUUID
+        inst.create(self.context)
+        self.assertRaises(exception.NetworkNotFoundForProject,
+            self.network.allocate_for_instance, self.user_context,
+            instance_id=inst['id'], instance_uuid=inst['uuid'],
+            host=inst['host'], vpn=None, rxtx_factor=3,
+            project_id=self.context.project_id, macs=None,
+            requested_networks=requested_networks)
 
     def test_allocate_for_instance_with_mac(self):
         available_macs = set(['ca:fe:de:ad:be:ef'])
@@ -2440,7 +2564,7 @@ class AllocateTestCase(test.TestCase):
             db.network_update(self.context, network['id'],
                               {'host': self.network.host})
         project_id = self.context.project_id
-        nw_info = self.network.allocate_for_instance(self.context,
+        nw_info = self.network.allocate_for_instance(self.user_context,
             instance_id=inst['id'], instance_uuid=inst['uuid'],
             host=inst['host'], vpn=None, rxtx_factor=3,
             project_id=project_id, macs=available_macs)
@@ -2463,7 +2587,8 @@ class AllocateTestCase(test.TestCase):
                               {'host': self.network.host})
         project_id = self.context.project_id
         self.assertRaises(exception.VirtualInterfaceCreateException,
-                          self.network.allocate_for_instance, self.context,
+                          self.network.allocate_for_instance,
+                          self.user_context,
                           instance_id=inst['id'], instance_uuid=inst['uuid'],
                           host=inst['host'], vpn=None, rxtx_factor=3,
                           project_id=project_id, macs=available_macs)
@@ -2986,6 +3111,32 @@ class FloatingIPTestCase(test.TestCase):
     def test_associate_floating_ip_failure_interface_not_found(self):
         self._test_associate_floating_ip_failure('Cannot find device',
                 exception.NoFloatingIpInterface)
+
+    @mock.patch('nova.objects.FloatingIP.get_by_address')
+    def test_get_floating_ip_by_address(self, mock_get):
+        mock_get.return_value = mock.sentinel.floating
+        self.assertEqual(mock.sentinel.floating,
+                         self.network.get_floating_ip_by_address(
+                             self.context,
+                             mock.sentinel.address))
+        mock_get.assert_called_once_with(self.context, mock.sentinel.address)
+
+    @mock.patch('nova.objects.FloatingIPList.get_by_project')
+    def test_get_floating_ips_by_project(self, mock_get):
+        mock_get.return_value = mock.sentinel.floatings
+        self.assertEqual(mock.sentinel.floatings,
+                         self.network.get_floating_ips_by_project(
+                             self.context))
+        mock_get.assert_called_once_with(self.context, self.context.project_id)
+
+    @mock.patch('nova.objects.FloatingIPList.get_by_fixed_address')
+    def test_get_floating_ips_by_fixed_address(self, mock_get):
+        mock_get.return_value = [objects.FloatingIP(address='1.2.3.4'),
+                                 objects.FloatingIP(address='5.6.7.8')]
+        self.assertEqual(['1.2.3.4', '5.6.7.8'],
+                         self.network.get_floating_ips_by_fixed_address(
+                             self.context, mock.sentinel.address))
+        mock_get.assert_called_once_with(self.context, mock.sentinel.address)
 
 
 class InstanceDNSTestCase(test.TestCase):

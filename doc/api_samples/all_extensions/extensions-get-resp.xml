@@ -129,6 +129,9 @@
   <extension alias="os-extended-hypervisors" updated="2014-01-04T00:00:00Z" namespace="http://docs.openstack.org/compute/ext/extended_hypervisors/api/v1.1" name="ExtendedHypervisors">
     <description>Extended hypervisors support.</description>
   </extension>
+  <extension alias="os-extended-networks" updated="2014-05-09T00:00:00Z" namespace="http://docs.openstack.org/compute/ext/extended_networks/api/v2" name="ExtendedNetworks">
+    <description>Adds additional fields to networks</description>
+  </extension>
   <extension alias="os-extended-quotas" updated="2013-06-09T00:00:00Z" namespace="http://docs.openstack.org/compute/ext/extended_quotas/api/v1.1" name="ExtendedQuotas">
     <description>Adds ability for admins to delete quota
     and optionally force the update Quota command.
@@ -238,6 +241,9 @@
   </extension>
   <extension alias="os-server-groups" updated="2013-06-20T00:00:00Z" namespace="http://docs.openstack.org/compute/ext/servergroups/api/v2" name="ServerGroups">
     <description>Server group support.</description>
+  </extension>
+  <extension alias="os-server-list-multi-status" updated="2014-05-11T00:00:00Z" namespace="http://docs.openstack.org/compute/ext/os-server-list-multi-status/api/v2" name="ServerListMultiStatus">
+    <description>Allow to filter the servers by a set of status values.</description>
   </extension>
   <extension alias="os-server-password" updated="2012-11-29T00:00:00Z" namespace="http://docs.openstack.org/compute/ext/server-password/api/v2" name="ServerPassword">
     <description>Server password support.</description>

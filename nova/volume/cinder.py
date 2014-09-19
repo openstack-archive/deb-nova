@@ -21,93 +21,88 @@ Handles all requests relating to volumes + cinder.
 import copy
 import sys
 
+from cinderclient import client as cinder_client
 from cinderclient import exceptions as cinder_exception
 from cinderclient import service_catalog
-from cinderclient.v1 import client as cinder_client
 from oslo.config import cfg
+import six.moves.urllib.parse as urlparse
 
 from nova import availability_zones as az
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LW
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 
 cinder_opts = [
-    cfg.StrOpt('cinder_catalog_info',
+    cfg.StrOpt('catalog_info',
             default='volume:cinder:publicURL',
             help='Info to match when looking for cinder in the service '
                  'catalog. Format is: separated values of the form: '
-                 '<service_type>:<service_name>:<endpoint_type>'),
-    cfg.StrOpt('cinder_endpoint_template',
+                 '<service_type>:<service_name>:<endpoint_type>',
+            deprecated_group='DEFAULT',
+            deprecated_name='cinder_catalog_info'),
+    cfg.StrOpt('endpoint_template',
                help='Override service catalog lookup with template for cinder '
-                    'endpoint e.g. http://localhost:8776/v1/%(project_id)s'),
+                    'endpoint e.g. http://localhost:8776/v1/%(project_id)s',
+               deprecated_group='DEFAULT',
+               deprecated_name='cinder_endpoint_template'),
     cfg.StrOpt('os_region_name',
-                help='Region name of this node'),
-    cfg.StrOpt('cinder_ca_certificates_file',
-                help='Location of ca certificates file to use for cinder '
-                     'client requests.'),
-    cfg.IntOpt('cinder_http_retries',
+               help='Region name of this node',
+               deprecated_group='DEFAULT',
+               deprecated_name='os_region_name'),
+    cfg.StrOpt('ca_certificates_file',
+               help='Location of ca certificates file to use for cinder '
+                    'client requests.',
+               deprecated_group='DEFAULT',
+               deprecated_name='cinder_ca_certificates_file'),
+    cfg.IntOpt('http_retries',
                default=3,
-               help='Number of cinderclient retries on failed http calls'),
-    cfg.IntOpt('cinder_http_timeout', default=None,
-               help='HTTP inactivity timeout (in seconds)'),
-    cfg.BoolOpt('cinder_api_insecure',
-               default=False,
-               help='Allow to perform insecure SSL requests to cinder'),
-    cfg.BoolOpt('cinder_cross_az_attach',
+               help='Number of cinderclient retries on failed http calls',
+            deprecated_group='DEFAULT',
+            deprecated_name='cinder_http_retries'),
+    cfg.IntOpt('http_timeout', default=None,
+               help='HTTP inactivity timeout (in seconds)',
+               deprecated_group='DEFAULT',
+               deprecated_name='cinder_http_timeout'),
+    cfg.BoolOpt('api_insecure',
+                default=False,
+                help='Allow to perform insecure SSL requests to cinder',
+                deprecated_group='DEFAULT',
+                deprecated_name='cinder_api_insecure'),
+    cfg.BoolOpt('cross_az_attach',
                 default=True,
                 help='Allow attach between instance and volume in different '
-                     'availability zones.'),
+                     'availability zones.',
+                deprecated_group='DEFAULT',
+                deprecated_name='cinder_cross_az_attach'),
 ]
 
 CONF = cfg.CONF
-CONF.register_opts(cinder_opts)
+# cinder_opts options in the DEFAULT group were deprecated in Juno
+CONF.register_opts(cinder_opts, group='cinder')
 
 LOG = logging.getLogger(__name__)
 
+CINDER_URL = None
+
 
 def cinderclient(context):
-
-    # FIXME: the cinderclient ServiceCatalog object is mis-named.
-    #        It actually contains the entire access blob.
-    # Only needed parts of the service catalog are passed in, see
-    # nova/context.py.
-    compat_catalog = {
-        'access': {'serviceCatalog': context.service_catalog or []}
-    }
-    sc = service_catalog.ServiceCatalog(compat_catalog)
-    if CONF.cinder_endpoint_template:
-        url = CONF.cinder_endpoint_template % context.to_dict()
-    else:
-        info = CONF.cinder_catalog_info
-        service_type, service_name, endpoint_type = info.split(':')
-        # extract the region if set in configuration
-        if CONF.os_region_name:
-            attr = 'region'
-            filter_value = CONF.os_region_name
-        else:
-            attr = None
-            filter_value = None
-        url = sc.url_for(attr=attr,
-                         filter_value=filter_value,
-                         service_type=service_type,
-                         service_name=service_name,
-                         endpoint_type=endpoint_type)
-
-    LOG.debug('Cinderclient connection created using URL: %s', url)
-
-    c = cinder_client.Client(context.user_id,
+    global CINDER_URL
+    version = get_cinder_client_version(context)
+    c = cinder_client.Client(version,
+                             context.user_id,
                              context.auth_token,
                              project_id=context.project_id,
-                             auth_url=url,
-                             insecure=CONF.cinder_api_insecure,
-                             retries=CONF.cinder_http_retries,
-                             timeout=CONF.cinder_http_timeout,
-                             cacert=CONF.cinder_ca_certificates_file)
+                             auth_url=CINDER_URL,
+                             insecure=CONF.cinder.api_insecure,
+                             retries=CONF.cinder.http_retries,
+                             timeout=CONF.cinder.http_timeout,
+                             cacert=CONF.cinder.ca_certificates_file)
     # noauth extracts user_id:project_id from auth_token
     c.client.auth_token = context.auth_token or '%s:%s' % (context.user_id,
                                                            context.project_id)
-    c.client.management_url = url
+    c.client.management_url = CINDER_URL
     return c
 
 
@@ -134,10 +129,14 @@ def _untranslate_volume_summary_view(context, vol):
         d['mountpoint'] = att['device']
     else:
         d['attach_status'] = 'detached'
-
-    d['display_name'] = vol.display_name
-    d['display_description'] = vol.display_description
-
+    # NOTE(dzyu) volume(cinder) v2 API uses 'name' instead of 'display_name',
+    # and use 'description' instead of 'display_description' for volume.
+    if hasattr(vol, 'display_name'):
+        d['display_name'] = vol.display_name
+        d['display_description'] = vol.display_description
+    else:
+        d['display_name'] = vol.name
+        d['display_description'] = vol.description
     # TODO(jdg): Information may be lost in this translation
     d['volume_type_id'] = vol.volume_type
     d['snapshot_id'] = vol.snapshot_id
@@ -161,8 +160,16 @@ def _untranslate_snapshot_summary_view(context, snapshot):
     d['progress'] = snapshot.progress
     d['size'] = snapshot.size
     d['created_at'] = snapshot.created_at
-    d['display_name'] = snapshot.display_name
-    d['display_description'] = snapshot.display_description
+
+    # NOTE(dzyu) volume(cinder) v2 API uses 'name' instead of 'display_name',
+    # 'description' instead of 'display_description' for snapshot.
+    if hasattr(snapshot, 'display_name'):
+        d['display_name'] = snapshot.display_name
+        d['display_description'] = snapshot.display_description
+    else:
+        d['display_name'] = snapshot.name
+        d['display_description'] = snapshot.description
+
     d['volume_id'] = snapshot.volume_id
     d['project_id'] = snapshot.project_id
     d['volume_size'] = snapshot.size
@@ -213,6 +220,61 @@ def translate_snapshot_exception(method):
     return wrapper
 
 
+def get_cinder_client_version(context):
+    """Parse cinder client version by endpoint url.
+
+    :param context: Nova auth context.
+    :return: str value(1 or 2).
+    """
+    global CINDER_URL
+    # FIXME: the cinderclient ServiceCatalog object is mis-named.
+    #        It actually contains the entire access blob.
+    # Only needed parts of the service catalog are passed in, see
+    # nova/context.py.
+    compat_catalog = {
+        'access': {'serviceCatalog': context.service_catalog or []}
+    }
+    sc = service_catalog.ServiceCatalog(compat_catalog)
+    if CONF.cinder.endpoint_template:
+        url = CONF.cinder.endpoint_template % context.to_dict()
+    else:
+        info = CONF.cinder.catalog_info
+        service_type, service_name, endpoint_type = info.split(':')
+        # extract the region if set in configuration
+        if CONF.cinder.os_region_name:
+            attr = 'region'
+            filter_value = CONF.cinder.os_region_name
+        else:
+            attr = None
+            filter_value = None
+        url = sc.url_for(attr=attr,
+                         filter_value=filter_value,
+                         service_type=service_type,
+                         service_name=service_name,
+                         endpoint_type=endpoint_type)
+    LOG.debug('Cinderclient connection created using URL: %s', url)
+
+    valid_versions = ['v1', 'v2']
+    magic_tuple = urlparse.urlsplit(url)
+    scheme, netloc, path, query, frag = magic_tuple
+    components = path.split("/")
+    for version in valid_versions:
+        if version in components[1]:
+            version = version[1:]
+
+            if not CINDER_URL and version == '1':
+                msg = _LW('Cinder V1 API is deprecated as of the Juno '
+                          'release, and Nova is still configured to use it. '
+                          'Enable the V2 API in Cinder and set '
+                          'cinder_catalog_info in nova.conf to use it.')
+                LOG.warn(msg)
+
+            CINDER_URL = url
+            return version
+    msg = _("Invalid client version, must be one of: %s") % valid_versions
+    raise cinder_exception.UnsupportedVersion(msg)
+
+
 class API(object):
     """API for interacting with the volume manager."""
 
@@ -244,7 +306,7 @@ class API(object):
         if volume['attach_status'] == "attached":
             msg = _("already attached")
             raise exception.InvalidVolume(reason=msg)
-        if instance and not CONF.cinder_cross_az_attach:
+        if instance and not CONF.cinder.cross_az_attach:
             # NOTE(sorrison): If instance is on a host we match against it's AZ
             #                 else we check the intended AZ
             if instance.get('host'):
@@ -312,14 +374,20 @@ class API(object):
             snapshot_id = None
 
         kwargs = dict(snapshot_id=snapshot_id,
-                      display_name=name,
-                      display_description=description,
                       volume_type=volume_type,
                       user_id=context.user_id,
                       project_id=context.project_id,
                       availability_zone=availability_zone,
                       metadata=metadata,
                       imageRef=image_id)
+
+        version = get_cinder_client_version(context)
+        if version == '1':
+            kwargs['display_name'] = name
+            kwargs['display_description'] = description
+        elif version == '2':
+            kwargs['name'] = name
+            kwargs['description'] = description
 
         try:
             item = cinderclient(context).volumes.create(size, **kwargs)
@@ -377,20 +445,28 @@ class API(object):
 
     @translate_volume_exception
     def get_volume_metadata(self, context, volume_id):
-        raise NotImplementedError()
+        vol = cinderclient(context).volumes.get(volume_id)
+        return vol.metadata
 
     @translate_volume_exception
-    def delete_volume_metadata(self, context, volume_id, key):
-        raise NotImplementedError()
+    def delete_volume_metadata(self, context, volume_id, keys):
+        cinderclient(context).volumes.delete_metadata(volume_id, keys)
 
     @translate_volume_exception
     def update_volume_metadata(self, context, volume_id,
                                metadata, delete=False):
-        raise NotImplementedError()
+        if delete:
+            # Completely replace volume metadata with one given
+            return cinderclient(context).volumes.update_all_metadata(
+                volume_id, metadata)
+        else:
+            return cinderclient(context).volumes.set_metadata(
+                volume_id, metadata)
 
     @translate_volume_exception
-    def get_volume_metadata_value(self, volume_id, key):
-        raise NotImplementedError()
+    def get_volume_metadata_value(self, context, volume_id, key):
+        vol = cinderclient(context).volumes.get(volume_id)
+        return vol.metadata.get(key)
 
     @translate_snapshot_exception
     def update_snapshot_status(self, context, snapshot_id, status):

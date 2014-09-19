@@ -763,6 +763,22 @@ class ServerActionsControllerTest(test.TestCase):
         self.assertEqual(instance_meta['kernel_id'], '1')
         self.assertEqual(instance_meta['ramdisk_id'], '2')
 
+    @mock.patch.object(compute_api.API, 'rebuild')
+    def test_rebuild_instance_raise_auto_disk_config_exc(self, mock_rebuild):
+        body = {
+            "rebuild": {
+                "imageRef": self._image_href,
+            },
+        }
+
+        req = fakes.HTTPRequest.blank(self.url)
+        mock_rebuild.side_effect = exception.AutoDiskConfigDisabledByImage(
+            image='dummy')
+
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_rebuild,
+                          req, FAKE_UUID, body)
+
     def test_resize_server(self):
 
         body = dict(resize=dict(flavorRef="http://localhost/3"))
@@ -833,6 +849,25 @@ class ServerActionsControllerTest(test.TestCase):
                               req, FAKE_UUID, body)
             self.assertEqual(self.resize_called, call_no + 1)
 
+    @mock.patch('nova.compute.api.API.resize',
+                side_effect=exception.CannotResizeDisk(reason=''))
+    def test_resize_raises_cannot_resize_disk(self, mock_resize):
+        body = dict(resize=dict(flavorRef="http://localhost/3"))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_resize,
+                          req, FAKE_UUID, body)
+
+    @mock.patch('nova.compute.api.API.resize',
+                side_effect=exception.FlavorNotFound(reason='',
+                                                     flavor_id='fake_id'))
+    def test_resize_raises_flavor_not_found(self, mock_resize):
+        body = dict(resize=dict(flavorRef="http://localhost/3"))
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_resize,
+                          req, FAKE_UUID, body)
+
     def test_resize_with_too_many_instances(self):
         body = dict(resize=dict(flavorRef="http://localhost/3"))
 
@@ -842,7 +877,7 @@ class ServerActionsControllerTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'resize', fake_resize)
 
         req = fakes.HTTPRequest.blank(self.url)
-        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+        self.assertRaises(webob.exc.HTTPForbidden,
                           self.controller._action_resize,
                           req, FAKE_UUID, body)
 
@@ -864,6 +899,18 @@ class ServerActionsControllerTest(test.TestCase):
     @mock.patch('nova.compute.api.API.resize',
                 side_effect=exception.NoValidHost(reason=''))
     def test_resize_raises_no_valid_host(self, mock_resize):
+        body = dict(resize=dict(flavorRef="http://localhost/3"))
+
+        req = fakes.HTTPRequest.blank(self.url)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_resize,
+                          req, FAKE_UUID, body)
+
+    @mock.patch.object(compute_api.API, 'resize')
+    def test_resize_instance_raise_auto_disk_config_exc(self, mock_resize):
+        mock_resize.side_effect = exception.AutoDiskConfigDisabledByImage(
+            image='dummy')
+
         body = dict(resize=dict(flavorRef="http://localhost/3"))
 
         req = fakes.HTTPRequest.blank(self.url)
@@ -1106,12 +1153,15 @@ class ServerActionsControllerTest(test.TestCase):
         self._do_test_create_volume_backed_image(dict(ImageType='Gold',
                                                       ImageVersion='2.0'))
 
-    def test_create_volume_backed_image_with_metadata_from_volume(self):
+    def _test_create_volume_backed_image_with_metadata_from_volume(
+            self, extra_metadata=None):
 
         def _fake_id(x):
             return '%s-%s-%s-%s' % (x * 8, x * 4, x * 4, x * 12)
 
         body = dict(createImage=dict(name='snapshot_of_volume_backed'))
+        if extra_metadata:
+            body['createImage']['metadata'] = extra_metadata
 
         image_service = glance.get_default_image_service()
 
@@ -1162,6 +1212,16 @@ class ServerActionsControllerTest(test.TestCase):
         properties = image['properties']
         self.assertEqual(properties['test_key1'], 'test_value1')
         self.assertEqual(properties['test_key2'], 'test_value2')
+        if extra_metadata:
+            for key, val in extra_metadata.items():
+                self.assertEqual(properties[key], val)
+
+    def test_create_vol_backed_img_with_meta_from_vol_without_extra_meta(self):
+        self._test_create_volume_backed_image_with_metadata_from_volume()
+
+    def test_create_vol_backed_img_with_meta_from_vol_with_extra_meta(self):
+        self._test_create_volume_backed_image_with_metadata_from_volume(
+            extra_metadata={'a': 'b'})
 
     def test_create_image_snapshots_disabled(self):
         """Don't permit a snapshot if the allow_instance_snapshots flag is
@@ -1203,7 +1263,7 @@ class ServerActionsControllerTest(test.TestCase):
             body['createImage']['metadata']['foo%i' % num] = "bar"
 
         req = fakes.HTTPRequest.blank(self.url)
-        self.assertRaises(webob.exc.HTTPRequestEntityTooLarge,
+        self.assertRaises(webob.exc.HTTPForbidden,
                           self.controller._action_create_image,
                           req, FAKE_UUID, body)
 

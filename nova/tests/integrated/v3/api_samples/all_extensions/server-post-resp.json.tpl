@@ -1,6 +1,6 @@
 {
     "server": {
-        "admin_password": "%(password)s",
+        "adminPass": "%(password)s",
         "id": "%(id)s",
         "links": [
             {
@@ -17,7 +17,7 @@
                 "name": "default"
             }
         ],
-        "os-access-ips:access_ip_v4": "",
-        "os-access-ips:access_ip_v6": ""
+        "accessIPv4": "",
+        "accessIPv6": ""
     }
 }

@@ -17,6 +17,7 @@ from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import fields
+from nova import utils
 
 FLOATING_IP_OPTIONAL_ATTRS = ['fixed_ip']
 
@@ -24,7 +25,8 @@ FLOATING_IP_OPTIONAL_ATTRS = ['fixed_ip']
 class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added _get_addresses_by_instance_uuid()
-    VERSION = '1.1'
+    # Version 1.2: FixedIP <= version 1.2
+    VERSION = '1.2'
     fields = {
         'id': fields.IntegerField(),
         'address': fields.IPAddressField(),
@@ -37,6 +39,13 @@ class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
         'fixed_ip': fields.ObjectField('FixedIP', nullable=True),
         }
 
+    def obj_make_compatible(self, primitive, target_version):
+        target_version = utils.convert_version_to_tuple(target_version)
+        if target_version < (1, 2) and 'fixed_ip' in primitive:
+            primitive['fixed_ip'] = (
+                    objects.FixedIP().object_make_compatible(
+                        primitive['fixed_ip']['nova_object.data'], '1.1'))
+
     @staticmethod
     def _from_db_object(context, floatingip, db_floatingip,
                         expected_attrs=None):
@@ -45,7 +54,8 @@ class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
         for field in floatingip.fields:
             if field not in FLOATING_IP_OPTIONAL_ATTRS:
                 floatingip[field] = db_floatingip[field]
-        if 'fixed_ip' in expected_attrs:
+        if ('fixed_ip' in expected_attrs and
+                db_floatingip['fixed_ip'] is not None):
             floatingip.fixed_ip = objects.FixedIP._from_db_object(
                 context, objects.FixedIP(context), db_floatingip['fixed_ip'])
         floatingip._context = context
@@ -75,7 +85,7 @@ class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
 
     @obj_base.remotable_classmethod
     def get_by_address(cls, context, address):
-        db_floatingip = db.floating_ip_get_by_address(context, address)
+        db_floatingip = db.floating_ip_get_by_address(context, str(address))
         return cls._from_db_object(context, cls(context), db_floatingip)
 
     @obj_base.remotable_classmethod
@@ -90,8 +100,8 @@ class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
     @obj_base.remotable_classmethod
     def associate(cls, context, floating_address, fixed_address, host):
         db_fixed = db.floating_ip_fixed_ip_associate(context,
-                                                     floating_address,
-                                                     fixed_address,
+                                                     str(floating_address),
+                                                     str(fixed_address),
                                                      host)
         if db_fixed is None:
             return None
@@ -106,15 +116,15 @@ class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
 
     @obj_base.remotable_classmethod
     def deallocate(cls, context, address):
-        db.floating_ip_deallocate(context, address)
+        return db.floating_ip_deallocate(context, str(address))
 
     @obj_base.remotable_classmethod
     def destroy(cls, context, address):
-        db.floating_ip_destroy(context, address)
+        db.floating_ip_destroy(context, str(address))
 
     @obj_base.remotable_classmethod
     def disassociate(cls, context, address):
-        db_fixed = db.floating_ip_disassociate(context, address)
+        db_fixed = db.floating_ip_disassociate(context, str(address))
 
         return cls(context=context, address=address,
                    fixed_ip_id=db_fixed['id'],
@@ -136,6 +146,14 @@ class FloatingIP(obj_base.NovaPersistentObject, obj_base.NovaObject):
         if 'address' in updates:
             raise exception.ObjectActionError(action='save',
                                               reason='address is not mutable')
+        if 'fixed_ip_id' in updates:
+            reason = 'fixed_ip_id is not mutable'
+            raise exception.ObjectActionError(action='save', reason=reason)
+
+        # NOTE(danms): Make sure we don't pass the calculated fixed_ip
+        # relationship to the DB update method
+        updates.pop('fixed_ip', None)
+
         db_floatingip = db.floating_ip_update(context, str(self.address),
                                               updates)
         self._from_db_object(context, self, db_floatingip)
@@ -149,8 +167,9 @@ class FloatingIPList(obj_base.ObjectListBase, obj_base.NovaObject):
         '1.0': '1.0',
         '1.1': '1.1',
         '1.2': '1.1',
+        '1.3': '1.2',
         }
-    VERSION = '1.2'
+    VERSION = '1.3'
 
     @obj_base.remotable_classmethod
     def get_all(cls, context):
@@ -172,8 +191,8 @@ class FloatingIPList(obj_base.ObjectListBase, obj_base.NovaObject):
 
     @obj_base.remotable_classmethod
     def get_by_fixed_address(cls, context, fixed_address):
-        db_floatingips = db.floating_ip_get_by_fixed_address(context,
-                                                             fixed_address)
+        db_floatingips = db.floating_ip_get_by_fixed_address(
+            context, str(fixed_address))
         return obj_base.obj_make_list(context, cls(context),
                                       objects.FloatingIP, db_floatingips)
 

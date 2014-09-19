@@ -19,7 +19,6 @@ import re
 
 from nova import availability_zones
 from nova import context
-from nova import db
 from nova import exception
 from nova.i18n import _
 from nova.network import model as network_model
@@ -102,7 +101,7 @@ def resource_type_from_id(context, resource_id):
 @memoize
 def id_to_glance_id(context, image_id):
     """Convert an internal (db) id to a glance id."""
-    return db.s3_image_get(context, image_id)['uuid']
+    return objects.S3ImageMapping.get_by_id(context, image_id).uuid
 
 
 @memoize
@@ -111,9 +110,11 @@ def glance_id_to_id(context, glance_id):
     if not glance_id:
         return
     try:
-        return db.s3_image_get_by_uuid(context, glance_id)['id']
+        return objects.S3ImageMapping.get_by_uuid(context, glance_id).id
     except exception.NotFound:
-        return db.s3_image_create(context, glance_id)['id']
+        s3imap = objects.S3ImageMapping(context, uuid=glance_id)
+        s3imap.create()
+        return s3imap.id
 
 
 def ec2_id_to_glance_id(context, ec2_id):
@@ -344,14 +345,18 @@ def get_int_id_from_snapshot_uuid(context, snapshot_uuid):
     if snapshot_uuid is None:
         return
     try:
-        return db.get_ec2_snapshot_id_by_uuid(context, snapshot_uuid)
+        smap = objects.EC2SnapshotMapping.get_by_uuid(context, snapshot_uuid)
+        return smap.id
     except exception.NotFound:
-        return db.ec2_snapshot_create(context, snapshot_uuid)['id']
+        smap = objects.EC2SnapshotMapping(context, uuid=snapshot_uuid)
+        smap.create()
+        return smap.id
 
 
 @memoize
 def get_snapshot_uuid_from_int_id(context, int_id):
-    return db.get_snapshot_uuid_by_ec2_id(context, int_id)
+    smap = objects.EC2SnapshotMapping.get_by_id(context, int_id)
+    return smap.uuid
 
 
 _c2u = re.compile('(((?<=[a-z])[A-Z])|([A-Z](?![A-Z]|$)))')

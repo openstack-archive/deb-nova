@@ -149,12 +149,12 @@ def populate_retry(filter_properties, instance_uuid):
     retry['num_attempts'] += 1
 
     _log_compute_error(instance_uuid, retry)
+    exc = retry.pop('exc', None)
 
     if retry['num_attempts'] > max_attempts:
-        exc = retry.pop('exc', None)
         msg = (_('Exceeded max scheduling attempts %(max_attempts)d '
                  'for instance %(instance_uuid)s. '
-                 'Last exception: %(exc)s.')
+                 'Last exception: %(exc)s')
                % {'max_attempts': max_attempts,
                   'instance_uuid': instance_uuid,
                   'exc': exc})
@@ -165,7 +165,7 @@ def _log_compute_error(instance_uuid, retry):
     """If the request contained an exception from a previous compute
     build/resize operation, log it to aid debugging
     """
-    exc = retry.pop('exc', None)  # string-ified exception from compute
+    exc = retry.get('exc')  # string-ified exception from compute
     if not exc:
         return  # no exception info from a previous attempt, skip
 
@@ -196,9 +196,7 @@ def _add_retry_host(filter_properties, host, node):
     node has already been tried.
     """
     retry = filter_properties.get('retry', None)
-    force_hosts = filter_properties.get('force_hosts', [])
-    force_nodes = filter_properties.get('force_nodes', [])
-    if not retry or force_hosts or force_nodes:
+    if not retry:
         return
     hosts = retry['hosts']
     hosts.append([host, node])
@@ -235,3 +233,8 @@ def parse_options(opts, sep='=', converter=str, name=""):
                 {'name': name,
                  'options': ", ".join(bad)})
     return good
+
+
+def validate_filter(filter):
+    """Validates that the filter is configured in the default filters."""
+    return filter in CONF.scheduler_default_filters
