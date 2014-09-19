@@ -5,3 +5,8 @@
 # - novnc
 
 NOVA_CONSOLE_PROXY_TYPE=spicehtml5
+
+# This switch decides if you want to start or not the serialproxy daemon.
+# Only allowed values are: TRUE or FALSE (case sensitive)
+
+NOVA_SERIAL_PROXY_START=true
