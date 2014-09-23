@@ -1,0 +1,166 @@
+Description: Make sure volumes are well detected during block migration
+ Currently, _assert_dest_node_has_enough_disk() calls
+ self.get_instance_disk_info(instance['name']), which means that
+ get_instance_disk_info() has a block_device_info parameter equal to None, and
+ _get_instance_disk_info() as well. In the end, block_device_info_get_mapping()
+ returns an empty list, and the 'volume_devices' variable is an empty set.
+ Ultimately, this prevents volume devices from being properly detected in
+ _get_instance_disk_info(), and Nova tries to migrate them as well, even though
+ they should not be migrated.
+ .
+ Fix this issue by passing 'block_device_info' to
+ check_can_live_migrate_source() and have it propagated all the way to
+ _get_instance_disk_info().
+Bug-Ubuntu: https://launchpad.net/bugs/1356552
+Author Cyril Roelandt <cyril.roelandt@enovance.com>
+Origin: upstream, https://review.openstack.org/#/c/117631/
+Date: Thu, 28 Aug 2014 21:44:30 +0000
+Change-Id: I30717a8ee0ef7ba82a45d8b1b22058ea1ecf0d25
+Last-Update: 2014-09-23
+
+Index: nova/nova/compute/manager.py
+===================================================================
+--- nova.orig/nova/compute/manager.py	2014-09-23 15:32:23.000000000 +0800
++++ nova/nova/compute/manager.py	2014-09-23 15:32:23.000000000 +0800
+@@ -4466,8 +4466,11 @@
+         is_volume_backed = self.compute_api.is_volume_backed_instance(ctxt,
+                                                                       instance)
+         dest_check_data['is_volume_backed'] = is_volume_backed
++        block_device_info = self._get_instance_volume_block_device_info(
++                            ctxt, instance, refresh_conn_info=True)
+         return self.driver.check_can_live_migrate_source(ctxt, instance,
+-                                                         dest_check_data)
++                                                         dest_check_data,
++                                                         block_device_info)
+ 
+     @object_compat
+     @wrap_exception()
+Index: nova/nova/tests/compute/test_compute_mgr.py
+===================================================================
+--- nova.orig/nova/tests/compute/test_compute_mgr.py	2014-09-22 01:26:25.000000000 +0800
++++ nova/nova/tests/compute/test_compute_mgr.py	2014-09-23 15:32:23.000000000 +0800
+@@ -930,14 +930,20 @@
+ 
+         self.mox.StubOutWithMock(self.compute.compute_api,
+                                  'is_volume_backed_instance')
++        self.mox.StubOutWithMock(self.compute,
++                                 '_get_instance_volume_block_device_info')
+         self.mox.StubOutWithMock(self.compute.driver,
+                                  'check_can_live_migrate_source')
+ 
+         instance_p = obj_base.obj_to_primitive(instance)
+         self.compute.compute_api.is_volume_backed_instance(
+                 self.context, instance).AndReturn(is_volume_backed)
++        self.compute._get_instance_volume_block_device_info(
++                self.context, instance, refresh_conn_info=True
++                ).AndReturn('fake-block-device-info')
+         self.compute.driver.check_can_live_migrate_source(
+-                self.context, instance, expected_dest_check_data)
++                self.context, instance, expected_dest_check_data,
++                'fake-block-device-info')
+ 
+         self.mox.ReplayAll()
+ 
+Index: nova/nova/virt/driver.py
+===================================================================
+--- nova.orig/nova/virt/driver.py	2014-09-23 15:32:23.000000000 +0800
++++ nova/nova/virt/driver.py	2014-09-23 15:32:23.000000000 +0800
+@@ -754,7 +754,7 @@
+         raise NotImplementedError()
+ 
+     def check_can_live_migrate_source(self, ctxt, instance_ref,
+-                                      dest_check_data):
++                                      dest_check_data, block_device_info=None):
+         """Check if it is possible to execute live migration.
+ 
+         This checks if the live migration can succeed, based on the
+Index: nova/nova/virt/fake.py
+===================================================================
+--- nova.orig/nova/virt/fake.py	2014-09-23 15:32:23.000000000 +0800
++++ nova/nova/virt/fake.py	2014-09-23 15:32:23.000000000 +0800
+@@ -395,7 +395,7 @@
+         return {}
+ 
+     def check_can_live_migrate_source(self, ctxt, instance_ref,
+-                                      dest_check_data):
++                                      dest_check_data, block_device_info=None):
+         return
+ 
+     def finish_migration(self, context, migration, instance, disk_info,
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-09-23 15:32:23.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-09-23 15:32:23.000000000 +0800
+@@ -4282,7 +4282,7 @@
+         self._cleanup_shared_storage_test_file(filename)
+ 
+     def check_can_live_migrate_source(self, context, instance,
+-                                      dest_check_data):
++                                      dest_check_data, block_device_info=None):
+         """Check if it is possible to execute live migration.
+ 
+         This checks if the live migration can succeed, based on the
+@@ -4310,7 +4310,8 @@
+                 raise exception.InvalidLocalStorage(reason=reason, path=source)
+             self._assert_dest_node_has_enough_disk(context, instance,
+                                     dest_check_data['disk_available_mb'],
+-                                    dest_check_data['disk_over_commit'])
++                                    dest_check_data['disk_over_commit'],
++                                    block_device_info)
+ 
+         elif not (dest_check_data['is_shared_block_storage'] or
+                   dest_check_data['is_shared_instance_path']):
+@@ -4361,7 +4362,8 @@
+                     dest_check_data["filename"])
+ 
+     def _assert_dest_node_has_enough_disk(self, context, instance,
+-                                             available_mb, disk_over_commit):
++                                             available_mb, disk_over_commit,
++                                             block_device_info=None):
+         """Checks if destination has enough disk for block migration."""
+         # Libvirt supports qcow2 disk format,which is usually compressed
+         # on compute nodes.
+@@ -4377,7 +4379,7 @@
+         if available_mb:
+             available = available_mb * units.Mi
+ 
+-        ret = self.get_instance_disk_info(instance['name'])
++        ret = self.get_instance_disk_info(instance['name'], block_device_info)
+         disk_infos = jsonutils.loads(ret)
+ 
+         necessary = 0
+Index: nova/nova/virt/xenapi/driver.py
+===================================================================
+--- nova.orig/nova/virt/xenapi/driver.py	2014-09-23 15:32:23.000000000 +0800
++++ nova/nova/virt/xenapi/driver.py	2014-09-23 15:32:23.000000000 +0800
+@@ -514,7 +514,7 @@
+         pass
+ 
+     def check_can_live_migrate_source(self, ctxt, instance_ref,
+-                                      dest_check_data):
++                                      dest_check_data, block_device_info=None):
+         """Check if it is possible to execute live migration.
+ 
+         This checks if the live migration can succeed, based on the
+Index: nova/nova/tests/virt/libvirt/test_libvirt.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-09-23 15:32:23.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-09-23 15:32:23.000000000 +0800
+@@ -3903,7 +3903,7 @@
+         self.mox.StubOutWithMock(conn, "_assert_dest_node_has_enough_disk")
+         conn._assert_dest_node_has_enough_disk(
+             self.context, instance, dest_check_data['disk_available_mb'],
+-            False)
++            False, None)
+ 
+         self.mox.ReplayAll()
+         ret = conn.check_can_live_migrate_source(self.context, instance,
+@@ -3966,7 +3966,7 @@
+                 disk_available_mb=0)
+ 
+         self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+-        conn.get_instance_disk_info(instance["name"]).AndReturn(
++        conn.get_instance_disk_info(instance["name"], None).AndReturn(
+                                             '[{"virt_disk_size":2}]')
+ 
+         self.mox.ReplayAll()

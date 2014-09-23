@@ -1,3 +1,9 @@
+nova (2014.1.2-7) unstable; urgency=medium
+
+  * Added fix-live-migraton-nfs.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 23 Sep 2014 15:32:58 +0800
+
 nova (2014.1.2-6) unstable; urgency=medium
 
   * Switching to libvirt-daemon-system instead of libvirt-bin because the
