@@ -3,6 +3,7 @@ nova (2014.1.2-7) unstable; urgency=medium
   * Added fix-live-migraton-nfs.patch.
   * Added pt_BR.po Brazilian Portuguese debconf templates translation thanks to
     Adriano Rafael Gomes <adrianorg@arg.eti.br> (Closes: #762472).
+  * nova-xenvncproxy init script provides itself now.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 29 Sep 2014 16:01:24 +0800
 
