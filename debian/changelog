@@ -2,8 +2,9 @@ nova (2014.2~b3-2) UNRELEASED; urgency=medium
 
   * Added pt_BR.po Brazilian Portuguese debconf templates translation thanks to
     Adriano Rafael Gomes <adrianorg@arg.eti.br> (Closes: #762472).
+  * nova-xenvncproxy init script provides itself now.
 
- -- Thomas Goirand <zigo@debian.org>  Mon, 29 Sep 2014 16:00:18 +0800
+ -- Thomas Goirand <zigo@debian.org>  Mon, 29 Sep 2014 08:15:32 +0000
 
 nova (2014.2~b3-1) experimental; urgency=medium
 
