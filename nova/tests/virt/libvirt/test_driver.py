@@ -3929,7 +3929,6 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         self.stubs.Set(libvirt_driver.libvirt_utils, 'disk_type', 'raw')
-        libvirt_driver.libvirt_utils.disk_type = "raw"
 
         def convert_image(source, dest, out_format):
             libvirt_driver.libvirt_utils.files[dest] = ''
@@ -4060,6 +4059,7 @@ class LibvirtConnTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
         self.stubs.Set(libvirt_driver.libvirt_utils, 'disk_type', 'raw')
+        libvirt_driver.libvirt_utils.disk_type = "raw"
 
         def convert_image(source, dest, out_format):
             libvirt_driver.libvirt_utils.files[dest] = ''
@@ -4281,7 +4281,6 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
-        libvirt_driver.libvirt_utils.disk_type = "qcow2"
 
         self.mox.ReplayAll()
 
@@ -4330,6 +4329,7 @@ class LibvirtConnTestCase(test.TestCase):
         libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
         self.mox.StubOutWithMock(libvirt_driver.utils, 'execute')
         libvirt_driver.utils.execute = self.fake_execute
+        libvirt_driver.libvirt_utils.disk_type = "qcow2"
 
         self.mox.ReplayAll()
 
@@ -12072,10 +12072,6 @@ class LibvirtDriverTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_utils, 'write_to_file')
         self.mox.StubOutWithMock(imagebackend.Backend, 'image')
         self.mox.StubOutWithMock(imagebackend.Image, 'cache')
-        self.mox.StubOutWithMock(instance_metadata.InstanceMetadata,
-                                                            '__init__')
-        self.mox.StubOutWithMock(configdrive, 'ConfigDriveBuilder')
-        self.mox.StubOutWithMock(configdrive.ConfigDriveBuilder, 'make_drive')
         self.mox.StubOutWithMock(self.libvirtconnection, '_get_guest_xml')
         self.mox.StubOutWithMock(self.libvirtconnection, '_destroy')
         self.mox.StubOutWithMock(self.libvirtconnection, '_create_domain')
@@ -12143,6 +12139,10 @@ class LibvirtDriverTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_utils, 'write_to_file')
         self.mox.StubOutWithMock(imagebackend.Backend, 'image')
         self.mox.StubOutWithMock(imagebackend.Image, 'cache')
+        self.mox.StubOutWithMock(instance_metadata.InstanceMetadata,
+                                                            '__init__')
+        self.mox.StubOutWithMock(configdrive, 'ConfigDriveBuilder')
+        self.mox.StubOutWithMock(configdrive.ConfigDriveBuilder, 'make_drive')
         self.mox.StubOutWithMock(self.libvirtconnection, '_get_guest_xml')
         self.mox.StubOutWithMock(self.libvirtconnection, '_destroy')
         self.mox.StubOutWithMock(self.libvirtconnection, '_create_domain')
