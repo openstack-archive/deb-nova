@@ -6,6 +6,8 @@ nova (2014.2~rc1-1) experimental; urgency=medium
   * nova-xenvncproxy init script provides itself now.
   * Updated (build-)depends for this release.
   * Removed no-intersphinx patch (it's removed upstream).
+  * Now using templated init script for sysv-rc, generated systemd unit and
+    upstart jobs, using openstack-pkg-tools >= 13.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 29 Sep 2014 08:15:32 +0000
 
