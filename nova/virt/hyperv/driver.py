@@ -46,6 +46,9 @@ class HyperVDriver(driver.ComputeDriver):
     def init_host(self, host):
         pass
 
+    def list_instance_uuids(self):
+        return self._vmops.list_instance_uuids()
+
     def list_instances(self):
         return self._vmops.list_instances()
 
@@ -159,6 +162,9 @@ class HyperVDriver(driver.ComputeDriver):
                                       dest_check_data):
         return self._livemigrationops.check_can_live_migrate_source(
             ctxt, instance_ref, dest_check_data)
+
+    def get_instance_disk_info(self, instance_name, block_device_info=None):
+        pass
 
     def plug_vifs(self, instance, network_info):
         """Plug VIFs into networks."""

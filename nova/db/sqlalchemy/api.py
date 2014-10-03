@@ -525,6 +525,7 @@ def service_create(context, values):
 
 
 @require_admin_context
+@_retry_on_deadlock
 def service_update(context, service_id, values):
     session = get_session()
     with session.begin():
@@ -1026,6 +1027,7 @@ def floating_ip_update(context, address, values):
             float_ip_ref.save(session=session)
         except db_exc.DBDuplicateEntry:
             raise exception.FloatingIpExists(address=values['address'])
+        return float_ip_ref
 
 
 def _dnsdomain_get(context, session, fqdomain):
@@ -3349,6 +3351,7 @@ def quota_destroy_all_by_project(context, project_id):
 
 
 @require_admin_context
+@_retry_on_deadlock
 def reservation_expire(context):
     session = get_session()
     with session.begin():

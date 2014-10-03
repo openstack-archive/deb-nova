@@ -509,14 +509,38 @@ def _convert_to_string(metadata):
 
 
 def _extract_attributes(image):
+    #NOTE(hdd): If a key is not found, base.Resource.__getattr__() may perform
+    # a get(), resulting in a useless request back to glance. This list is
+    # therefore sorted, with dependent attributes as the end
+    # 'deleted_at' depends on 'deleted'
+    # 'checksum' depends on 'status' == 'active'
     IMAGE_ATTRIBUTES = ['size', 'disk_format', 'owner',
-                        'container_format', 'checksum', 'id',
+                        'container_format', 'status', 'id',
                         'name', 'created_at', 'updated_at',
-                        'deleted_at', 'deleted', 'status',
+                        'deleted', 'deleted_at', 'checksum',
                         'min_disk', 'min_ram', 'is_public']
+
+    queued = getattr(image, 'status') == 'queued'
+    queued_exclude_attrs = ['disk_format', 'container_format']
     output = {}
+
     for attr in IMAGE_ATTRIBUTES:
-        output[attr] = getattr(image, attr, None)
+        if attr == 'deleted_at' and not output['deleted']:
+            output[attr] = None
+        elif attr == 'checksum' and output['status'] != 'active':
+            output[attr] = None
+        # image may not have 'name' attr
+        elif attr == 'name':
+            output[attr] = getattr(image, attr, None)
+        #NOTE(liusheng): queued image may not have these attributes and 'name'
+        elif queued and attr in queued_exclude_attrs:
+            output[attr] = getattr(image, attr, None)
+        else:
+            # NOTE(xarses): Anything that is caught with the default value
+            # will result in a additional lookup to glance for said attr.
+            # Notable attributes that could have this issue:
+            # disk_format, container_format, name, deleted, checksum
+            output[attr] = getattr(image, attr, None)
 
     output['properties'] = getattr(image, 'properties', {})
 

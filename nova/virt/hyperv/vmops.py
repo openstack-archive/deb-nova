@@ -30,6 +30,7 @@ from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import processutils
 from nova.openstack.common import units
+from nova.openstack.common import uuidutils
 from nova import utils
 from nova.virt import configdrive
 from nova.virt.hyperv import constants
@@ -113,6 +114,16 @@ class VMOps(object):
             raise TypeError(_("VIF driver not found for "
                               "network_api_class: %s") %
                             CONF.network_api_class)
+
+    def list_instance_uuids(self):
+        instance_uuids = []
+        for (instance_name, notes) in self._vmutils.list_instance_notes():
+            if notes and uuidutils.is_uuid_like(notes[0]):
+                instance_uuids.append(str(notes[0]))
+            else:
+                LOG.debug("Notes not found or not resembling a GUID for "
+                          "instance: %s" % instance_name)
+        return instance_uuids
 
     def list_instances(self):
         return self._vmutils.list_instances()
@@ -224,8 +235,10 @@ class VMOps(object):
                                  root_vhd_path, eph_vhd_path)
 
             if configdrive.required_by(instance):
-                self._create_config_drive(instance, injected_files,
-                                          admin_password)
+                configdrive_path = self._create_config_drive(instance,
+                                                             injected_files,
+                                                             admin_password)
+                self.attach_config_drive(instance, configdrive_path)
 
             self.power_on(instance)
         except Exception:
@@ -240,7 +253,8 @@ class VMOps(object):
                                 instance['memory_mb'],
                                 instance['vcpus'],
                                 CONF.hyperv.limit_cpu_features,
-                                CONF.hyperv.dynamic_memory_ratio)
+                                CONF.hyperv.dynamic_memory_ratio,
+                                [instance['uuid']])
 
         ctrl_disk_addr = 0
         if root_vhd_path:
@@ -305,7 +319,6 @@ class VMOps(object):
                               e, instance=instance)
 
         if not CONF.hyperv.config_drive_cdrom:
-            drive_type = constants.IDE_DISK
             configdrive_path = os.path.join(instance_path,
                                             'configdrive.vhd')
             utils.execute(CONF.hyperv.qemu_img_cmd,
@@ -319,11 +332,19 @@ class VMOps(object):
                           attempts=1)
             self._pathutils.remove(configdrive_path_iso)
         else:
-            drive_type = constants.IDE_DVD
             configdrive_path = configdrive_path_iso
 
-        self._vmutils.attach_ide_drive(instance['name'], configdrive_path,
-                                       1, 0, drive_type)
+        return configdrive_path
+
+    def attach_config_drive(self, instance, configdrive_path):
+        configdrive_ext = configdrive_path[(configdrive_path.rfind('.') + 1):]
+        # Do the attach here and if there is a certain file format that isn't
+        # supported in constants.DISK_FORMAT_MAP then bomb out.
+        try:
+            self._vmutils.attach_ide_drive(instance.name, configdrive_path,
+                    1, 0, constants.DISK_FORMAT_MAP[configdrive_ext])
+        except KeyError:
+            raise exception.InvalidDiskFormat(disk_format=configdrive_ext)
 
     def _disconnect_volumes(self, volume_drives):
         for volume_drive in volume_drives:

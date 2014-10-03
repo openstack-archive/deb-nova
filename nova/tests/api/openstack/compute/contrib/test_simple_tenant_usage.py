@@ -24,6 +24,7 @@ from nova.compute import flavors
 from nova.compute import vm_states
 from nova import context
 from nova import db
+from nova import exception
 from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
@@ -253,6 +254,39 @@ class SimpleTenantUsageTest(test.TestCase):
                                init_only=('os-simple-tenant-usage',)))
         self.assertEqual(res.status_int, 400)
 
+    def test_get_tenants_usage_with_invalid_start_date(self):
+        tenant_id = 0
+        req = webob.Request.blank(
+                  '/v2/faketenant_0/os-simple-tenant-usage/'
+                  'faketenant_%s?start=%s&end=%s' %
+                  (tenant_id, "xxxx", NOW.isoformat()))
+        req.method = "GET"
+        req.headers["content-type"] = "application/json"
+
+        res = req.get_response(fakes.wsgi_app(
+                               fake_auth_context=self.user_context,
+                               init_only=('os-simple-tenant-usage',)))
+        self.assertEqual(res.status_int, 400)
+
+    def _test_get_tenants_usage_with_one_date(self, date_url_param):
+        req = webob.Request.blank(
+                  '/v2/faketenant_0/os-simple-tenant-usage/'
+                  'faketenant_0?%s' % date_url_param)
+        req.method = "GET"
+        req.headers["content-type"] = "application/json"
+        res = req.get_response(fakes.wsgi_app(
+                               fake_auth_context=self.user_context,
+                               init_only=('os-simple-tenant-usage',)))
+        self.assertEqual(200, res.status_int)
+
+    def test_get_tenants_usage_with_no_start_date(self):
+        self._test_get_tenants_usage_with_one_date(
+            'end=%s' % (NOW + datetime.timedelta(5)).isoformat())
+
+    def test_get_tenants_usage_with_no_end_date(self):
+        self._test_get_tenants_usage_with_one_date(
+            'start=%s' % (NOW - datetime.timedelta(5)).isoformat())
+
 
 class SimpleTenantUsageSerializerTest(test.TestCase):
     def _verify_server_usage(self, raw_usage, tree):
@@ -471,3 +505,18 @@ class SimpleTenantUsageControllerTest(test.TestCase):
         self.inst_obj.instance_type_id = 99
         flavor = self.controller._get_flavor(self.context, self.inst_obj, {})
         self.assertIsNone(flavor)
+
+
+class SimpleTenantUsageUtils(test.NoDBTestCase):
+    def test_valid_string(self):
+        dt = simple_tenant_usage.parse_strtime("2014-02-21T13:47:20.824060",
+                                               "%Y-%m-%dT%H:%M:%S.%f")
+        self.assertEqual(datetime.datetime(
+                microsecond=824060, second=20, minute=47, hour=13,
+                day=21, month=2, year=2014), dt)
+
+    def test_invalid_string(self):
+        self.assertRaises(exception.InvalidStrTime,
+                          simple_tenant_usage.parse_strtime,
+                          "2014-02-21 13:47:20.824060",
+                          "%Y-%m-%dT%H:%M:%S.%f")

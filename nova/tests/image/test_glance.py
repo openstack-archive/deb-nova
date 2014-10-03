@@ -572,6 +572,48 @@ class TestGlanceImageService(test.NoDBTestCase):
         self.assertEqual(same_id, image_id)
         self.assertEqual(service._client.host, 'something-less-likely')
 
+    def test_extracting_missing_attributes(self):
+        """Verify behavior from glance objects that are missing attributes
+
+        This fakes the image class and is missing attribute as the client can
+        return if they're not set in the database.
+        """
+        class MyFakeGlanceImage(glance_stubs.FakeImage):
+            def __init__(self, metadata):
+                IMAGE_ATTRIBUTES = ['size', 'owner', 'id', 'created_at',
+                                    'updated_at', 'status', 'min_disk',
+                                    'min_ram', 'is_public']
+                raw = dict.fromkeys(IMAGE_ATTRIBUTES)
+                raw.update(metadata)
+                self.__dict__['raw'] = raw
+
+        metadata = {
+            'id': 1,
+            'created_at': self.NOW_DATETIME,
+            'updated_at': self.NOW_DATETIME,
+        }
+        image = MyFakeGlanceImage(metadata)
+        observed = glance._extract_attributes(image)
+        expected = {
+            'id': 1,
+            'name': None,
+            'is_public': None,
+            'size': None,
+            'min_disk': None,
+            'min_ram': None,
+            'disk_format': None,
+            'container_format': None,
+            'checksum': None,
+            'created_at': self.NOW_DATETIME,
+            'updated_at': self.NOW_DATETIME,
+            'deleted_at': None,
+            'deleted': None,
+            'status': None,
+            'properties': {},
+            'owner': None,
+        }
+        self.assertEqual(expected, observed)
+
 
 def _create_failing_glance_client(info):
     class MyGlanceStubClient(glance_stubs.StubGlanceClient):
@@ -765,6 +807,40 @@ class TestShow(test.NoDBTestCase):
             is_avail_mock.assert_not_called()
             trans_from_mock.assert_not_called()
             reraise_mock.assert_called_once_with(mock.sentinel.image_id)
+
+    @mock.patch('nova.image.glance._is_image_available')
+    def test_show_queued_image_without_some_attrs(self, is_avail_mock):
+        is_avail_mock.return_value = True
+        client = mock.MagicMock()
+
+        # fake image cls without disk_format, container_format, name attributes
+        class fake_image_cls(object):
+            id = 'b31aa5dd-f07a-4748-8f15-398346887584'
+            deleted = False
+            protected = False
+            min_disk = 0
+            created_at = '2014-05-20T08:16:48'
+            size = 0
+            status = 'queued'
+            is_public = False
+            min_ram = 0
+            owner = '980ec4870033453ead65c0470a78b8a8'
+            updated_at = '2014-05-20T08:16:48'
+        glance_image = fake_image_cls()
+        client.call.return_value = glance_image
+        ctx = mock.sentinel.ctx
+        service = glance.GlanceImageService(client)
+        image_info = service.show(ctx, glance_image.id)
+        client.call.assert_called_once_with(ctx, 1, 'get',
+                                            glance_image.id)
+        NOVA_IMAGE_ATTRIBUTES = set(['size', 'disk_format', 'owner',
+                                     'container_format', 'status', 'id',
+                                     'name', 'created_at', 'updated_at',
+                                     'deleted', 'deleted_at', 'checksum',
+                                     'min_disk', 'min_ram', 'is_public',
+                                     'properties'])
+
+        self.assertEqual(NOVA_IMAGE_ATTRIBUTES, set(image_info.keys()))
 
 
 class TestDetail(test.NoDBTestCase):

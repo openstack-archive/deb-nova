@@ -1169,7 +1169,15 @@ class LibvirtDriver(driver.ComputeDriver):
         return connector
 
     def _cleanup_resize(self, instance, network_info):
-        target = libvirt_utils.get_instance_path(instance) + "_resize"
+        # NOTE(wangpan): we get the pre-grizzly instance path firstly,
+        #                so the backup dir of pre-grizzly instance can
+        #                be deleted correctly with grizzly or later nova.
+        pre_grizzly_name = libvirt_utils.get_instance_path(instance,
+                                                           forceold=True)
+        target = pre_grizzly_name + '_resize'
+        if not os.path.exists(target):
+            target = libvirt_utils.get_instance_path(instance) + '_resize'
+
         if os.path.exists(target):
             # Deletion can fail over NFS, so retry the deletion as required.
             # Set maximum attempt as 5, most test can remove the directory
@@ -1239,7 +1247,7 @@ class LibvirtDriver(driver.ComputeDriver):
             #             affect live if the domain is running.
             flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
             state = LIBVIRT_POWER_STATE[virt_dom.info()[0]]
-            if state == power_state.RUNNING:
+            if state in (power_state.RUNNING, power_state.PAUSED):
                 flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
 
             # cache device_path in connection_info -- required by encryptors
@@ -1371,7 +1379,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 #             affect live if the domain is running.
                 flags = libvirt.VIR_DOMAIN_AFFECT_CONFIG
                 state = LIBVIRT_POWER_STATE[virt_dom.info()[0]]
-                if state == power_state.RUNNING:
+                if state in (power_state.RUNNING, power_state.PAUSED):
                     flags |= libvirt.VIR_DOMAIN_AFFECT_LIVE
                 virt_dom.detachDeviceFlags(xml, flags)
 
@@ -2909,7 +2917,7 @@ class LibvirtDriver(driver.ComputeDriver):
         for hostfeat in hostcpu.features:
             guestfeat = vconfig.LibvirtConfigGuestCPUFeature(hostfeat.name)
             guestfeat.policy = "require"
-            guestcpu.features.append(guestfeat)
+            guestcpu.add_feature(guestfeat)
 
         return guestcpu
 
@@ -3614,7 +3622,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     '%(event)s for instance %(uuid)s'),
                   {'event': event_name, 'uuid': instance.uuid})
         if CONF.vif_plugging_is_fatal:
-            raise exception.NovaException()
+            raise exception.VirtualInterfaceCreateException()
 
     def _get_neutron_events(self, network_info):
         # NOTE(danms): We need to collect any VIFs that are currently
@@ -3646,12 +3654,13 @@ class LibvirtDriver(driver.ComputeDriver):
                                              disk_info)
 
             # cache device_path in connection_info -- required by encryptors
-            if (not reboot and 'data' in connection_info and
-                    'volume_id' in connection_info['data']):
+            if 'data' in connection_info:
                 connection_info['data']['device_path'] = conf.source_path
                 vol['connection_info'] = connection_info
                 vol.save(context)
 
+            if (not reboot and 'data' in connection_info and
+                    'volume_id' in connection_info['data']):
                 volume_id = connection_info['data']['volume_id']
                 encryption = encryptors.get_encryption_metadata(
                     context, self._volume_api, volume_id, connection_info)
@@ -3687,14 +3696,14 @@ class LibvirtDriver(driver.ComputeDriver):
 
                 self.firewall_driver.apply_instance_filter(instance,
                                                            network_info)
-        except exception.NovaException:
+        except exception.VirtualInterfaceCreateException:
             # Neutron reported failure and we didn't swallow it, so
             # bail here
-            if domain:
-                domain.destroy()
-            self.cleanup(context, instance, network_info=network_info,
-                         block_device_info=block_device_info)
-            raise exception.VirtualInterfaceCreateException()
+            with excutils.save_and_reraise_exception():
+                if domain:
+                    domain.destroy()
+                self.cleanup(context, instance, network_info=network_info,
+                             block_device_info=block_device_info)
         except eventlet.timeout.Timeout:
             # We never heard from Neutron
             LOG.warn(_('Timeout waiting for vif plugging callback for '
@@ -5045,7 +5054,8 @@ class LibvirtDriver(driver.ComputeDriver):
                           block_device_info=block_device_info,
                           write_to_disk=True)
         self._create_domain_and_network(context, xml, instance, network_info,
-                                        block_device_info, power_on)
+                                        block_device_info, power_on,
+                                        vifs_already_plugged=True)
         if power_on:
             timer = loopingcall.FixedIntervalLoopingCall(
                                                     self._wait_for_running,

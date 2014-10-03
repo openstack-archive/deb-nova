@@ -19,6 +19,8 @@
 import functools
 import inspect
 
+from oslo.config import cfg
+
 from nova.compute import flavors
 from nova.db import base
 from nova import exception
@@ -30,9 +32,12 @@ from nova.objects import instance as instance_obj
 from nova.objects import instance_info_cache as info_cache_obj
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
+from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 from nova import policy
 from nova import utils
+
+CONF = cfg.CONF
 
 LOG = logging.getLogger(__name__)
 
@@ -57,8 +62,9 @@ def refresh_cache(f):
             msg = _('instance is a required argument to use @refresh_cache')
             raise Exception(msg)
 
-        update_instance_cache_with_nw_info(self, context, instance,
-                                           nw_info=res)
+        with lockutils.lock('refresh_cache-%s' % instance['uuid']):
+            update_instance_cache_with_nw_info(self, context, instance,
+                                               nw_info=res)
 
         # return the original function's return value
         return res
@@ -126,12 +132,18 @@ class API(base.Base):
     def get_all(self, context):
         """Get all the networks.
 
-        If it is an admin user, api will return all the networks,
-        if it is a normal user, api will only return the networks which
+        If it is an admin user then api will return all the
+        networks. If it is a normal user and nova Flat or FlatDHCP
+        networking is being used then api will return all
+        networks. Otherwise api will only return the networks which
         belong to the user's project.
         """
+        if "nova.network.manager.Flat" in CONF.network_manager:
+            project_only = "allow_none"
+        else:
+            project_only = True
         try:
-            return self.db.network_get_all(context, project_only=True)
+            return self.db.network_get_all(context, project_only=project_only)
         except exception.NoNetworksFound:
             return []
 
@@ -226,6 +238,26 @@ class API(base.Base):
         """Removes (deallocates) a floating ip with address from a project."""
         return self.floating_manager.deallocate_floating_ip(context, address,
                  affect_auto_assigned)
+
+    def disassociate_and_release_floating_ip(self, context, instance,
+                                           floating_ip):
+        """Removes (deallocates) and deletes the floating ip.
+
+        This api call was added to allow this to be done in one operation
+        if using neutron.
+        """
+
+        address = floating_ip['address']
+        if floating_ip.get('fixed_ip_id'):
+            try:
+                self.disassociate_floating_ip(context, instance, address)
+            except exception.FloatingIpNotAssociated:
+                msg = ("Floating ip %s has already been disassociated, "
+                       "perhaps by another concurrent action.") % address
+                LOG.debug(msg)
+
+        # release ip from project
+        return self.release_floating_ip(context, address)
 
     @wrap_check_policy
     @refresh_cache

@@ -56,11 +56,13 @@ from nova.openstack.common import uuidutils
 from nova.pci import pci_manager
 from nova import test
 from nova.tests import fake_block_device
+from nova.tests import fake_instance
 from nova.tests import fake_network
 import nova.tests.image.fake
 from nova.tests import matchers
 from nova.tests.objects import test_pci_device
 from nova.tests.virt.libvirt import fake_libvirt_utils
+from nova.tests.virt.libvirt import fakelibvirt
 from nova import utils
 from nova import version
 from nova.virt import configdrive
@@ -2250,8 +2252,8 @@ class LibvirtConnTestCase(test.TestCase):
             cpu.model = "Opteron_G4"
             cpu.vendor = "AMD"
 
-            cpu.features.append(vconfig.LibvirtConfigGuestCPUFeature("tm2"))
-            cpu.features.append(vconfig.LibvirtConfigGuestCPUFeature("ht"))
+            cpu.add_feature(vconfig.LibvirtConfigGuestCPUFeature("tm2"))
+            cpu.add_feature(vconfig.LibvirtConfigGuestCPUFeature("ht"))
 
             caps = vconfig.LibvirtConfigCaps()
             caps.host = vconfig.LibvirtConfigCapsHost()
@@ -2279,8 +2281,8 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertEqual(conf.cpu.model, "Opteron_G4")
         self.assertEqual(conf.cpu.vendor, "AMD")
         self.assertEqual(len(conf.cpu.features), 2)
-        self.assertEqual(conf.cpu.features[0].name, "tm2")
-        self.assertEqual(conf.cpu.features[1].name, "ht")
+        self.assertEqual(conf.cpu.features.pop().name, "tm2")
+        self.assertEqual(conf.cpu.features.pop().name, "ht")
 
     def test_get_guest_cpu_config_custom_old(self):
         def get_lib_version_stub():
@@ -3320,6 +3322,85 @@ class LibvirtConnTestCase(test.TestCase):
                           },
                           {"name": "fake-instance"},
                           "/dev/sda")
+
+    @mock.patch('nova.virt.libvirt.blockinfo.get_info_from_bdm')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._lookup_by_name')
+    def test_attach_volume_with_vir_domain_affect_live_flag(self,
+            mock_lookup_by_name, mock_get_info):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = fake_instance.fake_instance_obj(mock.sentinel.ctx)
+        mock_dom = mock.MagicMock()
+        mock_lookup_by_name.return_value = mock_dom
+
+        connection_info = {"driver_volume_type": "fake",
+                           "data": {"device_path": "/fake",
+                                    "access_mode": "rw"}}
+        bdm = {'device_name': 'vdb',
+               'disk_bus': 'fake-bus',
+               'device_type': 'fake-type'}
+        disk_info = {'bus': bdm['disk_bus'], 'type': bdm['device_type'],
+                     'dev': 'vdb'}
+        mock_get_info.return_value = disk_info
+        mock_conf = mock.MagicMock()
+        flags = (fakelibvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                 fakelibvirt.VIR_DOMAIN_AFFECT_LIVE)
+
+        with contextlib.nested(
+            mock.patch.object(conn, 'volume_driver_method',
+                              return_value=mock_conf),
+            mock.patch.object(conn, 'set_cache_mode')
+        ) as (mock_volume_driver_method, mock_set_cache_mode):
+            for state in (power_state.RUNNING, power_state.PAUSED):
+                mock_dom.info.return_value = [state, 512, 512, 2, 1234, 5678]
+
+                conn.attach_volume(self.context, connection_info, instance,
+                                   "/dev/vdb", disk_bus=bdm['disk_bus'],
+                                   device_type=bdm['device_type'])
+
+                mock_lookup_by_name.assert_called_with(instance['name'])
+                mock_get_info.assert_called_with(CONF.libvirt.virt_type, bdm)
+                mock_volume_driver_method.assert_called_with(
+                    'connect_volume', connection_info, disk_info)
+                mock_set_cache_mode.assert_called_with(mock_conf)
+                mock_dom.attachDeviceFlags.assert_called_with(
+                    mock_conf.to_xml(), flags)
+
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._get_disk_xml')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._lookup_by_name')
+    def test_detach_volume_with_vir_domain_affect_live_flag(self,
+            mock_lookup_by_name, mock_get_disk_xml):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = fake_instance.fake_instance_obj(mock.sentinel.ctx)
+        mock_dom = mock.MagicMock()
+        mock_xml = \
+            """
+            <disk type='file'>
+                <source file='/path/to/fake-volume'/>
+                <target dev='vdc' bus='virtio'/>
+            </disk>
+            """
+        mock_get_disk_xml.return_value = mock_xml
+
+        connection_info = {"driver_volume_type": "fake",
+                           "data": {"device_path": "/fake",
+                                    "access_mode": "rw"}}
+        flags = (fakelibvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                 fakelibvirt.VIR_DOMAIN_AFFECT_LIVE)
+
+        with mock.patch.object(conn, 'volume_driver_method') as \
+                mock_volume_driver_method:
+            for state in (power_state.RUNNING, power_state.PAUSED):
+                mock_dom.info.return_value = [state, 512, 512, 2, 1234, 5678]
+                mock_lookup_by_name.return_value = mock_dom
+
+                conn.detach_volume(connection_info, instance, '/dev/vdc')
+
+                mock_lookup_by_name.assert_called_with(instance['name'])
+                mock_get_disk_xml.assert_called_with(mock_dom.XMLDesc(0),
+                                                     'vdc')
+                mock_dom.detachDeviceFlags.assert_called_with(mock_xml, flags)
+                mock_volume_driver_method.assert_called_with(
+                    'disconnect_volume', connection_info, 'vdc')
 
     def test_multi_nic(self):
         instance_data = dict(self.test_instance)
@@ -6951,6 +7032,25 @@ class LibvirtConnTestCase(test.TestCase):
         self.assertTrue(
             block_device_info['block_device_mapping'][0].save.called)
 
+    def test_create_propogates_exceptions(self):
+        self.flags(virt_type='lxc', group='libvirt')
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = instance_obj.Instance(id=1, uuid='fake-uuid')
+
+        with contextlib.nested(
+              mock.patch.object(conn, 'plug_vifs'),
+              mock.patch.object(conn, 'firewall_driver'),
+              mock.patch.object(conn, '_create_domain',
+                                side_effect=exception.NovaException),
+              mock.patch.object(conn, 'cleanup')) as (
+              cleanup, firewall_driver, create, plug_vifs):
+            self.assertRaises(exception.NovaException,
+                              conn._create_domain_and_network,
+                              self.context,
+                              'xml',
+                              instance, None)
+
     def test_create_without_pause(self):
         self.flags(virt_type='lxc', group='libvirt')
 
@@ -7081,6 +7181,93 @@ class LibvirtConnTestCase(test.TestCase):
     @mock.patch('nova.utils.is_neutron', return_value=False)
     def test_create_with_network_events_non_neutron(self, is_neutron):
         self._test_create_with_network_events()
+
+    @mock.patch('nova.volume.encryptors.get_encryption_metadata')
+    @mock.patch('nova.virt.libvirt.blockinfo.get_info_from_bdm')
+    def test_create_with_bdm(self, get_info_from_bdm, get_encryption_metadata):
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = fake_instance.fake_instance_obj(mock.sentinel.ctx)
+        mock_dom = mock.MagicMock()
+        mock_encryption_meta = mock.MagicMock()
+        get_encryption_metadata.return_value = mock_encryption_meta
+
+        fake_xml = """
+            <domain>
+                <name>instance-00000001</name>
+                <memory>1048576</memory>
+                <vcpu>1</vcpu>
+                <devices>
+                    <disk type='file' device='disk'>
+                        <driver name='qemu' type='raw' cache='none'/>
+                        <source file='/path/fake-volume1'/>
+                        <target dev='vda' bus='virtio'/>
+                    </disk>
+                </devices>
+            </domain>
+        """
+        fake_volume_id = "fake-volume-id"
+        connection_info = {"driver_volume_type": "fake",
+                           "data": {"access_mode": "rw",
+                                    "volume_id": fake_volume_id}}
+
+        def fake_getitem(*args, **kwargs):
+            fake_bdm = {'connection_info': connection_info,
+                        'mount_device': '/dev/vda'}
+            return fake_bdm.get(args[0])
+
+        mock_volume = mock.MagicMock()
+        mock_volume.__getitem__.side_effect = fake_getitem
+        bdi = {'block_device_mapping': [mock_volume]}
+        network_info = [network_model.VIF(id='1'),
+                        network_model.VIF(id='2', active=True)]
+        disk_info = {'bus': 'virtio', 'type': 'file',
+                     'dev': 'vda'}
+        get_info_from_bdm.return_value = disk_info
+
+        with contextlib.nested(
+            mock.patch.object(conn, 'volume_driver_method'),
+            mock.patch.object(conn, '_get_volume_encryptor'),
+            mock.patch.object(conn, 'plug_vifs'),
+            mock.patch.object(conn.firewall_driver, 'setup_basic_filtering'),
+            mock.patch.object(conn.firewall_driver,
+                              'prepare_instance_filter'),
+            mock.patch.object(conn, '_create_domain'),
+            mock.patch.object(conn.firewall_driver, 'apply_instance_filter'),
+        ) as (volume_driver_method, get_volume_encryptor, plug_vifs,
+              setup_basic_filtering, prepare_instance_filter, create_domain,
+              apply_instance_filter):
+            volume_driver_method.return_value = mock.MagicMock(
+                source_path='/path/fake-volume1')
+            create_domain.return_value = mock_dom
+
+            domain = conn._create_domain_and_network(self.context, fake_xml,
+                                                     instance, network_info,
+                                                     block_device_info=bdi)
+
+            get_info_from_bdm.assert_called_once_with(CONF.libvirt.virt_type,
+                                                      mock_volume)
+            volume_driver_method.assert_called_once_with('connect_volume',
+                                                         connection_info,
+                                                         disk_info)
+            self.assertEqual(connection_info['data']['device_path'],
+                             '/path/fake-volume1')
+            mock_volume.save.assert_called_once_with(self.context)
+            get_encryption_metadata.assert_called_once_with(self.context,
+                conn._volume_api, fake_volume_id, connection_info)
+            get_volume_encryptor.assert_called_once_with(connection_info,
+                                                         mock_encryption_meta)
+            plug_vifs.assert_called_once_with(instance, network_info)
+            setup_basic_filtering.assert_called_once_with(instance,
+                                                          network_info)
+            prepare_instance_filter.assert_called_once_with(instance,
+                                                          network_info)
+
+            event = utils.is_neutron() and CONF.vif_plugging_timeout
+            flag = event and libvirt.VIR_DOMAIN_START_PAUSED or 0
+            create_domain.assert_called_once_with(fake_xml, instance=instance,
+                                                  launch_flags=flag,
+                                                  power_on=True)
+            self.assertEqual(mock_dom, domain)
 
     def test_get_neutron_events(self):
         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -8393,11 +8580,13 @@ class LibvirtDriverTestCase(test.TestCase):
                               block_device_info=None, inject_files=True):
             self.assertFalse(inject_files)
 
-        def fake_create_domain(xml, instance=None, launch_flags=0,
-                               power_on=True):
+        def fake_create_domain_and_network(
+            context, xml, instance, network_info,
+            block_device_info=None, power_on=True, reboot=False,
+            vifs_already_plugged=False):
             self.fake_create_domain_called = True
             self.assertEqual(powered_on, power_on)
-            return mock.MagicMock()
+            self.assertTrue(vifs_already_plugged)
 
         def fake_enable_hairpin(instance):
             pass
@@ -8419,8 +8608,8 @@ class LibvirtDriverTestCase(test.TestCase):
         self.stubs.Set(self.libvirtconnection, 'plug_vifs', fake_plug_vifs)
         self.stubs.Set(self.libvirtconnection, '_create_image',
                        fake_create_image)
-        self.stubs.Set(self.libvirtconnection, '_create_domain',
-                       fake_create_domain)
+        self.stubs.Set(self.libvirtconnection, '_create_domain_and_network',
+                       fake_create_domain_and_network)
         self.stubs.Set(self.libvirtconnection, '_enable_hairpin',
                        fake_enable_hairpin)
         self.stubs.Set(utils, 'execute', fake_execute)
@@ -8585,7 +8774,8 @@ class LibvirtDriverTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_utils, 'get_instance_path')
         self.mox.StubOutWithMock(utils, 'execute')
 
-        libvirt_utils.get_instance_path(ins_ref).AndReturn('/fake/inst')
+        libvirt_utils.get_instance_path(ins_ref,
+                forceold=True).AndReturn('/fake/inst')
         utils.execute('rm', '-rf', '/fake/inst_resize', delay_on_retry=True,
                       attempts=5)
 
@@ -8620,7 +8810,8 @@ class LibvirtDriverTestCase(test.TestCase):
         self.mox.StubOutWithMock(libvirt_utils, 'get_instance_path')
         self.mox.StubOutWithMock(utils, 'execute')
 
-        libvirt_utils.get_instance_path(ins_ref).AndReturn('/fake/inst')
+        libvirt_utils.get_instance_path(ins_ref,
+                forceold=True).AndReturn('/fake/inst')
         utils.execute('rm', '-rf', '/fake/inst_resize', delay_on_retry=True,
                       attempts=5)
 

@@ -16,6 +16,7 @@
 import copy
 import uuid
 
+import mock
 import mox
 from neutronclient.common import exceptions
 from neutronclient.v2_0 import client
@@ -30,6 +31,7 @@ from nova.network import model
 from nova.network import neutronv2
 from nova.network.neutronv2 import api as neutronapi
 from nova.network.neutronv2 import constants
+from nova.objects import instance as instance_obj
 from nova.openstack.common import jsonutils
 from nova.openstack.common import local
 from nova import test
@@ -1756,6 +1758,19 @@ class TestNeutronv2(TestNeutronv2Base):
         self.mox.ReplayAll()
         api.release_floating_ip(self.context, address)
 
+    def test_disassociate_and_release_floating_ip(self):
+        api = neutronapi.API()
+        address = self.fip_unassociated['floating_ip_address']
+        fip_id = self.fip_unassociated['id']
+        floating_ip = {'address': address}
+
+        self.moxed_client.list_floatingips(floating_ip_address=address).\
+            AndReturn({'floatingips': [self.fip_unassociated]})
+        self.moxed_client.delete_floatingip(fip_id)
+        self.mox.ReplayAll()
+        api.disassociate_and_release_floating_ip(self.context, None,
+                                               floating_ip)
+
     def test_release_floating_ip_associated(self):
         api = neutronapi.API()
         address = self.fip_associated['floating_ip_address']
@@ -2121,6 +2136,26 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertRaises(NotImplementedError,
                           api.get_floating_ips_by_fixed_address,
                           self.context, fake_fixed)
+
+
+class TestNeutronv2WithMock(test.TestCase):
+    """Used to test Neutron V2 API with mock."""
+
+    def setUp(self):
+        super(TestNeutronv2WithMock, self).setUp()
+        self.api = neutronapi.API()
+        self.context = context.RequestContext(
+            'fake-user', 'fake-project',
+            auth_token='bff4a5a6b9eb4ea2a6efec6eefb77936')
+
+    @mock.patch('nova.openstack.common.lockutils.lock')
+    def test_get_instance_nw_info_locks_per_instance(self, mock_lock):
+        instance = instance_obj.Instance(uuid=uuid.uuid4())
+        api = neutronapi.API()
+        mock_lock.side_effect = test.TestingException
+        self.assertRaises(test.TestingException,
+                          api.get_instance_nw_info, 'context', instance)
+        mock_lock.assert_called_once_with('refresh_cache-%s' % instance.uuid)
 
 
 class TestNeutronv2ModuleMethods(test.TestCase):

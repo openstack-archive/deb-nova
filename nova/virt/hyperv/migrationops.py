@@ -18,10 +18,12 @@ Management class for migration / resize operations.
 """
 import os
 
+from nova import exception
 from nova.openstack.common import excutils
 from nova.openstack.common.gettextutils import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import units
+from nova.virt import configdrive
 from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmops
@@ -101,11 +103,13 @@ class MigrationOps(object):
         curr_root_gb = instance['root_gb']
 
         if new_root_gb < curr_root_gb:
-            raise vmutils.VHDResizeException(
-                _("Cannot resize the root disk to a smaller size. Current "
-                  "size: %(curr_root_gb)s GB. Requested size: "
-                  "%(new_root_gb)s GB") %
-                {'curr_root_gb': curr_root_gb, 'new_root_gb': new_root_gb})
+            raise exception.InstanceFaultRollback(
+                vmutils.VHDResizeException(
+                    _("Cannot resize the root disk to a smaller size. "
+                      "Current size: %(curr_root_gb)s GB. Requested size: "
+                      "%(new_root_gb)s GB") %
+                    {'curr_root_gb': curr_root_gb,
+                     'new_root_gb': new_root_gb}))
 
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    flavor, network_info,
@@ -143,6 +147,17 @@ class MigrationOps(object):
             instance_name)
         self._pathutils.rename(revert_path, instance_path)
 
+    def _check_and_attach_config_drive(self, instance):
+        if configdrive.required_by(instance):
+            configdrive_path = self._pathutils.lookup_configdrive_path(
+                instance.name)
+            if configdrive_path:
+                self._vmops.attach_config_drive(instance, configdrive_path)
+            else:
+                raise vmutils.HyperVException(
+                    _("Config drive is required by instance: %s, "
+                      "but it does not exist.") % instance.name)
+
     def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info=None, power_on=True):
         LOG.debug(_("finish_revert_migration called"), instance=instance)
@@ -159,6 +174,8 @@ class MigrationOps(object):
 
         self._vmops.create_instance(instance, network_info, block_device_info,
                                     root_vhd_path, eph_vhd_path)
+
+        self._check_and_attach_config_drive(instance)
 
         if power_on:
             self._vmops.power_on(instance)
@@ -268,5 +285,8 @@ class MigrationOps(object):
 
         self._vmops.create_instance(instance, network_info, block_device_info,
                                     root_vhd_path, eph_vhd_path)
+
+        self._check_and_attach_config_drive(instance)
+
         if power_on:
             self._vmops.power_on(instance)

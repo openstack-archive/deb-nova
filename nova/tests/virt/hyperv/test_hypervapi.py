@@ -125,6 +125,8 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
                        fake_get_remote_image_service)
 
         def fake_check_min_windows_version(fake_self, major, minor):
+            if [major, minor] >= [6, 3]:
+                return False
             return self._check_min_windows_version_satisfied
         self.stubs.Set(hostutils.HostUtils, 'check_min_windows_version',
                        fake_check_min_windows_version)
@@ -132,10 +134,6 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         def fake_sleep(ms):
             pass
         self.stubs.Set(time, 'sleep', fake_sleep)
-
-        def fake_vmutils__init__(self, host='.'):
-            pass
-        vmutils.VMUtils.__init__ = fake_vmutils__init__
 
         self.stubs.Set(pathutils, 'PathUtils', fake.PathUtils)
         self._mox.StubOutWithMock(fake.PathUtils, 'open')
@@ -163,7 +161,7 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         self._mox.StubOutWithMock(vmutils.VMUtils, 'set_nic_connection')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'get_vm_scsi_controller')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'get_vm_ide_controller')
-        self._mox.StubOutWithMock(vmutils.VMUtils, 'get_attached_disks_count')
+        self._mox.StubOutWithMock(vmutils.VMUtils, 'get_attached_disks')
         self._mox.StubOutWithMock(vmutils.VMUtils,
                                   'attach_volume_to_controller')
         self._mox.StubOutWithMock(vmutils.VMUtils,
@@ -734,10 +732,6 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         m.AndReturn(True)
 
         if cow:
-            m = basevolumeutils.BaseVolumeUtils.volume_in_mapping(mox.IsA(str),
-                                                                  None)
-            m.AndReturn(False)
-
             self._setup_get_cached_image_mocks(cow)
 
         if with_volumes:
@@ -769,6 +763,15 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             self.assertIsNotNone(self._fetched_image)
         else:
             self.assertIsNone(self._fetched_image)
+
+    def test_get_instance_disk_info_is_implemented(self):
+        # Ensure that the method has been implemented in the driver
+        try:
+            disk_info = self._conn.get_instance_disk_info('fake_instance_name')
+            self.assertIsNone(disk_info)
+        except NotImplementedError:
+            self.fail("test_get_instance_disk_info() should not raise "
+                      "NotImplementedError")
 
     def test_snapshot_with_update_failure(self):
         (snapshot_name, func_call_matcher) = self._setup_snapshot_mocks()
@@ -915,7 +918,8 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
                                      ephemeral_storage=False):
         vmutils.VMUtils.create_vm(mox.Func(self._check_vm_name), mox.IsA(int),
                                   mox.IsA(int), mox.IsA(bool),
-                                  CONF.hyperv.dynamic_memory_ratio)
+                                  CONF.hyperv.dynamic_memory_ratio,
+                                  mox.IsA(list))
 
         if not boot_from_volume:
             m = vmutils.VMUtils.attach_ide_drive(mox.Func(self._check_vm_name),
@@ -1016,9 +1020,10 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
                                             remove_dir=True)
         m.AndReturn(self._test_instance_dir)
 
-        m = basevolumeutils.BaseVolumeUtils.volume_in_mapping(
-            mox.IsA(str), block_device_info)
-        m.AndReturn(boot_from_volume)
+        if block_device_info:
+            m = basevolumeutils.BaseVolumeUtils.volume_in_mapping(
+                'fake_root_device_name', block_device_info)
+            m.AndReturn(boot_from_volume)
 
         if not boot_from_volume:
             m = fake.PathUtils.get_instance_dir(mox.Func(self._check_vm_name))
@@ -1124,6 +1129,8 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         fake_mounted_disk = "fake_mounted_disk"
         fake_device_number = 0
         fake_controller_path = 'fake_scsi_controller_path'
+        self._mox.StubOutWithMock(self._conn._volumeops,
+                                  '_get_free_controller_slot')
 
         self._mock_login_storage_target(target_iqn, target_lun,
                                         target_portal,
@@ -1143,7 +1150,8 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             m.AndReturn(fake_controller_path)
 
             fake_free_slot = 1
-            m = vmutils.VMUtils.get_attached_disks_count(fake_controller_path)
+            m = self._conn._volumeops._get_free_controller_slot(
+                fake_controller_path)
             m.AndReturn(fake_free_slot)
 
         m = vmutils.VMUtils.attach_volume_to_controller(instance_name,
@@ -1499,21 +1507,49 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         (instance, fake_dest_ip, network_info, flavor) = args
 
         self._mox.ReplayAll()
-        self.assertRaises(vmutils.VHDResizeException,
+        self.assertRaises(exception.InstanceFaultRollback,
                           self._conn.migrate_disk_and_power_off,
                           self._context, instance, fake_dest_ip,
                           flavor, network_info)
         self._mox.VerifyAll()
 
-    def _test_finish_migration(self, power_on, ephemeral_storage=False):
+    def _mock_attach_config_drive(self, instance, config_drive_format):
+        instance['config_drive'] = True
+        self._mox.StubOutWithMock(fake.PathUtils, 'lookup_configdrive_path')
+        m = fake.PathUtils.lookup_configdrive_path(
+            mox.Func(self._check_instance_name))
+
+        if config_drive_format in constants.DISK_FORMAT_MAP:
+            m.AndReturn(self._test_instance_dir + '/configdrive.' +
+                        config_drive_format)
+        else:
+            m.AndReturn(None)
+
+        m = vmutils.VMUtils.attach_ide_drive(
+            mox.Func(self._check_instance_name),
+            mox.IsA(str),
+            mox.IsA(int),
+            mox.IsA(int),
+            mox.IsA(str))
+        m.WithSideEffects(self._add_ide_disk).InAnyOrder()
+
+    def _verify_attach_config_drive(self, config_drive_format):
+        if config_drive_format == constants.IDE_DISK_FORMAT.lower():
+            self.assertEqual(self._instance_ide_disks[1],
+                self._test_instance_dir + '/configdrive.' +
+                config_drive_format)
+        elif config_drive_format == constants.IDE_DVD_FORMAT.lower():
+            self.assertEqual(self._instance_ide_dvds[0],
+                self._test_instance_dir + '/configdrive.' +
+                config_drive_format)
+
+    def _test_finish_migration(self, power_on, ephemeral_storage=False,
+                               config_drive=False,
+                               config_drive_format='iso'):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
         instance['system_metadata'] = {}
         network_info = fake_network.fake_get_instance_nw_info(self.stubs)
-
-        m = basevolumeutils.BaseVolumeUtils.volume_in_mapping(mox.IsA(str),
-                                                              None)
-        m.AndReturn(False)
 
         m = fake.PathUtils.get_instance_dir(mox.IsA(str))
         m.AndReturn(self._test_instance_dir)
@@ -1554,10 +1590,16 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
                                          constants.HYPERV_VM_STATE_ENABLED)
 
+        if config_drive:
+            self._mock_attach_config_drive(instance, config_drive_format)
+
         self._mox.ReplayAll()
         self._conn.finish_migration(self._context, None, instance, "",
                                     network_info, None, False, None, power_on)
         self._mox.VerifyAll()
+
+        if config_drive:
+            self._verify_attach_config_drive(config_drive_format)
 
     def test_finish_migration_power_on(self):
         self._test_finish_migration(True)
@@ -1567,6 +1609,14 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
 
     def test_finish_migration_with_ephemeral_storage(self):
         self._test_finish_migration(False, ephemeral_storage=True)
+
+    def test_finish_migration_attach_config_drive_iso(self):
+        self._test_finish_migration(False, config_drive=True,
+            config_drive_format=constants.IDE_DVD_FORMAT.lower())
+
+    def test_finish_migration_attach_config_drive_vhd(self):
+        self._test_finish_migration(False, config_drive=True,
+            config_drive_format=constants.IDE_DISK_FORMAT.lower())
 
     def test_confirm_migration(self):
         self._instance_data = self._get_instance_data()
@@ -1579,17 +1629,15 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         self._conn.confirm_migration(None, instance, network_info)
         self._mox.VerifyAll()
 
-    def _test_finish_revert_migration(self, power_on, ephemeral_storage=False):
+    def _test_finish_revert_migration(self, power_on, ephemeral_storage=False,
+                                      config_drive=False,
+                                      config_drive_format='iso'):
         self._instance_data = self._get_instance_data()
         instance = db.instance_create(self._context, self._instance_data)
         network_info = fake_network.fake_get_instance_nw_info(self.stubs)
 
         fake_revert_path = ('C:\\FakeInstancesPath\\%s\\_revert' %
                             instance['name'])
-
-        m = basevolumeutils.BaseVolumeUtils.volume_in_mapping(mox.IsA(str),
-                                                              None)
-        m.AndReturn(False)
 
         m = fake.PathUtils.get_instance_dir(mox.IsA(str),
                                             create_dir=False,
@@ -1617,11 +1665,17 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             vmutils.VMUtils.set_vm_state(mox.Func(self._check_instance_name),
                                          constants.HYPERV_VM_STATE_ENABLED)
 
+        if config_drive:
+            self._mock_attach_config_drive(instance, config_drive_format)
+
         self._mox.ReplayAll()
         self._conn.finish_revert_migration(self._context, instance,
                                            network_info, None,
                                            power_on)
         self._mox.VerifyAll()
+
+        if config_drive:
+            self._verify_attach_config_drive(config_drive_format)
 
     def test_finish_revert_migration_power_on(self):
         self._test_finish_revert_migration(True)
@@ -1637,6 +1691,14 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
 
     def test_finish_revert_migration_with_ephemeral_storage(self):
         self._test_finish_revert_migration(False, ephemeral_storage=True)
+
+    def test_finish_revert_migration_attach_config_drive_iso(self):
+        self._test_finish_revert_migration(False, config_drive=True,
+            config_drive_format=constants.IDE_DVD_FORMAT.lower())
+
+    def test_finish_revert_migration_attach_config_drive_vhd(self):
+        self._test_finish_revert_migration(False, config_drive=True,
+            config_drive_format=constants.IDE_DISK_FORMAT.lower())
 
     def test_plug_vifs(self):
         # Check to make sure the method raises NotImplementedError.
@@ -1738,3 +1800,17 @@ class VolumeOpsTestCase(HyperVAPIBaseTestCase):
                 self.assertRaises(exception.NotFound,
                                   self.volumeops._get_mounted_disk_from_lun,
                                   target_iqn, target_lun)
+
+    def test_get_free_controller_slot_exception(self):
+        fake_drive = mock.MagicMock()
+        type(fake_drive).AddressOnParent = mock.PropertyMock(
+            side_effect=xrange(constants.SCSI_CONTROLLER_SLOTS_NUMBER))
+        fake_scsi_controller_path = 'fake_scsi_controller_path'
+
+        with mock.patch.object(self.volumeops._vmutils,
+                'get_attached_disks') as fake_get_attached_disks:
+            fake_get_attached_disks.return_value = (
+                [fake_drive] * constants.SCSI_CONTROLLER_SLOTS_NUMBER)
+            self.assertRaises(vmutils.HyperVException,
+                              self.volumeops._get_free_controller_slot,
+                              fake_scsi_controller_path)
