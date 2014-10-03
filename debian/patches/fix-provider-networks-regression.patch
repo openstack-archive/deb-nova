@@ -25,8 +25,10 @@ Last-Update: 2014-08-08
  nova/tests/fake_policy.py     | 3 ++-
  3 files changed, 11 insertions(+), 3 deletions(-)
 
---- a/etc/nova/policy.json
-+++ b/etc/nova/policy.json
+Index: nova/etc/nova/policy.json
+===================================================================
+--- nova.orig/etc/nova/policy.json	2014-10-03 15:40:46.000000000 +0800
++++ nova/etc/nova/policy.json	2014-10-03 18:44:47.000000000 +0800
 @@ -320,5 +320,6 @@
      "network:get_dns_entries_by_name": "",
      "network:create_private_dns_domain": "",
@@ -35,17 +37,19 @@ Last-Update: 2014-08-08
 +    "network:delete_dns_domain": "",
 +    "network:attach_external_network": "rule:admin_api"
  }
---- a/nova/network/neutronv2/api.py
-+++ b/nova/network/neutronv2/api.py
-@@ -34,6 +34,7 @@
- from nova.openstack.common.gettextutils import _
+Index: nova/nova/network/neutronv2/api.py
+===================================================================
+--- nova.orig/nova/network/neutronv2/api.py	2014-10-03 16:09:12.000000000 +0800
++++ nova/nova/network/neutronv2/api.py	2014-10-03 18:44:47.000000000 +0800
+@@ -35,6 +35,7 @@
+ from nova.openstack.common import lockutils
  from nova.openstack.common import log as logging
  from nova.openstack.common import uuidutils
 +from nova import policy
  
  neutron_opts = [
      cfg.StrOpt('neutron_url',
-@@ -135,7 +136,12 @@
+@@ -136,7 +137,12 @@
              nets,
              net_ids)
  
@@ -59,8 +63,10 @@ Last-Update: 2014-08-08
              for net in nets:
                  # Perform this check here rather than in validate_networks to
                  # ensure the check is performed everytime allocate_for_instance
---- a/nova/tests/fake_policy.py
-+++ b/nova/tests/fake_policy.py
+Index: nova/nova/tests/fake_policy.py
+===================================================================
+--- nova.orig/nova/tests/fake_policy.py	2014-10-03 15:40:47.000000000 +0800
++++ nova/nova/tests/fake_policy.py	2014-10-03 18:44:47.000000000 +0800
 @@ -373,6 +373,7 @@
      "network:get_dns_entries_by_name": "",
      "network:create_private_dns_domain": "",

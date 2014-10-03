@@ -23,11 +23,11 @@ Change-Id: I92cd6b16fbd93b377fe47b15d22efbbf68d02513
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 Last-Update: 2014-08-10
 
-diff --git a/nova/tests/virt/libvirt/fake_libvirt_utils.py b/nova/tests/virt/libvirt/fake_libvirt_utils.py
-index 1585e60..865c058 100644
---- a/nova/tests/virt/libvirt/fake_libvirt_utils.py
-+++ b/nova/tests/virt/libvirt/fake_libvirt_utils.py
-@@ -110,10 +110,6 @@ def create_lvm_image(vg, lv, size, sparse=False):
+Index: nova/nova/tests/virt/libvirt/fake_libvirt_utils.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/fake_libvirt_utils.py	2014-10-03 15:40:47.000000000 +0800
++++ nova/nova/tests/virt/libvirt/fake_libvirt_utils.py	2014-10-03 16:26:29.000000000 +0800
+@@ -110,10 +110,6 @@
      pass
  
  
@@ -38,7 +38,7 @@ index 1585e60..865c058 100644
  def volume_group_free_space(vg):
      pass
  
-@@ -194,17 +190,5 @@ def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
+@@ -194,17 +190,5 @@
      return "qemu"
  
  
@@ -56,11 +56,11 @@ index 1585e60..865c058 100644
 -
  def get_arch(image_meta):
      pass
-diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
-index d8b6560..9ccbbee 100644
---- a/nova/tests/virt/libvirt/test_imagebackend.py
-+++ b/nova/tests/virt/libvirt/test_imagebackend.py
-@@ -804,19 +804,23 @@ def test_create_image(self):
+Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_imagebackend.py	2014-10-03 16:26:00.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_imagebackend.py	2014-10-03 16:26:29.000000000 +0800
+@@ -804,19 +804,23 @@
  
          rbd.rbd.RBD_FEATURE_LAYERING = 1
  
@@ -87,11 +87,11 @@ index d8b6560..9ccbbee 100644
          self.mox.VerifyAll()
  
      def test_prealloc_image(self):
-diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
-index 6ea3d38..9ab2cc8 100644
---- a/nova/tests/virt/libvirt/test_libvirt.py
-+++ b/nova/tests/virt/libvirt/test_libvirt.py
-@@ -75,6 +75,7 @@
+Index: nova/nova/tests/virt/libvirt/test_libvirt.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-10-03 16:25:02.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-10-03 16:26:29.000000000 +0800
+@@ -77,6 +77,7 @@
  from nova.virt.libvirt import driver as libvirt_driver
  from nova.virt.libvirt import firewall
  from nova.virt.libvirt import imagebackend
@@ -99,7 +99,7 @@ index 6ea3d38..9ab2cc8 100644
  from nova.virt.libvirt import utils as libvirt_utils
  from nova.virt import netutils
  
-@@ -5567,38 +5568,16 @@ def fake_delete_instance_files(instance):
+@@ -5648,38 +5649,16 @@
                      "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
          conn.destroy(self.context, instance, [])
  
@@ -145,11 +145,11 @@ index 6ea3d38..9ab2cc8 100644
  
      def test_destroy_undefines_no_undefine_flags(self):
          mock = self.mox.CreateMock(libvirt.virDomain)
-diff --git a/nova/tests/virt/libvirt/test_libvirt_utils.py b/nova/tests/virt/libvirt/test_libvirt_utils.py
-index c10fc21..fc4b3d3 100644
---- a/nova/tests/virt/libvirt/test_libvirt_utils.py
-+++ b/nova/tests/virt/libvirt/test_libvirt_utils.py
-@@ -170,48 +170,6 @@ def fake_execute(*cmd, **kwargs):
+Index: nova/nova/tests/virt/libvirt/test_libvirt_utils.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt_utils.py	2014-10-03 15:40:47.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt_utils.py	2014-10-03 16:26:29.000000000 +0800
+@@ -170,48 +170,6 @@
          libvirt_utils.clear_logical_volume('/dev/vd')
          self.assertEqual(expected_commands, executes)
  
@@ -198,11 +198,11 @@ index c10fc21..fc4b3d3 100644
      @mock.patch('nova.utils.execute')
      def test_copy_image_local_cp(self, mock_execute):
          libvirt_utils.copy_image('src', 'dest')
-diff --git a/nova/tests/virt/libvirt/test_rbd.py b/nova/tests/virt/libvirt/test_rbd.py
-index 2ca1546..58e4039 100644
---- a/nova/tests/virt/libvirt/test_rbd.py
-+++ b/nova/tests/virt/libvirt/test_rbd.py
-@@ -168,3 +168,18 @@ def test_exists(self, mock_proxy):
+Index: nova/nova/tests/virt/libvirt/test_rbd.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_rbd.py	2014-10-03 16:26:00.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_rbd.py	2014-10-03 16:26:29.000000000 +0800
+@@ -168,3 +168,18 @@
          self.assertTrue(self.driver.exists(self.volume_name))
          proxy.__enter__.assert_called_once_with()
          proxy.__exit__.assert_called_once_with(None, None, None)
@@ -221,10 +221,10 @@ index 2ca1546..58e4039 100644
 +        rbd.remove.assert_called_once_with(client.ioctx, '12345_test')
 +        client.__enter__.assert_called_once_with()
 +        client.__exit__.assert_called_once_with(None, None, None)
-diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index 312585d..f73a9aa 100644
---- a/nova/virt/libvirt/driver.py
-+++ b/nova/virt/libvirt/driver.py
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 16:25:02.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-10-03 16:26:29.000000000 +0800
 @@ -102,6 +102,7 @@
  from nova.virt.libvirt import firewall as libvirt_firewall
  from nova.virt.libvirt import imagebackend
@@ -233,7 +233,7 @@ index 312585d..f73a9aa 100644
  from nova.virt.libvirt import utils as libvirt_utils
  from nova.virt import netutils
  from nova.virt import watchdog_actions
-@@ -1080,17 +1081,11 @@ def cleanup(self, context, instance, network_info, block_device_info=None,
+@@ -1080,17 +1081,11 @@
                  self._cleanup_rbd(instance)
  
      def _cleanup_rbd(self, instance):
@@ -256,11 +256,11 @@ index 312585d..f73a9aa 100644
  
      def _cleanup_lvm(self, instance):
          """Delete all LVM disks for given instance object."""
-diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index 7e08533..5bff9d7 100644
---- a/nova/virt/libvirt/imagebackend.py
-+++ b/nova/virt/libvirt/imagebackend.py
-@@ -572,16 +572,9 @@ def create_image(self, prepare_template, base, size, *args, **kwargs):
+Index: nova/nova/virt/libvirt/imagebackend.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/imagebackend.py	2014-10-03 16:26:00.000000000 +0800
++++ nova/nova/virt/libvirt/imagebackend.py	2014-10-03 16:26:29.000000000 +0800
+@@ -572,16 +572,9 @@
          else:
              self.verify_base_size(base, size)
  
@@ -278,11 +278,11 @@ index 7e08533..5bff9d7 100644
          if size and size > base_size:
              self.driver.resize(self.rbd_name, size)
  
-diff --git a/nova/virt/libvirt/rbd.py b/nova/virt/libvirt/rbd.py
-index effd8da..f06a362 100644
---- a/nova/virt/libvirt/rbd.py
-+++ b/nova/virt/libvirt/rbd.py
-@@ -63,6 +63,19 @@ def __getattr__(self, attrib):
+Index: nova/nova/virt/libvirt/rbd.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/rbd.py	2014-10-03 16:26:00.000000000 +0800
++++ nova/nova/virt/libvirt/rbd.py	2014-10-03 16:26:29.000000000 +0800
+@@ -63,6 +63,19 @@
          return getattr(self.volume, attrib)
  
  
@@ -302,7 +302,7 @@ index effd8da..f06a362 100644
  class RBDDriver(object):
  
      def __init__(self, pool, ceph_conf, rbd_user):
-@@ -144,3 +157,34 @@ def exists(self, name):
+@@ -144,3 +157,34 @@
                  return True
          except rbd.ImageNotFound:
              return False
@@ -337,11 +337,11 @@ index effd8da..f06a362 100644
 +                    LOG.warn(_('rbd remove %(volume)s in pool %(pool)s '
 +                               'failed'),
 +                             {'volume': volume, 'pool': self.pool})
-diff --git a/nova/virt/libvirt/utils.py b/nova/virt/libvirt/utils.py
-index ddfad72..21b02f6 100644
---- a/nova/virt/libvirt/utils.py
-+++ b/nova/virt/libvirt/utils.py
-@@ -251,46 +251,6 @@ def check_size(vg, lv, size):
+Index: nova/nova/virt/libvirt/utils.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/utils.py	2014-10-03 15:40:47.000000000 +0800
++++ nova/nova/virt/libvirt/utils.py	2014-10-03 16:26:29.000000000 +0800
+@@ -251,46 +251,6 @@
      execute(*cmd, run_as_root=True, attempts=3)
  
  
@@ -388,6 +388,3 @@ index ddfad72..21b02f6 100644
  def get_volume_group_info(vg):
      """Return free/used/total space info for a volume group in bytes
  
--- 
-2.0.3
-

@@ -11,9 +11,9 @@ Last-Update: 2014-08-29
 
 Index: nova/nova/virt/libvirt/driver.py
 ===================================================================
---- nova.orig/nova/virt/libvirt/driver.py
-+++ nova/nova/virt/libvirt/driver.py
-@@ -2730,9 +2730,11 @@ class LibvirtDriver(driver.ComputeDriver
+--- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 18:41:15.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-10-03 18:42:09.000000000 +0800
+@@ -2738,9 +2738,11 @@
                      # cdb.make_drive call
                      pass
  
@@ -28,7 +28,7 @@ Index: nova/nova/virt/libvirt/driver.py
  
          # File injection only if needed
          elif inject_files and CONF.libvirt.inject_partition != -2:
-@@ -3072,14 +3074,7 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -3080,14 +3082,7 @@
                      vol.save(nova_context.get_admin_context())
  
              if 'disk.config' in disk_mapping:
@@ -44,7 +44,7 @@ Index: nova/nova/virt/libvirt/driver.py
                  diskconfig = self.get_guest_disk_config(instance,
                                                          'disk.config',
                                                          disk_mapping,
-@@ -3100,6 +3095,17 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -3108,6 +3103,17 @@
  
          return devices
  

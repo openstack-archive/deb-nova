@@ -13,11 +13,11 @@ Change-Id: I9718c727db205b6f2191f8435583391584e96e6e
 Bug-Ubuntu: https://launchpad.net/bugs/1332660
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 
-diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index 23fbfcc..122a05e 100644
---- a/nova/virt/libvirt/driver.py
-+++ b/nova/virt/libvirt/driver.py
-@@ -1080,12 +1080,15 @@ def cleanup(self, context, instance, network_info, block_device_info=None,
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 16:27:33.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-10-03 16:27:40.000000000 +0800
+@@ -1080,12 +1080,15 @@
              if CONF.libvirt.images_type == 'rbd':
                  self._cleanup_rbd(instance)
  
@@ -36,7 +36,7 @@ index 23fbfcc..122a05e 100644
  
      def _cleanup_lvm(self, instance):
          """Delete all LVM disks for given instance object."""
-@@ -3828,6 +3831,8 @@ def get_local_gb_info():
+@@ -3837,6 +3840,8 @@
          if CONF.libvirt.images_type == 'lvm':
              info = libvirt_utils.get_volume_group_info(
                                   CONF.libvirt.images_volume_group)
@@ -45,10 +45,10 @@ index 23fbfcc..122a05e 100644
          else:
              info = libvirt_utils.get_fs_info(CONF.instances_path)
  
-diff --git a/nova/virt/libvirt/rbd.py b/nova/virt/libvirt/rbd.py
-index 4658199..fce4b3d 100644
---- a/nova/virt/libvirt/rbd.py
-+++ b/nova/virt/libvirt/rbd.py
+Index: nova/nova/virt/libvirt/rbd.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/rbd.py	2014-10-03 16:27:33.000000000 +0800
++++ nova/nova/virt/libvirt/rbd.py	2014-10-03 16:27:40.000000000 +0800
 @@ -28,6 +28,7 @@
  from nova.openstack.common.gettextutils import _
  from nova.openstack.common import jsonutils
@@ -57,7 +57,7 @@ index 4658199..fce4b3d 100644
  from nova import utils
  
  LOG = logging.getLogger(__name__)
-@@ -264,3 +265,10 @@ def belongs_to_instance(disk):
+@@ -264,3 +265,10 @@
                      LOG.warn(_('rbd remove %(volume)s in pool %(pool)s '
                                 'failed'),
                               {'volume': volume, 'pool': self.pool})
@@ -68,6 +68,3 @@ index 4658199..fce4b3d 100644
 +            return {'total': stats['kb'] * units.Ki,
 +                    'free':  stats['kb_avail'] * units.Ki,
 +                    'used':  stats['kb_used'] * units.Ki}
--- 
-2.0.3
-

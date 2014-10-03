@@ -15,9 +15,9 @@ Last-Update: 2014-08-25
 
 Index: nova/nova/virt/libvirt/driver.py
 ===================================================================
---- nova.orig/nova/virt/libvirt/driver.py
-+++ nova/nova/virt/libvirt/driver.py
-@@ -2485,6 +2485,30 @@ class LibvirtDriver(driver.ComputeDriver
+--- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 18:42:09.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-10-03 18:42:40.000000000 +0800
+@@ -2493,6 +2493,30 @@
          utils.mkfs('swap', target)
  
      @staticmethod
@@ -48,7 +48,7 @@ Index: nova/nova/virt/libvirt/driver.py
      def _get_console_log_path(instance):
          return os.path.join(libvirt_utils.get_instance_path(instance),
                              'console.log')
-@@ -2705,36 +2729,14 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -2713,36 +2737,14 @@
          # Config drive
          if configdrive.required_by(instance):
              LOG.info(_('Using config drive'), instance=instance)

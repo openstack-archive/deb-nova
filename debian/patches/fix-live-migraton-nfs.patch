@@ -20,9 +20,9 @@ Last-Update: 2014-09-23
 
 Index: nova/nova/compute/manager.py
 ===================================================================
---- nova.orig/nova/compute/manager.py	2014-09-23 15:32:23.000000000 +0800
-+++ nova/nova/compute/manager.py	2014-09-23 15:32:23.000000000 +0800
-@@ -4466,8 +4466,11 @@
+--- nova.orig/nova/compute/manager.py	2014-10-03 18:41:15.000000000 +0800
++++ nova/nova/compute/manager.py	2014-10-03 18:45:17.000000000 +0800
+@@ -4479,8 +4479,11 @@
          is_volume_backed = self.compute_api.is_volume_backed_instance(ctxt,
                                                                        instance)
          dest_check_data['is_volume_backed'] = is_volume_backed
@@ -37,8 +37,8 @@ Index: nova/nova/compute/manager.py
      @wrap_exception()
 Index: nova/nova/tests/compute/test_compute_mgr.py
 ===================================================================
---- nova.orig/nova/tests/compute/test_compute_mgr.py	2014-09-22 01:26:25.000000000 +0800
-+++ nova/nova/tests/compute/test_compute_mgr.py	2014-09-23 15:32:23.000000000 +0800
+--- nova.orig/nova/tests/compute/test_compute_mgr.py	2014-10-03 16:09:12.000000000 +0800
++++ nova/nova/tests/compute/test_compute_mgr.py	2014-10-03 18:45:17.000000000 +0800
 @@ -930,14 +930,20 @@
  
          self.mox.StubOutWithMock(self.compute.compute_api,
@@ -63,9 +63,9 @@ Index: nova/nova/tests/compute/test_compute_mgr.py
  
 Index: nova/nova/virt/driver.py
 ===================================================================
---- nova.orig/nova/virt/driver.py	2014-09-23 15:32:23.000000000 +0800
-+++ nova/nova/virt/driver.py	2014-09-23 15:32:23.000000000 +0800
-@@ -754,7 +754,7 @@
+--- nova.orig/nova/virt/driver.py	2014-10-03 18:41:15.000000000 +0800
++++ nova/nova/virt/driver.py	2014-10-03 18:45:17.000000000 +0800
+@@ -755,7 +755,7 @@
          raise NotImplementedError()
  
      def check_can_live_migrate_source(self, ctxt, instance_ref,
@@ -76,8 +76,8 @@ Index: nova/nova/virt/driver.py
          This checks if the live migration can succeed, based on the
 Index: nova/nova/virt/fake.py
 ===================================================================
---- nova.orig/nova/virt/fake.py	2014-09-23 15:32:23.000000000 +0800
-+++ nova/nova/virt/fake.py	2014-09-23 15:32:23.000000000 +0800
+--- nova.orig/nova/virt/fake.py	2014-10-03 18:41:15.000000000 +0800
++++ nova/nova/virt/fake.py	2014-10-03 18:45:17.000000000 +0800
 @@ -395,7 +395,7 @@
          return {}
  
@@ -89,9 +89,9 @@ Index: nova/nova/virt/fake.py
      def finish_migration(self, context, migration, instance, disk_info,
 Index: nova/nova/virt/libvirt/driver.py
 ===================================================================
---- nova.orig/nova/virt/libvirt/driver.py	2014-09-23 15:32:23.000000000 +0800
-+++ nova/nova/virt/libvirt/driver.py	2014-09-23 15:32:23.000000000 +0800
-@@ -4282,7 +4282,7 @@
+--- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 18:42:40.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-10-03 18:45:17.000000000 +0800
+@@ -4291,7 +4291,7 @@
          self._cleanup_shared_storage_test_file(filename)
  
      def check_can_live_migrate_source(self, context, instance,
@@ -100,7 +100,7 @@ Index: nova/nova/virt/libvirt/driver.py
          """Check if it is possible to execute live migration.
  
          This checks if the live migration can succeed, based on the
-@@ -4310,7 +4310,8 @@
+@@ -4319,7 +4319,8 @@
                  raise exception.InvalidLocalStorage(reason=reason, path=source)
              self._assert_dest_node_has_enough_disk(context, instance,
                                      dest_check_data['disk_available_mb'],
@@ -110,7 +110,7 @@ Index: nova/nova/virt/libvirt/driver.py
  
          elif not (dest_check_data['is_shared_block_storage'] or
                    dest_check_data['is_shared_instance_path']):
-@@ -4361,7 +4362,8 @@
+@@ -4370,7 +4371,8 @@
                      dest_check_data["filename"])
  
      def _assert_dest_node_has_enough_disk(self, context, instance,
@@ -120,7 +120,7 @@ Index: nova/nova/virt/libvirt/driver.py
          """Checks if destination has enough disk for block migration."""
          # Libvirt supports qcow2 disk format,which is usually compressed
          # on compute nodes.
-@@ -4377,7 +4379,7 @@
+@@ -4386,7 +4388,7 @@
          if available_mb:
              available = available_mb * units.Mi
  
@@ -131,8 +131,8 @@ Index: nova/nova/virt/libvirt/driver.py
          necessary = 0
 Index: nova/nova/virt/xenapi/driver.py
 ===================================================================
---- nova.orig/nova/virt/xenapi/driver.py	2014-09-23 15:32:23.000000000 +0800
-+++ nova/nova/virt/xenapi/driver.py	2014-09-23 15:32:23.000000000 +0800
+--- nova.orig/nova/virt/xenapi/driver.py	2014-10-03 18:41:15.000000000 +0800
++++ nova/nova/virt/xenapi/driver.py	2014-10-03 18:45:17.000000000 +0800
 @@ -514,7 +514,7 @@
          pass
  
@@ -144,9 +144,9 @@ Index: nova/nova/virt/xenapi/driver.py
          This checks if the live migration can succeed, based on the
 Index: nova/nova/tests/virt/libvirt/test_libvirt.py
 ===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-09-23 15:32:23.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-09-23 15:32:23.000000000 +0800
-@@ -3903,7 +3903,7 @@
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-10-03 18:41:15.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-10-03 18:45:17.000000000 +0800
+@@ -3984,7 +3984,7 @@
          self.mox.StubOutWithMock(conn, "_assert_dest_node_has_enough_disk")
          conn._assert_dest_node_has_enough_disk(
              self.context, instance, dest_check_data['disk_available_mb'],
@@ -155,7 +155,7 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt.py
  
          self.mox.ReplayAll()
          ret = conn.check_can_live_migrate_source(self.context, instance,
-@@ -3966,7 +3966,7 @@
+@@ -4047,7 +4047,7 @@
                  disk_available_mb=0)
  
          self.mox.StubOutWithMock(conn, "get_instance_disk_info")

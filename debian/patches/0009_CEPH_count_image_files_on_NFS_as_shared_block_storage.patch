@@ -10,11 +10,11 @@ Bug-Ubuntu: https://launchpad.net/bugs/1351002
 Origin: upstream, https://github.com/angdraug/nova/commits/rbd-ephemeral-clone-stable-icehouse
 Last-Update: 2014-08-10
 
-diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
-index f7c4a1c..ee8706a 100644
---- a/nova/virt/libvirt/driver.py
-+++ b/nova/virt/libvirt/driver.py
-@@ -4271,10 +4271,10 @@ def check_can_live_migrate_source(self, context, instance,
+Index: nova/nova/virt/libvirt/driver.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 16:28:05.000000000 +0800
++++ nova/nova/virt/libvirt/driver.py	2014-10-03 16:28:35.000000000 +0800
+@@ -4280,10 +4280,10 @@
          # if block migration, instances_paths should not be on shared storage.
          source = CONF.host
  
@@ -27,7 +27,7 @@ index f7c4a1c..ee8706a 100644
  
          if dest_check_data['block_migration']:
              if (dest_check_data['is_shared_block_storage'] or
-@@ -4313,6 +4313,12 @@ def _is_shared_block_storage(self, instance, dest_check_data):
+@@ -4322,6 +4322,12 @@
                  self.image_backend.backend().is_shared_block_storage()):
              return True
  
@@ -40,11 +40,11 @@ index f7c4a1c..ee8706a 100644
          if (dest_check_data.get('is_volume_backed') and
                  not bool(jsonutils.loads(
                      self.get_instance_disk_info(instance['name'])))):
-diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
-index 5f15e30..93ac19e 100644
---- a/nova/virt/libvirt/imagebackend.py
-+++ b/nova/virt/libvirt/imagebackend.py
-@@ -306,6 +306,11 @@ def is_shared_block_storage():
+Index: nova/nova/virt/libvirt/imagebackend.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/imagebackend.py	2014-10-03 16:27:33.000000000 +0800
++++ nova/nova/virt/libvirt/imagebackend.py	2014-10-03 16:28:35.000000000 +0800
+@@ -306,6 +306,11 @@
          '''
          return False
  
@@ -56,7 +56,7 @@ index 5f15e30..93ac19e 100644
      def direct_fetch(self, image_id, image_meta, image_locations):
          """Create an image from a direct image location.
  
-@@ -363,6 +368,10 @@ def copy_raw_image(base, target, size):
+@@ -363,6 +368,10 @@
      def snapshot_extract(self, target, out_format):
          images.convert_image(self.path, target, out_format)
  
@@ -67,7 +67,7 @@ index 5f15e30..93ac19e 100644
  
  class Qcow2(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -427,6 +436,10 @@ def snapshot_extract(self, target, out_format):
+@@ -427,6 +436,10 @@
                                         target,
                                         out_format)
  
@@ -78,6 +78,3 @@ index 5f15e30..93ac19e 100644
  
  class Lvm(Image):
      @staticmethod
--- 
-2.0.3
-
