@@ -25,8 +25,196 @@ Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 Change-Id: I2755c59b4db736151000dae351fd776d3c15ca39
 Last-Update: 2014-10-03
 
---- nova-2014.1.3.orig/nova/exception.py
-+++ nova-2014.1.3/nova/exception.py
+diff --git a/nova/compute/manager.py b/nova/compute/manager.py
+index 55075c5..f4001a1 100644
+--- a/nova/compute/manager.py
++++ b/nova/compute/manager.py
+@@ -4571,6 +4571,39 @@ class ComputeManager(manager.Manager):
+                                    self._rollback_live_migration,
+                                    block_migration, migrate_data)
+ 
++    def _live_migration_cleanup_flags(self, block_migration, migrate_data):
++        """Determine whether disks or intance path need to be cleaned up after
++        live migration (at source on success, at destination on rollback)
++
++        Block migration needs empty image at destination host before migration
++        starts, so if any failure occurs, any empty images has to be deleted.
++
++        Also Volume backed live migration w/o shared storage needs to delete
++        newly created instance-xxx dir on the destination as a part of its
++        rollback process
++
++        :param block_migration: if true, it was a block migration
++        :param migrate_data: implementation specific data
++        :returns: (bool, bool) -- do_cleanup, destroy_disks
++        """
++        # NOTE(angdraug): block migration wouldn't have been allowed if either
++        #                 block storage or instance path were shared
++        is_shared_block_storage = not block_migration
++        is_shared_instance_path = not block_migration
++        if migrate_data:
++            is_shared_block_storage = migrate_data.get(
++                    'is_shared_block_storage', is_shared_block_storage)
++            is_shared_instance_path = migrate_data.get(
++                    'is_shared_instance_path', is_shared_instance_path)
++
++        # No instance booting at source host, but instance dir
++        # must be deleted for preparing next block migration
++        # must be deleted for preparing next live migration w/o shared storage
++        do_cleanup = block_migration or not is_shared_instance_path
++        destroy_disks = not is_shared_block_storage
++
++        return (do_cleanup, destroy_disks)
++
+     @wrap_exception()
+     @wrap_instance_fault
+     def _post_live_migration(self, ctxt, instance,
+@@ -4636,16 +4669,15 @@ class ComputeManager(manager.Manager):
+         self.compute_rpcapi.post_live_migration_at_destination(ctxt,
+                 instance, block_migration, dest)
+ 
+-        # No instance booting at source host, but instance dir
+-        # must be deleted for preparing next block migration
+-        # must be deleted for preparing next live migration w/o shared storage
+-        is_shared_storage = True
+-        if migrate_data:
+-            is_shared_storage = migrate_data.get('is_shared_storage', True)
+-        if block_migration or not is_shared_storage:
+-            self.driver.cleanup(ctxt, instance, network_info)
++        do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
++                block_migration, migrate_data)
++
++        if do_cleanup:
++            self.driver.cleanup(ctxt, instance, network_info,
++                                destroy_disks=destroy_disks,
++                                migrate_data=migrate_data)
+         else:
+-            # self.driver.destroy() usually performs  vif unplugging
++            # self.driver.cleanup() usually performs  vif unplugging
+             # but we must do it explicitly here when block_migration
+             # is false, as the network devices at the source must be
+             # torn down
+@@ -4768,27 +4800,22 @@ class ComputeManager(manager.Manager):
+         self._notify_about_instance_usage(context, instance,
+                                           "live_migration._rollback.start")
+ 
+-        # Block migration needs empty image at destination host
+-        # before migration starts, so if any failure occurs,
+-        # any empty images has to be deleted.
+-        # Also Volume backed live migration w/o shared storage needs to delete
+-        # newly created instance-xxx dir on the destination as a part of its
+-        # rollback process
+-        is_volume_backed = False
+-        is_shared_storage = True
+-        if migrate_data:
+-            is_volume_backed = migrate_data.get('is_volume_backed', False)
+-            is_shared_storage = migrate_data.get('is_shared_storage', True)
+-        if block_migration or (is_volume_backed and not is_shared_storage):
+-            self.compute_rpcapi.rollback_live_migration_at_destination(context,
+-                    instance, dest)
++        do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
++                block_migration, migrate_data)
++
++        if do_cleanup:
++            self.compute_rpcapi.rollback_live_migration_at_destination(
++                    context, instance, dest, destroy_disks=destroy_disks,
++                    migrate_data=migrate_data)
+ 
+         self._notify_about_instance_usage(context, instance,
+                                           "live_migration._rollback.end")
+ 
+     @wrap_exception()
+     @wrap_instance_fault
+-    def rollback_live_migration_at_destination(self, context, instance):
++    def rollback_live_migration_at_destination(self, context, instance,
++                                               destroy_disks=True,
++                                               migrate_data=None):
+         """Cleaning up image directory that is created pre_live_migration.
+ 
+         :param context: security context
+@@ -4807,8 +4834,9 @@ class ComputeManager(manager.Manager):
+         #             from remote volumes if necessary
+         block_device_info = self._get_instance_block_device_info(context,
+                                                                  instance)
+-        self.driver.rollback_live_migration_at_destination(context, instance,
+-                        network_info, block_device_info)
++        self.driver.rollback_live_migration_at_destination(
++                        context, instance, network_info, block_device_info,
++                        destroy_disks=destroy_disks, migrate_data=migrate_data)
+         self._notify_about_instance_usage(
+                         context, instance, "live_migration.rollback.dest.end",
+                         network_info=network_info)
+diff --git a/nova/compute/rpcapi.py b/nova/compute/rpcapi.py
+index a1adfbf..4200916 100644
+--- a/nova/compute/rpcapi.py
++++ b/nova/compute/rpcapi.py
+@@ -271,6 +271,13 @@ class ComputeAPI(object):
+             return havana_compat
+         return current
+ 
++    def _check_live_migration_api_version(self, server):
++        # NOTE(angdraug): live migration involving a compute host running Nova
++        # API older than v3.23 as either source or destination can cause
++        # instance disks to be deleted from shared storage
++        if not self.client.can_send_version('3.23'):
++            raise exception.LiveMigrationWithOldNovaNotSafe(server=server)
++
+     def add_aggregate_host(self, ctxt, aggregate, host_param, host,
+                            slave_info=None):
+         '''Add aggregate host.
+@@ -351,19 +358,19 @@ class ComputeAPI(object):
+ 
+     def check_can_live_migrate_destination(self, ctxt, instance, destination,
+                                            block_migration, disk_over_commit):
+-        # NOTE(russellb) Havana compat
+-        version = self._get_compat_version('3.0', '2.38')
+-        cctxt = self.client.prepare(server=destination, version=version)
++        self._check_live_migration_api_version(destination)
++        cctxt = self.client.prepare(server=destination, version='3.23')
++
+         return cctxt.call(ctxt, 'check_can_live_migrate_destination',
+                           instance=instance,
+                           block_migration=block_migration,
+                           disk_over_commit=disk_over_commit)
+ 
+     def check_can_live_migrate_source(self, ctxt, instance, dest_check_data):
+-        # NOTE(russellb) Havana compat
+-        version = self._get_compat_version('3.0', '2.38')
+-        cctxt = self.client.prepare(server=_compute_host(None, instance),
+-                version=version)
++        source = _compute_host(None, instance)
++        self._check_live_migration_api_version(source)
++        cctxt = self.client.prepare(server=source, version='3.23')
++
+         return cctxt.call(ctxt, 'check_can_live_migrate_source',
+                           instance=instance,
+                           dest_check_data=dest_check_data)
+@@ -734,13 +741,15 @@ class ComputeAPI(object):
+                    instance=instance, migration=migration,
+                    reservations=reservations)
+ 
+-    def rollback_live_migration_at_destination(self, ctxt, instance, host):
+-        # NOTE(russellb) Havana compat
+-        version = self._get_compat_version('3.0', '2.0')
+-        instance_p = jsonutils.to_primitive(instance)
+-        cctxt = self.client.prepare(server=host, version=version)
++    def rollback_live_migration_at_destination(self, ctxt, instance, host,
++                                               destroy_disks=True,
++                                               migrate_data=None):
++        self._check_live_migration_api_version(host)
++        cctxt = self.client.prepare(server=host, version='3.23')
++
+         cctxt.cast(ctxt, 'rollback_live_migration_at_destination',
+-                   instance=instance_p)
++                   instance=instance,
++                   destroy_disks=destroy_disks, migrate_data=migrate_data)
+ 
+     def run_instance(self, ctxt, instance, host, request_spec,
+                      filter_properties, requested_networks,
+diff --git a/nova/exception.py b/nova/exception.py
+index 5cc74bc..e4a0456 100644
+--- a/nova/exception.py
++++ b/nova/exception.py
 @@ -1548,6 +1548,12 @@ class InvalidWatchdogAction(Invalid):
      msg_fmt = _("Provided watchdog action (%(action)s) is not supported.")
  
@@ -43,8 +231,10 @@ Last-Update: 2014-10-03
 +    msg_fmt = _("Host %(server)s is running an old version of Nova, "
 +                "live migrations involving that version may cause data loss. "
 +                "Upgrade Nova on %(server)s and try again.")
---- nova-2014.1.3.orig/nova/tests/compute/test_compute.py
-+++ nova-2014.1.3/nova/tests/compute/test_compute.py
+diff --git a/nova/tests/compute/test_compute.py b/nova/tests/compute/test_compute.py
+index ee1d7b3..6594bc8 100644
+--- a/nova/tests/compute/test_compute.py
++++ b/nova/tests/compute/test_compute.py
 @@ -5073,7 +5073,7 @@ class ComputeTestCase(BaseTestCase):
          fake_notifier.NOTIFICATIONS = []
          # start test
@@ -92,8 +282,10 @@ Last-Update: 2014-10-03
  
          # start test
          self.mox.ReplayAll()
---- nova-2014.1.3.orig/nova/tests/compute/test_rpcapi.py
-+++ nova-2014.1.3/nova/tests/compute/test_rpcapi.py
+diff --git a/nova/tests/compute/test_rpcapi.py b/nova/tests/compute/test_rpcapi.py
+index d4026ea..a1eb68a 100644
+--- a/nova/tests/compute/test_rpcapi.py
++++ b/nova/tests/compute/test_rpcapi.py
 @@ -23,6 +23,7 @@ from oslo.config import cfg
  
  from nova.compute import rpcapi as compute_rpcapi
@@ -102,7 +294,7 @@ Last-Update: 2014-10-03
  from nova import db
  from nova.openstack.common import jsonutils
  from nova import test
-@@ -154,24 +155,30 @@ class ComputeRpcAPITestCase(test.TestCas
+@@ -154,24 +155,30 @@ class ComputeRpcAPITestCase(test.TestCase):
          self._test_compute_api('check_can_live_migrate_destination', 'call',
                  instance=self.fake_instance,
                  destination='dest', block_migration=True,
@@ -139,7 +331,7 @@ Last-Update: 2014-10-03
                  dest_check_data={"test": "data"}, version='2.38')
  
      def test_check_instance_shared_storage(self):
-@@ -621,13 +628,17 @@ class ComputeRpcAPITestCase(test.TestCas
+@@ -621,13 +628,17 @@ class ComputeRpcAPITestCase(test.TestCase):
  
      def test_rollback_live_migration_at_destination(self):
          self._test_compute_api('rollback_live_migration_at_destination',
@@ -161,9 +353,11 @@ Last-Update: 2014-10-03
  
      def test_run_instance(self):
          self._test_compute_api('run_instance', 'cast',
---- nova-2014.1.3.orig/nova/tests/virt/libvirt/test_libvirt.py
-+++ nova-2014.1.3/nova/tests/virt/libvirt/test_libvirt.py
-@@ -3893,6 +3893,7 @@ class LibvirtConnTestCase(test.TestCase)
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index f006644..0713f4f 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -3893,6 +3893,7 @@ class LibvirtConnTestCase(test.TestCase):
          return_value = conn.check_can_live_migrate_destination(self.context,
                  instance_ref, compute_info, compute_info, True)
          self.assertThat({"filename": "file",
@@ -171,7 +365,7 @@ Last-Update: 2014-10-03
                           'disk_available_mb': 409600,
                           "disk_over_commit": False,
                           "block_migration": True},
-@@ -3917,6 +3918,7 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -3917,6 +3918,7 @@ class LibvirtConnTestCase(test.TestCase):
          return_value = conn.check_can_live_migrate_destination(self.context,
                  instance_ref, compute_info, compute_info, False)
          self.assertThat({"filename": "file",
@@ -179,7 +373,7 @@ Last-Update: 2014-10-03
                           "block_migration": False,
                           "disk_over_commit": False,
                           "disk_available_mb": None},
-@@ -3954,139 +3956,150 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -3954,139 +3956,150 @@ class LibvirtConnTestCase(test.TestCase):
          conn.check_can_live_migrate_destination_cleanup(self.context,
                                                          dest_check_data)
  
@@ -189,12 +383,6 @@ Last-Update: 2014-10-03
 -                           "block_migration": True,
 -                           "disk_over_commit": False,
 -                           "disk_available_mb": 1024}
--        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
--
--        self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
--        conn._check_shared_storage_test_file("file").AndReturn(False)
--        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
--        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
 +    def _mock_can_live_migrate_source(self, block_migration=False,
 +                                      is_shared_block_storage=False,
 +                                      is_shared_instance_path=False,
@@ -205,8 +393,12 @@ Last-Update: 2014-10-03
 +                           'block_migration': block_migration,
 +                           'disk_over_commit': False,
 +                           'disk_available_mb': disk_available_mb}
-+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-+
+         conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+ 
+-        self.mox.StubOutWithMock(conn, "_check_shared_storage_test_file")
+-        conn._check_shared_storage_test_file("file").AndReturn(False)
+-        self.mox.StubOutWithMock(conn, "get_instance_disk_info")
+-        conn.get_instance_disk_info(instance_ref['name']).AndReturn('[]')
 +        self.mox.StubOutWithMock(conn, '_is_shared_block_storage')
 +        conn._is_shared_block_storage(instance, dest_check_data).AndReturn(
 +                is_shared_block_storage)
@@ -429,7 +621,7 @@ Last-Update: 2014-10-03
  
      def test_live_migration_raises_exception(self):
          # Confirms recover method is called when exceptions are raised.
-@@ -4135,9 +4148,9 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -4135,9 +4148,9 @@ class LibvirtConnTestCase(test.TestCase):
          conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
          with mock.patch.object(conn, "destroy") as mock_destroy:
              conn.rollback_live_migration_at_destination("context",
@@ -441,7 +633,7 @@ Last-Update: 2014-10-03
  
      def _do_test_create_images_and_backing(self, disk_type):
          conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-@@ -4273,9 +4286,10 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -4273,9 +4286,10 @@ class LibvirtConnTestCase(test.TestCase):
          inst_ref = {'id': 'foo'}
          c = context.get_admin_context()
  
@@ -454,7 +646,7 @@ Last-Update: 2014-10-03
  
      def test_pre_live_migration_vol_backed_works_correctly_mocked(self):
          # Creating testdata, using temp dir.
-@@ -4311,7 +4325,7 @@ class LibvirtConnTestCase(test.TestCase)
+@@ -4311,7 +4325,7 @@ class LibvirtConnTestCase(test.TestCase):
              self.mox.StubOutWithMock(conn, 'plug_vifs')
              conn.plug_vifs(mox.IsA(inst_ref), nw_info)
              self.mox.ReplayAll()
@@ -463,190 +655,33 @@ Last-Update: 2014-10-03
                              'is_volume_backed': True,
                              'block_migration': False,
                              'instance_relative_path': inst_ref['name']
---- nova-2014.1.3.orig/nova/compute/rpcapi.py
-+++ nova-2014.1.3/nova/compute/rpcapi.py
-@@ -271,6 +271,13 @@ class ComputeAPI(object):
-             return havana_compat
-         return current
+diff --git a/nova/virt/baremetal/driver.py b/nova/virt/baremetal/driver.py
+index c1de148..c556032 100644
+--- a/nova/virt/baremetal/driver.py
++++ b/nova/virt/baremetal/driver.py
+@@ -362,7 +362,8 @@ class BareMetalDriver(driver.ComputeDriver):
+                 "for instance %r") % instance['uuid'])
+         _update_state(ctx, node, instance, state)
  
-+    def _check_live_migration_api_version(self, server):
-+        # NOTE(angdraug): live migration involving a compute host running Nova
-+        # API older than v3.23 as either source or destination can cause
-+        # instance disks to be deleted from shared storage
-+        if not self.client.can_send_version('3.23'):
-+            raise exception.LiveMigrationWithOldNovaNotSafe(server=server)
-+
-     def add_aggregate_host(self, ctxt, aggregate, host_param, host,
-                            slave_info=None):
-         '''Add aggregate host.
-@@ -351,19 +358,19 @@ class ComputeAPI(object):
+-    def destroy(self, context, instance, network_info, block_device_info=None):
++    def destroy(self, context, instance, network_info, block_device_info=None,
++                destroy_disks=True, migrate_data=None):
+         context = nova_context.get_admin_context()
  
-     def check_can_live_migrate_destination(self, ctxt, instance, destination,
-                                            block_migration, disk_over_commit):
--        # NOTE(russellb) Havana compat
--        version = self._get_compat_version('3.0', '2.38')
--        cctxt = self.client.prepare(server=destination, version=version)
-+        self._check_live_migration_api_version(destination)
-+        cctxt = self.client.prepare(server=destination, version='3.23')
-+
-         return cctxt.call(ctxt, 'check_can_live_migrate_destination',
-                           instance=instance,
-                           block_migration=block_migration,
-                           disk_over_commit=disk_over_commit)
+         try:
+@@ -395,7 +396,7 @@ class BareMetalDriver(driver.ComputeDriver):
+                                 "baremetal database: %s") % e)
  
-     def check_can_live_migrate_source(self, ctxt, instance, dest_check_data):
--        # NOTE(russellb) Havana compat
--        version = self._get_compat_version('3.0', '2.38')
--        cctxt = self.client.prepare(server=_compute_host(None, instance),
--                version=version)
-+        source = _compute_host(None, instance)
-+        self._check_live_migration_api_version(source)
-+        cctxt = self.client.prepare(server=source, version='3.23')
-+
-         return cctxt.call(ctxt, 'check_can_live_migrate_source',
-                           instance=instance,
-                           dest_check_data=dest_check_data)
-@@ -734,13 +741,15 @@ class ComputeAPI(object):
-                    instance=instance, migration=migration,
-                    reservations=reservations)
+     def cleanup(self, context, instance, network_info, block_device_info=None,
+-                destroy_disks=True):
++                destroy_disks=True, migrate_data=None):
+         """Cleanup after instance being destroyed."""
+         pass
  
--    def rollback_live_migration_at_destination(self, ctxt, instance, host):
--        # NOTE(russellb) Havana compat
--        version = self._get_compat_version('3.0', '2.0')
--        instance_p = jsonutils.to_primitive(instance)
--        cctxt = self.client.prepare(server=host, version=version)
-+    def rollback_live_migration_at_destination(self, ctxt, instance, host,
-+                                               destroy_disks=True,
-+                                               migrate_data=None):
-+        self._check_live_migration_api_version(host)
-+        cctxt = self.client.prepare(server=host, version='3.23')
-+
-         cctxt.cast(ctxt, 'rollback_live_migration_at_destination',
--                   instance=instance_p)
-+                   instance=instance,
-+                   destroy_disks=destroy_disks, migrate_data=migrate_data)
- 
-     def run_instance(self, ctxt, instance, host, request_spec,
-                      filter_properties, requested_networks,
---- nova-2014.1.3.orig/nova/compute/manager.py
-+++ nova-2014.1.3/nova/compute/manager.py
-@@ -4571,6 +4571,39 @@ class ComputeManager(manager.Manager):
-                                    self._rollback_live_migration,
-                                    block_migration, migrate_data)
- 
-+    def _live_migration_cleanup_flags(self, block_migration, migrate_data):
-+        """Determine whether disks or intance path need to be cleaned up after
-+        live migration (at source on success, at destination on rollback)
-+
-+        Block migration needs empty image at destination host before migration
-+        starts, so if any failure occurs, any empty images has to be deleted.
-+
-+        Also Volume backed live migration w/o shared storage needs to delete
-+        newly created instance-xxx dir on the destination as a part of its
-+        rollback process
-+
-+        :param block_migration: if true, it was a block migration
-+        :param migrate_data: implementation specific data
-+        :returns: (bool, bool) -- do_cleanup, destroy_disks
-+        """
-+        # NOTE(angdraug): block migration wouldn't have been allowed if either
-+        #                 block storage or instance path were shared
-+        is_shared_block_storage = not block_migration
-+        is_shared_instance_path = not block_migration
-+        if migrate_data:
-+            is_shared_block_storage = migrate_data.get(
-+                    'is_shared_block_storage', is_shared_block_storage)
-+            is_shared_instance_path = migrate_data.get(
-+                    'is_shared_instance_path', is_shared_instance_path)
-+
-+        # No instance booting at source host, but instance dir
-+        # must be deleted for preparing next block migration
-+        # must be deleted for preparing next live migration w/o shared storage
-+        do_cleanup = block_migration or not is_shared_instance_path
-+        destroy_disks = not is_shared_block_storage
-+
-+        return (do_cleanup, destroy_disks)
-+
-     @wrap_exception()
-     @wrap_instance_fault
-     def _post_live_migration(self, ctxt, instance,
-@@ -4636,16 +4669,15 @@ class ComputeManager(manager.Manager):
-         self.compute_rpcapi.post_live_migration_at_destination(ctxt,
-                 instance, block_migration, dest)
- 
--        # No instance booting at source host, but instance dir
--        # must be deleted for preparing next block migration
--        # must be deleted for preparing next live migration w/o shared storage
--        is_shared_storage = True
--        if migrate_data:
--            is_shared_storage = migrate_data.get('is_shared_storage', True)
--        if block_migration or not is_shared_storage:
--            self.driver.cleanup(ctxt, instance, network_info)
-+        do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
-+                block_migration, migrate_data)
-+
-+        if do_cleanup:
-+            self.driver.cleanup(ctxt, instance, network_info,
-+                                destroy_disks=destroy_disks,
-+                                migrate_data=migrate_data)
-         else:
--            # self.driver.destroy() usually performs  vif unplugging
-+            # self.driver.cleanup() usually performs  vif unplugging
-             # but we must do it explicitly here when block_migration
-             # is false, as the network devices at the source must be
-             # torn down
-@@ -4768,27 +4800,22 @@ class ComputeManager(manager.Manager):
-         self._notify_about_instance_usage(context, instance,
-                                           "live_migration._rollback.start")
- 
--        # Block migration needs empty image at destination host
--        # before migration starts, so if any failure occurs,
--        # any empty images has to be deleted.
--        # Also Volume backed live migration w/o shared storage needs to delete
--        # newly created instance-xxx dir on the destination as a part of its
--        # rollback process
--        is_volume_backed = False
--        is_shared_storage = True
--        if migrate_data:
--            is_volume_backed = migrate_data.get('is_volume_backed', False)
--            is_shared_storage = migrate_data.get('is_shared_storage', True)
--        if block_migration or (is_volume_backed and not is_shared_storage):
--            self.compute_rpcapi.rollback_live_migration_at_destination(context,
--                    instance, dest)
-+        do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
-+                block_migration, migrate_data)
-+
-+        if do_cleanup:
-+            self.compute_rpcapi.rollback_live_migration_at_destination(
-+                    context, instance, dest, destroy_disks=destroy_disks,
-+                    migrate_data=migrate_data)
- 
-         self._notify_about_instance_usage(context, instance,
-                                           "live_migration._rollback.end")
- 
-     @wrap_exception()
-     @wrap_instance_fault
--    def rollback_live_migration_at_destination(self, context, instance):
-+    def rollback_live_migration_at_destination(self, context, instance,
-+                                               destroy_disks=True,
-+                                               migrate_data=None):
-         """Cleaning up image directory that is created pre_live_migration.
- 
-         :param context: security context
-@@ -4807,8 +4834,9 @@ class ComputeManager(manager.Manager):
-         #             from remote volumes if necessary
-         block_device_info = self._get_instance_block_device_info(context,
-                                                                  instance)
--        self.driver.rollback_live_migration_at_destination(context, instance,
--                        network_info, block_device_info)
-+        self.driver.rollback_live_migration_at_destination(
-+                        context, instance, network_info, block_device_info,
-+                        destroy_disks=destroy_disks, migrate_data=migrate_data)
-         self._notify_about_instance_usage(
-                         context, instance, "live_migration.rollback.dest.end",
-                         network_info=network_info)
---- nova-2014.1.3.orig/nova/virt/driver.py
-+++ nova-2014.1.3/nova/virt/driver.py
+diff --git a/nova/virt/driver.py b/nova/virt/driver.py
+index 2fc95cc..970f54e 100644
+--- a/nova/virt/driver.py
++++ b/nova/virt/driver.py
 @@ -298,7 +298,7 @@ class ComputeDriver(object):
          raise NotImplementedError()
  
@@ -699,8 +734,10 @@ Last-Update: 2014-10-03
  
          """
          raise NotImplementedError()
---- nova-2014.1.3.orig/nova/virt/fake.py
-+++ nova-2014.1.3/nova/virt/fake.py
+diff --git a/nova/virt/fake.py b/nova/virt/fake.py
+index ea175cb..0f869ee 100644
+--- a/nova/virt/fake.py
++++ b/nova/virt/fake.py
 @@ -204,7 +204,7 @@ class FakeDriver(driver.ComputeDriver):
          pass
  
@@ -719,70 +756,11 @@ Last-Update: 2014-10-03
          pass
  
      def attach_volume(self, context, connection_info, instance, mountpoint,
---- nova-2014.1.3.orig/nova/virt/baremetal/driver.py
-+++ nova-2014.1.3/nova/virt/baremetal/driver.py
-@@ -362,7 +362,8 @@ class BareMetalDriver(driver.ComputeDriv
-                 "for instance %r") % instance['uuid'])
-         _update_state(ctx, node, instance, state)
- 
--    def destroy(self, context, instance, network_info, block_device_info=None):
-+    def destroy(self, context, instance, network_info, block_device_info=None,
-+                destroy_disks=True, migrate_data=None):
-         context = nova_context.get_admin_context()
- 
-         try:
-@@ -395,7 +396,7 @@ class BareMetalDriver(driver.ComputeDriv
-                                 "baremetal database: %s") % e)
- 
-     def cleanup(self, context, instance, network_info, block_device_info=None,
--                destroy_disks=True):
-+                destroy_disks=True, migrate_data=None):
-         """Cleanup after instance being destroyed."""
-         pass
- 
---- nova-2014.1.3.orig/nova/virt/vmwareapi/driver.py
-+++ nova-2014.1.3/nova/virt/vmwareapi/driver.py
-@@ -180,7 +180,7 @@ class VMwareESXDriver(driver.ComputeDriv
-         self._vmops.reboot(instance, network_info)
- 
-     def destroy(self, context, instance, network_info, block_device_info=None,
--                destroy_disks=True):
-+                destroy_disks=True, migrate_data=None):
-         """Destroy VM instance."""
- 
-         # Destroy gets triggered when Resource Claim in resource_tracker
-@@ -192,7 +192,7 @@ class VMwareESXDriver(driver.ComputeDriv
-         self._vmops.destroy(instance, network_info, destroy_disks)
- 
-     def cleanup(self, context, instance, network_info, block_device_info=None,
--                destroy_disks=True):
-+                destroy_disks=True, migrate_data=None):
-         """Cleanup after instance being destroyed by Hypervisor."""
-         pass
- 
-@@ -469,7 +469,9 @@ class VMwareVCDriver(VMwareESXDriver):
- 
-     def rollback_live_migration_at_destination(self, context, instance,
-                                                network_info,
--                                               block_device_info):
-+                                               block_device_info,
-+                                               destroy_disks=True,
-+                                               migrate_data=None):
-         """Clean up destination node after a failed live migration."""
-         self.destroy(context, instance, network_info, block_device_info)
- 
-@@ -661,7 +663,7 @@ class VMwareVCDriver(VMwareESXDriver):
-         _vmops.reboot(instance, network_info)
- 
-     def destroy(self, context, instance, network_info, block_device_info=None,
--                destroy_disks=True):
-+                destroy_disks=True, migrate_data=None):
-         """Destroy VM instance."""
- 
-         # Destroy gets triggered when Resource Claim in resource_tracker
---- nova-2014.1.3.orig/nova/virt/hyperv/driver.py
-+++ nova-2014.1.3/nova/virt/hyperv/driver.py
-@@ -62,12 +62,12 @@ class HyperVDriver(driver.ComputeDriver)
+diff --git a/nova/virt/hyperv/driver.py b/nova/virt/hyperv/driver.py
+index c1e578e..7fc2bd6 100644
+--- a/nova/virt/hyperv/driver.py
++++ b/nova/virt/hyperv/driver.py
+@@ -62,12 +62,12 @@ class HyperVDriver(driver.ComputeDriver):
          self._vmops.reboot(instance, network_info, reboot_type)
  
      def destroy(self, context, instance, network_info, block_device_info=None,
@@ -797,7 +775,7 @@ Last-Update: 2014-10-03
          """Cleanup after instance being destroyed by Hypervisor."""
          pass
  
-@@ -127,7 +127,9 @@ class HyperVDriver(driver.ComputeDriver)
+@@ -127,7 +127,9 @@ class HyperVDriver(driver.ComputeDriver):
  
      def rollback_live_migration_at_destination(self, context, instance,
                                                 network_info,
@@ -808,38 +786,11 @@ Last-Update: 2014-10-03
          self.destroy(context, instance, network_info, block_device_info)
  
      def pre_live_migration(self, context, instance, block_device_info,
---- nova-2014.1.3.orig/nova/virt/xenapi/driver.py
-+++ nova-2014.1.3/nova/virt/xenapi/driver.py
-@@ -275,13 +275,13 @@ class XenAPIDriver(driver.ComputeDriver)
-         self._vmops.change_instance_metadata(instance, diff)
- 
-     def destroy(self, context, instance, network_info, block_device_info=None,
--                destroy_disks=True):
-+                destroy_disks=True, migrate_data=None):
-         """Destroy VM instance."""
-         self._vmops.destroy(instance, network_info, block_device_info,
-                             destroy_disks)
- 
-     def cleanup(self, context, instance, network_info, block_device_info=None,
--                destroy_disks=True):
-+                destroy_disks=True, migrate_data=None):
-         """Cleanup after instance being destroyed by Hypervisor."""
-         pass
- 
-@@ -558,7 +558,9 @@ class XenAPIDriver(driver.ComputeDriver)
- 
-     def rollback_live_migration_at_destination(self, context, instance,
-                                                network_info,
--                                               block_device_info):
-+                                               block_device_info,
-+                                               destroy_disks=True,
-+                                               migrate_data=None):
-         # NOTE(johngarbutt) Destroying the VM is not appropriate here
-         # and in the cases where it might make sense,
-         # XenServer has already done it.
---- nova-2014.1.3.orig/nova/virt/libvirt/driver.py
-+++ nova-2014.1.3/nova/virt/libvirt/driver.py
-@@ -956,10 +956,10 @@ class LibvirtDriver(driver.ComputeDriver
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 37aa031..4644228 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -956,10 +956,10 @@ class LibvirtDriver(driver.ComputeDriver):
              self._destroy(instance)
  
      def destroy(self, context, instance, network_info, block_device_info=None,
@@ -852,7 +803,7 @@ Last-Update: 2014-10-03
  
      def _undefine_domain(self, instance):
          try:
-@@ -993,7 +993,7 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -993,7 +993,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                {'errcode': errcode, 'e': e}, instance=instance)
  
      def cleanup(self, context, instance, network_info, block_device_info=None,
@@ -861,7 +812,7 @@ Last-Update: 2014-10-03
          self._undefine_domain(instance)
          self.unplug_vifs(instance, network_info, ignore_errors=True)
          retry = True
-@@ -1068,9 +1068,12 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -1068,9 +1068,12 @@ class LibvirtDriver(driver.ComputeDriver):
                                   {'vol_id': vol.get('volume_id'), 'exc': exc},
                                   instance=instance)
  
@@ -875,7 +826,7 @@ Last-Update: 2014-10-03
              self._cleanup_lvm(instance)
              #NOTE(haomai): destroy volumes if needed
              if CONF.libvirt.images_type == 'rbd':
-@@ -4245,6 +4248,7 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4245,6 +4248,7 @@ class LibvirtDriver(driver.ComputeDriver):
          filename = self._create_shared_storage_test_file()
  
          return {"filename": filename,
@@ -883,7 +834,7 @@ Last-Update: 2014-10-03
                  "block_migration": block_migration,
                  "disk_over_commit": disk_over_commit,
                  "disk_available_mb": disk_available_mb}
-@@ -4273,16 +4277,15 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4273,16 +4277,15 @@ class LibvirtDriver(driver.ComputeDriver):
          # Checking shared storage connectivity
          # if block migration, instances_paths should not be on shared storage.
          source = CONF.host
@@ -892,23 +843,22 @@ Last-Update: 2014-10-03
 -        is_volume_backed = dest_check_data.get('is_volume_backed', False)
 -        has_local_disks = bool(
 -                jsonutils.loads(self.get_instance_disk_info(instance['name'])))
--
--        shared = self._check_shared_storage_test_file(filename)
  
--        if block_migration:
--            if shared:
+-        shared = self._check_shared_storage_test_file(filename)
 +        dest_check_data.update({'is_shared_block_storage':
 +                self._is_shared_block_storage(instance, dest_check_data)})
 +        dest_check_data.update({'is_shared_instance_path':
 +                self._is_shared_instance_path(dest_check_data)})
-+
+ 
+-        if block_migration:
+-            if shared:
 +        if dest_check_data['block_migration']:
 +            if (dest_check_data['is_shared_block_storage'] or
 +                    dest_check_data['is_shared_instance_path']):
                  reason = _("Block migration can not be used "
                             "with shared storage.")
                  raise exception.InvalidLocalStorage(reason=reason, path=source)
-@@ -4290,11 +4293,11 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4290,11 +4293,11 @@ class LibvirtDriver(driver.ComputeDriver):
                                      dest_check_data['disk_available_mb'],
                                      dest_check_data['disk_over_commit'])
  
@@ -922,7 +872,7 @@ Last-Update: 2014-10-03
  
          # NOTE(mikal): include the instance directory name here because it
          # doesn't yet exist on the destination but we want to force that
-@@ -4305,6 +4308,33 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4305,6 +4308,33 @@ class LibvirtDriver(driver.ComputeDriver):
  
          return dest_check_data
  
@@ -956,7 +906,7 @@ Last-Update: 2014-10-03
      def _assert_dest_node_has_enough_disk(self, context, instance,
                                               available_mb, disk_over_commit):
          """Checks if destination has enough disk for block migration."""
-@@ -4551,31 +4581,37 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4551,31 +4581,37 @@ class LibvirtDriver(driver.ComputeDriver):
  
      def rollback_live_migration_at_destination(self, context, instance,
                                                 network_info,
@@ -1002,7 +952,7 @@ Last-Update: 2014-10-03
              # NOTE(mikal): this doesn't use libvirt_utils.get_instance_path
              # because we are ensuring that the same instance directory name
              # is used as was at the source
-@@ -4589,11 +4625,16 @@ class LibvirtDriver(driver.ComputeDriver
+@@ -4589,11 +4625,16 @@ class LibvirtDriver(driver.ComputeDriver):
                  raise exception.DestinationDiskExists(path=instance_dir)
              os.mkdir(instance_dir)
  
@@ -1020,8 +970,10 @@ Last-Update: 2014-10-03
              # Touch the console.log file, required by libvirt.
              console_file = self._get_console_log_path(instance)
              libvirt_utils.file_open(console_file, 'a').close()
---- nova-2014.1.3.orig/nova/virt/libvirt/imagebackend.py
-+++ nova-2014.1.3/nova/virt/libvirt/imagebackend.py
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index f67d88d..6234d39 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
 @@ -304,6 +304,12 @@ class Image(object):
              raise exception.DiskInfoReadWriteFail(reason=unicode(e))
          return driver_format
@@ -1046,3 +998,79 @@ Last-Update: 2014-10-03
  
  class Backend(object):
      def __init__(self, use_cow):
+diff --git a/nova/virt/vmwareapi/driver.py b/nova/virt/vmwareapi/driver.py
+index e514bbb..7ee5fb9 100644
+--- a/nova/virt/vmwareapi/driver.py
++++ b/nova/virt/vmwareapi/driver.py
+@@ -180,7 +180,7 @@ class VMwareESXDriver(driver.ComputeDriver):
+         self._vmops.reboot(instance, network_info)
+ 
+     def destroy(self, context, instance, network_info, block_device_info=None,
+-                destroy_disks=True):
++                destroy_disks=True, migrate_data=None):
+         """Destroy VM instance."""
+ 
+         # Destroy gets triggered when Resource Claim in resource_tracker
+@@ -192,7 +192,7 @@ class VMwareESXDriver(driver.ComputeDriver):
+         self._vmops.destroy(instance, network_info, destroy_disks)
+ 
+     def cleanup(self, context, instance, network_info, block_device_info=None,
+-                destroy_disks=True):
++                destroy_disks=True, migrate_data=None):
+         """Cleanup after instance being destroyed by Hypervisor."""
+         pass
+ 
+@@ -469,7 +469,9 @@ class VMwareVCDriver(VMwareESXDriver):
+ 
+     def rollback_live_migration_at_destination(self, context, instance,
+                                                network_info,
+-                                               block_device_info):
++                                               block_device_info,
++                                               destroy_disks=True,
++                                               migrate_data=None):
+         """Clean up destination node after a failed live migration."""
+         self.destroy(context, instance, network_info, block_device_info)
+ 
+@@ -661,7 +663,7 @@ class VMwareVCDriver(VMwareESXDriver):
+         _vmops.reboot(instance, network_info)
+ 
+     def destroy(self, context, instance, network_info, block_device_info=None,
+-                destroy_disks=True):
++                destroy_disks=True, migrate_data=None):
+         """Destroy VM instance."""
+ 
+         # Destroy gets triggered when Resource Claim in resource_tracker
+diff --git a/nova/virt/xenapi/driver.py b/nova/virt/xenapi/driver.py
+index e7a0d1c..d343f06 100644
+--- a/nova/virt/xenapi/driver.py
++++ b/nova/virt/xenapi/driver.py
+@@ -275,13 +275,13 @@ class XenAPIDriver(driver.ComputeDriver):
+         self._vmops.change_instance_metadata(instance, diff)
+ 
+     def destroy(self, context, instance, network_info, block_device_info=None,
+-                destroy_disks=True):
++                destroy_disks=True, migrate_data=None):
+         """Destroy VM instance."""
+         self._vmops.destroy(instance, network_info, block_device_info,
+                             destroy_disks)
+ 
+     def cleanup(self, context, instance, network_info, block_device_info=None,
+-                destroy_disks=True):
++                destroy_disks=True, migrate_data=None):
+         """Cleanup after instance being destroyed by Hypervisor."""
+         pass
+ 
+@@ -558,7 +558,9 @@ class XenAPIDriver(driver.ComputeDriver):
+ 
+     def rollback_live_migration_at_destination(self, context, instance,
+                                                network_info,
+-                                               block_device_info):
++                                               block_device_info,
++                                               destroy_disks=True,
++                                               migrate_data=None):
+         # NOTE(johngarbutt) Destroying the VM is not appropriate here
+         # and in the cases where it might make sense,
+         # XenServer has already done it.
+-- 
+2.1.1
+
