@@ -19,3 +19,4 @@ Update_websocketproxy_to_work_with_websockify_0.6.patch
 spiceproxy_config_startup.patch
 fix-provider-networks-regression.patch
 fix-live-migraton-nfs.patch
+9990_update_german_programm_messages.patch
