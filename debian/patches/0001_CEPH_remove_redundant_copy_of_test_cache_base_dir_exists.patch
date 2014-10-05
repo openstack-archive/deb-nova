@@ -9,11 +9,9 @@ Bug-Ubuntu: https://launchpad.net/bugs/1302211
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 Last-Update: 2014-08-10
 
-diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
-index 5ae910a..30d6154 100644
 --- a/nova/tests/virt/libvirt/test_imagebackend.py
 +++ b/nova/tests/virt/libvirt/test_imagebackend.py
-@@ -804,20 +804,6 @@ def test_cache_template_exists(self):
+@@ -804,20 +804,6 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
  
          self.mox.VerifyAll()
  
@@ -35,5 +33,5 @@ index 5ae910a..30d6154 100644
          fn = self.prepare_mocks()
          fn(max_size=None, rbd=self.rbd, target=self.TEMPLATE_PATH)
 -- 
-2.0.3
+2.1.1
 

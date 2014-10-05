@@ -13,11 +13,11 @@ Change-Id: I9718c727db205b6f2191f8435583391584e96e6e
 Bug-Ubuntu: https://launchpad.net/bugs/1332660
 Signed-off-by: Dmitry Borodaenko <dborodaenko@mirantis.com>
 
-Index: nova/nova/virt/libvirt/driver.py
-===================================================================
---- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 16:27:33.000000000 +0800
-+++ nova/nova/virt/libvirt/driver.py	2014-10-03 16:27:40.000000000 +0800
-@@ -1080,12 +1080,15 @@
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 0f972db..f5628d3 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -1080,12 +1080,15 @@ class LibvirtDriver(driver.ComputeDriver):
              if CONF.libvirt.images_type == 'rbd':
                  self._cleanup_rbd(instance)
  
@@ -36,7 +36,7 @@ Index: nova/nova/virt/libvirt/driver.py
  
      def _cleanup_lvm(self, instance):
          """Delete all LVM disks for given instance object."""
-@@ -3837,6 +3840,8 @@
+@@ -3837,6 +3840,8 @@ class LibvirtDriver(driver.ComputeDriver):
          if CONF.libvirt.images_type == 'lvm':
              info = libvirt_utils.get_volume_group_info(
                                   CONF.libvirt.images_volume_group)
@@ -45,11 +45,11 @@ Index: nova/nova/virt/libvirt/driver.py
          else:
              info = libvirt_utils.get_fs_info(CONF.instances_path)
  
-Index: nova/nova/virt/libvirt/rbd.py
-===================================================================
---- nova.orig/nova/virt/libvirt/rbd.py	2014-10-03 16:27:33.000000000 +0800
-+++ nova/nova/virt/libvirt/rbd.py	2014-10-03 16:27:40.000000000 +0800
-@@ -28,6 +28,7 @@
+diff --git a/nova/virt/libvirt/rbd.py b/nova/virt/libvirt/rbd.py
+index 4658199..fce4b3d 100644
+--- a/nova/virt/libvirt/rbd.py
++++ b/nova/virt/libvirt/rbd.py
+@@ -28,6 +28,7 @@ from nova.openstack.common import excutils
  from nova.openstack.common.gettextutils import _
  from nova.openstack.common import jsonutils
  from nova.openstack.common import log as logging
@@ -57,7 +57,7 @@ Index: nova/nova/virt/libvirt/rbd.py
  from nova import utils
  
  LOG = logging.getLogger(__name__)
-@@ -264,3 +265,10 @@
+@@ -264,3 +265,10 @@ class RBDDriver(object):
                      LOG.warn(_('rbd remove %(volume)s in pool %(pool)s '
                                 'failed'),
                               {'volume': volume, 'pool': self.pool})
@@ -68,3 +68,6 @@ Index: nova/nova/virt/libvirt/rbd.py
 +            return {'total': stats['kb'] * units.Ki,
 +                    'free':  stats['kb_avail'] * units.Ki,
 +                    'used':  stats['kb_used'] * units.Ki}
+-- 
+2.1.1
+

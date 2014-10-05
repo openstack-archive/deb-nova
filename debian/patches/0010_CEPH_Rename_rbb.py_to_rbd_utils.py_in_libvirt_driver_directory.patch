@@ -6,11 +6,11 @@ Date: Tue, 5 Aug 2014 11:06:10 +0800
 Origin: https://github.com/angdraug/nova/commit/e2587bd49485783bfa86a358316d9776ec0c903e
 Last-Update: 2014-08-22
 
-Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_imagebackend.py	2014-10-03 16:27:33.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_imagebackend.py	2014-10-03 16:29:33.000000000 +0800
-@@ -30,7 +30,7 @@
+diff --git a/nova/tests/virt/libvirt/test_imagebackend.py b/nova/tests/virt/libvirt/test_imagebackend.py
+index 0eda260..3153e75 100644
+--- a/nova/tests/virt/libvirt/test_imagebackend.py
++++ b/nova/tests/virt/libvirt/test_imagebackend.py
+@@ -30,7 +30,7 @@ from nova.tests import fake_processutils
  from nova.tests.virt.libvirt import fake_libvirt_utils
  from nova import utils
  from nova.virt.libvirt import imagebackend
@@ -19,7 +19,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
  
  CONF = cfg.CONF
  
-@@ -730,8 +730,8 @@
+@@ -730,8 +730,8 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
                     group='libvirt')
          self.libvirt_utils = imagebackend.libvirt_utils
          self.utils = imagebackend.utils
@@ -30,7 +30,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
  
      def test_cache(self):
          image = self.image_class(self.INSTANCE, self.NAME)
-@@ -803,7 +803,7 @@
+@@ -803,7 +803,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
          fn = self.mox.CreateMockAnything()
          fn(max_size=None, target=self.TEMPLATE_PATH)
  
@@ -39,7 +39,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
  
          fake_processutils.fake_execute_clear_log()
          fake_processutils.stub_out_processutils_execute(self.stubs)
-@@ -829,7 +829,7 @@
+@@ -829,7 +829,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
          full_size = self.SIZE * 2
          fn(max_size=full_size, target=self.TEMPLATE_PATH)
  
@@ -48,7 +48,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
  
          fake_processutils.fake_execute_clear_log()
          fake_processutils.stub_out_processutils_execute(self.stubs)
-@@ -856,7 +856,7 @@
+@@ -856,7 +856,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
          self.mox.VerifyAll()
  
      def test_create_image_already_exists(self):
@@ -57,7 +57,7 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
  
          image = self.image_class(self.INSTANCE, self.NAME)
          self.mox.StubOutWithMock(image, 'check_image_exists')
-@@ -1020,8 +1020,8 @@
+@@ -1020,8 +1020,8 @@ class BackendTestCase(test.NoDBTestCase):
          pool = "FakePool"
          self.flags(images_rbd_pool=pool, group='libvirt')
          self.flags(images_rbd_ceph_conf=conf, group='libvirt')
@@ -68,11 +68,11 @@ Index: nova/nova/tests/virt/libvirt/test_imagebackend.py
          self._test_image('rbd', imagebackend.Rbd, imagebackend.Rbd)
  
      def test_image_default(self):
-Index: nova/nova/tests/virt/libvirt/test_libvirt.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-10-03 16:28:05.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-10-03 16:29:33.000000000 +0800
-@@ -77,7 +77,7 @@
+diff --git a/nova/tests/virt/libvirt/test_libvirt.py b/nova/tests/virt/libvirt/test_libvirt.py
+index e3dac62..93e0116 100644
+--- a/nova/tests/virt/libvirt/test_libvirt.py
++++ b/nova/tests/virt/libvirt/test_libvirt.py
+@@ -77,7 +77,7 @@ from nova.virt.libvirt import config as vconfig
  from nova.virt.libvirt import driver as libvirt_driver
  from nova.virt.libvirt import firewall
  from nova.virt.libvirt import imagebackend
@@ -81,7 +81,7 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt.py
  from nova.virt.libvirt import utils as libvirt_utils
  from nova.virt import netutils
  
-@@ -5673,7 +5673,7 @@
+@@ -5673,7 +5673,7 @@ class LibvirtConnTestCase(test.TestCase):
                      "uuid": "875a8070-d0b9-4949-8b31-104d125c9a64"}
          conn.destroy(self.context, instance, [])
  
@@ -90,11 +90,11 @@ Index: nova/nova/tests/virt/libvirt/test_libvirt.py
      def test_cleanup_rbd(self, mock_driver):
          driver = mock_driver.return_value
          driver.cleanup_volumes = mock.Mock()
-Index: nova/nova/tests/virt/libvirt/test_rbd.py
-===================================================================
---- nova.orig/nova/tests/virt/libvirt/test_rbd.py	2014-10-03 16:27:33.000000000 +0800
-+++ nova/nova/tests/virt/libvirt/test_rbd.py	2014-10-03 16:29:33.000000000 +0800
-@@ -17,7 +17,7 @@
+diff --git a/nova/tests/virt/libvirt/test_rbd.py b/nova/tests/virt/libvirt/test_rbd.py
+index d5e57e9..1a18838 100644
+--- a/nova/tests/virt/libvirt/test_rbd.py
++++ b/nova/tests/virt/libvirt/test_rbd.py
+@@ -17,7 +17,7 @@ from nova import exception
  from nova.openstack.common import log as logging
  from nova import test
  from nova import utils
@@ -103,7 +103,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
  
  
  LOG = logging.getLogger(__name__)
-@@ -53,8 +53,8 @@
+@@ -53,8 +53,8 @@ CEPH_MON_DUMP = """dumped monmap epoch 1
  
  class RbdTestCase(test.NoDBTestCase):
  
@@ -114,7 +114,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def setUp(self, mock_rados, mock_rbd):
          super(RbdTestCase, self).setUp()
  
-@@ -75,7 +75,7 @@
+@@ -75,7 +75,7 @@ class RbdTestCase(test.NoDBTestCase):
          self.mock_rbd.RBD.Error = Exception
  
          self.rbd_pool = 'rbd'
@@ -123,7 +123,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
  
          self.volume_name = u'volume-00000001'
  
-@@ -101,9 +101,9 @@
+@@ -101,9 +101,9 @@ class RbdTestCase(test.NoDBTestCase):
              self.assertFalse(self.driver.is_cloneable({'url': loc},
                                                        {'disk_format': 'raw'}))
  
@@ -136,7 +136,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_cloneable(self, mock_rados, mock_rbd, mock_get_fsid):
          mock_get_fsid.return_value = 'abc'
          location = {'url': 'rbd://abc/pool/image/snap'}
-@@ -111,8 +111,7 @@
+@@ -111,8 +111,7 @@ class RbdTestCase(test.NoDBTestCase):
          self.assertTrue(self.driver.is_cloneable(location, info))
          self.assertTrue(mock_get_fsid.called)
  
@@ -146,7 +146,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_uncloneable_different_fsid(self, mock_get_fsid):
          mock_get_fsid.return_value = 'abc'
          location = {'url': 'rbd://def/pool/image/snap'}
-@@ -120,10 +119,10 @@
+@@ -120,10 +119,10 @@ class RbdTestCase(test.NoDBTestCase):
              self.driver.is_cloneable(location, {'disk_format': 'raw'}))
          self.assertTrue(mock_get_fsid.called)
  
@@ -161,7 +161,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_uncloneable_unreadable(self, mock_rados, mock_rbd, mock_proxy,
                                      mock_get_fsid):
          mock_get_fsid.return_value = 'abc'
-@@ -137,7 +136,7 @@
+@@ -137,7 +136,7 @@ class RbdTestCase(test.NoDBTestCase):
                                             snapshot='snap', read_only=True)
          self.assertTrue(mock_get_fsid.called)
  
@@ -170,7 +170,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_uncloneable_bad_format(self, mock_get_fsid):
          mock_get_fsid.return_value = 'abc'
          location = {'url': 'rbd://abc/pool/image/snap'}
-@@ -154,9 +153,9 @@
+@@ -154,9 +153,9 @@ class RbdTestCase(test.NoDBTestCase):
          ports = ['6789', '6790', '6791', '6792', '6791']
          self.assertEqual((hosts, ports), self.driver.get_mon_addrs())
  
@@ -183,7 +183,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_clone(self, mock_rados, mock_rbd, mock_client):
          pool = u'images'
          image = u'image-name'
-@@ -185,7 +184,7 @@
+@@ -185,7 +184,7 @@ class RbdTestCase(test.NoDBTestCase):
          rbd.clone.assert_called_once_with(*args, **kwargs)
          self.assertEqual(client.__enter__.call_count, 2)
  
@@ -192,7 +192,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_resize(self, mock_proxy):
          size = 1024
          proxy = mock_proxy.return_value
-@@ -193,24 +192,24 @@
+@@ -193,24 +192,24 @@ class RbdTestCase(test.NoDBTestCase):
          self.driver.resize(self.volume_name, size)
          proxy.resize.assert_called_once_with(size)
  
@@ -224,7 +224,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_connect_to_rados_default(self, mock_rados, mock_rbd):
          ret = self.driver._connect_to_rados()
          self.assertTrue(self.mock_rados.Rados.connect.called)
-@@ -219,8 +218,8 @@
+@@ -219,8 +218,8 @@ class RbdTestCase(test.NoDBTestCase):
          self.assertEqual(ret[1], self.mock_rados.Rados.ioctx)
          self.mock_rados.Rados.open_ioctx.assert_called_with(self.rbd_pool)
  
@@ -235,7 +235,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_connect_to_rados_different_pool(self, mock_rados, mock_rbd):
          ret = self.driver._connect_to_rados('alt_pool')
          self.assertTrue(self.mock_rados.Rados.connect.called)
-@@ -229,7 +228,7 @@
+@@ -229,7 +228,7 @@ class RbdTestCase(test.NoDBTestCase):
          self.assertEqual(ret[1], self.mock_rados.Rados.ioctx)
          self.mock_rados.Rados.open_ioctx.assert_called_with('alt_pool')
  
@@ -244,7 +244,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_connect_to_rados_error(self, mock_rados):
          self.mock_rados.Rados.open_ioctx.side_effect = mock_rados.Error
          self.assertRaises(mock_rados.Error, self.driver._connect_to_rados)
-@@ -258,7 +257,7 @@
+@@ -258,7 +257,7 @@ class RbdTestCase(test.NoDBTestCase):
          self.assertEqual(['--id', 'foo', '--conf', '/path/bar.conf'],
                           self.driver.ceph_args())
  
@@ -253,7 +253,7 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_exists(self, mock_proxy):
          snapshot = 'snap'
          proxy = mock_proxy.return_value
-@@ -268,9 +267,9 @@
+@@ -268,9 +267,9 @@ class RbdTestCase(test.NoDBTestCase):
          proxy.__enter__.assert_called_once_with()
          proxy.__exit__.assert_called_once_with(None, None, None)
  
@@ -266,11 +266,11 @@ Index: nova/nova/tests/virt/libvirt/test_rbd.py
      def test_cleanup_volumes(self, mock_client, mock_rados, mock_rbd):
          instance = {'uuid': '12345'}
  
-Index: nova/nova/virt/libvirt/driver.py
-===================================================================
---- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 16:28:35.000000000 +0800
-+++ nova/nova/virt/libvirt/driver.py	2014-10-03 16:29:33.000000000 +0800
-@@ -102,7 +102,7 @@
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index c799eb5..8c7ba7a 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -102,7 +102,7 @@ from nova.virt.libvirt import config as vconfig
  from nova.virt.libvirt import firewall as libvirt_firewall
  from nova.virt.libvirt import imagebackend
  from nova.virt.libvirt import imagecache
@@ -279,7 +279,7 @@ Index: nova/nova/virt/libvirt/driver.py
  from nova.virt.libvirt import utils as libvirt_utils
  from nova.virt import netutils
  from nova.virt import watchdog_actions
-@@ -1082,7 +1082,7 @@
+@@ -1082,7 +1082,7 @@ class LibvirtDriver(driver.ComputeDriver):
  
      @staticmethod
      def _get_rbd_driver():
@@ -288,11 +288,11 @@ Index: nova/nova/virt/libvirt/driver.py
                  pool=CONF.libvirt.images_rbd_pool,
                  ceph_conf=CONF.libvirt.images_rbd_ceph_conf,
                  rbd_user=CONF.libvirt.rbd_user)
-Index: nova/nova/virt/libvirt/imagebackend.py
-===================================================================
---- nova.orig/nova/virt/libvirt/imagebackend.py	2014-10-03 16:28:35.000000000 +0800
-+++ nova/nova/virt/libvirt/imagebackend.py	2014-10-03 16:29:33.000000000 +0800
-@@ -32,7 +32,7 @@
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 48fca39..a7eb324 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -32,7 +32,7 @@ from nova import utils
  from nova.virt.disk import api as disk
  from nova.virt import images
  from nova.virt.libvirt import config as vconfig
@@ -301,7 +301,7 @@ Index: nova/nova/virt/libvirt/imagebackend.py
  from nova.virt.libvirt import utils as libvirt_utils
  
  __imagebackend_opts = [
-@@ -533,7 +533,7 @@
+@@ -533,7 +533,7 @@ class Rbd(Image):
          self.rbd_user = CONF.libvirt.rbd_user
          self.ceph_conf = CONF.libvirt.images_rbd_ceph_conf
  
@@ -310,10 +310,11 @@ Index: nova/nova/virt/libvirt/imagebackend.py
              pool=self.pool,
              ceph_conf=self.ceph_conf,
              rbd_user=self.rbd_user)
-Index: nova/nova/virt/libvirt/rbd.py
-===================================================================
---- nova.orig/nova/virt/libvirt/rbd.py	2014-10-03 16:27:40.000000000 +0800
-+++ /dev/null	1970-01-01 00:00:00.000000000 +0000
+diff --git a/nova/virt/libvirt/rbd.py b/nova/virt/libvirt/rbd.py
+deleted file mode 100644
+index fce4b3d..0000000
+--- a/nova/virt/libvirt/rbd.py
++++ /dev/null
 @@ -1,274 +0,0 @@
 -# Copyright 2012 Grid Dynamics
 -# Copyright 2013 Inktank Storage, Inc.
@@ -589,10 +590,11 @@ Index: nova/nova/virt/libvirt/rbd.py
 -            return {'total': stats['kb'] * units.Ki,
 -                    'free':  stats['kb_avail'] * units.Ki,
 -                    'used':  stats['kb_used'] * units.Ki}
-Index: nova/nova/virt/libvirt/rbd_utils.py
-===================================================================
---- /dev/null	1970-01-01 00:00:00.000000000 +0000
-+++ nova/nova/virt/libvirt/rbd_utils.py	2014-10-03 16:29:33.000000000 +0800
+diff --git a/nova/virt/libvirt/rbd_utils.py b/nova/virt/libvirt/rbd_utils.py
+new file mode 100644
+index 0000000..fce4b3d
+--- /dev/null
++++ b/nova/virt/libvirt/rbd_utils.py
 @@ -0,0 +1,274 @@
 +# Copyright 2012 Grid Dynamics
 +# Copyright 2013 Inktank Storage, Inc.
@@ -868,3 +870,6 @@ Index: nova/nova/virt/libvirt/rbd_utils.py
 +            return {'total': stats['kb'] * units.Ki,
 +                    'free':  stats['kb_avail'] * units.Ki,
 +                    'used':  stats['kb_used'] * units.Ki}
+-- 
+2.1.1
+

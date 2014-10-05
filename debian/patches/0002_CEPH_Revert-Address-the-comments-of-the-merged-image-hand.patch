@@ -6,9 +6,6 @@ Change-Id: I3cf8000a3e984c57441a226d3139acbf3e346825
 Date: Tue, 29 Apr 2014 09:56:15 -0700
 Last-Update: 2014-08-10
 
-diff --git a/nova/virt/imagehandler/__init__.py b/nova/virt/imagehandler/__init__.py
-deleted file mode 100644
-index 54310a0..0000000
 --- a/nova/virt/imagehandler/__init__.py
 +++ /dev/null
 @@ -1,176 +0,0 @@
@@ -189,5 +186,5 @@ index 54310a0..0000000
 -                  {'image_id': image_id, 'target_path': target_path})
 -        raise exception.NoImageHandlerAvailable(image_id=image_id)
 -- 
-2.0.3
+2.1.1
 

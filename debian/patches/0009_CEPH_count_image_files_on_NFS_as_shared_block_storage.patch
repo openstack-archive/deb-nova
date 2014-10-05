@@ -10,11 +10,11 @@ Bug-Ubuntu: https://launchpad.net/bugs/1351002
 Origin: upstream, https://github.com/angdraug/nova/commits/rbd-ephemeral-clone-stable-icehouse
 Last-Update: 2014-08-10
 
-Index: nova/nova/virt/libvirt/driver.py
-===================================================================
---- nova.orig/nova/virt/libvirt/driver.py	2014-10-03 16:28:05.000000000 +0800
-+++ nova/nova/virt/libvirt/driver.py	2014-10-03 16:28:35.000000000 +0800
-@@ -4280,10 +4280,10 @@
+diff --git a/nova/virt/libvirt/driver.py b/nova/virt/libvirt/driver.py
+index 8a4af63..c799eb5 100644
+--- a/nova/virt/libvirt/driver.py
++++ b/nova/virt/libvirt/driver.py
+@@ -4280,10 +4280,10 @@ class LibvirtDriver(driver.ComputeDriver):
          # if block migration, instances_paths should not be on shared storage.
          source = CONF.host
  
@@ -27,7 +27,7 @@ Index: nova/nova/virt/libvirt/driver.py
  
          if dest_check_data['block_migration']:
              if (dest_check_data['is_shared_block_storage'] or
-@@ -4322,6 +4322,12 @@
+@@ -4322,6 +4322,12 @@ class LibvirtDriver(driver.ComputeDriver):
                  self.image_backend.backend().is_shared_block_storage()):
              return True
  
@@ -40,11 +40,11 @@ Index: nova/nova/virt/libvirt/driver.py
          if (dest_check_data.get('is_volume_backed') and
                  not bool(jsonutils.loads(
                      self.get_instance_disk_info(instance['name'])))):
-Index: nova/nova/virt/libvirt/imagebackend.py
-===================================================================
---- nova.orig/nova/virt/libvirt/imagebackend.py	2014-10-03 16:27:33.000000000 +0800
-+++ nova/nova/virt/libvirt/imagebackend.py	2014-10-03 16:28:35.000000000 +0800
-@@ -306,6 +306,11 @@
+diff --git a/nova/virt/libvirt/imagebackend.py b/nova/virt/libvirt/imagebackend.py
+index 5e0d56c..48fca39 100644
+--- a/nova/virt/libvirt/imagebackend.py
++++ b/nova/virt/libvirt/imagebackend.py
+@@ -306,6 +306,11 @@ class Image(object):
          '''
          return False
  
@@ -56,7 +56,7 @@ Index: nova/nova/virt/libvirt/imagebackend.py
      def direct_fetch(self, image_id, image_meta, image_locations):
          """Create an image from a direct image location.
  
-@@ -363,6 +368,10 @@
+@@ -363,6 +368,10 @@ class Raw(Image):
      def snapshot_extract(self, target, out_format):
          images.convert_image(self.path, target, out_format)
  
@@ -67,7 +67,7 @@ Index: nova/nova/virt/libvirt/imagebackend.py
  
  class Qcow2(Image):
      def __init__(self, instance=None, disk_name=None, path=None):
-@@ -427,6 +436,10 @@
+@@ -427,6 +436,10 @@ class Qcow2(Image):
                                         target,
                                         out_format)
  
@@ -78,3 +78,6 @@ Index: nova/nova/virt/libvirt/imagebackend.py
  
  class Lvm(Image):
      @staticmethod
+-- 
+2.1.1
+
