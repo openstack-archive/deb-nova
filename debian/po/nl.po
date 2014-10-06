@@ -66,7 +66,7 @@ msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
 msgstr ""
-"Er is geen enkele database geïnstalleerd voor Nova. Als u deze nu op wilt "
+"Er is geen enkele database geÃ¯nstalleerd voor Nova. Als u deze nu op wilt "
 "zetten, zorg er dan voor dat u alle benodigde informatie bij de hand heeft:"
 
 #. Type: boolean
@@ -288,7 +288,7 @@ msgid ""
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
 "Dit mag een server zijn die Citrix XenServer draait, het apparaat CentOS Xen "
-"Cloud Platform (XCP) geïnstalleerd vanaf een ISO-image, of zelfs de XCP van "
+"Cloud Platform (XCP) geÃ¯nstalleerd vanaf een ISO-image, of zelfs de XCP van "
 "het Kronos-project (beschikbaar in Debian en Ubuntu als pakket xcp-api)."
 
 #. Type: string
