@@ -1,6 +1,6 @@
 Description: Update German translation for upstream .po file
 Author: Helge Kreutzmann <debian@helgefjell.de>
-Forwarded: no
+Forwarded: https://review.openstack.org/126212
 Last-Update: 2014-10-06
 
 Index: nova-2014.1.2.nmu/nova/locale/de/LC_MESSAGES/nova.po
