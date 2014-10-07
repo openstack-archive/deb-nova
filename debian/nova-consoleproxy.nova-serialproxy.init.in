@@ -1,0 +1,30 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          nova-serialproxy
+# Required-Start:    $network $local_fs $remote_fs $syslog
+# Required-Stop:     $remote_fs
+# Should-Start:      nova-consoleauth
+# Should-Stop:       nova-consoleauth
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Nova serialproxy server
+# Description:       Frontend Nova serialproxy server
+### END INIT INFO
+
+# Authors: Thomas Goirand <zigo@debian.org>
+
+# PATH should only include /usr/* if it runs after the mountnfs.sh script
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+DESC="OpenStack Compute serialproxy"
+PROJECT_NAME=nova
+NAME=${PROJECT_NAME}-serialproxy
+
+# Exit if the default file not present, or not set to run this daemon
+if [ -r /etc/default/nova-consoleproxy ] ; then
+	. /etc/default/nova-consoleproxy
+else
+	exit 0
+fi
+if ! [ "${NOVA_SERIAL_PROXY_START}" = "TRUE" ] ; then
+	exit 0
+fi

@@ -1,7 +1,0 @@
-/var/log/nova/nova-consoleproxy.log {
-    daily
-    missingok
-    compress
-    delaycompress
-    copytruncate
-}

@@ -1,8 +1,0 @@
-/var/log/nova/nova-scheduler.log {
-    daily
-    missingok
-    compress
-    delaycompress
-    notifempty
-    copytruncate
-}
