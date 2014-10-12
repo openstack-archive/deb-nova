@@ -271,10 +271,14 @@ class ComputeAPI(object):
         * 3.34 - Add get_serial_console method
         * 3.35 - Make reserve_block_device_name return a BDM object
 
+        ... Juno supports message version 3.35.  So, any changes to
+        existing methods in 3.x after that point should be done such that they
+        can handle the version_cap being set to 3.35.
     '''
 
     VERSION_ALIASES = {
         'icehouse': '3.23',
+        'juno': '3.35',
     }
 
     def __init__(self):
@@ -880,7 +884,9 @@ class ComputeAPI(object):
         if not self.client.can_send_version(version):
             version = '3.23'
             if requested_networks is not None:
-                requested_networks = requested_networks.as_tuples()
+                requested_networks = [(network_id, address, port_id)
+                    for (network_id, address, port_id, _) in
+                        requested_networks.as_tuples()]
 
         cctxt = self.client.prepare(server=host, version=version)
         cctxt.cast(ctxt, 'build_and_run_instance', instance=instance,
