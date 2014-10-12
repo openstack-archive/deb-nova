@@ -5488,11 +5488,11 @@ msgstr ""
 msgid "Missing keys: %s"
 msgstr ""
 
-#: nova/compute/rpcapi.py:57
+#: nova/compute/rpcapi.py:58
 msgid "No compute host specified"
 msgstr ""
 
-#: nova/compute/rpcapi.py:59
+#: nova/compute/rpcapi.py:60
 #, python-format
 msgid "Unable to find host for Instance %s"
 msgstr ""

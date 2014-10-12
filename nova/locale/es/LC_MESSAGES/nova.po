@@ -5853,11 +5853,11 @@ msgstr ""
 msgid "Missing keys: %s"
 msgstr "Faltan claves: %s"
 
-#: nova/compute/rpcapi.py:57
+#: nova/compute/rpcapi.py:58
 msgid "No compute host specified"
 msgstr "No se ha especificado ningún host de cálculo"
 
-#: nova/compute/rpcapi.py:59
+#: nova/compute/rpcapi.py:60
 #, python-format
 msgid "Unable to find host for Instance %s"
 msgstr "No se puede encontrar el host para la instancia %s "

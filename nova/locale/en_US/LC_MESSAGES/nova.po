@@ -5605,11 +5605,11 @@ msgstr ""
 msgid "Missing keys: %s"
 msgstr "Missing keys: %s"
 
-#: nova/compute/rpcapi.py:57
+#: nova/compute/rpcapi.py:58
 msgid "No compute host specified"
 msgstr "No compute host specified"
 
-#: nova/compute/rpcapi.py:59
+#: nova/compute/rpcapi.py:60
 #, python-format
 msgid "Unable to find host for Instance %s"
 msgstr "Unable to find host for Instance %s"
@@ -6295,6 +6295,8 @@ msgid ""
 "The sum between the number of networks and the vlan start cannot be "
 "greater than 4094"
 msgstr ""
+"The sum between the number of networks and the vlan start cannot be "
+"greater than 4094"
 
 #: nova/network/manager.py:2026
 msgid "vlan must be an integer"
