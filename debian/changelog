@@ -2,6 +2,7 @@ nova (2014.2~rc2-1) experimental; urgency=medium
 
   * Fixed correct de.po (Closes: #763682).
   * Mangling upstream rc and beta versions in watch file.
+  * Now using a single logrotate file in nova-common.
 
  -- Thomas Goirand <zigo@debian.org>  Sun, 05 Oct 2014 15:02:15 +0800
 
