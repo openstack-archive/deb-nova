@@ -1,8 +1,14 @@
-nova (2014.2~rc2-2) experimental; urgency=medium
+nova (2014.2-2) experimental; urgency=medium
 
   * Added conntrack as Depends: for nova-compute.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 15 Oct 2014 00:05:33 +0800
+
+nova (2014.2-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 16 Oct 2014 12:18:20 +0000
 
 nova (2014.2~rc2-1) experimental; urgency=medium
 
