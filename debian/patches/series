@@ -20,3 +20,4 @@ spiceproxy_config_startup.patch
 fix-provider-networks-regression.patch
 fix-live-migraton-nfs.patch
 9990_update_german_programm_messages.patch
+CVE-2014-7230_CVE-2014-7231_Sync_process_utils_from_oslo.patch
