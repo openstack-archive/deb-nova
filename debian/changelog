@@ -1,3 +1,10 @@
+nova (2014.2-3) experimental; urgency=medium
+
+  * Reworked the default nova.conf to use the new section and clean the
+    deprecated ones.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 23 Oct 2014 00:21:27 +0800
+
 nova (2014.2-2) experimental; urgency=medium
 
   * Added conntrack as Depends: for nova-compute.
