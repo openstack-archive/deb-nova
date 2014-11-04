@@ -1,3 +1,9 @@
+nova (2014.1.3-6) UNRELEASED; urgency=medium
+
+  * Fix a issue into fix-live-migraton-nfs.patch.
+
+ -- Mehdi Abaakouk <sileht@sileht.net>  Tue, 04 Nov 2014 12:27:57 +0100
+
 nova (2014.1.3-5) unstable; urgency=high
 
   * CVE-2014-7230 & CVE-2014-7231: Potential leak of passwords into log files.
