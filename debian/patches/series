@@ -1,3 +1,4 @@
 path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
+CVE-2014-3708_Fixes_DOS_issue_in_instance_list_ip_filter_juno.patch

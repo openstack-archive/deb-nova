@@ -1,3 +1,9 @@
+nova (2014.2-4) experimental; urgency=medium
+
+  * Added CVE-2014-3708_Fixes_DOS_issue_in_instance_list_ip_filter_juno.patch.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 12 Nov 2014 05:33:13 +0800
+
 nova (2014.2-3) experimental; urgency=medium
 
   * Reworked the default nova.conf to use the new section and clean the
