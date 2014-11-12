@@ -1,3 +1,9 @@
+nova (2015.1~b0~0-1) UNRELEASED; urgency=medium
+
+  * Starting the kilo branch.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 12 Nov 2014 19:40:33 +0800
+
 nova (2014.2-4) experimental; urgency=medium
 
   * Added CVE-2014-3708_Fixes_DOS_issue_in_instance_list_ip_filter_juno.patch.
