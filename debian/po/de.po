@@ -4,10 +4,10 @@
 # Copyright of this file Erik Pfannenstein 2012, Chris Leick 2013-2014.
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 2014.1.2\n"
+"Project-Id-Version: nova 2014.1.3-6\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-01-18 23:08+0800\n"
-"PO-Revision-Date: 2014-10-01 13:39+0200\n"
+"POT-Creation-Date: 2014-05-03 03:26+0000\n"
+"PO-Revision-Date: 2014-11-29 08:44+0200\n"
 "Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
 "Language-Team: German <debian-l10n-german@lists.debian.org>\n"
 "Language: de\n"
@@ -141,23 +141,20 @@ msgstr "Wert für »my_ip«:"
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-msgid ""
-"Enter the IP address that will be set in the my_ip directive of nova.conf."
-msgstr ""
-"Geben Sie die IP-Adresse ein, die in der Direktive »my_ip« der nova.conf "
-"gesetzt werden wird."
+msgid "This value will be stored in the my_ip directive of nova.conf."
+msgstr "Dieser Wert wird in der Richtlinie »my_ip« der »nova.conf« gespeichert."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
-msgid "Value for neutron_url:"
-msgstr "Wert für »neutron_url«:"
+msgid "Neutron server URL:"
+msgstr "URL des Neutron-Servers:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
-msgid "Enter the URL of your Neutron server."
-msgstr "Geben Sie die URL Ihres Neutron-Servers ein."
+msgid "Please enter the URL of the Neutron server."
+msgstr "Bitte geben Sie die URL Ihres Neutron-Servers ein."
 
 #. Type: string
 #. Description
@@ -178,32 +175,33 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-msgid "Enter the name of the admin tenant for Neutron."
-msgstr "Geben Sie den Namen des Admin-Tenants für Neutron ein."
+msgid "Please enter the name of the admin tenant for Neutron."
+msgstr "Bitte geben Sie den Namen des Admin-Tenants für Neutron ein."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Neutron admin username:"
-msgstr "Benutzername des Neutron-Admins:"
+msgid "Neutron administrator username:"
+msgstr "Benutzername des Neutron-Administrators:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-msgid "Enter the username for Neutron."
-msgstr "Bitte geben Sie den Benutzernamen für Neutron ein."
+msgid "Please enter the username of the Neutron administrator."
+msgstr "Bitte geben Sie den Benutzernamen des Neutron-Administrators ein."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Neutron admin password:"
-msgstr "Passwort des Neutron-Admins:"
+msgid "Neutron administrator password:"
+msgstr "Passwort des Neutron-Administrators:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-msgid "Enter the password for the admin username of Neutron."
-msgstr "Bitte geben Sie das Passwort für den administrativen Benutzernamen ein."
+msgid "Please enter the password of the Neutron administrator."
+msgstr ""
+"Bitte geben Sie das Passwort für des Neutron-Administrators ein."
 
 #. Type: string
 #. Description
@@ -464,6 +462,9 @@ msgstr ""
 #: ../nova-consoleproxy.templates:1001
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dies kann später in /etc/default/nova-consoleproxy geändert werden."
+
+#~ msgid "Value for neutron_url:"
+#~ msgstr "Wert für »neutron_url«:"
 
 #~ msgid "Start nova services at boot?"
 #~ msgstr "Nova-Dienste beim Hochfahren starten?"
