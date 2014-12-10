@@ -2,6 +2,8 @@ nova (2014.1.3-7) unstable; urgency=medium
 
   * Now init scripts depends on libvirtd and not libvirt-bin, as this has been
     renamed in the libvirt-daemon-system package (Closes: #772699).
+  * Do not touch the database directive if user doesn't want to use
+    dbconfig-common (Closes: #770941).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 10 Dec 2014 19:21:37 +0800
 
