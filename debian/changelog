@@ -1,3 +1,9 @@
+nova (2014.2-5) experimental; urgency=medium
+
+  * Fixed init scripts to use libvirtd instead of libvirt-bin (Closes: #772699)
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 10 Dec 2014 19:20:05 +0800
+
 nova (2014.2-4) experimental; urgency=medium
 
   * Added CVE-2014-3708_Fixes_DOS_issue_in_instance_list_ip_filter_juno.patch.
