@@ -384,10 +384,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         delattr(self, base.get_attrname('id'))
 
     def _save_info_cache(self, context):
-        self.info_cache.save(context)
+        if self.info_cache:
+            self.info_cache.save(context)
 
     def _save_security_groups(self, context):
-        for secgroup in self.security_groups:
+        security_groups = self.security_groups or []
+        for secgroup in security_groups:
             secgroup.save(context)
         self.security_groups.obj_reset_changes()
 
@@ -396,8 +398,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         pass
 
     def _save_numa_topology(self, context):
-        # NOTE(ndipanov): No need for this yet.
-        pass
+        if self.numa_topology:
+            self.numa_topology.instance_uuid = self.uuid
+            self.numa_topology._save(context)
+        else:
+            objects.InstanceNUMATopology.delete_by_instance_uuid(
+                    context, self.uuid)
 
     def _save_pci_devices(self, context):
         # NOTE(yjiang5): All devices held by PCI tracker, only PCI tracker
@@ -449,9 +455,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
 
         updates = {}
         changes = self.obj_what_changed()
+
         for field in self.fields:
             if (self.obj_attr_is_set(field) and
-                    isinstance(self[field], base.NovaObject)):
+                    isinstance(self.fields[field], fields.ObjectField)):
                 try:
                     getattr(self, '_save_%s' % field)(context)
                 except AttributeError:

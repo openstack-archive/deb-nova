@@ -862,8 +862,8 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
         memory_mb = FAKE_VIRT_MEMORY_MB * 2
         root_gb = ephemeral_gb = FAKE_VIRT_LOCAL_GB
         vcpus = FAKE_VIRT_VCPUS * 2
-        claim_topology = self._claim_topology(memory_mb)
-        instance_topology = self._instance_topology(memory_mb)
+        claim_topology = self._claim_topology(3)
+        instance_topology = self._instance_topology(3)
 
         limits = {'memory_mb': memory_mb + FAKE_VIRT_MEMORY_OVERHEAD,
                   'disk_gb': root_gb * 2,
@@ -1365,6 +1365,19 @@ class ComputeMonitorTestCase(BaseTestCase):
         metrics = self.tracker._get_host_metrics(self.context,
                                                  self.node_name)
         self.assertTrue(len(metrics) > 0)
+
+    @mock.patch.object(resource_tracker.LOG, 'warn')
+    def test_get_host_metrics_exception(self, mock_LOG_warn):
+        self.flags(compute_monitors=['FakeMontorClass1'])
+        class1 = test_monitors.FakeMonitorClass1(self.tracker)
+        self.tracker.monitors = [class1]
+        with mock.patch.object(class1, 'get_metrics',
+                               side_effect=test.TestingException()):
+            metrics = self.tracker._get_host_metrics(self.context,
+                                                     self.node_name)
+            mock_LOG_warn.assert_called_once_with(
+                u'Cannot get the metrics from %s.', class1)
+            self.assertEqual(0, len(metrics))
 
     def test_get_host_metrics(self):
         self.flags(compute_monitors=['FakeMonitorClass1', 'FakeMonitorClass2'])
