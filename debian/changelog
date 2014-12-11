@@ -1,3 +1,9 @@
+nova (2014.2.1-1) experimental; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 11 Dec 2014 23:51:29 +0800
+
 nova (2014.2-5) experimental; urgency=medium
 
   * Fixed init scripts to use libvirtd instead of libvirt-bin (Closes: #772699)
