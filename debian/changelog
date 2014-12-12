@@ -3,6 +3,7 @@ nova (2014.2.1-1) experimental; urgency=medium
   * New upstream release.
   * CVE-2014-3708_Fixes_DOS_issue_in_instance_list_ip_filter_juno.patch has
     been applied upstream, removing it.
+  * Added patch for removing ssl.PROTOCOL_SSLv3 from openstack/common.
 
  -- Thomas Goirand <zigo@debian.org>  Thu, 11 Dec 2014 23:51:29 +0800
 

@@ -1,0 +1,18 @@
+Description: Removed the use of the ssl.PROTOCOL_SSLv3
+ ssl.PROTOCOL_SSLv3 has been removed from Debian.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2014-12-12
+
+--- nova-2014.2.1.orig/nova/openstack/common/sslutils.py
++++ nova-2014.2.1/nova/openstack/common/sslutils.py
+@@ -77,8 +77,7 @@ def wrap(sock):
+ 
+ _SSL_PROTOCOLS = {
+     "tlsv1": ssl.PROTOCOL_TLSv1,
+-    "sslv23": ssl.PROTOCOL_SSLv23,
+-    "sslv3": ssl.PROTOCOL_SSLv3
++    "sslv23": ssl.PROTOCOL_SSLv23
+ }
+ 
+ try:
