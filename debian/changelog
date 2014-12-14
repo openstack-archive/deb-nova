@@ -1,3 +1,9 @@
+nova (2014.2.1-2) experimental; urgency=medium
+
+  * Now build-depends on openstack-pkg-tools (>= 20~).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 14 Dec 2014 15:47:29 +0000
+
 nova (2014.2.1-1) experimental; urgency=medium
 
   * New upstream release.
