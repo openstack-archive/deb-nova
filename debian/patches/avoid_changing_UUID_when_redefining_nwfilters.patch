@@ -1,0 +1,202 @@
+Author: Daniel P. Berrange <berrange@redhat.com>
+ libvirt >= 1.2.7 enforces that when you re-define a network filter you can't
+ change the UUID. ie name + uuid must match. Since Nova was not including any
+ UUID in the XML it sent, it would always get a random UUID generated, which
+ would cause failures when re-defining an existing filter. The result was that
+ Nova would fail to start up and fail to migrate if there was an existing guest
+ running. The fix is to query libvirt to see if the nwfilter already exists,
+ and extract the UUID from its XML and use that when re-defining it.
+Date: Fri, 19 Sep 2014 12:41:54 +0000 (+0100)
+Subject: libvirt: avoid changing UUID when redefining nwfilters
+X-Git-Tag: 2014.2.rc1~50^2
+X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=2418a9dce86280fbf269f68f7d7c9b739f662ef1
+Bug-Ubuntu: https://launchpad.net/bugs/1360119
+Bug-Debian: https://bugs.debian.org/773504
+Change-Id: I9d4b2c6c8f0c9a23ed79ed8e0b5ac0d4418851a4
+Last-Update: 2014-12-19
+
+Index: nova/nova/tests/virt/libvirt/test_libvirt.py
+===================================================================
+--- nova.orig/nova/tests/virt/libvirt/test_libvirt.py	2014-12-19 19:01:11.000000000 +0800
++++ nova/nova/tests/virt/libvirt/test_libvirt.py	2014-12-19 19:01:11.000000000 +0800
+@@ -7402,18 +7402,33 @@
+ 
+     def filterDefineXMLMock(self, xml):
+         class FakeNWFilterInternal:
+-            def __init__(self, parent, name, xml):
++            def __init__(self, parent, name, u, xml):
+                 self.name = name
++                self.uuid = u
+                 self.parent = parent
+                 self.xml = xml
+ 
++            def XMLDesc(self, flags):
++                return self.xml
++
+             def undefine(self):
+                 del self.parent.filters[self.name]
+-                pass
++
+         tree = etree.fromstring(xml)
+         name = tree.get('name')
++        u = tree.find('uuid')
++        if u is None:
++            u = uuid.uuid4().hex
++        else:
++            u = u.text
+         if name not in self.filters:
+-            self.filters[name] = FakeNWFilterInternal(self, name, xml)
++            self.filters[name] = FakeNWFilterInternal(self, name, u, xml)
++        else:
++            if self.filters[name].uuid != u:
++                raise libvirt.libvirtError(
++                    "Mismatching name '%s' with uuid '%s' vs '%s'"
++                    % (name, self.filters[name].uuid, u))
++            self.filters[name].xml = xml
+         return True
+ 
+ 
+@@ -7954,6 +7969,26 @@
+ 
+         db.instance_destroy(admin_ctxt, instance_ref['uuid'])
+ 
++    def test_redefining_nwfilters(self):
++        fakefilter = NWFilterFakes()
++        self.fw._conn.nwfilterDefineXML = fakefilter.filterDefineXMLMock
++        self.fw._conn.nwfilterLookupByName = fakefilter.nwfilterLookupByName
++
++        instance_ref = self._create_instance()
++        inst_id = instance_ref['id']
++        inst_uuid = instance_ref['uuid']
++
++        self.security_group = self.setup_and_return_security_group()
++
++        db.instance_add_security_group(self.context, inst_uuid,
++                                       self.security_group['id'])
++
++        instance = db.instance_get(self.context, inst_id)
++
++        network_info = _fake_network_info(self.stubs, 1)
++        self.fw.setup_basic_filtering(instance, network_info)
++        self.fw.setup_basic_filtering(instance, network_info)
++
+     def test_nwfilter_parameters(self):
+         admin_ctxt = context.get_admin_context()
+ 
+Index: nova/nova/virt/libvirt/firewall.py
+===================================================================
+--- nova.orig/nova/virt/libvirt/firewall.py	2014-12-19 18:57:22.000000000 +0800
++++ nova/nova/virt/libvirt/firewall.py	2014-12-19 19:01:11.000000000 +0800
+@@ -15,6 +15,9 @@
+ #    License for the specific language governing permissions and limitations
+ #    under the License.
+ 
++import uuid
++
++from lxml import etree
+ from oslo.config import cfg
+ 
+ from nova.cloudpipe import pipelib
+@@ -59,31 +62,30 @@
+         return self._libvirt_get_connection()
+     _conn = property(_get_connection)
+ 
+-    @staticmethod
+-    def nova_no_nd_reflection_filter():
++    def nova_no_nd_reflection_filter(self):
+         """This filter protects false positives on IPv6 Duplicate Address
+         Detection(DAD).
+         """
++        uuid = self._get_filter_uuid('nova-no-nd-reflection')
+         return '''<filter name='nova-no-nd-reflection' chain='ipv6'>
+                   <!-- no nd reflection -->
+                   <!-- drop if destination mac is v6 mcast mac addr and
+                        we sent it. -->
+-
++                  <uuid>%s</uuid>
+                   <rule action='drop' direction='in'>
+                       <mac dstmacaddr='33:33:00:00:00:00'
+                            dstmacmask='ff:ff:00:00:00:00' srcmacaddr='$MAC'/>
+                   </rule>
+-                  </filter>'''
++                  </filter>''' % uuid
+ 
+-    @staticmethod
+-    def nova_dhcp_filter():
++    def nova_dhcp_filter(self):
+         """The standard allow-dhcp-server filter is an <ip> one, so it uses
+            ebtables to allow traffic through. Without a corresponding rule in
+            iptables, it'll get blocked anyway.
+         """
+-
++        uuid = self._get_filter_uuid('nova-allow-dhcp-server')
+         return '''<filter name='nova-allow-dhcp-server' chain='ipv4'>
+-                    <uuid>891e4787-e5c0-d59b-cbd6-41bc3c6b36fc</uuid>
++                    <uuid>%s</uuid>
+                     <rule action='accept' direction='out'
+                           priority='100'>
+                       <udp srcipaddr='0.0.0.0'
+@@ -97,7 +99,7 @@
+                            srcportstart='67'
+                            dstportstart='68'/>
+                     </rule>
+-                  </filter>'''
++                  </filter>''' % uuid
+ 
+     def setup_basic_filtering(self, instance, network_info):
+         """Set up basic filtering (MAC, IP, and ARP spoofing protection)."""
+@@ -172,7 +174,9 @@
+         nic_id = vif['address'].replace(':', '')
+         instance_filter_name = self._instance_filter_name(instance, nic_id)
+         parameters = self._get_instance_filter_parameters(vif)
++        uuid = self._get_filter_uuid(instance_filter_name)
+         xml = '''<filter name='%s' chain='root'>''' % instance_filter_name
++        xml += '<uuid>%s</uuid>' % uuid
+         for f in filters:
+             xml += '''<filterref filter='%s'>''' % f
+             xml += ''.join(parameters)
+@@ -210,23 +214,40 @@
+         filter_set = ['no-mac-spoofing',
+                       'no-ip-spoofing',
+                       'no-arp-spoofing']
+-        self._define_filter(self.nova_no_nd_reflection_filter)
++
++        self._define_filter(self.nova_no_nd_reflection_filter())
+         filter_set.append('nova-no-nd-reflection')
+         self._define_filter(self._filter_container('nova-nodhcp', filter_set))
+         filter_set.append('allow-dhcp-server')
+         self._define_filter(self._filter_container('nova-base', filter_set))
+         self._define_filter(self._filter_container('nova-vpn',
+                                                    ['allow-dhcp-server']))
+-        self._define_filter(self.nova_dhcp_filter)
++        self._define_filter(self.nova_dhcp_filter())
+ 
+         self.static_filters_configured = True
+ 
+     def _filter_container(self, name, filters):
+-        xml = '''<filter name='%s' chain='root'>%s</filter>''' % (
+-                 name,
++        uuid = self._get_filter_uuid(name)
++        xml = '''<filter name='%s' chain='root'>
++                   <uuid>%s</uuid>
++                   %s
++                 </filter>''' % (name, uuid,
+                  ''.join(["<filterref filter='%s'/>" % (f,) for f in filters]))
+         return xml
+ 
++    def _get_filter_uuid(self, name):
++        try:
++            flt = self._conn.nwfilterLookupByName(name)
++            xml = flt.XMLDesc(0)
++            doc = etree.fromstring(xml)
++            u = doc.find("./uuid").text
++        except Exception as e:
++            LOG.debug("Cannot find UUID for filter '%s': '%s'" % (name, e))
++            u = uuid.uuid4().hex
++
++        LOG.debug("UUID for filter '%s' is '%s'" % (name, u))
++        return u
++
+     def _define_filter(self, xml):
+         if callable(xml):
+             xml = xml()

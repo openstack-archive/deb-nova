@@ -11,6 +11,8 @@ nova (2014.1.3-7) unstable; urgency=medium
     openstack-pkg-tools (>= 20~).
   * Only calls pkgos_dbc_postinst if the user asked for dbconf-common
     management.
+  * Added avoid_changing_UUID_when_redefining_nwfilters.patch so that nova
+    continues to work with libvirt >= 1.2.7.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 10 Dec 2014 19:21:37 +0800
 
