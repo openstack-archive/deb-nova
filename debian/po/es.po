@@ -4,10 +4,10 @@
 #
 # Changes:
 # - Initial translation
-# Jonathan Bustillos <jathanblackred@gmail.com>, 2012, 2013.
+# Jonathan Bustillos <jathanblackred@openmailbox.com>, 2012.
 #
 # - Updates
-# Jonathan Bustillos <jathanblackred@gmail.com>, 2012, 2013.
+# Jonathan Bustillos <jathanblackred@openmailbox.com>, 2012, 2013, 2014.
 # Matías Bellone <matiasbellone+debian@gmail.com>, 2013.
 #
 # Traductores, si no conocen el formato PO, merece la pena leer la
@@ -27,14 +27,13 @@
 # - La guía de traducción de po's de debconf:
 # /usr/share/doc/po-debconf/README-trans
 # o http://www.debian.org/intl/l10n/po-debconf/README-trans
-#
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2014-05-03 03:26+0000\n"
-"PO-Revision-Date: 2013-12-08 23:45-0600\n"
-"Last-Translator: Jonathan Bustillos <jathanblackred@gmail.com>\n"
+"PO-Revision-Date: 2014-12-11 18:12+0000\n"
+"Last-Translator: Jonathan Bustillos <jathanblackred@openmailbox.com>\n"
 "Language-Team: Debian Spanish <debian-l10n-spanish@lists.debian.org>\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
@@ -166,33 +165,30 @@ msgstr "Valor para my_ip:"
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-#, fuzzy
 #| msgid ""
 #| "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgid "This value will be stored in the my_ip directive of nova.conf."
 msgstr ""
-"Introduzca la dirección IP que será configurada en la directiva my_ip del "
-"archivo «nova.conf»."
+"Este valor será almacenado en la directiva «my_ip» del archivo «nova.conf»."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
 msgid "Neutron server URL:"
-msgstr ""
+msgstr "URL del servidor Neutron"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:9001
 msgid "Please enter the URL of the Neutron server."
-msgstr ""
+msgstr "Introduzca la URL para el servidor Neutron."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-#, fuzzy
 #| msgid "Auth server tenant name:"
 msgid "Neutron admin tenant name:"
-msgstr "Nombre del inquilino («tenant») del servidor de autenticación:"
+msgstr "Nombre del inquilino («tenant») administrador del servidor Neutron:"
 
 #. Type: string
 #. Description
@@ -201,57 +197,53 @@ msgid ""
 "Nova needs to be able to communicate with Neutron through Keystone. "
 "Therefore Nova needs to know the Neutron admin tenant, username and password."
 msgstr ""
+"Nova necesita ser capaz de comunicarse con Neutron a través de Keystone. Por "
+"lo tanto Nova requiere conocer el inquilino («tenant») administrador de "
+"Neutron, el usuario y la contraseña."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
 msgid "Please enter the name of the admin tenant for Neutron."
 msgstr ""
+"Introduzca el nombre del inquilino («tenant») administrador para Neutron:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#, fuzzy
 #| msgid "Auth server tenant name:"
 msgid "Neutron administrator username:"
-msgstr "Nombre del inquilino («tenant») del servidor de autenticación:"
+msgstr "Nombre para el administrador de Neutron:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#, fuzzy
 #| msgid ""
 #| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please enter the username of the Neutron administrator."
-msgstr ""
-"Introduzca el nombre de usuario utilizado para conectarse a su servidor "
-"XenAPI (servidor XCP)."
+msgstr "Introduzca el nombre de administrador de Neutron:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#, fuzzy
 #| msgid "Auth server tenant name:"
 msgid "Neutron administrator password:"
-msgstr "Nombre del inquilino («tenant») del servidor de autenticación:"
+msgstr "Contraseña del administrador de Neutron:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#, fuzzy
 #| msgid ""
 #| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please enter the password of the Neutron administrator."
-msgstr ""
-"Introduzca la contraseña para conectarse a su servidor XenAPI (servidor XCP)."
+msgstr "Introduzca la contraseña del administrador de Neutron."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:13001
-#, fuzzy
 #| msgid "Ip address of your rabbitmq host:"
 msgid "IP address of your RabbitMQ host:"
-msgstr "Dirección IP del servidor rabbitmq:"
+msgstr "Dirección IP del servidor RabbitMQ:"
 
 #. Type: string
 #. Description
@@ -265,49 +257,47 @@ msgid ""
 "In order to interoperate with other components of OpenStack, this package "
 "needs to connect to a central RabbitMQ server."
 msgstr ""
+"Con el fin de interoperar con otros componentes de OpenStack, este paquete "
+"tiene que conectarse a un servidor RabbitMQ central."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:13001
 msgid "Please specify the IP address of that server."
-msgstr ""
+msgstr "Introduzca la dirección IP de ese servidor."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:14001
-#, fuzzy
 #| msgid "Username to connect to XenAPI:"
 msgid "Username for connection to the RabbitMQ server:"
-msgstr "Nombre de usuario para conectarse a XenAPI:"
+msgstr "Nombre de usuario para la conexión al servidor RabbitMQ:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:14001
-#, fuzzy
 #| msgid ""
 #| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
-"Introduzca el nombre de usuario utilizado para conectarse a su servidor "
-"XenAPI (servidor XCP)."
+"Introduzca el nombre de usuario utilizado para conectarse al servidor "
+"RabbitMQ."
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:15001
-#, fuzzy
 #| msgid "Password to connect to XenAPI:"
 msgid "Password for connection to the RabbitMQ server:"
-msgstr "Contraseña para conectarse a XenAPI:"
+msgstr "Contraseña para conectarse al servidor RabbitMQ:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:15001
-#, fuzzy
 #| msgid ""
 #| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
-"Introduzca la contraseña para conectarse a su servidor XenAPI (servidor XCP)."
+"Introduzca la contraseña utilizada para conectarse al servidor RabbitMQ."
 
 #. Type: string
 #. Description
