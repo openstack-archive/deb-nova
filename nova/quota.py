@@ -19,15 +19,15 @@
 import datetime
 
 from oslo.config import cfg
+from oslo.utils import importutils
+from oslo.utils import timeutils
 import six
 
 from nova import db
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LE
 from nova import objects
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 
 LOG = logging.getLogger(__name__)
 
@@ -59,10 +59,7 @@ quota_opts = [
                help='Number of bytes allowed per injected file'),
     cfg.IntOpt('quota_injected_file_path_length',
                default=255,
-               deprecated_name='quota_injected_file_path_bytes',
                help='Length of injected file path'),
-    # TODO(lyj): quota_injected_file_path_bytes is deprecated in Juno, and will
-    #            be removed in K.
     cfg.IntOpt('quota_security_groups',
                default=10,
                help='Number of security groups per project'),
@@ -1330,7 +1327,8 @@ class QuotaEngine(object):
             # usage resynchronization and the reservation expiration
             # mechanisms will resolve the issue.  The exception is
             # logged, however, because this is less than optimal.
-            LOG.exception(_("Failed to commit reservations %s"), reservations)
+            LOG.exception(_LE("Failed to commit reservations %s"),
+                          reservations)
             return
         LOG.debug("Committed reservations %s", reservations)
 
@@ -1353,7 +1351,7 @@ class QuotaEngine(object):
             # usage resynchronization and the reservation expiration
             # mechanisms will resolve the issue.  The exception is
             # logged, however, because this is less than optimal.
-            LOG.exception(_("Failed to roll back reservations %s"),
+            LOG.exception(_LE("Failed to roll back reservations %s"),
                           reservations)
             return
         LOG.debug("Rolled back reservations %s", reservations)

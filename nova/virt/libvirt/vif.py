@@ -20,6 +20,7 @@
 import copy
 
 from oslo.config import cfg
+from oslo_concurrency import processutils
 
 from nova import exception
 from nova.i18n import _
@@ -27,7 +28,6 @@ from nova.i18n import _LE
 from nova.network import linux_net
 from nova.network import model as network_model
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
 from nova import utils
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import designer
@@ -81,9 +81,6 @@ def is_vif_model_valid_for_virt(virt_type, vif_model):
 
 class LibvirtGenericVIFDriver(object):
     """Generic VIF driver for libvirt networking."""
-
-    def __init__(self, get_connection):
-        self.get_connection = get_connection
 
     def _normalize_vif_type(self, vif_type):
         return vif_type.replace('2.1q', '2q')
@@ -484,7 +481,11 @@ class LibvirtGenericVIFDriver(object):
         pass
 
     def plug_hw_veb(self, instance, vif):
-        pass
+        if vif['vnic_type'] == network_model.VNIC_TYPE_MACVTAP:
+            linux_net.set_vf_interface_vlan(
+                vif['profile']['pci_slot'],
+                mac_addr=vif['address'],
+                vlan=vif['details'][network_model.VIF_DETAILS_VLAN])
 
     def plug_midonet(self, instance, vif):
         """Plug into MidoNet's network port
@@ -531,14 +532,15 @@ class LibvirtGenericVIFDriver(object):
                    'vif': vif})
 
         if vif_type is None:
-            raise exception.NovaException(
+            raise exception.VirtualInterfacePlugException(
                 _("vif_type parameter must be present "
                   "for this vif_driver implementation"))
         vif_slug = self._normalize_vif_type(vif_type)
         func = getattr(self, 'plug_%s' % vif_slug, None)
         if not func:
-            raise exception.NovaException(
-                _("Unexpected vif_type=%s") % vif_type)
+            raise exception.VirtualInterfacePlugException(
+                _("Plug vif failed because of unexpected "
+                  "vif_type=%s") % vif_type)
         func(instance, vif)
 
     def unplug_bridge(self, instance, vif):
@@ -632,7 +634,12 @@ class LibvirtGenericVIFDriver(object):
         pass
 
     def unplug_hw_veb(self, instance, vif):
-        pass
+        if vif['vnic_type'] == network_model.VNIC_TYPE_MACVTAP:
+            # The ip utility doesn't accept the MAC 00:00:00:00:00:00.
+            # Therefore, keep the MAC unchanged.  Later operations on
+            # the same VF will not be affected by the existing MAC.
+            linux_net.set_vf_interface_vlan(vif['profile']['pci_slot'],
+                                            mac_addr=vif['address'])
 
     def unplug_midonet(self, instance, vif):
         """Unplug from MidoNet network port

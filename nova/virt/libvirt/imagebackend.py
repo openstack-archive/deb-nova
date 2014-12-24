@@ -18,6 +18,9 @@ import contextlib
 import os
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+from oslo.utils import units
 import six
 
 from nova import exception
@@ -25,11 +28,8 @@ from nova.i18n import _
 from nova.i18n import _LE, _LI
 from nova import image
 from nova import keymgr
-from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import units
 from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt import images
@@ -52,13 +52,6 @@ __imagebackend_opts = [
                 default=False,
                 help='Create sparse logical volumes (with virtualsize)'
                      ' if this flag is set to True.'),
-    cfg.StrOpt('volume_clear',
-               default='zero',
-               help='Method used to wipe old volumes (valid options are: '
-                    'none, zero, shred)'),
-    cfg.IntOpt('volume_clear_size',
-               default=0,
-               help='Size in MiB to wipe at start of old volumes. 0 => all'),
     cfg.StrOpt('images_rbd_pool',
                default='rbd',
                help='The RADOS pool in which rbd volumes are stored'),
@@ -283,7 +276,7 @@ class Image(object):
             except (TypeError, ValueError) as e:
                 msg = (_("Could not load line %(line)s, got error "
                         "%(error)s") %
-                        {'line': line, 'error': unicode(e)})
+                        {'line': line, 'error': e})
                 raise exception.InvalidDiskInfo(reason=msg)
 
         @utils.synchronized(self.disk_info_path, external=False,
@@ -320,7 +313,7 @@ class Image(object):
                 fileutils.ensure_tree(os.path.dirname(self.disk_info_path))
                 write_to_disk_info_file()
         except OSError as e:
-            raise exception.DiskInfoReadWriteFail(reason=unicode(e))
+            raise exception.DiskInfoReadWriteFail(reason=six.text_type(e))
         return driver_format
 
     @staticmethod
@@ -546,7 +539,9 @@ class Lvm(Image):
                                   CONF.ephemeral_storage_encryption.key_size,
                                   key)
 
-        @utils.synchronized(base, external=True, lock_path=self.lock_path)
+        filename = os.path.split(base)[-1]
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def create_lvm_image(base, size):
             base_size = disk.get_disk_size(base)
             self.verify_base_size(base, size, base_size=base_size)

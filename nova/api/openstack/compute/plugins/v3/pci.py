@@ -14,6 +14,7 @@
 #    under the License.
 
 
+from oslo.serialization import jsonutils
 import webob.exc
 
 from nova.api.openstack import extensions
@@ -21,7 +22,6 @@ from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
 from nova import objects
-from nova.openstack.common import jsonutils
 
 
 ALIAS = 'os-pci'
@@ -80,7 +80,7 @@ class PciHypervisorController(wsgi.Controller):
             self._extend_hypervisor(hypervisor, compute_node)
 
 
-class PciController(object):
+class PciController(wsgi.Controller):
 
     def __init__(self):
         self.host_api = compute.HostAPI()

@@ -17,14 +17,16 @@ Internal implementation of request Body validating middleware.
 """
 
 import base64
+import re
 
 import jsonschema
+import netaddr
+from oslo.utils import timeutils
 import rfc3986
 import six
 
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 
 
@@ -45,6 +47,19 @@ def _validate_base64_format(instance):
     except base64.binascii.Error:
         return False
 
+    return True
+
+
+@jsonschema.FormatChecker.cls_checks('cidr')
+def _validate_cidr_format(cidr):
+    try:
+        netaddr.IPNetwork(cidr)
+    except netaddr.AddrFormatError:
+        return False
+    if '/' not in cidr:
+        return False
+    if re.search('\s', cidr):
+        return False
     return True
 
 

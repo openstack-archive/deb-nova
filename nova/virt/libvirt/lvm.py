@@ -22,6 +22,8 @@
 import functools
 
 from oslo.config import cfg
+from oslo.utils import units
+from oslo_concurrency import processutils
 import six
 
 from nova import exception
@@ -29,13 +31,22 @@ from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
-from nova.openstack.common import units
 from nova import utils as nova_utils
 from nova.virt.libvirt import utils
 
 
+lvm_opts = [
+    cfg.StrOpt('volume_clear',
+               default='zero',
+               help='Method used to wipe old volumes (valid options are: '
+                    'none, zero, shred)'),
+    cfg.IntOpt('volume_clear_size',
+               default=0,
+               help='Size in MiB to wipe at start of old volumes. 0 => all'),
+]
+
 CONF = cfg.CONF
+CONF.register_opts(lvm_opts, 'libvirt')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 LOG = logging.getLogger(__name__)
 

@@ -18,13 +18,13 @@ CPU monitor based on compute driver to retrieve CPU information
 """
 
 from oslo.config import cfg
+from oslo.utils import timeutils
 
 from nova.compute import monitors
 from nova.compute.monitors import cpu_monitor as monitor
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LE
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 
 CONF = cfg.CONF
 CONF.import_opt('compute_driver', 'nova.virt.driver')
@@ -109,8 +109,8 @@ class ComputeDriverCPUMonitor(monitor._CPUMonitorBase):
             self._data["cpu.iowait.time"] = stats["iowait"]
             self._data["cpu.frequency"] = stats["frequency"]
         except (NotImplementedError, TypeError, KeyError) as ex:
-            LOG.exception(_("Not all properties needed are implemented "
-                "in the compute driver: %s"), ex)
+            LOG.exception(_LE("Not all properties needed are implemented "
+                              "in the compute driver: %s"), ex)
             raise exception.ResourceMonitorError(
                 monitor=self.__class__.__name__)
 

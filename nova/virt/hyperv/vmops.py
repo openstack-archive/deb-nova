@@ -23,20 +23,21 @@ import time
 
 from eventlet import timeout as etimeout
 from oslo.config import cfg
+from oslo.utils import excutils
+from oslo.utils import importutils
+from oslo.utils import units
+from oslo_concurrency import processutils
 
 from nova.api.metadata import base as instance_metadata
 from nova import exception
-from nova.i18n import _, _LI, _LW
-from nova.openstack.common import excutils
+from nova.i18n import _, _LI, _LE, _LW
 from nova.openstack.common import fileutils
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
-from nova.openstack.common import processutils
-from nova.openstack.common import units
 from nova.openstack.common import uuidutils
 from nova import utils
 from nova.virt import configdrive
+from nova.virt import hardware
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import ioutils
@@ -158,11 +159,11 @@ class VMOps(object):
         info = self._vmutils.get_vm_summary_info(instance_name)
 
         state = constants.HYPERV_POWER_STATE[info['EnabledState']]
-        return {'state': state,
-                'max_mem': info['MemoryUsage'],
-                'mem': info['MemoryUsage'],
-                'num_cpu': info['NumberOfProcessors'],
-                'cpu_time': info['UpTime']}
+        return hardware.InstanceInfo(state=state,
+                                     max_mem_kb=info['MemoryUsage'],
+                                     mem_kb=info['MemoryUsage'],
+                                     num_cpu=info['NumberOfProcessors'],
+                                     cpu_time_ns=info['UpTime'])
 
     def _create_root_vhd(self, context, instance):
         base_vhd_path = self._imagecache.get_cached_image(context, instance)
@@ -180,24 +181,14 @@ class VMOps(object):
                           {'base_vhd_path': base_vhd_path,
                            'root_vhd_path': root_vhd_path},
                           instance=instance)
+                self._vhdutils.create_differencing_vhd(root_vhd_path,
+                                                       base_vhd_path)
                 vhd_type = self._vhdutils.get_vhd_format(base_vhd_path)
-                if vhd_type == constants.DISK_FORMAT_VHDX:
-                    # Differencing vhdx images can be resized, so we use
-                    # the flavor size when creating the root image
-                    root_vhd_internal_size = (
-                        self._vhdutils.get_internal_vhd_size_by_file_size(
-                            base_vhd_path, root_vhd_size))
-                    if not self._is_resize_needed(root_vhd_path, base_vhd_size,
-                                                  root_vhd_internal_size,
-                                                  instance):
-                        root_vhd_internal_size = None
-
-                    self._vhdutils.create_differencing_vhd(
-                        root_vhd_path, base_vhd_path, root_vhd_internal_size)
-                else:
-                    # The base image had already been resized
-                    self._vhdutils.create_differencing_vhd(root_vhd_path,
-                                                           base_vhd_path)
+                if vhd_type == constants.DISK_FORMAT_VHD:
+                    # The base image has already been resized. As differencing
+                    # vhdx images support it, the root image will be resized
+                    # instead if needed.
+                    return root_vhd_path
             else:
                 LOG.debug("Copying VHD image %(base_vhd_path)s to target: "
                           "%(root_vhd_path)s",
@@ -206,16 +197,16 @@ class VMOps(object):
                           instance=instance)
                 self._pathutils.copyfile(base_vhd_path, root_vhd_path)
 
-                root_vhd_internal_size = (
-                        self._vhdutils.get_internal_vhd_size_by_file_size(
-                            root_vhd_path, root_vhd_size))
+            root_vhd_internal_size = (
+                self._vhdutils.get_internal_vhd_size_by_file_size(
+                    base_vhd_path, root_vhd_size))
 
-                if self._is_resize_needed(root_vhd_path, base_vhd_size,
+            if self._is_resize_needed(root_vhd_path, base_vhd_size,
+                                      root_vhd_internal_size,
+                                      instance):
+                self._vhdutils.resize_vhd(root_vhd_path,
                                           root_vhd_internal_size,
-                                          instance):
-                    self._vhdutils.resize_vhd(root_vhd_path,
-                                              root_vhd_internal_size,
-                                              is_file_max_size=False)
+                                          is_file_max_size=False)
         except Exception:
             with excutils.save_and_reraise_exception():
                 if self._pathutils.exists(root_vhd_path):
@@ -255,7 +246,7 @@ class VMOps(object):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None):
         """Create a new VM and start it."""
-        LOG.info(_("Spawning new instance"), instance=instance)
+        LOG.info(_LI("Spawning new instance"), instance=instance)
 
         instance_name = instance['name']
         if self._vmutils.vm_exists(instance_name):
@@ -303,7 +294,7 @@ class VMOps(object):
                                            root_vhd_path,
                                            0,
                                            ctrl_disk_addr,
-                                           constants.IDE_DISK)
+                                           constants.DISK)
             ctrl_disk_addr += 1
 
         if eph_vhd_path:
@@ -311,7 +302,7 @@ class VMOps(object):
                                            eph_vhd_path,
                                            0,
                                            ctrl_disk_addr,
-                                           constants.IDE_DISK)
+                                           constants.DISK)
 
         self._vmutils.create_scsi_controller(instance_name)
 
@@ -337,7 +328,7 @@ class VMOps(object):
                 _('Invalid config_drive_format "%s"') %
                 CONF.config_drive_format)
 
-        LOG.info(_('Using config drive for instance'), instance=instance)
+        LOG.info(_LI('Using config drive for instance'), instance=instance)
 
         extra_md = {}
         if admin_password and CONF.hyperv.config_drive_inject_password:
@@ -350,7 +341,7 @@ class VMOps(object):
         instance_path = self._pathutils.get_instance_dir(
             instance['name'])
         configdrive_path_iso = os.path.join(instance_path, 'configdrive.iso')
-        LOG.info(_('Creating config drive at %(path)s'),
+        LOG.info(_LI('Creating config drive at %(path)s'),
                  {'path': configdrive_path_iso}, instance=instance)
 
         with configdrive.ConfigDriveBuilder(instance_md=inst_md) as cdb:
@@ -358,7 +349,8 @@ class VMOps(object):
                 cdb.make_drive(configdrive_path_iso)
             except processutils.ProcessExecutionError as e:
                 with excutils.save_and_reraise_exception():
-                    LOG.error(_('Creating config drive failed with error: %s'),
+                    LOG.error(_LE('Creating config drive failed with '
+                                  'error: %s'),
                               e, instance=instance)
 
         if not CONF.hyperv.config_drive_cdrom:
@@ -389,10 +381,6 @@ class VMOps(object):
         except KeyError:
             raise exception.InvalidDiskFormat(disk_format=configdrive_ext)
 
-    def _disconnect_volumes(self, volume_drives):
-        for volume_drive in volume_drives:
-            self._volumeops.disconnect_volume(volume_drive)
-
     def _delete_disk_files(self, instance_name):
         self._pathutils.get_instance_dir(instance_name,
                                          create_dir=False,
@@ -401,18 +389,15 @@ class VMOps(object):
     def destroy(self, instance, network_info=None, block_device_info=None,
                 destroy_disks=True):
         instance_name = instance['name']
-        LOG.info(_("Got request to destroy instance"), instance=instance)
+        LOG.info(_LI("Got request to destroy instance"), instance=instance)
         try:
             if self._vmutils.vm_exists(instance_name):
 
                 # Stop the VM first.
                 self.power_off(instance)
 
-                storage = self._vmutils.get_vm_storage_paths(instance_name)
-                (disk_files, volume_drives) = storage
-
                 self._vmutils.destroy_vm(instance_name)
-                self._disconnect_volumes(volume_drives)
+                self._volumeops.disconnect_volumes(block_device_info)
             else:
                 LOG.debug("Instance not found", instance=instance)
 
@@ -420,7 +405,7 @@ class VMOps(object):
                 self._delete_disk_files(instance_name)
         except Exception:
             with excutils.save_and_reraise_exception():
-                LOG.exception(_('Failed to destroy instance: %s'),
+                LOG.exception(_LE('Failed to destroy instance: %s'),
                               instance_name)
 
     def reboot(self, instance, network_info, reboot_type):
@@ -536,8 +521,8 @@ class VMOps(object):
                                              'req_state': req_state})
         except Exception:
             with excutils.save_and_reraise_exception():
-                LOG.error(_("Failed to change vm state of %(instance_name)s"
-                            " to %(req_state)s"),
+                LOG.error(_LE("Failed to change vm state of %(instance_name)s"
+                              " to %(req_state)s"),
                           {'instance_name': instance_name,
                            'req_state': req_state})
 

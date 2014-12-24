@@ -21,16 +21,16 @@ import collections
 import UserDict
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import timeutils
 
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import db
 from nova import exception
-from nova.i18n import _, _LW
-from nova.openstack.common import jsonutils
+from nova.i18n import _, _LI, _LW
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
-from nova.pci import pci_stats
+from nova.pci import stats as pci_stats
 from nova.scheduler import filters
 from nova.scheduler import weights
 from nova.virt import hardware
@@ -40,7 +40,7 @@ host_manager_opts = [
             default=['nova.scheduler.filters.all_filters'],
             help='Filter classes available to the scheduler which may '
                     'be specified more than once.  An entry of '
-                    '"nova.scheduler.filters.standard_filters" '
+                    '"nova.scheduler.filters.all_filters" '
                     'maps to all filters included with nova.'),
     cfg.ListOpt('scheduler_default_filters',
                 default=[
@@ -167,7 +167,7 @@ class HostState(object):
             if name:
                 self.metrics[name] = item
             else:
-                LOG.warn(_LW("Metric name unknown of %r"), item)
+                LOG.warning(_LW("Metric name unknown of %r"), item)
 
     def update_from_compute_node(self, compute):
         """Update information about a host from its compute_node info."""
@@ -182,9 +182,11 @@ class HostState(object):
         if least_gb is not None:
             if least_gb > free_gb:
                 # can occur when an instance in database is not on host
-                LOG.warn(_LW("Host has more disk space than database "
-                             "expected (%(physical)sgb > %(database)sgb)"),
-                         {'physical': least_gb, 'database': free_gb})
+                LOG.warning(_LW("Host %(hostname)s has more disk space than "
+                                "database expected "
+                                "(%(physical)sgb > %(database)sgb)"),
+                            {'physical': least_gb, 'database': free_gb,
+                             'hostname': compute['hypervisor_hostname']})
             free_gb = min(least_gb, free_gb)
         free_disk_mb = free_gb * 1024
 
@@ -242,7 +244,11 @@ class HostState(object):
         self.num_instances += 1
 
         pci_requests = instance.get('pci_requests')
-        if pci_requests and pci_requests.requests and self.pci_stats:
+        # NOTE(danms): Instance here is still a dict, which is converted from
+        # an object. Thus, it has a .pci_requests field, which gets converted
+        # to a primitive early on, and is thus a dict here. Convert this when
+        # we get an object all the way to this path.
+        if pci_requests and pci_requests['requests'] and self.pci_stats:
             self.pci_stats.apply_requests(pci_requests.requests)
 
         # Calculate the numa usage
@@ -275,11 +281,15 @@ class HostManager(object):
     def __init__(self):
         self.host_state_map = {}
         self.filter_handler = filters.HostFilterHandler()
-        self.filter_classes = self.filter_handler.get_matching_classes(
+        filter_classes = self.filter_handler.get_matching_classes(
                 CONF.scheduler_available_filters)
+        self.filter_cls_map = dict(
+                (cls.__name__, cls) for cls in filter_classes)
+        self.filter_obj_map = {}
         self.weight_handler = weights.HostWeightHandler()
-        self.weight_classes = self.weight_handler.get_matching_classes(
+        weigher_classes = self.weight_handler.get_matching_classes(
                 CONF.scheduler_weight_classes)
+        self.weighers = [cls() for cls in weigher_classes]
 
     def _choose_host_filters(self, filter_cls_names):
         """Since the caller may specify which filters to use we need
@@ -291,14 +301,17 @@ class HostManager(object):
             filter_cls_names = CONF.scheduler_default_filters
         if not isinstance(filter_cls_names, (list, tuple)):
             filter_cls_names = [filter_cls_names]
-        cls_map = dict((cls.__name__, cls) for cls in self.filter_classes)
+
         good_filters = []
         bad_filters = []
         for filter_name in filter_cls_names:
-            if filter_name not in cls_map:
-                bad_filters.append(filter_name)
-                continue
-            good_filters.append(cls_map[filter_name])
+            if filter_name not in self.filter_obj_map:
+                if filter_name not in self.filter_cls_map:
+                    bad_filters.append(filter_name)
+                    continue
+                filter_cls = self.filter_cls_map[filter_name]
+                self.filter_obj_map[filter_name] = filter_cls()
+            good_filters.append(self.filter_obj_map[filter_name])
         if bad_filters:
             msg = ", ".join(bad_filters)
             raise exception.SchedulerHostFilterNotFound(filter_name=msg)
@@ -351,7 +364,7 @@ class HostManager(object):
                         "'force_nodes' value of '%s'")
             LOG.audit(msg % forced_nodes_str)
 
-        filter_classes = self._choose_host_filters(filter_class_names)
+        filters = self._choose_host_filters(filter_class_names)
         ignore_hosts = filter_properties.get('ignore_hosts', [])
         force_hosts = filter_properties.get('force_hosts', [])
         force_nodes = filter_properties.get('force_nodes', [])
@@ -375,12 +388,12 @@ class HostManager(object):
                     return name_to_cls_map.values()
             hosts = name_to_cls_map.itervalues()
 
-        return self.filter_handler.get_filtered_objects(filter_classes,
+        return self.filter_handler.get_filtered_objects(filters,
                 hosts, filter_properties, index)
 
     def get_weighed_hosts(self, hosts, weight_properties):
         """Weigh the hosts."""
-        return self.weight_handler.get_weighed_objects(self.weight_classes,
+        return self.weight_handler.get_weighed_objects(self.weighers,
                 hosts, weight_properties)
 
     def get_all_host_states(self, context):
@@ -395,7 +408,7 @@ class HostManager(object):
         for compute in compute_nodes:
             service = compute['service']
             if not service:
-                LOG.warn(_LW("No service for compute ID %s"), compute['id'])
+                LOG.warning(_LW("No service for compute ID %s"), compute['id'])
                 continue
             host = service['host']
             node = compute.get('hypervisor_hostname')
@@ -413,8 +426,8 @@ class HostManager(object):
         dead_nodes = set(self.host_state_map.keys()) - seen_nodes
         for state_key in dead_nodes:
             host, node = state_key
-            LOG.info(_("Removing dead compute node %(host)s:%(node)s "
-                       "from scheduler") % {'host': host, 'node': node})
+            LOG.info(_LI("Removing dead compute node %(host)s:%(node)s "
+                         "from scheduler"), {'host': host, 'node': node})
             del self.host_state_map[state_key]
 
         return self.host_state_map.itervalues()

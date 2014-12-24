@@ -30,7 +30,7 @@ from nova.compute import vm_states
 from nova import conductor
 from nova.db import base
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LE, _LI
 from nova import objects
 from nova.objects import base as obj_base
 from nova.openstack.common import log as logging
@@ -73,11 +73,13 @@ class CellsScheduler(base.Base):
         self.compute_api = compute.API()
         self.compute_task_api = conductor.ComputeTaskAPI()
         self.filter_handler = filters.CellFilterHandler()
-        self.filter_classes = self.filter_handler.get_matching_classes(
+        filter_classes = self.filter_handler.get_matching_classes(
                 CONF.cells.scheduler_filter_classes)
+        self.filters = [cls() for cls in filter_classes]
         self.weight_handler = weights.CellWeightHandler()
-        self.weigher_classes = self.weight_handler.get_matching_classes(
+        weigher_classes = self.weight_handler.get_matching_classes(
                 CONF.cells.scheduler_weight_classes)
+        self.weighers = [cls() for cls in weigher_classes]
 
     def _create_instances_here(self, ctxt, instance_uuids, instance_properties,
             instance_type, image, security_groups, block_device_mapping):
@@ -97,10 +99,17 @@ class CellsScheduler(base.Base):
         instance_values.pop('info_cache')
         instance_values.pop('security_groups')
 
+        # FIXME(danms): The instance was brutally serialized before being
+        # sent over RPC to us. Thus, the pci_requests value wasn't really
+        # sent in a useful form. Since it was getting ignored for cells
+        # before it was part of the Instance, skip it now until cells RPC
+        # is sending proper instance objects.
+        instance_values.pop('pci_requests', None)
+
         instances = []
         num_instances = len(instance_uuids)
         for i, instance_uuid in enumerate(instance_uuids):
-            instance = objects.Instance()
+            instance = objects.Instance(context=ctxt)
             instance.update(instance_values)
             instance.uuid = instance_uuid
             instance = self.compute_api.create_db_entry_for_new_instance(
@@ -135,8 +144,7 @@ class CellsScheduler(base.Base):
 
     def _grab_target_cells(self, filter_properties):
         cells = self._get_possible_cells()
-        cells = self.filter_handler.get_filtered_objects(self.filter_classes,
-                                                         cells,
+        cells = self.filter_handler.get_filtered_objects(self.filters, cells,
                                                          filter_properties)
         # NOTE(comstud): I know this reads weird, but the 'if's are nested
         # this way to optimize for the common case where 'cells' is a list
@@ -149,7 +157,7 @@ class CellsScheduler(base.Base):
             raise exception.NoCellsAvailable()
 
         weighted_cells = self.weight_handler.get_weighed_objects(
-                self.weigher_classes, cells, filter_properties)
+                self.weighers, cells, filter_properties)
         LOG.debug("Weighted cells: %(weighted_cells)s",
                   {'weighted_cells': weighted_cells})
         target_cells = [cell.obj for cell in weighted_cells]
@@ -159,7 +167,8 @@ class CellsScheduler(base.Base):
             build_inst_kwargs):
         """Attempt to build instance(s) or send msg to child cell."""
         ctxt = message.ctxt
-        instance_properties = build_inst_kwargs['instances'][0]
+        instance_properties = obj_base.obj_to_primitive(
+            build_inst_kwargs['instances'][0])
         filter_properties = build_inst_kwargs['filter_properties']
         instance_type = filter_properties['instance_type']
         image = build_inst_kwargs['image']
@@ -188,12 +197,11 @@ class CellsScheduler(base.Base):
                         build_inst_kwargs)
                 return
             except Exception:
-                LOG.exception(_("Couldn't communicate with cell '%s'") %
-                        target_cell.name)
+                LOG.exception(_LE("Couldn't communicate with cell '%s'"),
+                              target_cell.name)
         # FIXME(comstud): Would be nice to kick this back up so that
         # the parent cell could retry, if we had a parent.
-        msg = _("Couldn't communicate with any cells")
-        LOG.error(msg)
+        LOG.error(_LE("Couldn't communicate with any cells"))
         raise exception.NoCellsAvailable()
 
     def build_instances(self, message, build_inst_kwargs):
@@ -230,13 +238,13 @@ class CellsScheduler(base.Base):
                     if i == max(0, CONF.cells.scheduler_retries):
                         raise
                     sleep_time = max(1, CONF.cells.scheduler_retry_delay)
-                    LOG.info(_("No cells available when scheduling.  Will "
-                               "retry in %(sleep_time)s second(s)"),
+                    LOG.info(_LI("No cells available when scheduling.  Will "
+                                 "retry in %(sleep_time)s second(s)"),
                              {'sleep_time': sleep_time})
                     time.sleep(sleep_time)
                     continue
         except Exception:
-            LOG.exception(_("Error scheduling instances %(instance_uuids)s"),
+            LOG.exception(_LE("Error scheduling instances %(instance_uuids)s"),
                           {'instance_uuids': instance_uuids})
             ctxt = message.ctxt
             for instance_uuid in instance_uuids:

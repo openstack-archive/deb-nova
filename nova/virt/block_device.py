@@ -15,13 +15,15 @@
 import functools
 import operator
 
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+
 from nova import block_device
 from nova.i18n import _
+from nova.i18n import _LE
 from nova.i18n import _LI
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import excutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.volume import encryptors
 
@@ -252,8 +254,8 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
                         device_type=self['device_type'], encryption=encryption)
             except Exception:  # pylint: disable=W0702
                 with excutils.save_and_reraise_exception():
-                    LOG.exception(_("Driver failed to attach volume "
-                                    "%(volume_id)s at %(mountpoint)s"),
+                    LOG.exception(_LE("Driver failed to attach volume "
+                                      "%(volume_id)s at %(mountpoint)s"),
                                   {'volume_id': volume_id,
                                    'mountpoint': self['mount_device']},
                                   context=context, instance=instance)
@@ -265,7 +267,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
         if 'data' in connection_info:
             mode = connection_info['data'].get('access_mode', 'rw')
         if volume['attach_status'] == "detached":
-            volume_api.attach(context, volume_id, instance['uuid'],
+            volume_api.attach(context, volume_id, instance.uuid,
                               self['mount_device'], mode=mode)
 
     @update_db
@@ -360,17 +362,14 @@ class DriverBlankBlockDevice(DriverVolumeBlockDevice):
 
 
 def _convert_block_devices(device_type, block_device_mapping):
-    def _is_transformable(bdm):
+    devices = []
+    for bdm in block_device_mapping:
         try:
-            device_type(bdm)
+            devices.append(device_type(bdm))
         except _NotTransformable:
-            return False
-        return True
+            pass
 
-    return [device_type(bdm)
-            for bdm in block_device_mapping
-            if _is_transformable(bdm)]
-
+    return devices
 
 convert_swap = functools.partial(_convert_block_devices,
                                  DriverSwapBlockDevice)

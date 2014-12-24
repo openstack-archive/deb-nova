@@ -15,6 +15,8 @@
 
 """The instance interfaces extension."""
 
+import netaddr
+import six
 import webob
 from webob import exc
 
@@ -61,15 +63,20 @@ class InterfaceAttachmentController(object):
         authorize(context)
 
         port_id = id
+        # NOTE(mriedem): We need to verify the instance actually exists from
+        # the server_id even though we're not using the instance for anything,
+        # just the port id.
         common.get_instance(self.compute_api, context, server_id)
 
         try:
             port_info = self.network_api.show_port(context, port_id)
         except exception.NotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.Forbidden as e:
+            raise exc.HTTPForbidden(explanation=e.format_message())
 
         if port_info['port']['device_id'] != server_id:
-            msg = _("Instance %(instance)s does not have a port with id"
+            msg = _("Instance %(instance)s does not have a port with id "
                     "%(port)s") % {'instance': server_id, 'port': port_id}
             raise exc.HTTPNotFound(explanation=msg)
 
@@ -100,6 +107,12 @@ class InterfaceAttachmentController(object):
             msg = _("Must input network_id when request IP address")
             raise exc.HTTPBadRequest(explanation=msg)
 
+        if req_ip:
+            try:
+                netaddr.IPAddress(req_ip)
+            except netaddr.AddrFormatError as e:
+                raise exc.HTTPBadRequest(explanation=six.text_type(e))
+
         try:
             instance = common.get_instance(self.compute_api,
                                            context, server_id,
@@ -125,7 +138,7 @@ class InterfaceAttachmentController(object):
             raise webob.exc.HTTPInternalServerError(explanation=msg)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'attach_interface')
+                    'attach_interface', server_id)
 
         return self.show(req, server_id, vif['id'])
 
@@ -150,7 +163,7 @@ class InterfaceAttachmentController(object):
             raise webob.exc.HTTPNotImplemented(explanation=msg)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'detach_interface')
+                    'detach_interface', server_id)
 
         return webob.Response(status_int=202)
 
@@ -158,9 +171,10 @@ class InterfaceAttachmentController(object):
         """Returns a list of attachments, transformed through entity_maker."""
         context = req.environ['nova.context']
         authorize(context)
-        instance = common.get_instance(self.compute_api, context, server_id)
+        instance = common.get_instance(self.compute_api, context, server_id,
+                                       want_objects=True)
         results = []
-        search_opts = {'device_id': instance['uuid']}
+        search_opts = {'device_id': instance.uuid}
 
         try:
             data = self.network_api.list_ports(context, **search_opts)

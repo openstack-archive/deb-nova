@@ -22,16 +22,16 @@ Scheduler base class that all Schedulers should inherit from
 import sys
 
 from oslo.config import cfg
+from oslo.utils import importutils
+from oslo.utils import timeutils
 
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import db
 from nova import exception
-from nova.i18n import _, _LW
+from nova.i18n import _, _LE, _LW
 from nova import notifications
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova import rpc
 from nova import servicegroup
 
@@ -57,7 +57,7 @@ def handle_schedule_error(context, ex, instance_uuid, request_spec):
                     ex.format_message().strip(),
                     instance_uuid=instance_uuid)
     else:
-        LOG.exception(_("Exception during scheduler.run_instance"))
+        LOG.exception(_LE("Exception during scheduler.run_instance"))
     state = vm_states.ERROR.upper()
     LOG.warning(_LW('Setting instance to %s state.'), state,
                 instance_uuid=instance_uuid)
@@ -114,16 +114,6 @@ class Scheduler(object):
         return [service['host']
                 for service in services
                 if self.servicegroup_api.service_is_up(service)]
-
-    # NOTE(alaski): Remove this method when the scheduler rpc interface is
-    # bumped to 4.x as it is no longer used.
-    def schedule_run_instance(self, context, request_spec,
-                              admin_password, injected_files,
-                              requested_networks, is_first_time,
-                              filter_properties, legacy_bdm_in_spec):
-        """Must override schedule_run_instance method for scheduler to work."""
-        msg = _("Driver must implement schedule_run_instance")
-        raise NotImplementedError(msg)
 
     def select_destinations(self, context, request_spec, filter_properties):
         """Must override select_destinations method.

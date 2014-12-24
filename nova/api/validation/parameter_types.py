@@ -16,10 +16,27 @@ Common parameter types for validating request Body.
 
 """
 
+import copy
+
+
 boolean = {
     'type': ['boolean', 'string'],
-    'enum': [True, 'True', 'TRUE', 'true', '1',
-             False, 'False', 'FALSE', 'false', '0'],
+    'enum': [True, 'True', 'TRUE', 'true', '1', 'ON', 'On', 'on',
+             'YES', 'Yes', 'yes',
+             False, 'False', 'FALSE', 'false', '0', 'OFF', 'Off', 'off',
+             'NO', 'No', 'no'],
+}
+
+
+positive_integer = {
+    'type': ['integer', 'string'],
+    'pattern': '^[0-9]*$', 'minimum': 1
+}
+
+
+non_negative_integer = {
+    'type': ['integer', 'string'],
+    'pattern': '^[0-9]*$', 'minimum': 0
 }
 
 
@@ -62,12 +79,38 @@ name = {
 tcp_udp_port = {
     'type': ['integer', 'string'], 'pattern': '^[0-9]*$',
     'minimum': 0, 'maximum': 65535,
+    'minLength': 1
 }
 
 
 project_id = {
     'type': 'string', 'minLength': 1, 'maxLength': 255,
     'pattern': '^[a-zA-Z0-9-]*$'
+}
+
+
+server_id = {
+    'type': 'string', 'format': 'uuid'
+}
+
+
+image_id = {
+    'type': 'string', 'format': 'uuid'
+}
+
+
+volume_id = {
+    'type': 'string', 'format': 'uuid'
+}
+
+
+network_id = {
+    'type': 'string', 'format': 'uuid'
+}
+
+
+network_port_id = {
+    'type': 'string', 'format': 'uuid'
 }
 
 
@@ -87,7 +130,7 @@ image_ref = {
 
 
 flavor_ref = {
-    'type': ['string', 'integer'],
+    'type': ['string', 'integer'], 'minLength': 1
 }
 
 
@@ -99,4 +142,15 @@ metadata = {
         }
     },
     'additionalProperties': False
+}
+
+
+metadata_with_null = copy.deepcopy(metadata)
+metadata_with_null['patternProperties']['^[a-zA-Z0-9-_:. ]{1,255}$']['type'] =\
+    ['string', 'null']
+
+
+mac_address = {
+    'type': 'string',
+    'pattern': '^([0-9a-fA-F]{2})(:[0-9a-fA-F]{2}){5}$'
 }

@@ -37,9 +37,14 @@ Nova Specific Commandments
 - [N322] Method's default argument shouldn't be mutable
 - [N323] Ensure that the _() function is explicitly imported to ensure proper translations.
 - [N324] Ensure that jsonutils.%(fun)s must be used instead of json.%(fun)s
-- [N325] str() cannot be used on an exception.  Remove use or use six.text_type()
+- [N325] str() and unicode() cannot be used on an exception.  Remove use or use six.text_type()
 - [N326] Translated messages cannot be concatenated.  String should be included in translated message.
 - [N327] assert_called_once() is not a valid method
+- [N328] Validate that LOG.info messages use _LI.
+- [N329] Validate that LOG.exception messages use _LE.
+- [N330] Validate that LOG.warning messages use _LW.
+- [N331] Change LOG.warn on LOG.warning.
+- [N332] Check that the api_version decorator is the first decorator on a method
 
 Creating Unit Tests
 -------------------

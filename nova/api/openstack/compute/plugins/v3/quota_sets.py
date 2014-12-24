@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.utils import strutils
 import six.moves.urllib.parse as urlparse
 import webob
 
@@ -24,14 +25,11 @@ import nova.context
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
 from nova import quota
 
 
 ALIAS = "os-quota-sets"
 QUOTAS = quota.QUOTAS
-LOG = logging.getLogger(__name__)
 authorize_update = extensions.extension_authorizer('compute',
                                                    'v3:%s:update' % ALIAS)
 authorize_show = extensions.extension_authorizer('compute',
@@ -51,14 +49,22 @@ class QuotaSetsController(wsgi.Controller):
 
     def _validate_quota_limit(self, resource, limit, minimum, maximum):
         # NOTE: -1 is a flag value for unlimited
-        if ((limit < minimum) and
-           (maximum != -1 or (maximum == -1 and limit != -1))):
+        if limit < -1:
+            msg = (_("Quota limit %(limit)s for %(resource)s "
+                     "must be -1 or greater.") %
+                   {'limit': limit, 'resource': resource})
+            raise webob.exc.HTTPBadRequest(explanation=msg)
+
+        def conv_inf(value):
+            return float("inf") if value == -1 else value
+
+        if conv_inf(limit) < conv_inf(minimum):
             msg = (_("Quota limit %(limit)s for %(resource)s must "
                      "be greater than or equal to already used and "
                      "reserved %(minimum)s.") %
                    {'limit': limit, 'resource': resource, 'minimum': minimum})
             raise webob.exc.HTTPBadRequest(explanation=msg)
-        if maximum != -1 and limit > maximum:
+        if conv_inf(limit) > conv_inf(maximum):
             msg = (_("Quota limit %(limit)s for %(resource)s must be "
                      "less than or equal to %(maximum)s.") %
                    {'limit': limit, 'resource': resource, 'maximum': maximum})
@@ -120,8 +126,6 @@ class QuotaSetsController(wsgi.Controller):
                                                          user_id=user_id)
         except exception.Forbidden:
             raise webob.exc.HTTPForbidden()
-
-        LOG.debug("Force update quotas: %s", force_update)
 
         for key, value in body['quota_set'].iteritems():
             if key == 'force' or (not value and value != 0):

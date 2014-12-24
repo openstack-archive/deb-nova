@@ -19,6 +19,8 @@ import re
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.utils import strutils
+from oslo.utils import timeutils
 import six
 import stevedore
 import webob
@@ -38,8 +40,6 @@ from nova.i18n import _LW
 from nova.image import glance
 from nova import objects
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
-from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import policy
 from nova import utils
@@ -70,11 +70,14 @@ class ServersController(wsgi.Controller):
 
     EXTENSION_UPDATE_NAMESPACE = 'nova.api.v3.extensions.server.update'
 
+    EXTENSION_RESIZE_NAMESPACE = 'nova.api.v3.extensions.server.resize'
+
     _view_builder_class = views_servers.ViewBuilderV3
 
     schema_server_create = schema_servers.base_create
     schema_server_update = schema_servers.base_update
     schema_server_rebuild = schema_servers.base_rebuild
+    schema_server_resize = schema_servers.base_resize
 
     @staticmethod
     def _add_location(robj):
@@ -103,11 +106,11 @@ class ServersController(wsgi.Controller):
                     if ext.obj.alias not in CONF.osapi_v3.extensions_blacklist:
                         return True
                     else:
-                        LOG.warn(_LW("Not loading %s because it is "
-                                     "in the blacklist"), ext.obj.alias)
+                        LOG.warning(_LW("Not loading %s because it is "
+                                        "in the blacklist"), ext.obj.alias)
                         return False
                 else:
-                    LOG.warn(
+                    LOG.warning(
                         _LW("Not loading %s because it is not in the "
                             "whitelist"), ext.obj.alias)
                     return False
@@ -173,6 +176,17 @@ class ServersController(wsgi.Controller):
         if not list(self.update_extension_manager):
             LOG.debug("Did not find any server update extensions")
 
+        # Look for implementation of extension point of server resize
+        self.resize_extension_manager = \
+            stevedore.enabled.EnabledExtensionManager(
+                namespace=self.EXTENSION_RESIZE_NAMESPACE,
+                check_func=_check_load_extension('server_resize'),
+                invoke_on_load=True,
+                invoke_kwds={"extension_info": self.extension_info},
+                propagate_map_exceptions=True)
+        if not list(self.resize_extension_manager):
+            LOG.debug("Did not find any server resize extensions")
+
         # Look for API schema of server create extension
         self.create_schema_manager = \
             stevedore.enabled.EnabledExtensionManager(
@@ -214,6 +228,20 @@ class ServersController(wsgi.Controller):
                                             self.schema_server_rebuild)
         else:
             LOG.debug("Did not find any server rebuild schemas")
+
+        # Look for API schema of server resize extension
+        self.resize_schema_manager = \
+            stevedore.enabled.EnabledExtensionManager(
+                namespace=self.EXTENSION_RESIZE_NAMESPACE,
+                check_func=_check_load_extension('get_server_resize_schema'),
+                invoke_on_load=True,
+                invoke_kwds={"extension_info": self.extension_info},
+                propagate_map_exceptions=True)
+        if list(self.resize_schema_manager):
+            self.resize_schema_manager.map(self._resize_extension_schema,
+                                           self.schema_server_resize)
+        else:
+            LOG.debug("Did not find any server resize schemas")
 
     @extensions.expected_errors((400, 403))
     def index(self, req):
@@ -322,18 +350,19 @@ class ServersController(wsgi.Controller):
                 search_opts['user_id'] = context.user_id
 
         limit, marker = common.get_limit_and_marker(req)
+        sort_keys, sort_dirs = common.get_sort_params(req.params)
         try:
             instance_list = self.compute_api.get_all(context,
                     search_opts=search_opts, limit=limit, marker=marker,
-                    want_objects=True, expected_attrs=['pci_devices'])
+                    want_objects=True, expected_attrs=['pci_devices'],
+                    sort_keys=sort_keys, sort_dirs=sort_dirs)
         except exception.MarkerNotFound:
             msg = _('marker [%s] not found') % marker
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.FlavorNotFound:
-            log_msg = _("Flavor '%s' could not be found ")
-            LOG.debug(log_msg, search_opts['flavor'])
-            # TODO(mriedem): Move to ObjectListBase.__init__ for empty lists.
-            instance_list = objects.InstanceList(objects=[])
+            LOG.debug("Flavor '%s' could not be found ",
+                      search_opts['flavor'])
+            instance_list = objects.InstanceList()
 
         if is_detail:
             instance_list.fill_faults()
@@ -441,8 +470,8 @@ class ServersController(wsgi.Controller):
         req.cache_db_instance(instance)
         return self._view_builder.show(req, instance)
 
-    @extensions.expected_errors((400, 403, 409, 413))
     @wsgi.response(202)
+    @extensions.expected_errors((400, 403, 409, 413))
     @validation.schema(schema_server_create)
     def create(self, req, body):
         """Creates a new server for a given user."""
@@ -479,16 +508,10 @@ class ServersController(wsgi.Controller):
                                                   False)
 
         requested_networks = None
-        # TODO(cyeoh): bp v3-api-core-as-extensions
-        # Replace with an extension point when the os-networks
-        # extension is ported. Currently reworked
-        # to take into account is_neutron
-        # if (self.ext_mgr.is_loaded('os-networks')
-        #        or utils.is_neutron()):
-        #    requested_networks = server_dict.get('networks')
-
-        if utils.is_neutron():
+        if ('os-networks' in self.extension_info.get_extensions()
+                or utils.is_neutron()):
             requested_networks = server_dict.get('networks')
+
         if requested_networks is not None:
             requested_networks = self._get_requested_networks(
                 requested_networks)
@@ -537,7 +560,7 @@ class ServersController(wsgi.Controller):
                                                  'err_msg': err.value}
             raise exc.HTTPBadRequest(explanation=msg)
         except UnicodeDecodeError as error:
-            msg = "UnicodeError: %s" % unicode(error)
+            msg = "UnicodeError: %s" % error
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
                 exception.FlavorDiskTooSmall,
@@ -561,9 +584,11 @@ class ServersController(wsgi.Controller):
                 exception.InvalidBDMImage,
                 exception.InvalidBDMBootSequence,
                 exception.InvalidBDMLocalsLimit,
-                exception.InvalidBDMVolumeNotBootable) as error:
+                exception.InvalidBDMVolumeNotBootable,
+                exception.AutoDiskConfigDisabledByImage) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
+                exception.InstanceExists,
                 exception.NetworkAmbiguous,
                 exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
@@ -618,7 +643,13 @@ class ServersController(wsgi.Controller):
         LOG.debug("Running _create_extension_schema for %s", ext.obj)
 
         schema = handler.get_server_create_schema()
-        create_schema['properties']['server']['properties'].update(schema)
+        if ext.obj.name == 'SchedulerHints':
+            # NOTE(oomichi): The request parameter position of scheduler-hint
+            # extension is different from the other extensions, so here handles
+            # the difference.
+            create_schema['properties'].update(schema)
+        else:
+            create_schema['properties']['server']['properties'].update(schema)
 
     def _update_extension_schema(self, ext, update_schema):
         handler = ext.obj
@@ -633,6 +664,13 @@ class ServersController(wsgi.Controller):
 
         schema = handler.get_server_rebuild_schema()
         rebuild_schema['properties']['rebuild']['properties'].update(schema)
+
+    def _resize_extension_schema(self, ext, resize_schema):
+        handler = ext.obj
+        LOG.debug("Running _resize_extension_schema for %s", ext.obj)
+
+        schema = handler.get_server_resize_schema()
+        resize_schema['properties']['resize']['properties'].update(schema)
 
     def _delete(self, context, req, instance_uuid):
         instance = self._get_server(context, req, instance_uuid)
@@ -686,8 +724,8 @@ class ServersController(wsgi.Controller):
     # NOTE(gmann): Returns 204 for backwards compatibility but should be 202
     # for representing async API as this API just accepts the request and
     # request hypervisor driver to complete the same in async mode.
-    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(204)
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.action('confirmResize')
     def _action_confirm_resize(self, req, id, body):
         context = req.environ['nova.context']
@@ -701,10 +739,10 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'confirmResize')
+                    'confirmResize', id)
 
-    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.action('revertResize')
     def _action_revert_resize(self, req, id, body):
         context = req.environ['nova.context']
@@ -721,11 +759,10 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'revertResize')
-        return webob.Response(status_int=202)
+                    'revertResize', id)
 
-    @extensions.expected_errors((400, 404, 409))
     @wsgi.response(202)
+    @extensions.expected_errors((400, 404, 409))
     @wsgi.action('reboot')
     def _action_reboot(self, req, id, body):
         if 'reboot' in body and 'type' in body['reboot']:
@@ -753,8 +790,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'reboot')
-        return webob.Response(status_int=202)
+                    'reboot', id)
 
     def _resize(self, req, instance_id, flavor_id, **kwargs):
         """Begin the resize process with given instance/flavor."""
@@ -773,13 +809,14 @@ class ServersController(wsgi.Controller):
         except exception.CannotResizeToSameFlavor:
             msg = _("Resize requires a flavor change.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.CannotResizeDisk as e:
+        except (exception.CannotResizeDisk,
+                exception.AutoDiskConfigDisabledByImage) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'resize')
+                    'resize', instance_id)
         except exception.ImageNotAuthorized:
             msg = _("You are not authorized to access the image "
                     "the instance was started with.")
@@ -788,14 +825,15 @@ class ServersController(wsgi.Controller):
             msg = _("Image that the instance was started "
                     "with could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
+        except (exception.NoValidHost,
+                exception.AutoDiskConfigDisabledByImage) as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.Invalid:
             msg = _("Invalid instance image.")
             raise exc.HTTPBadRequest(explanation=msg)
 
-        return webob.Response(status_int=202)
-
-    @extensions.expected_errors((404, 409))
     @wsgi.response(204)
+    @extensions.expected_errors((404, 409))
     def delete(self, req, id):
         """Destroys a server."""
         try:
@@ -807,7 +845,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'delete')
+                    'delete', id)
 
     def _image_uuid_from_href(self, image_href):
         # If the image href was generated by nova api, strip image_href
@@ -841,27 +879,25 @@ class ServersController(wsgi.Controller):
         flavor_ref = data['server']['flavorRef']
         return common.get_id_from_href(flavor_ref)
 
-    @extensions.expected_errors((400, 401, 403, 404, 409))
     @wsgi.response(202)
+    @extensions.expected_errors((400, 401, 403, 404, 409))
     @wsgi.action('resize')
+    @validation.schema(schema_server_resize)
     def _action_resize(self, req, id, body):
         """Resizes a given instance to the flavor size requested."""
         resize_dict = body['resize']
-        try:
-            flavor_ref = str(resize_dict["flavorRef"])
-            if not flavor_ref:
-                msg = _("Resize request has invalid 'flavorRef' attribute.")
-                raise exc.HTTPBadRequest(explanation=msg)
-        except (KeyError, TypeError):
-            msg = _("Resize requests require 'flavorRef' attribute.")
-            raise exc.HTTPBadRequest(explanation=msg)
+        flavor_ref = str(resize_dict["flavorRef"])
 
         resize_kwargs = {}
 
-        return self._resize(req, id, flavor_ref, **resize_kwargs)
+        if list(self.resize_extension_manager):
+            self.resize_extension_manager.map(self._resize_extension_point,
+                                              resize_dict, resize_kwargs)
 
-    @extensions.expected_errors((400, 403, 404, 409, 413))
+        self._resize(req, id, flavor_ref, **resize_kwargs)
+
     @wsgi.response(202)
+    @extensions.expected_errors((400, 403, 404, 409, 413))
     @wsgi.action('rebuild')
     @validation.schema(schema_server_rebuild)
     def _action_rebuild(self, req, id, body):
@@ -908,7 +944,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'rebuild')
+                    'rebuild', id)
         except exception.InstanceNotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -920,7 +956,8 @@ class ServersController(wsgi.Controller):
         except (exception.ImageNotActive,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
-                exception.InvalidMetadata) as error:
+                exception.InvalidMetadata,
+                exception.AutoDiskConfigDisabledByImage) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
 
         instance = self._get_server(context, req, id)
@@ -935,8 +972,8 @@ class ServersController(wsgi.Controller):
         robj = wsgi.ResponseObject(view)
         return self._add_location(robj)
 
-    @extensions.expected_errors((400, 403, 404, 409))
     @wsgi.response(202)
+    @extensions.expected_errors((400, 403, 404, 409))
     @wsgi.action('createImage')
     @common.check_snapshots_enabled
     def _action_create_image(self, req, id, body):
@@ -989,7 +1026,7 @@ class ServersController(wsgi.Controller):
                                                   extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                        'createImage')
+                        'createImage', id)
         except exception.Invalid as err:
             raise exc.HTTPBadRequest(explanation=err.format_message())
 
@@ -1022,6 +1059,7 @@ class ServersController(wsgi.Controller):
         except exception.InstanceNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409))
     @wsgi.action('os-start')
     def _start_server(self, req, id, body):
@@ -1035,8 +1073,8 @@ class ServersController(wsgi.Controller):
         except (exception.InstanceNotReady, exception.InstanceIsLocked,
                 exception.InstanceInvalidState) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
-        return webob.Response(status_int=202)
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409))
     @wsgi.action('os-stop')
     def _stop_server(self, req, id, body):
@@ -1050,7 +1088,6 @@ class ServersController(wsgi.Controller):
         except (exception.InstanceNotReady, exception.InstanceIsLocked,
                 exception.InstanceInvalidState) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
-        return webob.Response(status_int=202)
 
 
 def remove_invalid_options(context, search_options, allowed_search_options):

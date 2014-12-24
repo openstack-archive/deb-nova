@@ -44,13 +44,13 @@ the Open Attestation project at:
 """
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import timeutils
 import requests
 
 from nova import context
 from nova import db
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova.scheduler import filters
 
 LOG = logging.getLogger(__name__)
@@ -105,7 +105,7 @@ class AttestationService(object):
         # :returns: result data
         # :raises: IOError if the request fails
 
-        action_url = "https://%s:%d%s/%s" % (self.host, self.port,
+        action_url = "https://%s:%s%s/%s" % (self.host, self.port,
                                              self.api_url, action_url)
         try:
             res = requests.request(method, action_url, data=body,
@@ -119,7 +119,7 @@ class AttestationService(object):
                                requests.codes.NO_CONTENT):
                 try:
                     return requests.codes.OK, jsonutils.loads(res.text)
-                except ValueError:
+                except (TypeError, ValueError):
                     return requests.codes.OK, res.text
             return status_code, None
 
@@ -254,6 +254,9 @@ class TrustedFilter(filters.BaseHostFilter):
 
     def __init__(self):
         self.compute_attestation = ComputeAttestation()
+
+    # The hosts the instances are running on doesn't change within a request
+    run_filter_once_per_request = True
 
     def host_passes(self, host_state, filter_properties):
         instance_type = filter_properties.get('instance_type', {})

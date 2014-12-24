@@ -19,9 +19,9 @@
 import random
 
 from oslo.config import cfg
+from oslo.utils import importutils
 
-from nova.i18n import _
-from nova.openstack.common import importutils
+from nova.i18n import _, _LW
 from nova.openstack.common import log as logging
 from nova import utils
 
@@ -85,14 +85,14 @@ class API(object):
         report_interval = CONF.report_interval
         if CONF.service_down_time <= report_interval:
             new_service_down_time = int(report_interval * 2.5)
-            LOG.warn(_("Report interval must be less than service down "
-                       "time. Current config: <service_down_time: "
-                       "%(service_down_time)s, report_interval: "
-                       "%(report_interval)s>. Setting service_down_time to: "
-                       "%(new_service_down_time)s"),
-                       {'service_down_time': CONF.service_down_time,
-                        'report_interval': report_interval,
-                        'new_service_down_time': new_service_down_time})
+            LOG.warning(_LW("Report interval must be less than service down "
+                            "time. Current config: <service_down_time: "
+                            "%(service_down_time)s, report_interval: "
+                            "%(report_interval)s>. Setting service_down_time "
+                            "to: %(new_service_down_time)s"),
+                        {'service_down_time': CONF.service_down_time,
+                         'report_interval': report_interval,
+                         'new_service_down_time': new_service_down_time})
             CONF.set_override('service_down_time', new_service_down_time)
 
     def join(self, member_id, group_id, service=None):
@@ -103,10 +103,12 @@ class API(object):
         @param service: the parameter can be used for notifications about
         disconnect mode and update some internals
         """
-        msg = _('Join new ServiceGroup member %(member_id)s to the '
-                '%(group_id)s group, service = %(service)s')
-        LOG.debug(msg, {'member_id': member_id, 'group_id': group_id,
-                        'service': service})
+
+        LOG.debug('Join new ServiceGroup member %(member_id)s to the '
+                  '%(group_id)s group, service = %(service)s',
+                  {'member_id': member_id,
+                   'group_id': group_id,
+                   'service': service})
         return self._driver.join(member_id, group_id, service)
 
     def service_is_up(self, member):
@@ -119,9 +121,9 @@ class API(object):
         """Explicitly remove the given member from the ServiceGroup
         monitoring.
         """
-        msg = _('Explicitly remove the given member %(member_id)s from the'
-                '%(group_id)s group monitoring')
-        LOG.debug(msg, {'member_id': member_id, 'group_id': group_id})
+        LOG.debug('Explicitly remove the given member %(member_id)s from the'
+                  '%(group_id)s group monitoring',
+                  {'member_id': member_id, 'group_id': group_id})
         return self._driver.leave(member_id, group_id)
 
     def get_all(self, group_id):

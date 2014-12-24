@@ -22,7 +22,6 @@ from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.openstack.common import log as logging
-from nova import utils
 
 
 LOG = logging.getLogger(__name__)
@@ -37,12 +36,16 @@ def _expected_cols(expected_attrs):
                  if attr in _BLOCK_DEVICE_OPTIONAL_JOINED_FIELD]
 
 
-class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
+                         base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Add instance_uuid to get_by_volume_id method
     # Version 1.2: Instance version 1.14
     # Version 1.3: Instance version 1.15
-    VERSION = '1.3'
+    # Version 1.4: Instance version 1.16
+    # Version 1.5: Instance version 1.17
+    VERSION = '1.5'
 
     fields = {
         'id': fields.IntegerField(),
@@ -64,16 +67,10 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject):
         'connection_info': fields.StringField(nullable=True),
     }
 
-    def obj_make_compatible(self, primitive, target_version):
-        target_version = utils.convert_version_to_tuple(target_version)
-        if target_version < (1, 2) and 'instance' in primitive:
-            self.instance.obj_make_compatible(
-                    primitive['instance']['nova_object.data'], '1.13')
-            primitive['instance']['nova_object.version'] = '1.13'
-        elif target_version < (1, 3) and 'instance' in primitive:
-            self.instance.obj_make_compatible(
-                    primitive['instance']['nova_object.data'], '1.14')
-            primitive['instance']['nova_object.version'] = '1.14'
+    obj_relationships = {
+        'instance': [('1.0', '1.13'), ('1.2', '1.14'), ('1.3', '1.15'),
+                     ('1.4', '1.16')],
+    }
 
     @staticmethod
     def _from_db_object(context, block_device_obj,
@@ -205,7 +202,9 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.2: Added use_slave to get_by_instance_uuid
     # Version 1.3: BlockDeviceMapping <= version 1.2
     # Version 1.4: BlockDeviceMapping <= version 1.3
-    VERSION = '1.4'
+    # Version 1.5: BlockDeviceMapping <= version 1.4
+    # Version 1.6: BlockDeviceMapping <= version 1.5
+    VERSION = '1.6'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
@@ -216,6 +215,8 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
         '1.2': '1.1',
         '1.3': '1.2',
         '1.4': '1.3',
+        '1.5': '1.4',
+        '1.6': '1.5',
     }
 
     @base.remotable_classmethod

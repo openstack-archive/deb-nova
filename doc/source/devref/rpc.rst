@@ -25,7 +25,7 @@ AMQP is the messaging technology chosen by the OpenStack cloud.  The AMQP broker
 
 Nova uses direct, fanout, and topic-based exchanges. The architecture looks like the one depicted in the figure below:
 
-.. image:: /images/rpc/arch.png
+.. image:: ../images/rpc/arch.png
    :width: 60%
 
 ..
@@ -35,7 +35,7 @@ Nova implements RPC (both request+response, and one-way, respectively nicknamed 
 Nova RPC Mappings
 -----------------
 
-The figure below shows the internals of a message broker node (referred to as a RabbitMQ node in the diagrams) when a single instance is deployed and shared in an OpenStack cloud. Every Nova component connects to the message broker and, depending on its personality (for example a compute node or a network node), may use the queue either as an Invoker (such as API or Scheduler) or a Worker (such as Compute or Network). Invokers and Workers do not actually exist in the Nova object model, but we are going to use them as an abstraction for sake of clarity. An Invoker is a component that sends messages in the queuing system via two operations: 1) rpc.call and ii) rpc.cast; a Worker is a component that receives messages from the queuing system and reply accordingly to rcp.call operations.
+The figure below shows the internals of a message broker node (referred to as a RabbitMQ node in the diagrams) when a single instance is deployed and shared in an OpenStack cloud. Every Nova component connects to the message broker and, depending on its personality (for example a compute node or a network node), may use the queue either as an Invoker (such as API or Scheduler) or a Worker (such as Compute or Network). Invokers and Workers do not actually exist in the Nova object model, but we are going to use them as an abstraction for sake of clarity. An Invoker is a component that sends messages in the queuing system via two operations: 1) rpc.call and ii) rpc.cast; a Worker is a component that receives messages from the queuing system and reply accordingly to rpc.call operations.
 
 Figure 2 shows the following internal elements:
 
@@ -47,7 +47,7 @@ Figure 2 shows the following internal elements:
     * Direct Exchange: this is a routing table that is created during rpc.call operations; there are many instances of this kind of exchange throughout the life-cycle of a message broker node, one for each rpc.call invoked.
     * Queue Element: A Queue is a message bucket. Messages are kept in the queue until a Consumer (either Topic or Direct Consumer) connects to the queue and fetch it. Queues can be shared or can be exclusive. Queues whose routing key is 'topic' are shared amongst Workers of the same personality.
 
-.. image:: /images/rpc/rabt.png
+.. image:: ../images/rpc/rabt.png
    :width: 60%
 
 ..
@@ -55,14 +55,14 @@ Figure 2 shows the following internal elements:
 RPC Calls
 ---------
 
-The diagram below shows the message flow during an rp.call operation:
+The diagram below shows the message flow during an rpc.call operation:
 
     1. a Topic Publisher is instantiated to send the message request to the queuing system; immediately before the publishing operation, a Direct Consumer is instantiated to wait for the response message.
     2. once the message is dispatched by the exchange, it is fetched by the Topic Consumer dictated by the routing key (such as 'topic.host') and passed to the Worker in charge of the task.
     3. once the task is completed, a Direct Publisher is allocated to send the response message to the queuing system.
     4. once the message is dispatched by the exchange, it is fetched by the Direct Consumer dictated by the routing key (such as 'msg_id') and passed to the Invoker.
 
-.. image:: /images/rpc/flow1.png
+.. image:: ../images/rpc/flow1.png
    :width: 60%
 
 ..
@@ -70,12 +70,12 @@ The diagram below shows the message flow during an rp.call operation:
 RPC Casts
 ---------
 
-The diagram below the message flow during an rp.cast operation:
+The diagram below the message flow during an rpc.cast operation:
 
     1. A Topic Publisher is instantiated to send the message request to the queuing system.
     2. Once the message is dispatched by the exchange, it is fetched by the Topic Consumer dictated by the routing key (such as 'topic') and passed to the Worker in charge of the task.
 
-.. image:: /images/rpc/flow2.png
+.. image:: ../images/rpc/flow2.png
    :width: 60%
 
 ..
@@ -100,7 +100,7 @@ The figure below shows the status of a RabbitMQ node after Nova components' boot
        5. scheduler.phantom (phantom is hostname)
        6. scheduler
 
-.. image:: /images/rpc/state.png
+.. image:: ../images/rpc/state.png
    :width: 60%
 
 ..

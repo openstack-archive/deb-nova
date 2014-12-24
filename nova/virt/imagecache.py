@@ -17,15 +17,15 @@ from oslo.config import cfg
 
 from nova.compute import task_states
 from nova.compute import vm_states
+from nova import objects
+from nova.virt import block_device as driver_block_device
 
 imagecache_opts = [
     cfg.IntOpt('image_cache_manager_interval',
                default=2400,
                help='Number of seconds to wait between runs of the image '
                     'cache manager. Set to -1 to disable. '
-                    'Setting this to 0 will disable, but this will change in '
-                    'the K release to mean "run at the default rate".'),
-    # TODO(gilliard): Clean the above message after the K release
+                    'Setting this to 0 will run at the default rate.'),
     cfg.StrOpt('image_cache_subdirectory_name',
                default='_base',
                help='Where cached images are stored under $instances_path. '
@@ -73,6 +73,7 @@ class ImageCacheManager(object):
         used_images = {}
         image_popularity = {}
         instance_names = set()
+        used_swap_images = set()
 
         for instance in all_instances:
             # NOTE(mikal): "instance name" here means "the name of a directory
@@ -101,9 +102,18 @@ class ImageCacheManager(object):
                 image_popularity.setdefault(image_ref_str, 0)
                 image_popularity[image_ref_str] += 1
 
+            gb = objects.BlockDeviceMappingList.get_by_instance_uuid
+            bdms = gb(context, instance.uuid)
+            if bdms:
+                swap = driver_block_device.convert_swap(bdms)
+                if swap:
+                    swap_image = 'swap_' + str(swap[0]['swap_size'])
+                    used_swap_images.add(swap_image)
+
         return {'used_images': used_images,
                 'image_popularity': image_popularity,
-                'instance_names': instance_names}
+                'instance_names': instance_names,
+                'used_swap_images': used_swap_images}
 
     def _list_base_images(self, base_dir):
         """Return a list of the images present in _base.

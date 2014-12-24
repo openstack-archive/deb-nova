@@ -17,10 +17,12 @@ from nova.objects import fields
 from nova import utils
 
 
-class NetworkRequest(obj_base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class NetworkRequest(obj_base.NovaObject,
+                     obj_base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Added pci_request_id
-    VERSION = '1.0'
+    VERSION = '1.1'
     fields = {
         'network_id': fields.StringField(nullable=True),
         'address': fields.IPAddressField(nullable=True),

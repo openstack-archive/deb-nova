@@ -20,19 +20,19 @@ Management class for host-related functions (start, reboot, etc).
 import re
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
 
 from nova.compute import arch
-from nova.compute import hvtype
+from nova.compute import hv_type
 from nova.compute import task_states
 from nova.compute import vm_mode
 from nova.compute import vm_states
 from nova import context
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.pci import pci_whitelist
+from nova.pci import whitelist as pci_whitelist
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 
@@ -46,7 +46,7 @@ class Host(object):
         self._session = session
         self._virtapi = virtapi
 
-    def host_power_action(self, _host, action):
+    def host_power_action(self, action):
         """Reboots or shuts down the host."""
         args = {"action": jsonutils.dumps(action)}
         methods = {"reboot": "host_reboot", "shutdown": "host_shutdown"}
@@ -73,10 +73,11 @@ class Host(object):
                         name = vm_rec['name_label']
                         uuid = _uuid_find(ctxt, host, name)
                         if not uuid:
-                            LOG.info(_('Instance %(name)s running on %(host)s'
-                                       ' could not be found in the database:'
-                                       ' assuming it is a worker VM and skip'
-                                       ' ping migration to a new host'),
+                            LOG.info(_LI('Instance %(name)s running on '
+                                         '%(host)s could not be found in '
+                                         'the database: assuming it is a '
+                                         'worker VM and skip ping migration '
+                                         'to a new host'),
                                      {'name': name, 'host': host})
                             continue
                     instance = objects.Instance.get_by_uuid(ctxt, uuid)
@@ -104,8 +105,8 @@ class Host(object):
 
                     break
                 except self._session.XenAPI.Failure:
-                    LOG.exception(_('Unable to migrate VM %(vm_ref)s '
-                                    'from %(host)s'),
+                    LOG.exception(_LE('Unable to migrate VM %(vm_ref)s '
+                                      'from %(host)s'),
                                   {'vm_ref': vm_ref, 'host': host})
                     instance.host = host
                     instance.vm_state = vm_states.ACTIVE
@@ -258,10 +259,10 @@ class HostState(object):
                 del data['host_memory']
             if (data['host_hostname'] !=
                     self._stats.get('host_hostname', data['host_hostname'])):
-                LOG.error(_('Hostname has changed from %(old)s '
-                            'to %(new)s. A restart is required to take effect.'
-                            ) % {'old': self._stats['host_hostname'],
-                                 'new': data['host_hostname']})
+                LOG.error(_LE('Hostname has changed from %(old)s to %(new)s. '
+                              'A restart is required to take effect.') %
+                          {'old': self._stats['host_hostname'],
+                           'new': data['host_hostname']})
                 data['host_hostname'] = self._stats['host_hostname']
             data['hypervisor_hostname'] = data['host_hostname']
             vcpus_used = 0
@@ -288,10 +289,10 @@ def to_supported_instances(host_capabilities):
             guestarch = arch.canonicalize(guestarch)
             ostype = vm_mode.canonicalize(ostype)
 
-            result.append((guestarch, hvtype.XEN, ostype))
+            result.append((guestarch, hv_type.XEN, ostype))
         except ValueError:
-            LOG.warning(
-                _("Failed to extract instance support from %s"), capability)
+            LOG.warning(_LW("Failed to extract instance support from %s"),
+                        capability)
 
     return result
 
@@ -308,11 +309,11 @@ def call_xenhost(session, method, arg_dict):
             return ''
         return jsonutils.loads(result)
     except ValueError:
-        LOG.exception(_("Unable to get updated status"))
+        LOG.exception(_LE("Unable to get updated status"))
         return None
     except session.XenAPI.Failure as e:
-        LOG.error(_("The call to %(method)s returned "
-                    "an error: %(e)s."), {'method': method, 'e': e})
+        LOG.error(_LE("The call to %(method)s returned "
+                      "an error: %(e)s."), {'method': method, 'e': e})
         return e.details[1]
 
 

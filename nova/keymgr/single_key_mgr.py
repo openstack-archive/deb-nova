@@ -20,7 +20,7 @@ all invocations of get_key.
 
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LW
 from nova.keymgr import mock_key_mgr
 from nova.openstack.common import log as logging
 
@@ -37,8 +37,8 @@ class SingleKeyManager(mock_key_mgr.MockKeyManager):
     """
 
     def __init__(self):
-        LOG.warn(_('This key manager is insecure and is not recommended for '
-                   'production deployments'))
+        LOG.warning(_LW('This key manager is insecure and is not recommended '
+                        'for production deployments'))
         super(SingleKeyManager, self).__init__()
 
         self.key_id = '00000000-0000-0000-0000-000000000000'
@@ -57,7 +57,7 @@ class SingleKeyManager(mock_key_mgr.MockKeyManager):
     def store_key(self, ctxt, key, **kwargs):
         if key != self.key:
             raise exception.KeyManagerError(
-                        reason="cannot store arbitrary keys")
+                        reason=_("cannot store arbitrary keys"))
 
         return super(SingleKeyManager, self).store_key(ctxt, key, **kwargs)
 
@@ -67,6 +67,6 @@ class SingleKeyManager(mock_key_mgr.MockKeyManager):
 
         if key_id != self.key_id:
             raise exception.KeyManagerError(
-                        reason="cannot delete non-existent key")
+                        reason=_("cannot delete non-existent key"))
 
-        LOG.warn(_("Not deleting key %s"), key_id)
+        LOG.warning(_LW("Not deleting key %s"), key_id)

@@ -27,6 +27,7 @@ It also allows setting of formatting information through conf.
 
 """
 
+import copy
 import inspect
 import itertools
 import logging
@@ -38,18 +39,15 @@ import sys
 import traceback
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import importutils
 import six
 from six import moves
 
 _PY26 = sys.version_info[0:2] == (2, 6)
 
-from nova.openstack.common.gettextutils import _
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
+from nova.openstack.common._i18n import _
 from nova.openstack.common import local
-# NOTE(flaper87): Pls, remove when graduating this module
-# from the incubator.
-from nova.openstack.common.strutils import mask_password  # noqa
 
 
 _DEFAULT_LOG_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -176,6 +174,16 @@ CONF.register_cli_opts(common_cli_opts)
 CONF.register_cli_opts(logging_cli_opts)
 CONF.register_opts(generic_log_opts)
 CONF.register_opts(log_opts)
+
+
+def list_opts():
+    """Entry point for oslo.config-generator."""
+    return [(None, copy.deepcopy(common_cli_opts)),
+            (None, copy.deepcopy(logging_cli_opts)),
+            (None, copy.deepcopy(generic_log_opts)),
+            (None, copy.deepcopy(log_opts)),
+            ]
+
 
 # our new audit level
 # NOTE(jkoelker) Since we synthesized an audit level, make the logging
@@ -501,14 +509,9 @@ def _setup_logging_from_conf(project, version):
         log_root.addHandler(streamlog)
 
     if CONF.publish_errors:
-        try:
-            handler = importutils.import_object(
-                "nova.openstack.common.log_handler.PublishErrorsHandler",
-                logging.ERROR)
-        except ImportError:
-            handler = importutils.import_object(
-                "oslo.messaging.notify.log_handler.PublishErrorsHandler",
-                logging.ERROR)
+        handler = importutils.import_object(
+            "oslo.messaging.notify.log_handler.PublishErrorsHandler",
+            logging.ERROR)
         log_root.addHandler(handler)
 
     datefmt = CONF.log_date_format
@@ -554,7 +557,7 @@ def _setup_logging_from_conf(project, version):
                 syslog = logging.handlers.SysLogHandler(facility=facility)
             log_root.addHandler(syslog)
         except socket.error:
-            log_root.error('Unable to add syslog handler. Verify that syslog'
+            log_root.error('Unable to add syslog handler. Verify that syslog '
                            'is running.')
 
 

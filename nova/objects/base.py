@@ -22,6 +22,7 @@ import traceback
 
 import netaddr
 from oslo import messaging
+from oslo.utils import timeutils
 import six
 
 from nova import context
@@ -30,8 +31,8 @@ from nova.i18n import _, _LE
 from nova import objects
 from nova.objects import fields
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova.openstack.common import versionutils
+from nova import utils
 
 
 LOG = logging.getLogger('object')
@@ -43,7 +44,7 @@ class NotSpecifiedSentinel:
 
 def get_attrname(name):
     """Return the mangled name of the attribute's underlying storage."""
-    return '_%s' % name
+    return '_' + name
 
 
 def make_class_properties(cls):
@@ -225,6 +226,12 @@ class NovaObject(object):
     # a client attempts to call an object method, the server checks to see if
     # the version of that object matches (in a compatible way) its object
     # implementation. If so, cool, and if not, fail.
+    #
+    # This version is allowed to have three parts, X.Y.Z, where the .Z element
+    # is reserved for stable branch backports. The .Z is ignored for the
+    # purposes of triggering a backport, which means anything changed under
+    # a .Z must be additive and non-destructive such that a node that knows
+    # about X.Y can consider X.Y.Z equivalent.
     VERSION = '1.0'
 
     # The fields present in this object as key:field pairs. For example:
@@ -235,11 +242,37 @@ class NovaObject(object):
     fields = {}
     obj_extra_fields = []
 
+    # Table of sub-object versioning information
+    #
+    # This contains a list of version mappings, by the field name of
+    # the subobject. The mappings must be in order of oldest to
+    # newest, and are tuples of (my_version, subobject_version). A
+    # request to backport this object to $my_version will cause the
+    # subobject to be backported to $subobject_version.
+    #
+    # obj_relationships = {
+    #     'subobject1': [('1.2', '1.1'), ('1.4', '1.2')],
+    #     'subobject2': [('1.2', '1.0')],
+    # }
+    #
+    # In the above example:
+    #
+    # - If we are asked to backport our object to version 1.3,
+    #   subobject1 will be backported to version 1.1, since it was
+    #   bumped to version 1.2 when our version was 1.4.
+    # - If we are asked to backport our object to version 1.5,
+    #   no changes will be made to subobject1 or subobject2, since
+    #   they have not changed since version 1.4.
+    # - If we are asked to backlevel our object to version 1.1, we
+    #   will remove both subobject1 and subobject2 from the primitive,
+    #   since they were not added until version 1.2.
+    obj_relationships = {}
+
     def __init__(self, context=None, **kwargs):
         self._changed_fields = set()
         self._context = context
         for key in kwargs.keys():
-            self[key] = kwargs[key]
+            setattr(self, key, kwargs[key])
 
     def __repr__(self):
         return '%s(%s)' % (
@@ -261,8 +294,8 @@ class NovaObject(object):
     def obj_class_from_name(cls, objname, objver):
         """Returns a class from the registry based on a name and version."""
         if objname not in cls._obj_classes:
-            LOG.error(_('Unable to instantiate unregistered object type '
-                        '%(objtype)s') % dict(objtype=objname))
+            LOG.error(_LE('Unable to instantiate unregistered object type '
+                          '%(objtype)s'), dict(objtype=objname))
             raise exception.UnsupportedObjectError(objtype=objname)
 
         # NOTE(comstud): If there's not an exact match, return the highest
@@ -337,6 +370,59 @@ class NovaObject(object):
         """Create a copy."""
         return copy.deepcopy(self)
 
+    def _obj_make_obj_compatible(self, primitive, target_version, field):
+        """Backlevel a sub-object based on our versioning rules.
+
+        This is responsible for backporting objects contained within
+        this object's primitive according to a set of rules we
+        maintain about version dependencies between objects. This
+        requires that the obj_relationships table in this object is
+        correct and up-to-date.
+
+        :param:primitive: The primitive version of this object
+        :param:target_version: The version string requested for this object
+        :param:field: The name of the field in this object containing the
+                      sub-object to be backported
+        """
+
+        def _do_backport(to_version):
+            obj = getattr(self, field)
+            if not obj:
+                return
+            if isinstance(obj, NovaObject):
+                obj.obj_make_compatible(
+                    primitive[field]['nova_object.data'],
+                    to_version)
+                primitive[field]['nova_object.version'] = to_version
+            elif isinstance(obj, list):
+                for i, element in enumerate(obj):
+                    element.obj_make_compatible(
+                        primitive[field][i]['nova_object.data'],
+                        to_version)
+                    primitive[field][i]['nova_object.version'] = to_version
+
+        target_version = utils.convert_version_to_tuple(target_version)
+        for index, versions in enumerate(self.obj_relationships[field]):
+            my_version, child_version = versions
+            my_version = utils.convert_version_to_tuple(my_version)
+            if target_version < my_version:
+                if index == 0:
+                    # We're backporting to a version from before this
+                    # subobject was added: delete it from the primitive.
+                    del primitive[field]
+                else:
+                    # We're in the gap between index-1 and index, so
+                    # backport to the older version
+                    last_child_version = \
+                        self.obj_relationships[field][index - 1][1]
+                    _do_backport(last_child_version)
+                return
+            elif target_version == my_version:
+                # This is the first mapping that satisfies the
+                # target_version request: backport the object.
+                _do_backport(child_version)
+                return
+
     def obj_make_compatible(self, primitive, target_version):
         """Make an object representation compatible with a target version.
 
@@ -363,7 +449,19 @@ class NovaObject(object):
         :raises: nova.exception.UnsupportedObjectError if conversion
         is not possible for some reason
         """
-        pass
+        for key, field in self.fields.items():
+            if not isinstance(field, (fields.ObjectField,
+                                      fields.ListOfObjectsField)):
+                continue
+            if not self.obj_attr_is_set(key):
+                continue
+            if key not in self.obj_relationships:
+                # NOTE(danms): This is really a coding error and shouldn't
+                # happen unless we miss something
+                raise exception.ObjectActionError(
+                    action='obj_make_compatible',
+                    reason='No rule for %s' % key)
+            self._obj_make_obj_compatible(primitive, target_version, key)
 
     def obj_to_primitive(self, target_version=None):
         """Simple base-case dehydration.
@@ -384,6 +482,19 @@ class NovaObject(object):
         if self.obj_what_changed():
             obj['nova_object.changes'] = list(self.obj_what_changed())
         return obj
+
+    def obj_set_defaults(self, *attrs):
+        if not attrs:
+            attrs = [name for name, field in self.fields.items()
+                     if field.default != fields.UnspecifiedDefault]
+
+        for attr in attrs:
+            default = self.fields[attr].default
+            if default is fields.UnspecifiedDefault:
+                raise exception.ObjectActionError(
+                    action='set_defaults',
+                    reason='No default set for field %s' % attr)
+            setattr(self, attr, default)
 
     def obj_load_attr(self, attrname):
         """Load an additional attribute from the real object.
@@ -407,8 +518,8 @@ class NovaObject(object):
         changes = set(self._changed_fields)
         for field in self.fields:
             if (self.obj_attr_is_set(field) and
-                    isinstance(self[field], NovaObject) and
-                    self[field].obj_what_changed()):
+                    isinstance(getattr(self, field), NovaObject) and
+                    getattr(self, field).obj_what_changed()):
                 changes.add(field)
         return changes
 
@@ -416,7 +527,7 @@ class NovaObject(object):
         """Returns a dict of changed fields and their new values."""
         changes = {}
         for key in self.obj_what_changed():
-            changes[key] = self[key]
+            changes[key] = getattr(self, key)
         return changes
 
     def obj_reset_changes(self, fields=None):
@@ -445,6 +556,19 @@ class NovaObject(object):
     @property
     def obj_fields(self):
         return self.fields.keys() + self.obj_extra_fields
+
+
+class NovaObjectDictCompat(object):
+    """Mix-in to provide dictionary key access compat
+
+    If an object needs to support attribute access using
+    dictionary items instead of object attributes, inherit
+    from this class. This should only be used as a temporary
+    measure until all callers are converted to use modern
+    attribute access.
+
+    NOTE(berrange) This class will eventually be deleted.
+    """
 
     # dictish syntactic sugar
     def iteritems(self):
@@ -494,7 +618,7 @@ class NovaObject(object):
         if value != NotSpecifiedSentinel and not self.obj_attr_is_set(key):
             return value
         else:
-            return self[key]
+            return getattr(self, key)
 
     def update(self, updates):
         """For backwards-compatibility with dict-base objects.
@@ -502,12 +626,12 @@ class NovaObject(object):
         NOTE(danms): May be removed in the future.
         """
         for key, value in updates.items():
-            self[key] = value
+            setattr(self, key, value)
 
 
 class NovaPersistentObject(object):
     """Mixin class for Persistent objects.
-    This adds the fields that we use in common for all persisent objects.
+    This adds the fields that we use in common for all persistent objects.
     """
     fields = {
         'created_at': fields.DateTimeField(nullable=True),
@@ -611,6 +735,13 @@ class NovaObjectSerializer(messaging.NoOpSerializer):
         try:
             objinst = NovaObject.obj_from_primitive(objprim, context=context)
         except exception.IncompatibleObjectVersion as e:
+            objver = objprim['nova_object.version']
+            if objver.count('.') == 2:
+                # NOTE(danms): For our purposes, the .z part of the version
+                # should be safe to accept without requiring a backport
+                objprim['nova_object.version'] = \
+                    '.'.join(objver.split('.')[:2])
+                return self._process_object(context, objprim)
             objinst = self.conductor.object_backport(context, objprim,
                                                      e.kwargs['supported'])
         return objinst
@@ -680,7 +811,7 @@ def obj_make_list(context, list_obj, item_cls, db_list, **extra_args):
     This calls item_cls._from_db_object() on each item of db_list, and
     adds the resulting object to list_obj.
 
-    :param:context: Request contextr
+    :param:context: Request context
     :param:list_obj: An ObjectListBase object
     :param:item_cls: The NovaObject class of the objects within the list
     :param:db_list: The list of primitives to convert to objects

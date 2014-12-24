@@ -33,6 +33,7 @@ class DeferredDeleteController(wsgi.Controller):
         super(DeferredDeleteController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409, 403))
     @wsgi.action('restore')
     def _restore(self, req, id, body):
@@ -47,9 +48,9 @@ class DeferredDeleteController(wsgi.Controller):
             raise webob.exc.HTTPForbidden(explanation=error.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'restore')
-        return webob.Response(status_int=202)
+                    'restore', id)
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409))
     @wsgi.action('forceDelete')
     def _force_delete(self, req, id, body):
@@ -62,7 +63,6 @@ class DeferredDeleteController(wsgi.Controller):
             self.compute_api.force_delete(context, instance)
         except exception.InstanceIsLocked as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
-        return webob.Response(status_int=202)
 
 
 class DeferredDelete(extensions.V3APIExtensionBase):

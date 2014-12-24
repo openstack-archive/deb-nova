@@ -31,14 +31,14 @@ if os.name != 'nt':
     import crypt
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo_concurrency import processutils
 
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
 from nova import utils
 from nova.virt.disk.mount import api as mount
 from nova.virt.disk.vfs import api as vfs
@@ -363,8 +363,8 @@ def inject_data(image, key=None, net=None, metadata=None, admin_password=None,
             inject_val = locals()[inject]
             if inject_val:
                 raise
-        LOG.warn(_LW('Ignoring error injecting data into image %(image)s '
-                   '(%(e)s)'), {'image': image, 'e': e})
+        LOG.warning(_LW('Ignoring error injecting data into image %(image)s '
+                        '(%(e)s)'), {'image': image, 'e': e})
         return False
 
     try:
@@ -415,7 +415,7 @@ def teardown_container(container_dir, container_root_device=None):
                 utils.execute('qemu-nbd', '-d', container_root_device,
                               run_as_root=True)
     except Exception as exn:
-        LOG.exception(_('Failed to teardown container filesystem: %s'), exn)
+        LOG.exception(_LE('Failed to teardown container filesystem: %s'), exn)
 
 
 def clean_lxc_namespace(container_dir):
@@ -428,7 +428,7 @@ def clean_lxc_namespace(container_dir):
         img = _DiskImage(image=None, mount_dir=container_dir)
         img.umount()
     except Exception as exn:
-        LOG.exception(_('Failed to umount container filesystem: %s'), exn)
+        LOG.exception(_LE('Failed to umount container filesystem: %s'), exn)
 
 
 def inject_data_into_fs(fs, key, net, metadata, admin_password, files,
@@ -453,8 +453,8 @@ def inject_data_into_fs(fs, key, net, metadata, admin_password, files,
             except Exception as e:
                 if inject in mandatory:
                     raise
-                LOG.warn(_LW('Ignoring error injecting %(inject)s into image '
-                           '(%(e)s)'), {'inject': inject, 'e': e})
+                LOG.warning(_LW('Ignoring error injecting %(inject)s into '
+                                'image (%(e)s)'), {'inject': inject, 'e': e})
                 status = False
     return status
 

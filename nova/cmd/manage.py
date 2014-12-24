@@ -61,8 +61,8 @@ import sys
 import decorator
 import netaddr
 from oslo.config import cfg
-from oslo.db import exception as db_exc
 from oslo import messaging
+from oslo.utils import importutils
 import six
 
 from nova.api.ec2 import ec2utils
@@ -76,7 +76,6 @@ from nova import exception
 from nova.i18n import _
 from nova import objects
 from nova.openstack.common import cliutils
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import quota
 from nova import rpc
@@ -439,10 +438,10 @@ class FloatingIpCommands(object):
         if not interface:
             interface = CONF.public_interface
 
-        ips = ({'address': str(address), 'pool': pool, 'interface': interface}
-               for address in self.address_to_hosts(ip_range))
+        ips = [{'address': str(address), 'pool': pool, 'interface': interface}
+               for address in self.address_to_hosts(ip_range)]
         try:
-            db.floating_ip_bulk_create(admin_context, ips)
+            db.floating_ip_bulk_create(admin_context, ips, want_result=False)
         except exception.FloatingIpExists as exc:
             # NOTE(simplylizz): Maybe logging would be better here
             # instead of printing, but logging isn't used here and I
@@ -919,141 +918,34 @@ class DbCommands(object):
         admin_context = context.get_admin_context()
         db.archive_deleted_rows(admin_context, max_rows)
 
-
-class FlavorCommands(object):
-    """Class for managing flavors.
-
-    Note instance type is a deprecated synonym for flavor.
-    """
-
-    description = ('DEPRECATED: Use the nova flavor-* commands from '
-                   'python-novaclient instead. The flavor subcommand will be '
-                   'removed in the 2015.1 release')
-
-    def _print_flavors(self, val):
-        is_public = ('private', 'public')[val["is_public"] == 1]
-        print(("%s: Memory: %sMB, VCPUS: %s, Root: %sGB, Ephemeral: %sGb, "
-            "FlavorID: %s, Swap: %sMB, RXTX Factor: %s, %s, ExtraSpecs %s") % (
-            val["name"], val["memory_mb"], val["vcpus"], val["root_gb"],
-            val["ephemeral_gb"], val["flavorid"], val["swap"],
-            val["rxtx_factor"], is_public, val["extra_specs"]))
-
-    @args('--name', metavar='<name>',
-            help='Name of flavor')
-    @args('--memory', metavar='<memory size>', help='Memory size')
-    @args('--cpu', dest='vcpus', metavar='<num cores>', help='Number cpus')
-    @args('--root_gb', metavar='<root_gb>', help='Root disk size')
-    @args('--ephemeral_gb', metavar='<ephemeral_gb>',
-            help='Ephemeral disk size')
-    @args('--flavor', dest='flavorid', metavar='<flavor  id>',
-            help='Flavor ID')
-    @args('--swap', metavar='<swap>', help='Swap')
-    @args('--rxtx_factor', metavar='<rxtx_factor>', help='rxtx_factor')
-    @args('--is_public', metavar='<is_public>',
-            help='Make flavor accessible to the public')
-    def create(self, name, memory, vcpus, root_gb, ephemeral_gb=0,
-               flavorid=None, swap=0, rxtx_factor=1.0, is_public=True):
-        """Creates flavors."""
-        try:
-            flavors.create(name, memory, vcpus, root_gb,
-                           ephemeral_gb=ephemeral_gb, flavorid=flavorid,
-                           swap=swap, rxtx_factor=rxtx_factor,
-                           is_public=is_public)
-        except exception.InvalidInput as e:
-            print(_("Must supply valid parameters to create flavor"))
-            print(e)
-            return 1
-        except exception.FlavorExists:
-            print(_("Flavor exists."))
-            print(_("Please ensure flavor name and flavorid are "
-                    "unique."))
-            print(_("Currently defined flavor names and flavorids:"))
-            print()
-            self.list()
-            return 2
-        except Exception:
-            print(_("Unknown error"))
-            return 3
-        else:
-            print(_("%s created") % name)
-
-    @args('--name', metavar='<name>', help='Name of flavor')
-    def delete(self, name):
-        """Marks flavors as deleted."""
-        try:
-            flavors.destroy(name)
-        except exception.FlavorNotFound:
-            print(_("Valid flavor name is required"))
-            return 1
-        except db_exc.DBError as e:
-            print(_("DB Error: %s") % e)
-            return(2)
-        except Exception:
-            return(3)
-        else:
-            print(_("%s deleted") % name)
-
-    @args('--name', metavar='<name>', help='Name of flavor')
-    def list(self, name=None):
-        """Lists all active or specific flavors."""
-        try:
-            if name is None:
-                inst_types = flavors.get_all_flavors()
-            else:
-                inst_types = flavors.get_flavor_by_name(name)
-        except db_exc.DBError as e:
-            _db_error(e)
-        if isinstance(inst_types.values()[0], dict):
-            for k, v in inst_types.iteritems():
-                self._print_flavors(v)
-        else:
-            self._print_flavors(inst_types)
-
-    @args('--name', metavar='<name>', help='Name of flavor')
-    @args('--key', metavar='<key>', help='The key of the key/value pair')
-    @args('--value', metavar='<value>', help='The value of the key/value pair')
-    def set_key(self, name, key, value=None):
-        """Add key/value pair to specified flavor's extra_specs."""
-        try:
-            try:
-                inst_type = flavors.get_flavor_by_name(name)
-            except exception.FlavorNotFoundByName as e:
-                print(e)
-                return(2)
-
-            ctxt = context.get_admin_context()
-            ext_spec = {key: value}
-            db.flavor_extra_specs_update_or_create(
-                            ctxt,
-                            inst_type["flavorid"],
-                            ext_spec)
-            print((_("Key %(key)s set to %(value)s on instance "
-                     "type %(name)s") %
-                   {'key': key, 'value': value, 'name': name}))
-        except db_exc.DBError as e:
-            _db_error(e)
-
-    @args('--name', metavar='<name>', help='Name of flavor')
-    @args('--key', metavar='<key>', help='The key to be deleted')
-    def unset_key(self, name, key):
-        """Delete the specified extra spec for flavor."""
-        try:
-            try:
-                inst_type = flavors.get_flavor_by_name(name)
-            except exception.FlavorNotFoundByName as e:
-                print(e)
-                return(2)
-
-            ctxt = context.get_admin_context()
-            db.flavor_extra_specs_delete(
-                        ctxt,
-                        inst_type["flavorid"],
-                        key)
-
-            print((_("Key %(key)s on flavor %(name)s unset") %
-                   {'key': key, 'name': name}))
-        except db_exc.DBError as e:
-            _db_error(e)
+    @args('--delete', action='store_true', dest='delete',
+          help='If specified, automatically delete any records found where '
+               'instance_uuid is NULL.')
+    def null_instance_uuid_scan(self, delete=False):
+        """Lists and optionally deletes database records where
+        instance_uuid is NULL.
+        """
+        hits = migration.db_null_instance_uuid_scan(delete)
+        records_found = False
+        for table_name, records in six.iteritems(hits):
+            # Don't print anything for 0 hits
+            if records:
+                records_found = True
+                if delete:
+                    print(_("Deleted %(records)d records "
+                            "from table '%(table_name)s'.") %
+                          {'records': records, 'table_name': table_name})
+                else:
+                    print(_("There are %(records)d records in the "
+                            "'%(table_name)s' table where the uuid or "
+                            "instance_uuid column is NULL. Run this "
+                            "command again with the --delete option after you "
+                            "have backed up any necessary data.") %
+                          {'records': records, 'table_name': table_name})
+        # check to see if we didn't find anything
+        if not records_found:
+            print(_('There were no records found where '
+                    'instance_uuid was NULL.'))
 
 
 class AgentBuildCommands(object):
@@ -1196,6 +1088,46 @@ class GetLogCommands(object):
 class CellCommands(object):
     """Commands for managing cells."""
 
+    def _create_transport_hosts(self, username, password,
+                                broker_hosts=None, hostname=None, port=None):
+        """Returns a list of oslo.messaging.TransportHost objects."""
+        transport_hosts = []
+        # Either broker-hosts or hostname should be set
+        if broker_hosts:
+            hosts = broker_hosts.split(',')
+            for host in hosts:
+                host = host.strip()
+                broker_hostname, broker_port = utils.parse_server_string(host)
+                if not broker_port:
+                    msg = _('Invalid broker_hosts value: %s. It should be'
+                            ' in hostname:port format') % host
+                    raise ValueError(msg)
+                try:
+                    broker_port = int(broker_port)
+                except ValueError:
+                    msg = _('Invalid port value: %s. It should be '
+                             'an integer') % broker_port
+                    raise ValueError(msg)
+                transport_hosts.append(
+                               messaging.TransportHost(
+                                   hostname=broker_hostname,
+                                   port=broker_port,
+                                   username=username,
+                                   password=password))
+        else:
+            try:
+                port = int(port)
+            except ValueError:
+                msg = _("Invalid port value: %s. Should be an integer") % port
+                raise ValueError(msg)
+            transport_hosts.append(
+                           messaging.TransportHost(
+                               hostname=hostname,
+                               port=port,
+                               username=username,
+                               password=password))
+        return transport_hosts
+
     @args('--name', metavar='<name>', help='Name for the new cell')
     @args('--cell_type', metavar='<parent|child>',
          help='Whether the cell is a parent or child')
@@ -1203,6 +1135,11 @@ class CellCommands(object):
          help='Username for the message broker in this cell')
     @args('--password', metavar='<password>',
          help='Password for the message broker in this cell')
+    @args('--broker_hosts', metavar='<broker_hosts>',
+         help='Comma separated list of message brokers in this cell. '
+              'Each Broker is specified as hostname:port with both '
+              'mandatory. This option overrides the --hostname '
+              'and --port options (if provided). ')
     @args('--hostname', metavar='<hostname>',
          help='Address of the message broker in this cell')
     @args('--port', metavar='<number>',
@@ -1211,8 +1148,8 @@ class CellCommands(object):
          help='The virtual host of the message broker in this cell')
     @args('--woffset', metavar='<float>')
     @args('--wscale', metavar='<float>')
-    def create(self, name, cell_type='child', username=None, password=None,
-               hostname=None, port=None, virtual_host=None,
+    def create(self, name, cell_type='child', username=None, broker_hosts=None,
+               password=None, hostname=None, port=None, virtual_host=None,
                woffset=None, wscale=None):
 
         if cell_type not in ['parent', 'child']:
@@ -1220,13 +1157,12 @@ class CellCommands(object):
             return(2)
 
         # Set up the transport URL
-        transport_host = messaging.TransportHost(hostname=hostname,
-                                                 port=int(port),
-                                                 username=username,
-                                                 password=password)
-
+        transport_hosts = self._create_transport_hosts(
+                                                 username, password,
+                                                 broker_hosts, hostname,
+                                                 port)
         transport_url = rpc.get_transport_url()
-        transport_url.hosts.append(transport_host)
+        transport_url.hosts.extend(transport_hosts)
         transport_url.virtual_host = virtual_host
 
         is_parent = cell_type == 'parent'
@@ -1269,7 +1205,6 @@ CATEGORIES = {
     'cell': CellCommands,
     'db': DbCommands,
     'fixed': FixedIpCommands,
-    'flavor': FlavorCommands,
     'floating': FloatingIpCommands,
     'host': HostCommands,
     'logs': GetLogCommands,

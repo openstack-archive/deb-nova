@@ -17,6 +17,8 @@
 A Hyper-V Nova Compute driver.
 """
 
+import platform
+
 from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova.virt import driver
@@ -53,7 +55,8 @@ class HyperVDriver(driver.ComputeDriver):
         return self._vmops.list_instances()
 
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info=None, block_device_info=None):
+              admin_password, network_info=None, block_device_info=None,
+              flavor=None):
         self._vmops.spawn(context, instance, image_meta, injected_files,
                           admin_password, network_info, block_device_info)
 
@@ -90,11 +93,11 @@ class HyperVDriver(driver.ComputeDriver):
     def get_available_resource(self, nodename):
         return self._hostops.get_available_resource()
 
-    def get_host_stats(self, refresh=False):
-        return self._hostops.get_host_stats(refresh)
+    def get_available_nodes(self, refresh=False):
+        return [platform.node()]
 
-    def host_power_action(self, host, action):
-        return self._hostops.host_power_action(host, action)
+    def host_power_action(self, action):
+        return self._hostops.host_power_action(action)
 
     def snapshot(self, context, instance, image_id, update_task_state):
         self._snapshotops.snapshot(context, instance, image_id,
@@ -145,6 +148,11 @@ class HyperVDriver(driver.ComputeDriver):
                                                   block_device_info,
                                                   network_info)
 
+    def post_live_migration(self, context, instance, block_device_info,
+                            migrate_data=None):
+        self._livemigrationops.post_live_migration(context, instance,
+                                                   block_device_info)
+
     def post_live_migration_at_destination(self, context, instance,
                                            network_info,
                                            block_migration=False,
@@ -169,11 +177,11 @@ class HyperVDriver(driver.ComputeDriver):
             context, dest_check_data)
 
     def check_can_live_migrate_source(self, context, instance,
-                                      dest_check_data):
+                                      dest_check_data, block_device_info=None):
         return self._livemigrationops.check_can_live_migrate_source(
             context, instance, dest_check_data)
 
-    def get_instance_disk_info(self, instance_name, block_device_info=None):
+    def get_instance_disk_info(self, instance, block_device_info=None):
         pass
 
     def plug_vifs(self, instance, network_info):

@@ -13,19 +13,25 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
+import sys
+
 from oslo.config import cfg
 
+from nova.compute import utils as compute_utils
 from nova import exception
 from nova.image import glance
+from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.xenapi import vm_utils
 
 CONF = cfg.CONF
 CONF.import_opt('num_retries', 'nova.image.glance', group='glance')
+LOG = logging.getLogger(__name__)
 
 
 class GlanceStore(object):
-    def _call_glance_plugin(self, session, fn, params):
+    def _call_glance_plugin(self, context, instance, session, fn, params):
         glance_api_servers = glance.get_api_servers()
 
         def pick_glance(kwargs):
@@ -35,26 +41,36 @@ class GlanceStore(object):
             kwargs['glance_use_ssl'] = g_use_ssl
             return g_host
 
+        def retry_cb(context, instance, exc=None):
+            if exc:
+                exc_info = sys.exc_info()
+                LOG.debug(exc.message, exc_info=exc_info)
+                compute_utils.add_instance_fault_from_exc(
+                    context, instance, exc, exc_info)
+
+        cb = functools.partial(retry_cb, context, instance)
+
         return session.call_plugin_serialized_with_retry(
-            'glance', fn, CONF.glance.num_retries, pick_glance, **params)
+            'glance', fn, CONF.glance.num_retries, pick_glance, cb, **params)
 
     def _make_params(self, context, session, image_id):
         return {'image_id': image_id,
                 'sr_path': vm_utils.get_sr_path(session),
                 'extra_headers': glance.generate_identity_headers(context)}
 
-    def download_image(self, context, session, image_id):
+    def download_image(self, context, session, instance, image_id):
         params = self._make_params(context, session, image_id)
         params['uuid_stack'] = vm_utils._make_uuid_stack()
 
         try:
-            vdis = self._call_glance_plugin(session, 'download_vhd', params)
+            vdis = self._call_glance_plugin(context, instance, session,
+                                            'download_vhd', params)
         except exception.PluginRetriesExceeded:
             raise exception.CouldNotFetchImage(image_id=image_id)
 
         return vdis
 
-    def upload_image(self, context, session, instance, vdi_uuids, image_id):
+    def upload_image(self, context, session, instance, image_id, vdi_uuids):
         params = self._make_params(context, session, image_id)
         params['vdi_uuids'] = vdi_uuids
 
@@ -72,6 +88,7 @@ class GlanceStore(object):
             props["auto_disk_config"] = "disabled"
 
         try:
-            self._call_glance_plugin(session, 'upload_vhd', params)
+            self._call_glance_plugin(context, instance, session,
+                                     'upload_vhd', params)
         except exception.PluginRetriesExceeded:
             raise exception.CouldNotUploadImage(image_id=image_id)

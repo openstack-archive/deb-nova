@@ -21,22 +21,24 @@ import calendar
 import inspect
 import os
 import re
+import time
 
 import netaddr
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+from oslo.utils import importutils
+from oslo.utils import timeutils
+from oslo_concurrency import processutils
 import six
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LW
 from nova import objects
-from nova.openstack.common import excutils
 from nova.openstack.common import fileutils
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
-from nova.openstack.common import timeutils
 from nova import paths
+from nova.pci import utils as pci_utils
 from nova import utils
 
 LOG = logging.getLogger(__name__)
@@ -126,6 +128,12 @@ linux_net_opts = [
     cfg.BoolOpt('fake_network',
                 default=False,
                 help='If passed, use fake network devices and addresses'),
+    cfg.IntOpt('ebtables_exec_attempts',
+               default=3,
+               help='Number of times to retry ebtables commands on failure.'),
+    cfg.FloatOpt('ebtables_retry_interval',
+                 default=1.0,
+                 help='Number of seconds to wait between ebtables retries.'),
     ]
 
 CONF = cfg.CONF
@@ -229,8 +237,8 @@ class IptablesTable(object):
             chain_set = self.unwrapped_chains
 
         if name not in chain_set:
-            LOG.warn(_('Attempted to remove chain %s which does not exist'),
-                     name)
+            LOG.warning(_LW('Attempted to remove chain %s which does not '
+                            'exist'), name)
             return
         self.dirty = True
 
@@ -298,10 +306,10 @@ class IptablesTable(object):
                 self.remove_rules.append(IptablesRule(chain, rule, wrap, top))
             self.dirty = True
         except ValueError:
-            LOG.warn(_('Tried to remove rule that was not there:'
-                       ' %(chain)r %(rule)r %(wrap)r %(top)r'),
-                     {'chain': chain, 'rule': rule,
-                      'top': top, 'wrap': wrap})
+            LOG.warning(_LW('Tried to remove rule that was not there:'
+                            ' %(chain)r %(rule)r %(wrap)r %(top)r'),
+                        {'chain': chain, 'rule': rule,
+                         'top': top, 'wrap': wrap})
 
     def remove_rules_regex(self, regex):
         """Remove all rules matching regex."""
@@ -822,7 +830,7 @@ def clean_conntrack(fixed_ip):
         _execute('conntrack', '-D', '-r', fixed_ip, run_as_root=True,
                  check_exit_code=[0, 1])
     except processutils.ProcessExecutionError:
-        LOG.exception(_('Error deleting conntrack entries for %s'), fixed_ip)
+        LOG.exception(_LE('Error deleting conntrack entries for %s'), fixed_ip)
 
 
 def _enable_ipv4_forwarding():
@@ -1080,7 +1088,7 @@ def restart_dhcp(context, dev, network_ref, fixedips):
                 _add_dnsmasq_accept_rules(dev)
                 return
             except Exception as exc:  # pylint: disable=W0703
-                LOG.error(_('Hupping dnsmasq threw %s'), exc)
+                LOG.error(_LE('Hupping dnsmasq threw %s'), exc)
         else:
             LOG.debug('Pid %d is stale, relaunching dnsmasq', pid)
 
@@ -1160,7 +1168,7 @@ interface %s
             try:
                 _execute('kill', pid, run_as_root=True)
             except Exception as exc:  # pylint: disable=W0703
-                LOG.error(_('killing radvd threw %s'), exc)
+                LOG.error(_LE('killing radvd threw %s'), exc)
         else:
             LOG.debug('Pid %d is stale, relaunching radvd', pid)
 
@@ -1187,16 +1195,24 @@ def _host_dhcp_network(vif_id):
 
 def _host_dhcp(fixedip):
     """Return a host string for an address in dhcp-host format."""
+    # NOTE(cfb): dnsmasq on linux only supports 64 characters in the hostname
+    #            field (LP #1238910). Since the . counts as a character we need
+    #            to truncate the hostname to only 63 characters.
+    hostname = fixedip.instance.hostname
+    if len(hostname) > 63:
+        LOG.warning(_LW('hostname %s too long, truncating.') % (hostname))
+        hostname = fixedip.instance.hostname[:2] + '-' +\
+                   fixedip.instance.hostname[-60:]
     if CONF.use_single_default_gateway:
         net = _host_dhcp_network(fixedip.virtual_interface_id)
         return '%s,%s.%s,%s,net:%s' % (fixedip.virtual_interface.address,
-                               fixedip.instance.hostname,
+                               hostname,
                                CONF.dhcp_domain,
                                fixedip.address,
                                net)
     else:
         return '%s,%s.%s,%s' % (fixedip.virtual_interface.address,
-                               fixedip.instance.hostname,
+                               hostname,
                                CONF.dhcp_domain,
                                fixedip.address)
 
@@ -1322,7 +1338,7 @@ def _ovs_vsctl(args):
     try:
         return utils.execute(*full_args, run_as_root=True)
     except Exception as e:
-        LOG.error(_("Unable to execute %(cmd)s. Exception: %(exception)s"),
+        LOG.error(_LE("Unable to execute %(cmd)s. Exception: %(exception)s"),
                   {'cmd': full_args, 'exception': e})
         raise exception.AgentError(method=full_args)
 
@@ -1380,7 +1396,7 @@ def delete_net_dev(dev):
             LOG.debug("Net device removed: '%s'", dev)
         except processutils.ProcessExecutionError:
             with excutils.save_and_reraise_exception():
-                LOG.error(_("Failed removing net device: '%s'"), dev)
+                LOG.error(_LE("Failed removing net device: '%s'"), dev)
 
 
 # Similar to compute virt layers, the Linux network node
@@ -1557,8 +1573,8 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             _execute('ip', 'link', 'set', bridge, 'up', run_as_root=True)
 
         if interface:
-            msg = _('Adding interface %(interface)s to bridge %(bridge)s')
-            LOG.debug(msg, {'interface': interface, 'bridge': bridge})
+            LOG.debug('Adding interface %(interface)s to bridge %(bridge)s',
+                      {'interface': interface, 'bridge': bridge})
             out, err = _execute('brctl', 'addif', bridge, interface,
                                 check_exit_code=False, run_as_root=True)
             if (err and err != "device %s is already a member of a bridge; "
@@ -1639,20 +1655,60 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
             delete_net_dev(bridge)
 
 
+# NOTE(cfb): This is a temporary fix to LP #1316621. We really want to call
+#            ebtables with --concurrent. In order to do that though we need
+#            libvirt to support this. Additionally since ebtables --concurrent
+#            will hang indefinitely waiting on the lock we need to teach
+#            oslo_concurrency.processutils how to timeout a long running
+#            process first. Once those are complete we can replace all of this
+#            with calls to ebtables --concurrent and a reasonable timeout.
+def _exec_ebtables(*cmd, **kwargs):
+    check_exit_code = kwargs.pop('check_exit_code', True)
+
+    # We always try at least once
+    attempts = CONF.ebtables_exec_attempts
+    if attempts <= 0:
+        attempts = 1
+    count = 1
+    while count <= attempts:
+        # Updated our counters if needed
+        sleep = CONF.ebtables_retry_interval * count
+        count += 1
+        # NOTE(cfb): ebtables reports all errors with a return code of 255.
+        #            As such we can't know if we hit a locking error, or some
+        #            other error (like a rule doesn't exist) so we have to
+        #            retry on all errors.
+        try:
+            _execute(*cmd, check_exit_code=[0], **kwargs)
+        except processutils.ProcessExecutionError:
+            if count > attempts and check_exit_code:
+                LOG.warning(_LW('%s failed. Not Retrying.'), ' '.join(cmd))
+                raise
+            else:
+                # We need to sleep a bit before retrying
+                LOG.warning(_LW("%(cmd)s failed. Sleeping %(time)s seconds "
+                                "before retry."),
+                            {'cmd': ' '.join(cmd), 'time': sleep})
+                time.sleep(sleep)
+        else:
+            # Success
+            return
+
+
 @utils.synchronized('ebtables', external=True)
 def ensure_ebtables_rules(rules, table='filter'):
     for rule in rules:
         cmd = ['ebtables', '-t', table, '-D'] + rule.split()
-        _execute(*cmd, check_exit_code=False, run_as_root=True)
+        _exec_ebtables(*cmd, check_exit_code=False, run_as_root=True)
         cmd[3] = '-I'
-        _execute(*cmd, run_as_root=True)
+        _exec_ebtables(*cmd, run_as_root=True)
 
 
 @utils.synchronized('ebtables', external=True)
 def remove_ebtables_rules(rules, table='filter'):
     for rule in rules:
         cmd = ['ebtables', '-t', table, '-D'] + rule.split()
-        _execute(*cmd, check_exit_code=False, run_as_root=True)
+        _exec_ebtables(*cmd, check_exit_code=False, run_as_root=True)
 
 
 def isolate_dhcp_address(interface, address):
@@ -1825,3 +1881,25 @@ class NeutronLinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 QuantumLinuxBridgeInterfaceDriver = NeutronLinuxBridgeInterfaceDriver
 
 iptables_manager = IptablesManager()
+
+
+def set_vf_interface_vlan(pci_addr, mac_addr, vlan=0):
+    pf_ifname = pci_utils.get_ifname_by_pci_address(pci_addr,
+                                                    pf_interface=True)
+    vf_ifname = pci_utils.get_ifname_by_pci_address(pci_addr)
+    vf_num = pci_utils.get_vf_num_by_pci_address(pci_addr)
+
+    # Set the VF's mac address and vlan
+    exit_code = [0, 2, 254]
+    port_state = 'up' if vlan > 0 else 'down'
+    utils.execute('ip', 'link', 'set', pf_ifname,
+                  'vf', vf_num,
+                  'mac', mac_addr,
+                  'vlan', vlan,
+                  run_as_root=True,
+                  check_exit_code=exit_code)
+    # Bring up/down the VF's interface
+    utils.execute('ip', 'link', 'set', vf_ifname,
+                  port_state,
+                  run_as_root=True,
+                  check_exit_code=exit_code)

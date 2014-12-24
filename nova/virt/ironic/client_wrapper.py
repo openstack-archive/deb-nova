@@ -18,17 +18,15 @@
 import time
 
 from oslo.config import cfg
+from oslo.utils import importutils
 
 from nova import exception
-from nova.openstack.common import gettextutils
-from nova.openstack.common import importutils
+from nova.i18n import _
 from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
-
-_ = gettextutils._
 
 ironic = None
 
@@ -72,7 +70,7 @@ class IronicClientWrapper(object):
         try:
             cli = ironic.client.get_client(CONF.ironic.api_version, **kwargs)
         except ironic.exc.Unauthorized:
-            msg = (_("Unable to authenticate Ironic client."))
+            msg = _("Unable to authenticate Ironic client.")
             LOG.error(msg)
             raise exception.NovaException(msg)
 
@@ -118,5 +116,5 @@ class IronicClientWrapper(object):
                 if attempt == num_attempts:
                     LOG.error(msg)
                     raise exception.NovaException(msg)
-                LOG.warning(msg)
+                LOG.warn(msg)
                 time.sleep(CONF.ironic.api_retry_interval)

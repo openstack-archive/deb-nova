@@ -86,7 +86,8 @@ def get_instance_by_floating_ip_addr(self, context, address):
     snagiibfa = self.network_api.get_instance_id_by_floating_address
     instance_id = snagiibfa(context, address)
     if instance_id:
-        return self.compute_api.get(context, instance_id)
+        return common.get_instance(self.compute_api, context, instance_id,
+                                   want_objects=True)
 
 
 def disassociate_floating_ip(self, context, instance, address):
@@ -206,7 +207,8 @@ class FloatingIPActionController(wsgi.Controller):
             msg = _("Address not specified")
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        instance = common.get_instance(self.compute_api, context, id)
+        instance = common.get_instance(self.compute_api, context, id,
+                                       want_objects=True)
         cached_nwinfo = compute_utils.get_nw_info_for_instance(instance)
         if not cached_nwinfo:
             msg = _('No nw_info cache associated with instance')
@@ -231,8 +233,8 @@ class FloatingIPActionController(wsgi.Controller):
         if not fixed_address:
             fixed_address = fixed_ips[0]['address']
             if len(fixed_ips) > 1:
-                LOG.warn(_LW('multiple fixed_ips exist, using the first: '
-                             '%s'), fixed_address)
+                LOG.warning(_LW('multiple fixed_ips exist, using the first: '
+                                '%s'), fixed_address)
 
         try:
             self.network_api.associate_floating_ip(context, instance,
@@ -301,7 +303,7 @@ class FloatingIPActionController(wsgi.Controller):
         else:
             msg = _("Floating ip %(address)s is not associated with instance "
                     "%(id)s.") % {'address': address, 'id': id}
-            raise webob.exc.HTTPUnprocessableEntity(explanation=msg)
+            raise webob.exc.HTTPConflict(explanation=msg)
 
 
 class Floating_ips(extensions.ExtensionDescriptor):

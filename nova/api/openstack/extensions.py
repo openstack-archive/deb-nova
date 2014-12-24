@@ -18,6 +18,7 @@ import abc
 import functools
 import os
 
+from oslo.utils import importutils
 import six
 import webob.dec
 import webob.exc
@@ -27,8 +28,8 @@ from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 import nova.policy
 
@@ -239,7 +240,7 @@ class ExtensionManager(object):
             LOG.debug('Ext namespace: %s', extension.namespace)
             LOG.debug('Ext updated: %s', extension.updated)
         except AttributeError as ex:
-            LOG.exception(_("Exception loading extension: %s"), unicode(ex))
+            LOG.exception(_LE("Exception loading extension: %s"), ex)
             return False
 
         return True
@@ -274,9 +275,9 @@ class ExtensionManager(object):
             try:
                 self.load_extension(ext_factory)
             except Exception as exc:
-                LOG.warn(_LW('Failed to load extension %(ext_factory)s: '
-                             '%(exc)s'),
-                         {'ext_factory': ext_factory, 'exc': exc})
+                LOG.warning(_LW('Failed to load extension %(ext_factory)s: '
+                                '%(exc)s'),
+                            {'ext_factory': ext_factory, 'exc': exc})
 
 
 class ControllerExtension(object):
@@ -373,6 +374,10 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
                                 {'ext_name': ext_name, 'exc': exc})
 
         # Update the list of directories we'll explore...
+        # using os.walk 'the caller can modify the dirnames list in-place,
+        # and walk() will only recurse into the subdirectories whose names
+        # remain in dirnames'
+        # https://docs.python.org/2/library/os.html#os.walk
         dirnames[:] = subdirs
 
 
@@ -498,7 +503,7 @@ def expected_errors(errors):
                     # expected error.
                     raise
 
-                LOG.exception(_("Unexpected exception in API method"))
+                LOG.exception(_LE("Unexpected exception in API method"))
                 msg = _('Unexpected API Error. Please report this at '
                     'http://bugs.launchpad.net/nova/ and attach the Nova '
                     'API log if possible.\n%s') % type(exc)

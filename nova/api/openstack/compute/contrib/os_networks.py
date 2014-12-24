@@ -22,13 +22,10 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import exception
 from nova.i18n import _
-from nova.i18n import _LI
 from nova import network
 from nova.objects import base as base_obj
 from nova.objects import fields as obj_fields
-from nova.openstack.common import log as logging
 
-LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'networks')
 authorize_view = extensions.extension_authorizer('compute',
                                                  'networks:view')
@@ -98,7 +95,6 @@ class NetworkController(wsgi.Controller):
     def _disassociate_host_and_project(self, req, id, body):
         context = req.environ['nova.context']
         authorize(context)
-        LOG.debug("Disassociating network with id %s", id)
 
         try:
             self.network_api.associate(context, id, host=None, project=None)
@@ -114,7 +110,7 @@ class NetworkController(wsgi.Controller):
     def show(self, req, id):
         context = req.environ['nova.context']
         authorize_view(context)
-        LOG.debug("Showing network with id %s", id)
+
         try:
             network = self.network_api.get(context, id)
         except exception.NetworkNotFound:
@@ -125,7 +121,6 @@ class NetworkController(wsgi.Controller):
     def delete(self, req, id):
         context = req.environ['nova.context']
         authorize(context)
-        LOG.info(_LI("Deleting network with id %s"), id)
         try:
             self.network_api.delete(context, id)
         except exception.NetworkInUse as e:
@@ -156,27 +151,28 @@ class NetworkController(wsgi.Controller):
         if params.get("project_id") == "":
             params["project_id"] = None
 
-        LOG.debug("Creating network with label %s", params["label"])
+        params["num_networks"] = 1
+        try:
+            params["network_size"] = netaddr.IPNetwork(cidr).size
+        except netaddr.AddrFormatError:
+            msg = _('%s is not a valid ip network') % cidr
+            raise exc.HTTPBadRequest(explanation=msg)
+
+        if not self.extended:
+            create_params = ('allowed_start', 'allowed_end')
+            for field in extended_fields + create_params:
+                if field in params:
+                    del params[field]
 
         try:
-            params["num_networks"] = 1
-            try:
-                params["network_size"] = netaddr.IPNetwork(cidr).size
-            except netaddr.AddrFormatError:
-                raise exception.InvalidCidr(cidr=cidr)
-            if not self.extended:
-                create_params = ('allowed_start', 'allowed_end')
-                for field in extended_fields + create_params:
-                    if field in params:
-                        del params[field]
-
             network = self.network_api.create(context, **params)[0]
-        except exception.NovaException as ex:
-            if ex.code == 400:
-                raise bad(ex.format_message())
-            elif ex.code == 409:
-                raise exc.HTTPConflict(explanation=ex.format_message())
-            raise
+        except (exception.InvalidCidr,
+                exception.InvalidIntValue,
+                exception.InvalidAddress,
+                exception.NetworkNotCreated) as ex:
+            raise exc.HTTPBadRequest(explanation=ex.format_message)
+        except exception.CidrConflict as ex:
+            raise exc.HTTPConflict(explanation=ex.format_message())
         return {"network": network_dict(context, network, self.extended)}
 
     def add(self, req, body):
@@ -187,23 +183,16 @@ class NetworkController(wsgi.Controller):
 
         network_id = body.get('id', None)
         project_id = context.project_id
-        LOG.debug("Associating network %(network)s"
-                  " with project %(project)s",
-                  {"network": network_id or "",
-                   "project": project_id})
+
         try:
             self.network_api.add_network_to_project(
                 context, project_id, network_id)
         except NotImplementedError:
             msg = (_("VLAN support must be enabled"))
             raise exc.HTTPNotImplemented(explanation=msg)
-        except Exception as ex:
-            msg = (_("Cannot associate network %(network)s"
-                     " with project %(project)s: %(message)s") %
-                   {"network": network_id or "",
-                    "project": project_id,
-                    "message": getattr(ex, "value", ex)})
-            raise exc.HTTPBadRequest(explanation=msg)
+        except (exception.NoMoreNetworks,
+                exception.NetworkNotFoundForUUID) as e:
+            raise exc.HTTPBadRequest(explanation=e.format_message())
 
         return webob.Response(status_int=202)
 

@@ -18,10 +18,13 @@
 
 import glob
 import os
+import re
 import time
 import urllib2
 
 from oslo.config import cfg
+from oslo.utils import strutils
+from oslo_concurrency import processutils
 import six
 import six.moves.urllib.parse as urlparse
 
@@ -31,11 +34,11 @@ from nova.i18n import _LE
 from nova.i18n import _LW
 from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
-from nova.openstack.common import processutils
 from nova import paths
 from nova.storage import linuxscsi
 from nova import utils
 from nova.virt.libvirt import config as vconfig
+from nova.virt.libvirt import remotefs
 from nova.virt.libvirt import utils as libvirt_utils
 
 LOG = logging.getLogger(__name__)
@@ -59,6 +62,15 @@ volume_opts = [
     cfg.StrOpt('nfs_mount_options',
                help='Mount options passedf to the NFS client. See section '
                     'of the nfs man page for details'),
+    cfg.StrOpt('smbfs_mount_point_base',
+               default=paths.state_path_def('mnt'),
+               help='Directory where the SMBFS shares are mounted on the '
+                    'compute node'),
+    cfg.StrOpt('smbfs_mount_options',
+               default='',
+               help='Mount options passed to the SMBFS client. See '
+                    'mount.cifs man page for details. Note that the '
+                    'libvirt-qemu uid and gid must be specified.'),
     cfg.IntOpt('num_aoe_discover_tries',
                default=3,
                help='Number of times to rediscover AoE target to find volume'),
@@ -148,7 +160,7 @@ class LibvirtBaseVolumeDriver(object):
 
     def connect_volume(self, connection_info, disk_info):
         """Connect the volume. Returns xml for libvirt."""
-        return self.get_config(connection_info, disk_info)
+        pass
 
     def disconnect_volume(self, connection_info, disk_dev):
         """Disconnect the volume."""
@@ -238,7 +250,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                {'command': iscsi_command, 'out': out, 'err': err})
         # NOTE(bpokorny): iscsi_command can contain passwords so we need to
         # sanitize the password in the message.
-        LOG.debug(logging.mask_password(msg))
+        LOG.debug(strutils.mask_password(msg))
         return (out, err)
 
     def _iscsiadm_update(self, iscsi_properties, property_key, property_value,
@@ -264,7 +276,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
         conf = super(LibvirtISCSIVolumeDriver,
                      self).get_config(connection_info, disk_info)
         conf.source_type = "block"
-        conf.source_path = connection_info['data']['host_device']
+        conf.source_path = connection_info['data']['device_path']
         return conf
 
     @utils.synchronized('connect_volume')
@@ -285,10 +297,29 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                           check_exit_code=[0, 255])[0] \
                 or ""
 
-            for ip, iqn in self._get_target_portals_from_iscsiadm_output(out):
+            # There are two types of iSCSI multipath devices.  One which shares
+            # the same iqn between multiple portals, and the other which use
+            # different iqns on different portals.  Try to identify the type by
+            # checking the iscsiadm output if the iqn is used by multiple
+            # portals.  If it is, it's the former, so use the supplied iqn.
+            # Otherwise, it's the latter, so try the ip,iqn combinations to
+            # find the targets which constitutes the multipath device.
+            ips_iqns = self._get_target_portals_from_iscsiadm_output(out)
+            same_portal = False
+            all_portals = set()
+            match_portals = set()
+            for ip, iqn in ips_iqns:
+                all_portals.add(ip)
+                if iqn == iscsi_properties['target_iqn']:
+                    match_portals.add(ip)
+            if len(all_portals) == len(match_portals):
+                same_portal = True
+
+            for ip, iqn in ips_iqns:
                 props = iscsi_properties.copy()
-                props['target_portal'] = ip
-                props['target_iqn'] = iqn
+                props['target_portal'] = ip.split(",")[0]
+                if not same_portal:
+                    props['target_iqn'] = iqn
                 self._connect_to_iscsi_portal(props)
 
             self._rescan_iscsi()
@@ -337,8 +368,7 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                 connection_info['data']['multipath_id'] = \
                     multipath_device.split('/')[-1]
 
-        connection_info['data']['host_device'] = host_device
-        return self.get_config(connection_info, disk_info)
+        connection_info['data']['device_path'] = host_device
 
     @utils.synchronized('connect_volume')
     def disconnect_volume(self, connection_info, disk_dev):
@@ -423,7 +453,23 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                       check_exit_code=[0, 255])[0] \
             or ""
 
-        ips_iqns = self._get_target_portals_from_iscsiadm_output(out)
+        # Extract targets for the current multipath device.
+        ips_iqns = []
+        entries = self._get_iscsi_devices()
+        for ip, iqn in self._get_target_portals_from_iscsiadm_output(out):
+            ip_iqn = "%s-iscsi-%s" % (ip.split(",")[0], iqn)
+            for entry in entries:
+                entry_ip_iqn = entry.split("-lun-")[0]
+                if entry_ip_iqn[:3] == "ip-":
+                    entry_ip_iqn = entry_ip_iqn[3:]
+                if (ip_iqn != entry_ip_iqn):
+                    continue
+                entry_real_path = os.path.realpath("/dev/disk/by-path/%s" %
+                                                   entry)
+                entry_mpdev = self._get_multipath_device_name(entry_real_path)
+                if entry_mpdev == multipath_device:
+                    ips_iqns.append([ip, iqn])
+                    break
 
         if not devices:
             # disconnect if no other multipath devices
@@ -660,16 +706,19 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
         super(LibvirtNFSVolumeDriver,
               self).__init__(connection, is_block_dev=False)
 
+    def _get_device_path(self, connection_info):
+        path = os.path.join(CONF.libvirt.nfs_mount_point_base,
+            utils.get_hash_str(connection_info['data']['export']))
+        path = os.path.join(path, connection_info['data']['name'])
+        return path
+
     def get_config(self, connection_info, disk_info):
         """Returns xml for libvirt."""
         conf = super(LibvirtNFSVolumeDriver,
                      self).get_config(connection_info, disk_info)
 
-        path = os.path.join(CONF.libvirt.nfs_mount_point_base,
-            utils.get_hash_str(connection_info['data']['export']))
-        path = os.path.join(path, connection_info['data']['name'])
         conf.source_type = 'file'
-        conf.source_path = path
+        conf.source_path = connection_info['data']['device_path']
         conf.driver_format = connection_info['data'].get('format', 'raw')
         return conf
 
@@ -678,7 +727,8 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
         options = connection_info['data'].get('options')
         self._ensure_mounted(connection_info['data']['export'], options)
 
-        return self.get_config(connection_info, disk_info)
+        connection_info['data']['device_path'] = \
+            self._get_device_path(connection_info)
 
     def disconnect_volume(self, connection_info, disk_dev):
         """Disconnect the volume."""
@@ -727,6 +777,70 @@ class LibvirtNFSVolumeDriver(LibvirtBaseVolumeDriver):
                 raise
 
 
+class LibvirtSMBFSVolumeDriver(LibvirtBaseVolumeDriver):
+    """Class implements libvirt part of volume driver for SMBFS."""
+
+    def __init__(self, connection):
+        super(LibvirtSMBFSVolumeDriver,
+              self).__init__(connection, is_block_dev=False)
+        self.username_regex = re.compile(
+            r"(user(?:name)?)=(?:[^ ,]+\\)?([^ ,]+)")
+
+    def _get_device_path(self, connection_info):
+        smbfs_share = connection_info['data']['export']
+        mount_path = self._get_mount_path(smbfs_share)
+        volume_path = os.path.join(mount_path,
+                                   connection_info['data']['name'])
+        return volume_path
+
+    def _get_mount_path(self, smbfs_share):
+        mount_path = os.path.join(CONF.libvirt.smbfs_mount_point_base,
+                                  utils.get_hash_str(smbfs_share))
+        return mount_path
+
+    def get_config(self, connection_info, disk_info):
+        """Returns xml for libvirt."""
+        conf = super(LibvirtSMBFSVolumeDriver,
+                     self).get_config(connection_info, disk_info)
+
+        conf.source_type = 'file'
+        conf.driver_cache = 'writethrough'
+        conf.source_path = connection_info['data']['device_path']
+        conf.driver_format = connection_info['data'].get('format', 'raw')
+        return conf
+
+    def connect_volume(self, connection_info, disk_info):
+        """Connect the volume."""
+        smbfs_share = connection_info['data']['export']
+        mount_path = self._get_mount_path(smbfs_share)
+
+        if not libvirt_utils.is_mounted(mount_path, smbfs_share):
+            mount_options = self._parse_mount_options(connection_info)
+            remotefs.mount_share(mount_path, smbfs_share,
+                                 export_type='cifs', options=mount_options)
+
+        device_path = self._get_device_path(connection_info)
+        connection_info['data']['device_path'] = device_path
+
+    def disconnect_volume(self, connection_info, disk_dev):
+        """Disconnect the volume."""
+        smbfs_share = connection_info['data']['export']
+        mount_path = self._get_mount_path(smbfs_share)
+        remotefs.unmount_share(mount_path, smbfs_share)
+
+    def _parse_mount_options(self, connection_info):
+        mount_options = " ".join(
+            [connection_info['data'].get('options', ''),
+             CONF.libvirt.smbfs_mount_options])
+
+        if not self.username_regex.findall(mount_options):
+            mount_options = mount_options + ' -o username=guest'
+        else:
+            # Remove the Domain Name from user name
+            mount_options = self.username_regex.sub(r'\1=\2', mount_options)
+        return mount_options.strip(", ").split(' ')
+
+
 class LibvirtAOEVolumeDriver(LibvirtBaseVolumeDriver):
     """Driver to attach AoE volumes to libvirt."""
     def __init__(self, connection):
@@ -745,18 +859,20 @@ class LibvirtAOEVolumeDriver(LibvirtBaseVolumeDriver):
                                    run_as_root=True, check_exit_code=0)
         return (out, err)
 
+    def _get_device_path(self, connection_info):
+        shelf = connection_info['data']['target_shelf']
+        lun = connection_info['data']['target_lun']
+        aoedev = 'e%s.%s' % (shelf, lun)
+        aoedevpath = '/dev/etherd/%s' % (aoedev)
+        return aoedevpath
+
     def get_config(self, connection_info, disk_info):
         """Returns xml for libvirt."""
         conf = super(LibvirtAOEVolumeDriver,
                      self).get_config(connection_info, disk_info)
 
-        shelf = connection_info['data']['target_shelf']
-        lun = connection_info['data']['target_lun']
-        aoedev = 'e%s.%s' % (shelf, lun)
-        aoedevpath = '/dev/etherd/%s' % (aoedev)
-
         conf.source_type = "block"
-        conf.source_path = aoedevpath
+        conf.source_path = connection_info['data']['device_path']
         return conf
 
     def connect_volume(self, connection_info, mount_device):
@@ -800,7 +916,8 @@ class LibvirtAOEVolumeDriver(LibvirtBaseVolumeDriver):
                       {'aoedevpath': aoedevpath,
                        'tries': tries})
 
-        return self.get_config(connection_info, mount_device)
+        connection_info['data']['device_path'] = \
+            self._get_device_path(connection_info)
 
 
 class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
@@ -810,6 +927,12 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
         """Create back-end to glusterfs."""
         super(LibvirtGlusterfsVolumeDriver,
               self).__init__(connection, is_block_dev=False)
+
+    def _get_device_path(self, connection_info):
+        path = os.path.join(CONF.libvirt.glusterfs_mount_point_base,
+            utils.get_hash_str(connection_info['data']['export']))
+        path = os.path.join(path, connection_info['data']['name'])
+        return path
 
     def get_config(self, connection_info, disk_info):
         """Returns xml for libvirt."""
@@ -828,11 +951,8 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
             conf.source_hosts = [source_host]
             conf.source_name = '%s/%s' % (vol_name, data['name'])
         else:
-            path = os.path.join(CONF.libvirt.glusterfs_mount_point_base,
-                utils.get_hash_str(data['export']))
-            path = os.path.join(path, data['name'])
             conf.source_type = 'file'
-            conf.source_path = path
+            conf.source_path = connection_info['data']['device_path']
 
         conf.driver_format = connection_info['data'].get('format', 'raw')
 
@@ -843,8 +963,8 @@ class LibvirtGlusterfsVolumeDriver(LibvirtBaseVolumeDriver):
 
         if 'gluster' not in CONF.libvirt.qemu_allowed_storage_drivers:
             self._ensure_mounted(data['export'], data.get('options'))
-
-        return self.get_config(connection_info, mount_device)
+            connection_info['data']['device_path'] = \
+                self._get_device_path(connection_info)
 
     def disconnect_volume(self, connection_info, disk_dev):
         """Disconnect the volume."""
@@ -1026,8 +1146,6 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
             connection_info['data']['device_path'] = device_path
             connection_info['data']['devices'] = [device_info]
 
-        return self.get_config(connection_info, disk_info)
-
     @utils.synchronized('connect_volume')
     def disconnect_volume(self, connection_info, mount_device):
         """Detach the volume from instance_name."""
@@ -1065,14 +1183,17 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
         super(LibvirtScalityVolumeDriver,
               self).__init__(connection, is_block_dev=False)
 
+    def _get_device_path(self, connection_info):
+        path = os.path.join(CONF.libvirt.scality_sofs_mount_point,
+                            connection_info['data']['sofs_path'])
+        return path
+
     def get_config(self, connection_info, disk_info):
         """Returns xml for libvirt."""
         conf = super(LibvirtScalityVolumeDriver,
                      self).get_config(connection_info, disk_info)
-        path = os.path.join(CONF.libvirt.scality_sofs_mount_point,
-                            connection_info['data']['sofs_path'])
         conf.source_type = 'file'
-        conf.source_path = path
+        conf.source_path = connection_info['data']['device_path']
 
         # The default driver cache policy is 'none', and this causes
         # qemu/kvm to open the volume file with O_DIRECT, which is
@@ -1087,7 +1208,8 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
         self._check_prerequisites()
         self._mount_sofs()
 
-        return self.get_config(connection_info, disk_info)
+        connection_info['data']['device_path'] = \
+            self._get_device_path(connection_info)
 
     def _check_prerequisites(self):
         """Sanity checks before attempting to mount SOFS."""

@@ -20,9 +20,8 @@ import functools
 
 from oslo.config import cfg
 
-from nova.compute import flavors
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LI
 from nova.network import base_api
 from nova.network import floating_ips
 from nova.network import model as network_model
@@ -139,12 +138,6 @@ class API(base_api.NetworkAPI):
                                                      context.project_id)
 
     @wrap_check_policy
-    def get_floating_ips_by_fixed_address(self, context, fixed_address):
-        floating_ips = objects.FloatingIPList.get_by_fixed_address(
-            context, fixed_address)
-        return [str(floating_ip.address) for floating_ip in floating_ips]
-
-    @wrap_check_policy
     def get_instance_id_by_floating_address(self, context, address):
         fixed_ip = objects.FixedIP.get_by_floating_address(context, address)
         if fixed_ip is None:
@@ -224,8 +217,8 @@ class API(base_api.NetworkAPI):
         if orig_instance_uuid:
             msg_dict = dict(address=floating_address,
                             instance_id=orig_instance_uuid)
-            LOG.info(_('re-assign floating IP %(address)s from '
-                       'instance %(instance_id)s') % msg_dict)
+            LOG.info(_LI('re-assign floating IP %(address)s from '
+                         'instance %(instance_id)s'), msg_dict)
             orig_instance = objects.Instance.get_by_uuid(context,
                                                          orig_instance_uuid)
 
@@ -270,7 +263,7 @@ class API(base_api.NetworkAPI):
         #             this is called from compute.manager which shouldn't
         #             have db access so we do it on the other side of the
         #             rpc.
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         args = {}
         args['vpn'] = vpn
         args['requested_networks'] = requested_networks
@@ -319,7 +312,7 @@ class API(base_api.NetworkAPI):
     @base_api.refresh_cache
     def add_fixed_ip_to_instance(self, context, instance, network_id):
         """Adds a fixed ip to instance from specified network."""
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
@@ -333,7 +326,7 @@ class API(base_api.NetworkAPI):
     def remove_fixed_ip_from_instance(self, context, instance, address):
         """Removes a fixed ip from instance from specified network."""
 
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
@@ -382,7 +375,7 @@ class API(base_api.NetworkAPI):
 
     def _get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         args = {'instance_id': instance['uuid'],
                 'rxtx_factor': flavor['rxtx_factor'],
                 'host': instance['host'],
@@ -419,14 +412,6 @@ class API(base_api.NetworkAPI):
         """
         # This is NOOP for Nova network since it doesn't support SR-IOV.
         pass
-
-    @wrap_check_policy
-    def get_instance_uuids_by_ip_filter(self, context, filters):
-        """Returns a list of dicts in the form of
-        {'instance_uuid': uuid, 'ip': ip} that matched the ip_filter
-        """
-        return self.network_rpcapi.get_instance_uuids_by_ip_filter(context,
-                                                                   filters)
 
     @wrap_check_policy
     def get_dns_domains(self, context):
@@ -503,25 +488,22 @@ class API(base_api.NetworkAPI):
 
         self.network_rpcapi.setup_networks_on_host(context, **args)
 
-    def _is_multi_host(self, context, instance):
+    def _get_multi_addresses(self, context, instance):
         try:
             fixed_ips = objects.FixedIPList.get_by_instance_uuid(
                 context, instance['uuid'])
         except exception.FixedIpNotFoundForInstance:
-            return False
-        network = objects.Network.get_by_id(context,
-                                            fixed_ips[0].network_id,
-                                            project_only='allow_none')
-        return network.multi_host
-
-    def _get_floating_ip_addresses(self, context, instance):
-        return objects.FloatingIP.get_addresses_by_instance(
-            context, instance)
+            return False, []
+        addresses = []
+        for fixed in fixed_ips:
+            for floating in fixed.floating_ips:
+                addresses.append(floating.address)
+        return fixed_ips[0].network.multi_host, addresses
 
     @wrap_check_policy
     def migrate_instance_start(self, context, instance, migration):
         """Start to migrate the network of an instance."""
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         args = dict(
             instance_uuid=instance['uuid'],
             rxtx_factor=flavor['rxtx_factor'],
@@ -531,9 +513,9 @@ class API(base_api.NetworkAPI):
             floating_addresses=None,
         )
 
-        if self._is_multi_host(context, instance):
-            args['floating_addresses'] = \
-                self._get_floating_ip_addresses(context, instance)
+        multi_host, addresses = self._get_multi_addresses(context, instance)
+        if multi_host:
+            args['floating_addresses'] = addresses
             args['host'] = migration['source_compute']
 
         self.network_rpcapi.migrate_instance_start(context, **args)
@@ -541,7 +523,7 @@ class API(base_api.NetworkAPI):
     @wrap_check_policy
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
         args = dict(
             instance_uuid=instance['uuid'],
             rxtx_factor=flavor['rxtx_factor'],
@@ -551,9 +533,9 @@ class API(base_api.NetworkAPI):
             floating_addresses=None,
         )
 
-        if self._is_multi_host(context, instance):
-            args['floating_addresses'] = \
-                self._get_floating_ip_addresses(context, instance)
+        multi_host, addresses = self._get_multi_addresses(context, instance)
+        if multi_host:
+            args['floating_addresses'] = addresses
             args['host'] = migration['dest_compute']
 
         self.network_rpcapi.migrate_instance_finish(context, **args)

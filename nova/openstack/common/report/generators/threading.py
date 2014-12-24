@@ -23,10 +23,10 @@ import sys
 
 import greenlet
 
-import nova.openstack.common.report.models.threading as tm
+from nova.openstack.common.report.models import threading as tm
 from nova.openstack.common.report.models import with_default_views as mwdv
-import nova.openstack.common.report.utils as rutils
-import nova.openstack.common.report.views.text.generic as text_views
+from nova.openstack.common.report import utils as rutils
+from nova.openstack.common.report.views.text import generic as text_views
 
 
 class ThreadReportGenerator(object):
@@ -44,8 +44,7 @@ class ThreadReportGenerator(object):
             for thread_id, stack in sys._current_frames().items()
         ]
 
-        thread_pairs = dict(zip(range(len(threadModels)), threadModels))
-        return mwdv.ModelWithDefaultViews(thread_pairs,
+        return mwdv.ModelWithDefaultViews(threadModels,
                                           text_view=text_views.MultiView())
 
 
@@ -68,6 +67,5 @@ class GreenThreadReportGenerator(object):
             for gr in rutils._find_objects(greenlet.greenlet)
         ]
 
-        thread_pairs = dict(zip(range(len(threadModels)), threadModels))
-        return mwdv.ModelWithDefaultViews(thread_pairs,
+        return mwdv.ModelWithDefaultViews(threadModels,
                                           text_view=text_views.MultiView())

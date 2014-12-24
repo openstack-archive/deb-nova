@@ -26,63 +26,50 @@ import time
 import glanceclient
 import glanceclient.exc
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import timeutils
 import six
 import six.moves.urllib.parse as urlparse
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE
 import nova.image.download as image_xfers
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova import utils
 
 
 glance_opts = [
     cfg.StrOpt('host',
                default='$my_ip',
-               help='Default glance hostname or IP address',
-               deprecated_group='DEFAULT',
-               deprecated_name='glance_host'),
+               help='Default glance hostname or IP address'),
     cfg.IntOpt('port',
                default=9292,
-               help='Default glance port',
-               deprecated_group='DEFAULT',
-               deprecated_name='glance_port'),
+               help='Default glance port'),
     cfg.StrOpt('protocol',
                 default='http',
                 help='Default protocol to use when connecting to glance. '
-                     'Set to https for SSL.',
-               deprecated_group='DEFAULT',
-               deprecated_name='glance_protocol'),
+                     'Set to https for SSL.'),
     cfg.ListOpt('api_servers',
                 help='A list of the glance api servers available to nova. '
                      'Prefix with https:// for ssl-based glance api servers. '
-                     '([hostname|ip]:port)',
-               deprecated_group='DEFAULT',
-               deprecated_name='glance_api_servers'),
+                     '([hostname|ip]:port)'),
     cfg.BoolOpt('api_insecure',
                 default=False,
                 help='Allow to perform insecure SSL (https) requests to '
-                     'glance',
-               deprecated_group='DEFAULT',
-               deprecated_name='glance_api_insecure'),
+                     'glance'),
     cfg.IntOpt('num_retries',
                default=0,
-               help='Number of retries when downloading an image from glance',
-               deprecated_group='DEFAULT',
-               deprecated_name='glance_num_retries'),
+               help='Number of retries when uploading / downloading an image '
+                    'to / from glance.'),
     cfg.ListOpt('allowed_direct_url_schemes',
                 default=[],
                 help='A list of url scheme that can be downloaded directly '
                      'via the direct_url.  Currently supported schemes: '
-                     '[file].',
-               deprecated_group='DEFAULT'),
+                     '[file].'),
     ]
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
-# glance_opts options in the DEFAULT group were deprecated in Juno
 CONF.register_opts(glance_opts, 'glance')
 CONF.import_opt('auth_strategy', 'nova.api.auth')
 CONF.import_opt('my_ip', 'nova.netconf')
@@ -271,9 +258,9 @@ class GlanceImageService(object):
             try:
                 self._download_handlers[scheme] = mod.get_download_handler()
             except Exception as ex:
-                fmt = _('When loading the module %(module_str)s the '
-                         'following error occurred: %(ex)s')
-                LOG.error(fmt % {'module_str': str(mod), 'ex': ex})
+                LOG.error(_LE('When loading the module %(module_str)s the '
+                              'following error occurred: %(ex)s'),
+                          {'module_str': str(mod), 'ex': ex})
 
     def detail(self, context, **kwargs):
         """Calls out to Glance for a list of detailed image information."""
@@ -290,7 +277,8 @@ class GlanceImageService(object):
 
         return _images
 
-    def show(self, context, image_id, include_locations=False):
+    def show(self, context, image_id, include_locations=False,
+             show_deleted=True):
         """Returns a dict with image data for the given opaque image id.
 
         :param context: The context object to pass to image client
@@ -301,6 +289,8 @@ class GlanceImageService(object):
                                   not support the locations attribute, it will
                                   still be included in the returned dict, as an
                                   empty list.
+        :param show_deleted: (Optional) show the image even the status of
+                             image is deleted.
         """
         version = 1
         if include_locations:
@@ -309,6 +299,9 @@ class GlanceImageService(object):
             image = self._client.call(context, version, 'get', image_id)
         except Exception:
             _reraise_translated_image_exception(image_id)
+
+        if not show_deleted and getattr(image, 'deleted', False):
+            raise exception.ImageNotFound(image_id=image_id)
 
         if not _is_image_available(context, image):
             raise exception.ImageNotFound(image_id=image_id)
@@ -330,8 +323,8 @@ class GlanceImageService(object):
         except KeyError:
             return None
         except Exception:
-            LOG.error(_("Failed to instantiate the download handler "
-                "for %(scheme)s") % {'scheme': scheme})
+            LOG.error(_LE("Failed to instantiate the download handler "
+                          "for %(scheme)s"), {'scheme': scheme})
         return
 
     def download(self, context, image_id, data=None, dst_path=None):
@@ -612,18 +605,18 @@ def _translate_image_exception(image_id, exc_value):
     if isinstance(exc_value, glanceclient.exc.NotFound):
         return exception.ImageNotFound(image_id=image_id)
     if isinstance(exc_value, glanceclient.exc.BadRequest):
-        return exception.Invalid(unicode(exc_value))
+        return exception.Invalid(six.text_type(exc_value))
     return exc_value
 
 
 def _translate_plain_exception(exc_value):
     if isinstance(exc_value, (glanceclient.exc.Forbidden,
                     glanceclient.exc.Unauthorized)):
-        return exception.Forbidden(unicode(exc_value))
+        return exception.Forbidden(six.text_type(exc_value))
     if isinstance(exc_value, glanceclient.exc.NotFound):
-        return exception.NotFound(unicode(exc_value))
+        return exception.NotFound(six.text_type(exc_value))
     if isinstance(exc_value, glanceclient.exc.BadRequest):
-        return exception.Invalid(unicode(exc_value))
+        return exception.Invalid(six.text_type(exc_value))
     return exc_value
 
 

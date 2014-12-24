@@ -17,9 +17,10 @@
 Management class for Storage-related functions (attach, detach, etc).
 """
 
+from oslo.utils import excutils
+
 from nova import exception
-from nova.i18n import _
-from nova.openstack.common import excutils
+from nova.i18n import _LI, _LW
 from nova.openstack.common import log as logging
 from nova.virt.xenapi import vm_utils
 from nova.virt.xenapi import volume_utils
@@ -60,7 +61,7 @@ class VolumeOps(object):
             vdi_ref = self._connect_hypervisor_to_volume(sr_ref,
                                                          connection_data)
             vdi_uuid = self._session.VDI.get_uuid(vdi_ref)
-            LOG.info(_('Connected volume (vdi_uuid): %s'), vdi_uuid)
+            LOG.info(_LI('Connected volume (vdi_uuid): %s'), vdi_uuid)
 
             if vm_ref:
                 self._attach_volume_to_vm(vdi_ref, vm_ref, instance_name,
@@ -109,8 +110,8 @@ class VolumeOps(object):
 
     def _attach_volume_to_vm(self, vdi_ref, vm_ref, instance_name, dev_number,
                              hotplug):
-        msg = _('Attach_volume vdi: %(vdi_ref)s vm: %(vm_ref)s')
-        LOG.debug(msg, {'vdi_ref': vdi_ref, 'vm_ref': vm_ref})
+        LOG.debug('Attach_volume vdi: %(vdi_ref)s vm: %(vm_ref)s',
+                  {'vdi_ref': vdi_ref, 'vm_ref': vm_ref})
 
         # osvol is added to the vbd so we can spot which vbds are volumes
         vbd_ref = vm_utils.create_vbd(self._session, vm_ref, vdi_ref,
@@ -123,8 +124,8 @@ class VolumeOps(object):
                 LOG.debug("Plugging VBD: %s", vbd_ref)
                 self._session.VBD.plug(vbd_ref, vm_ref)
 
-        LOG.info(_('Dev %(dev_number)s attached to'
-                   ' instance %(instance_name)s'),
+        LOG.info(_LI('Dev %(dev_number)s attached to'
+                     ' instance %(instance_name)s'),
                  {'instance_name': instance_name, 'dev_number': dev_number})
 
     def detach_volume(self, connection_info, instance_name, mountpoint):
@@ -141,12 +142,12 @@ class VolumeOps(object):
         if vbd_ref is None:
             # NOTE(sirp): If we don't find the VBD then it must have been
             # detached previously.
-            LOG.warn(_('Skipping detach because VBD for %s was not found'),
-                     instance_name)
+            LOG.warning(_LW('Skipping detach because VBD for %s was '
+                            'not found'), instance_name)
         else:
             self._detach_vbds_and_srs(vm_ref, [vbd_ref])
-            LOG.info(_('Mountpoint %(mountpoint)s detached from instance'
-                       ' %(instance_name)s'),
+            LOG.info(_LI('Mountpoint %(mountpoint)s detached from instance'
+                         ' %(instance_name)s'),
                      {'instance_name': instance_name,
                       'mountpoint': mountpoint})
 

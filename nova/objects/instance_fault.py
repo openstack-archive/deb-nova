@@ -28,7 +28,9 @@ from nova.openstack.common import log as logging
 LOG = logging.getLogger(__name__)
 
 
-class InstanceFault(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class InstanceFault(base.NovaPersistentObject, base.NovaObject,
+                    base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: String attributes updated to support unicode
     # Version 1.2: Added create()

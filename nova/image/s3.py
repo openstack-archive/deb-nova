@@ -27,15 +27,15 @@ import boto.s3.connection
 import eventlet
 from lxml import etree
 from oslo.config import cfg
+from oslo_concurrency import processutils
 
 from nova.api.ec2 import ec2utils
 import nova.cert.rpcapi
 from nova.compute import arch
 from nova import exception
-from nova.i18n import _, _LE
+from nova.i18n import _, _LE, _LI
 from nova.image import glance
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
 from nova import utils
 
 
@@ -383,7 +383,7 @@ class S3ImageService(object):
 
                 shutil.rmtree(image_path)
             except exception.ImageNotFound:
-                LOG.info(_("Image %s was deleted underneath us"), image_uuid)
+                LOG.info(_LI("Image %s was deleted underneath us"), image_uuid)
                 return
 
         eventlet.spawn_n(delayed_create)

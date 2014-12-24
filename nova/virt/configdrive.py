@@ -17,16 +17,15 @@
 
 import os
 import shutil
-import tempfile
 
 from oslo.config import cfg
+from oslo.utils import strutils
+from oslo.utils import units
 
 from nova import exception
 from nova.i18n import _LW
 from nova.openstack.common import fileutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
-from nova.openstack.common import units
 from nova import utils
 from nova import version
 
@@ -36,11 +35,6 @@ configdrive_opts = [
     cfg.StrOpt('config_drive_format',
                default='iso9660',
                help='Config drive format. One of iso9660 (default) or vfat'),
-    cfg.StrOpt('config_drive_tempdir',
-               default=tempfile.tempdir,
-               help=('DEPRECATED (not needed any more): '
-                     ' Where to put temporary files associated with '
-                     'config drive creation')),
     # force_config_drive is a string option, to allow for future behaviors
     #  (e.g. use config_drive based on image properties)
     cfg.StrOpt('force_config_drive',
@@ -181,10 +175,10 @@ def required_by(instance):
     image_prop = utils.instance_sys_meta(instance).get(
         utils.SM_IMAGE_PROP_PREFIX + 'img_config_drive', 'optional')
     if image_prop not in ['optional', 'mandatory']:
-        LOG.warn(_LW('Image config drive option %(image_prop)s is invalid '
-                        'and will be ignored') %
-                        {'image_prop': image_prop},
-                  instance=instance)
+        LOG.warning(_LW('Image config drive option %(image_prop)s is invalid '
+                        'and will be ignored'),
+                    {'image_prop': image_prop},
+                    instance=instance)
 
     return (instance.get('config_drive') or
             'always' == CONF.force_config_drive or

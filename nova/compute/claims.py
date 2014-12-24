@@ -17,12 +17,13 @@
 Claim objects for use with resource tracking.
 """
 
+from oslo.serialization import jsonutils
+
 from nova import context
 from nova import exception
 from nova.i18n import _
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.virt import hardware
 
@@ -201,22 +202,19 @@ class Claim(NopClaim):
 
     def _test_numa_topology(self, resources, limit):
         host_topology = resources.get('numa_topology')
-        requested_topology = (self.numa_topology and
-                                self.numa_topology.topology_from_obj())
+        requested_topology = self.numa_topology
         if host_topology:
-            host_topology = hardware.VirtNUMAHostTopology.from_json(
+            host_topology = objects.NUMATopology.obj_from_db_obj(
                     host_topology)
             instance_topology = (
-                    hardware.VirtNUMAHostTopology.fit_instance_to_host(
+                    hardware.numa_fit_instance_to_host(
                         host_topology, requested_topology,
                         limits_topology=limit))
             if requested_topology and not instance_topology:
                 return (_("Requested instance NUMA topology cannot fit "
                           "the given host NUMA topology"))
             elif instance_topology:
-                self.claimed_numa_topology = (
-                        objects.InstanceNUMATopology.obj_from_topology(
-                            instance_topology))
+                self.claimed_numa_topology = instance_topology
 
     def _test(self, type_, unit, total, used, requested, limit):
         """Test if the given type of resource needed for a claim can be safely
@@ -273,11 +271,8 @@ class ResizeClaim(Claim):
 
     @property
     def numa_topology(self):
-        instance_topology = hardware.VirtNUMAInstanceTopology.get_constraints(
-                    self.instance_type, self.image_meta)
-        if instance_topology:
-            return objects.InstanceNUMATopology.obj_from_topology(
-                    instance_topology)
+        return hardware.numa_get_constraints(
+            self.instance_type, self.image_meta)
 
     def _test_pci(self):
         pci_requests = objects.InstancePCIRequests.\

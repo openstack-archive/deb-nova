@@ -25,11 +25,12 @@ from oslo.config import cfg
 
 from nova import context
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LW
 from nova import objects
 from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 from nova import utils
+from nova import version
 from nova.virt.xenapi.client import objects as cli_objects
 from nova.virt.xenapi import pool
 from nova.virt.xenapi import pool_states
@@ -74,6 +75,11 @@ class XenAPISession(object):
     PLUGIN_REQUIRED_VERSION = '1.2'
 
     def __init__(self, url, user, pw):
+        version_string = version.version_string_with_package()
+        self.nova_version = _('%(vendor)s %(product)s %(version)s') % \
+                              {'vendor': version.vendor_string(),
+                               'product': version.product_string(),
+                               'version': version_string}
         import XenAPI
         self.XenAPI = XenAPI
         self._sessions = queue.Queue()
@@ -105,14 +111,16 @@ class XenAPISession(object):
         try:
             session = self._create_session(url)
             with timeout.Timeout(CONF.xenserver.login_timeout, exception):
-                session.login_with_password(user, pw)
+                session.login_with_password(user, pw,
+                                            self.nova_version, 'OpenStack')
         except self.XenAPI.Failure as e:
             # if user and pw of the master are different, we're doomed!
             if e.details[0] == 'HOST_IS_SLAVE':
                 master = e.details[1]
                 url = pool.swap_xapi_host(url, master)
                 session = self.XenAPI.Session(url)
-                session.login_with_password(user, pw)
+                session.login_with_password(user, pw,
+                                            self.nova_version, 'OpenStack')
                 self.is_slave = True
             else:
                 raise
@@ -123,7 +131,8 @@ class XenAPISession(object):
         for i in xrange(CONF.xenserver.connection_concurrent - 1):
             session = self._create_session(url)
             with timeout.Timeout(CONF.xenserver.login_timeout, exception):
-                session.login_with_password(user, pw)
+                session.login_with_password(user, pw,
+                                            self.nova_version, 'OpenStack')
             self._sessions.put(session)
 
     def _get_host_uuid(self):
@@ -132,8 +141,8 @@ class XenAPISession(object):
                 context.get_admin_context(),
                 CONF.host, key=pool_states.POOL_FLAG)[0]
             if not aggr:
-                LOG.error(_('Host is member of a pool, but DB '
-                                'says otherwise'))
+                LOG.error(_LE('Host is member of a pool, but DB '
+                              'says otherwise'))
                 raise exception.AggregateHostNotFound()
             return aggr.metadetails[CONF.host]
         else:
@@ -203,7 +212,8 @@ class XenAPISession(object):
         return pickle.loads(rv)
 
     def call_plugin_serialized_with_retry(self, plugin, fn, num_retries,
-                                          callback, *args, **kwargs):
+                                          callback, retry_cb=None, *args,
+                                          **kwargs):
         """Allows a plugin to raise RetryableError so we can try again."""
         attempts = num_retries + 1
         sleep_time = 0.5
@@ -226,15 +236,20 @@ class XenAPISession(object):
                 return self.call_plugin_serialized(plugin, fn, *args, **kwargs)
             except self.XenAPI.Failure as exc:
                 if self._is_retryable_exception(exc, fn):
-                    LOG.warn(_('%(plugin)s.%(fn)s failed. Retrying call.')
-                             % {'plugin': plugin, 'fn': fn})
+                    LOG.warning(_LW('%(plugin)s.%(fn)s failed. '
+                                    'Retrying call.'),
+                                {'plugin': plugin, 'fn': fn})
+                    if retry_cb:
+                        retry_cb(exc=exc)
                 else:
                     raise
             except socket.error as exc:
                 if exc.errno == errno.ECONNRESET:
-                    LOG.warn(_('Lost connection to XenAPI during call to '
-                               '%(plugin)s.%(fn)s.  Retrying call.') %
-                               {'plugin': plugin, 'fn': fn})
+                    LOG.warning(_LW('Lost connection to XenAPI during call to '
+                                    '%(plugin)s.%(fn)s.  Retrying call.'),
+                                {'plugin': plugin, 'fn': fn})
+                    if retry_cb:
+                        retry_cb(exc=exc)
                 else:
                     raise
 

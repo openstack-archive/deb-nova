@@ -16,15 +16,16 @@
 import datetime
 
 import iso8601
+from oslo.utils import timeutils
+import six
 import six.moves.urllib.parse as urlparse
 from webob import exc
 
 from nova.api.openstack import extensions
+from nova.api.openstack import wsgi
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.objects import instance as instance_obj
-from nova.openstack.common import timeutils
 
 ALIAS = "os-simple-tenant-usage"
 authorize_show = extensions.extension_authorizer('compute',
@@ -37,10 +38,10 @@ def parse_strtime(dstr, fmt):
     try:
         return timeutils.parse_strtime(dstr, fmt)
     except (TypeError, ValueError) as e:
-        raise exception.InvalidStrTime(reason=unicode(e))
+        raise exception.InvalidStrTime(reason=six.text_type(e))
 
 
-class SimpleTenantUsageController(object):
+class SimpleTenantUsageController(wsgi.Controller):
     def _hours_for(self, instance, period_start, period_stop):
         launched_at = instance.launched_at
         terminated_at = instance.terminated_at
@@ -107,7 +108,7 @@ class SimpleTenantUsageController(object):
 
         instances = objects.InstanceList.get_active_by_window_joined(
                         context, period_start, period_stop, tenant_id,
-                        expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS)
+                        expected_attrs=['system_metadata'])
         rval = {}
         flavors = {}
 

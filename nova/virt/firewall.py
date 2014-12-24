@@ -16,14 +16,13 @@
 #    under the License.
 
 from oslo.config import cfg
+from oslo.utils import importutils
 
 from nova.compute import utils as compute_utils
 from nova import context
-from nova.i18n import _
 from nova.i18n import _LI
 from nova.network import linux_net
 from nova import objects
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import netutils
@@ -171,8 +170,8 @@ class IptablesFirewallDriver(FirewallDriver):
             self.remove_filters_for_instance(instance)
             self.iptables.apply()
         else:
-            LOG.info(_('Attempted to unfilter instance which is not '
-                     'filtered'), instance=instance)
+            LOG.info(_LI('Attempted to unfilter instance which is not '
+                         'filtered'), instance=instance)
 
     def prepare_instance_filter(self, instance, network_info):
         self.instance_info[instance['id']] = (instance, network_info)

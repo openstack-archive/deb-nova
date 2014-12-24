@@ -17,15 +17,15 @@ Common Auth Middleware.
 """
 
 from oslo.config import cfg
+from oslo.middleware import request_id
+from oslo.serialization import jsonutils
 import webob.dec
 import webob.exc
 
 from nova import context
 from nova.i18n import _
 from nova.i18n import _LW
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common.middleware import request_id
 from nova import wsgi
 
 
@@ -70,7 +70,7 @@ def pipeline_factory(loader, global_conf, **local_conf):
     # If the configuration file still contains 'ratelimit_v3', just ignore it.
     # We will remove this code at next release (J)
     if 'ratelimit_v3' in pipeline:
-        LOG.warn(_LW('ratelimit_v3 is removed from v3 api.'))
+        LOG.warning(_LW('ratelimit_v3 is removed from v3 api.'))
         pipeline.remove('ratelimit_v3')
     return _load_pipeline(loader, pipeline)
 
@@ -139,6 +139,10 @@ class NovaKeystoneContext(wsgi.Middleware):
                 raise webob.exc.HTTPInternalServerError(
                           _('Invalid service catalog json.'))
 
+        # NOTE(jamielennox): This is a full auth plugin set by auth_token
+        # middleware in newer versions.
+        user_auth_plugin = req.environ.get('keystone.token_auth')
+
         ctx = context.RequestContext(user_id,
                                      project_id,
                                      user_name=user_name,
@@ -147,7 +151,8 @@ class NovaKeystoneContext(wsgi.Middleware):
                                      auth_token=auth_token,
                                      remote_address=remote_address,
                                      service_catalog=service_catalog,
-                                     request_id=req_id)
+                                     request_id=req_id,
+                                     user_auth_plugin=user_auth_plugin)
 
         req.environ['nova.context'] = ctx
         return self.application
@@ -155,12 +160,5 @@ class NovaKeystoneContext(wsgi.Middleware):
     def _get_roles(self, req):
         """Get the list of roles."""
 
-        if 'X_ROLES' in req.headers:
-            roles = req.headers.get('X_ROLES', '')
-        else:
-            # Fallback to deprecated role header:
-            roles = req.headers.get('X_ROLE', '')
-            if roles:
-                LOG.warn(_LW("Sourcing roles from deprecated X-Role HTTP "
-                             "header"))
+        roles = req.headers.get('X_ROLES', '')
         return [r.strip() for r in roles.split(',')]

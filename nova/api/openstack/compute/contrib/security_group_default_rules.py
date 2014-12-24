@@ -11,7 +11,9 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
+from xml.dom import minidom
 
+import six
 import webob
 from webob import exc
 
@@ -22,11 +24,8 @@ from nova.api.openstack import xmlutil
 from nova import exception
 from nova.i18n import _
 from nova.network.security_group import openstack_driver
-from nova.openstack.common import log as logging
-from nova.openstack.common import xmlutils
 
 
-LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute',
                                             'security_group_default_rules')
 
@@ -71,7 +70,7 @@ class SecurityGroupDefaultRuleTemplate(xmlutil.TemplateBuilder):
 
 class SecurityGroupDefaultRulesXMLDeserializer(wsgi.MetadataXMLDeserializer):
     def default(self, string):
-        dom = xmlutils.safe_minidom_parse_string(string)
+        dom = minidom.parseString(string)
         security_group_rule = self._extract_security_group_default_rule(dom)
         return {'body': {'security_group_default_rule': security_group_rule}}
 
@@ -121,7 +120,7 @@ class SecurityGroupDefaultRulesController(sg.SecurityGroupControllerBase):
                 ip_protocol=sg_rule.get('ip_protocol'),
                 cidr=sg_rule.get('cidr'))
         except Exception as exp:
-            raise exc.HTTPBadRequest(explanation=unicode(exp))
+            raise exc.HTTPBadRequest(explanation=six.text_type(exp))
 
         if values is None:
             msg = _('Not enough parameters to build a valid rule.')
@@ -129,7 +128,7 @@ class SecurityGroupDefaultRulesController(sg.SecurityGroupControllerBase):
 
         if self.security_group_api.default_rule_exists(context, values):
             msg = _('This default rule already exists.')
-            raise exc.HTTPBadRequest(explanation=msg)
+            raise exc.HTTPConflict(explanation=msg)
         security_group_rule = self.security_group_api.add_default_rules(
             context, [values])[0]
         fmt_rule = self._format_security_group_default_rule(
@@ -149,7 +148,6 @@ class SecurityGroupDefaultRulesController(sg.SecurityGroupControllerBase):
 
         id = self.security_group_api.validate_id(id)
 
-        LOG.debug("Showing security_group_default_rule with id %s", id)
         try:
             rule = self.security_group_api.get_default_rule(context, id)
         except exception.SecurityGroupDefaultRuleNotFound:
@@ -163,11 +161,16 @@ class SecurityGroupDefaultRulesController(sg.SecurityGroupControllerBase):
         context = sg._authorize_context(req)
         authorize(context)
 
-        id = self.security_group_api.validate_id(id)
+        try:
+            id = self.security_group_api.validate_id(id)
+        except exception.Invalid as ex:
+            raise exc.HTTPBadRequest(explanation=ex.format_message())
 
-        rule = self.security_group_api.get_default_rule(context, id)
-
-        self.security_group_api.remove_default_rules(context, [rule['id']])
+        try:
+            rule = self.security_group_api.get_default_rule(context, id)
+            self.security_group_api.remove_default_rules(context, [rule['id']])
+        except exception.SecurityGroupDefaultRuleNotFound as ex:
+            raise exc.HTTPNotFound(explanation=ex.format_message())
 
         return webob.Response(status_int=204)
 
@@ -178,10 +181,12 @@ class SecurityGroupDefaultRulesController(sg.SecurityGroupControllerBase):
         authorize(context)
 
         ret = {'security_group_default_rules': []}
-        for rule in self.security_group_api.get_all_default_rules(context):
-            rule_fmt = self._format_security_group_default_rule(rule)
-            ret['security_group_default_rules'].append(rule_fmt)
-
+        try:
+            for rule in self.security_group_api.get_all_default_rules(context):
+                rule_fmt = self._format_security_group_default_rule(rule)
+                ret['security_group_default_rules'].append(rule_fmt)
+        except exception.SecurityGroupDefaultRuleNotFound as ex:
+            raise exc.HTTPNotFound(explanation=ex.format_message())
         return ret
 
     def _format_security_group_default_rule(self, rule):

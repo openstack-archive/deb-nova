@@ -17,7 +17,10 @@
 """The security groups extension."""
 
 import contextlib
+from xml.dom import minidom
 
+from oslo.serialization import jsonutils
+import six
 import webob
 from webob import exc
 
@@ -26,14 +29,10 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api.openstack import xmlutil
 from nova import compute
-from nova.compute import api as compute_api
 from nova import exception
 from nova.i18n import _
-from nova.network.security_group import neutron_driver
 from nova.network.security_group import openstack_driver
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import xmlutils
 from nova.virt import netutils
 
 
@@ -262,10 +261,12 @@ class SecurityGroupControllerBase(object):
 
     def _from_body(self, body, key):
         if not body:
-            raise exc.HTTPUnprocessableEntity()
+            raise exc.HTTPBadRequest(
+                explanation=_("The request body can't be empty"))
         value = body.get(key, None)
         if value is None:
-            raise exc.HTTPUnprocessableEntity()
+            raise exc.HTTPBadRequest(
+                explanation=_("Missing parameter %s") % key)
         return value
 
 
@@ -387,8 +388,10 @@ class SecurityGroupRulesController(SecurityGroupControllerBase):
                               ip_protocol=sg_rule.get('ip_protocol'),
                               cidr=sg_rule.get('cidr'),
                               group_id=sg_rule.get('group_id'))
+        except exception.SecurityGroupNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except Exception as exp:
-            raise exc.HTTPBadRequest(explanation=unicode(exp))
+            raise exc.HTTPBadRequest(explanation=six.text_type(exp))
 
         if new_rule is None:
             msg = _("Not enough parameters to build a valid rule.")
@@ -571,7 +574,7 @@ class SecurityGroupsOutputController(wsgi.Controller):
                     servers[0][key] = req_obj['server'].get(
                         key, [{'name': 'default'}])
                 except ValueError:
-                    root = xmlutils.safe_minidom_parse_string(req.body)
+                    root = minidom.parseString(req.body)
                     sg_root = root.getElementsByTagName(key)
                     groups = []
                     if sg_root:
@@ -669,39 +672,3 @@ class Security_groups(extensions.ExtensionDescriptor):
         resources.append(res)
 
         return resources
-
-
-class NativeSecurityGroupExceptions(object):
-    @staticmethod
-    def raise_invalid_property(msg):
-        raise exception.Invalid(msg)
-
-    @staticmethod
-    def raise_group_already_exists(msg):
-        raise exception.Invalid(msg)
-
-    @staticmethod
-    def raise_invalid_group(msg):
-        raise exception.Invalid(msg)
-
-    @staticmethod
-    def raise_invalid_cidr(cidr, decoding_exception=None):
-        raise exception.InvalidCidr(cidr=cidr)
-
-    @staticmethod
-    def raise_over_quota(msg):
-        raise exception.SecurityGroupLimitExceeded(msg)
-
-    @staticmethod
-    def raise_not_found(msg):
-        raise exception.SecurityGroupNotFound(msg)
-
-
-class NativeNovaSecurityGroupAPI(NativeSecurityGroupExceptions,
-                                 compute_api.SecurityGroupAPI):
-    pass
-
-
-class NativeNeutronSecurityGroupAPI(NativeSecurityGroupExceptions,
-                                    neutron_driver.SecurityGroupAPI):
-    pass

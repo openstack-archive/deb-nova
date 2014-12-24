@@ -20,12 +20,14 @@ Leverages websockify.py by Joel Martin
 
 import Cookie
 import socket
+import sys
 import urlparse
 
 import websockify
 
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
+from nova import exception
 from nova.i18n import _
 from nova.openstack.common import log as logging
 
@@ -42,7 +44,16 @@ class NovaProxyRequestHandlerBase(object):
 
         # The nova expected behavior is to have token
         # passed to the method GET of the request
-        query = urlparse.urlparse(self.path).query
+        parse = urlparse.urlparse(self.path)
+        if parse.scheme not in ('http', 'https'):
+            # From a bug in urlparse in Python < 2.7.4 we cannot support
+            # special schemes (cf: http://bugs.python.org/issue9374)
+            if sys.version_info < (2, 7, 4):
+                raise exception.NovaException(
+                    _("We do not support scheme '%s' under Python < 2.7.4, "
+                      "please use http or https") % parse.scheme)
+
+        query = parse.query
         token = urlparse.parse_qs(query).get("token", [""]).pop()
         if not token:
             # NoVNC uses it's own convention that forward token
@@ -60,7 +71,7 @@ class NovaProxyRequestHandlerBase(object):
         connect_info = rpcapi.check_token(ctxt, token=token)
 
         if not connect_info:
-            raise Exception(_("Invalid Token"))
+            raise exception.InvalidToken(token=token)
 
         self.msg(_('connect info: %s'), str(connect_info))
         host = connect_info['host']
@@ -78,8 +89,8 @@ class NovaProxyRequestHandlerBase(object):
             while True:
                 data = tsock.recv(4096, socket.MSG_PEEK)
                 if data.find("\r\n\r\n") != -1:
-                    if not data.split("\r\n")[0].find("200"):
-                        raise Exception(_("Invalid Connection Info"))
+                    if data.split("\r\n")[0].find("200") == -1:
+                        raise exception.InvalidConnectionInfo()
                     tsock.recv(len(data))
                     break
 
@@ -95,55 +106,16 @@ class NovaProxyRequestHandlerBase(object):
             raise
 
 
-# TODO(sross): when the websockify version is bumped to be >=0.6,
-#              remove the if-else statement and make the if branch
-#              contents the only code.
-if getattr(websockify, 'ProxyRequestHandler', None) is not None:
-    class NovaProxyRequestHandler(NovaProxyRequestHandlerBase,
-                                  websockify.ProxyRequestHandler):
-        def __init__(self, *args, **kwargs):
-            websockify.ProxyRequestHandler.__init__(self, *args, **kwargs)
+class NovaProxyRequestHandler(NovaProxyRequestHandlerBase,
+                              websockify.ProxyRequestHandler):
+    def __init__(self, *args, **kwargs):
+        websockify.ProxyRequestHandler.__init__(self, *args, **kwargs)
 
-        def socket(self, *args, **kwargs):
-            return websockify.WebSocketServer.socket(*args, **kwargs)
+    def socket(self, *args, **kwargs):
+        return websockify.WebSocketServer.socket(*args, **kwargs)
 
-    class NovaWebSocketProxy(websockify.WebSocketProxy):
-        @staticmethod
-        def get_logger():
-            return LOG
 
-else:
-    import sys
-
-    class NovaWebSocketProxy(NovaProxyRequestHandlerBase,
-                             websockify.WebSocketProxy):
-        def __init__(self, *args, **kwargs):
-            del kwargs['traffic']
-            del kwargs['RequestHandlerClass']
-            websockify.WebSocketProxy.__init__(self, *args,
-                                               target_host='ignore',
-                                               target_port='ignore',
-                                               unix_target=None,
-                                               target_cfg=None,
-                                               ssl_target=None,
-                                               **kwargs)
-
-        def new_client(self):
-            self.new_websocket_client()
-
-        def msg(self, *args, **kwargs):
-            LOG.info(*args, **kwargs)
-
-        def vmsg(self, *args, **kwargs):
-            LOG.debug(*args, **kwargs)
-
-        def warn(self, *args, **kwargs):
-            LOG.warn(*args, **kwargs)
-
-        def print_traffic(self, token="."):
-            if self.traffic:
-                sys.stdout.write(token)
-                sys.stdout.flush()
-
-    class NovaProxyRequestHandler(object):
-        pass
+class NovaWebSocketProxy(websockify.WebSocketProxy):
+    @staticmethod
+    def get_logger():
+        return LOG

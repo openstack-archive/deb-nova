@@ -14,9 +14,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.utils import timeutils
+
 from nova.api.openstack import common
 from nova.image import glance
-from nova.openstack.common import timeutils
 
 
 class ViewBuilder(common.ViewBuilder):
@@ -118,7 +119,6 @@ class ViewBuilder(common.ViewBuilder):
         glance_url = glance.generate_glance_url()
         glance_url = self._update_glance_link_prefix(glance_url)
         return '/'.join([glance_url,
-                         request.environ["nova.context"].project_id,
                          self._collection_name,
                          str(identifier)])
 

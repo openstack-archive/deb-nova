@@ -23,9 +23,9 @@ Driver base-classes:
 import sys
 
 from oslo.config import cfg
+from oslo.utils import importutils
 
-from nova.i18n import _
-from nova.openstack.common import importutils
+from nova.i18n import _, _LE, _LI
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import event as virtevent
@@ -160,13 +160,7 @@ class ComputeDriver(object):
 
         :param instance: nova.objects.instance.Instance object
 
-        Returns a dict containing:
-
-        :state:           the running state, one of the power_state codes
-        :max_mem:         (int) the maximum memory in KBytes allowed
-        :mem:             (int) the memory in KBytes used by the domain
-        :num_cpu:         (int) the number of virtual CPUs for the domain
-        :cpu_time:        (int) the CPU time used in nanoseconds
+        Returns a InstanceInfo object
         """
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
@@ -274,7 +268,8 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info=None, block_device_info=None):
+              admin_password, network_info=None, block_device_info=None,
+              flavor=None):
         """Create a new instance/VM/domain on the virtualization platform.
 
         Once this successfully completes, the instance should be
@@ -296,6 +291,7 @@ class ComputeDriver(object):
            :py:meth:`~nova.network.manager.NetworkManager.get_instance_nw_info`
         :param block_device_info: Information about block devices to be
                                   attached to the instance.
+        :param flavor: The flavor for the instance to be spawned.
         """
         raise NotImplementedError()
 
@@ -759,7 +755,7 @@ class ComputeDriver(object):
         back to the source host to check the results.
 
         :param context: security context
-        :param instance: nova.db.sqlalchemy.models.Instance
+        :param instance: nova.objects.instance.Instance object
         """
         raise NotImplementedError()
 
@@ -808,7 +804,7 @@ class ComputeDriver(object):
         raise NotImplementedError()
 
     def check_can_live_migrate_source(self, context, instance,
-                                      dest_check_data):
+                                      dest_check_data, block_device_info=None):
         """Check if it is possible to execute live migration.
 
         This checks if the live migration can succeed, based on the
@@ -817,16 +813,16 @@ class ComputeDriver(object):
         :param context: security context
         :param instance: nova.db.sqlalchemy.models.Instance
         :param dest_check_data: result of check_can_live_migrate_destination
+        :param block_device_info: result of _get_instance_block_device_info
         :returns: a dict containing migration info (hypervisor-dependent)
         """
         raise NotImplementedError()
 
-    def get_instance_disk_info(self, instance_name,
+    def get_instance_disk_info(self, instance,
                                block_device_info=None):
         """Retrieve information about actual disk sizes of an instance.
 
-        :param instance_name:
-            name of a nova instance as returned by list_instances()
+        :param instance: nova.objects.Instance
         :param block_device_info:
             Optional; Can be used to filter out devices which are
             actually volumes.
@@ -1015,7 +1011,7 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def host_power_action(self, host, action):
+    def host_power_action(self, action):
         """Reboots, shuts down or powers up the host."""
         raise NotImplementedError()
 
@@ -1025,7 +1021,7 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
-    def set_host_enabled(self, host, enabled):
+    def set_host_enabled(self, enabled):
         """Sets the specified host's ability to accept new instances."""
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
@@ -1047,21 +1043,6 @@ class ComputeDriver(object):
         """Unplug VIFs from networks.
 
         :param instance: nova.objects.instance.Instance
-        """
-        raise NotImplementedError()
-
-    def get_host_stats(self, refresh=False):
-        """Return currently known host stats.
-
-        If the hypervisor supports pci passthrough, the returned
-        dictionary includes a key-value pair for it.
-        The key of pci passthrough device is "pci_passthrough_devices"
-        and the value is a json string for the list of assignable
-        pci devices. Each device is a dictionary, with mandatory
-        keys of 'address', 'vendor_id', 'product_id', 'dev_type',
-        'dev_id', 'label' and other optional device specific information.
-
-        Refer to the objects/pci_device.py for more idea of these keys.
         """
         raise NotImplementedError()
 
@@ -1087,32 +1068,13 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
-    def block_stats(self, instance_name, disk_id):
+    def block_stats(self, instance, disk_id):
         """Return performance counters associated with the given disk_id on the
-        given instance_name.  These are returned as [rd_req, rd_bytes, wr_req,
+        given instance.  These are returned as [rd_req, rd_bytes, wr_req,
         wr_bytes, errs], where rd indicates read, wr indicates write, req is
         the total number of I/O requests made, bytes is the total number of
         bytes transferred, and errs is the number of requests held up due to a
         full pipeline.
-
-        All counters are long integers.
-
-        This method is optional.  On some platforms (e.g. XenAPI) performance
-        statistics can be retrieved directly in aggregate form, without Nova
-        having to do the aggregation.  On those platforms, this method is
-        unused.
-
-        Note that this function takes an instance ID.
-        """
-        raise NotImplementedError()
-
-    def interface_stats(self, instance_name, iface_id):
-        """Return performance counters associated with the given iface_id
-        on the given instance_id.  These are returned as [rx_bytes, rx_packets,
-        rx_errs, rx_drop, tx_bytes, tx_packets, tx_errs, tx_drop], where rx
-        indicates receive, tx indicates transmit, bytes and packets indicate
-        the total number of bytes or packets transferred, and errs and dropped
-        is the total number of packets failed / dropped.
 
         All counters are long integers.
 
@@ -1182,7 +1144,7 @@ class ComputeDriver(object):
              |    ]
 
         """
-        pass
+        return None
 
     def manage_image_cache(self, context, all_instances):
         """Manage the driver's local image cache.
@@ -1234,10 +1196,7 @@ class ComputeDriver(object):
         by the service. Otherwise, this method should return
         [hypervisor_hostname].
         """
-        stats = self.get_host_stats(refresh=refresh)
-        if not isinstance(stats, list):
-            stats = [stats]
-        return [s['hypervisor_hostname'] for s in stats]
+        raise NotImplementedError()
 
     def node_is_available(self, nodename):
         """Return whether this compute service manages a particular node."""
@@ -1298,7 +1257,7 @@ class ComputeDriver(object):
             LOG.debug("Emitting event %s", str(event))
             self._compute_event_callback(event)
         except Exception as ex:
-            LOG.error(_("Exception dispatching event %(event)s: %(ex)s"),
+            LOG.error(_LE("Exception dispatching event %(event)s: %(ex)s"),
                       {'event': event, 'ex': ex})
 
     def delete_instance_files(self, instance):
@@ -1373,6 +1332,36 @@ class ComputeDriver(object):
         #                 virt layer.
         return False
 
+    def quiesce(self, context, instance, image_meta):
+        """Quiesce the specified instance to prepare for snapshots.
+
+        If the specified instance doesn't support quiescing,
+        InstanceQuiesceNotSupported is raised. When it fails to quiesce by
+        other errors (e.g. agent timeout), NovaException is raised.
+
+        :param context:  request context
+        :param instance: nova.objects.instance.Instance to be quiesced
+        :param image_meta: image object returned by nova.image.glance that
+                           defines the image from which this instance
+                           was created
+        """
+        raise NotImplementedError()
+
+    def unquiesce(self, context, instance, image_meta):
+        """Unquiesce the specified instance after snapshots.
+
+        If the specified instance doesn't support quiescing,
+        InstanceQuiesceNotSupported is raised. When it fails to quiesce by
+        other errors (e.g. agent timeout), NovaException is raised.
+
+        :param context:  request context
+        :param instance: nova.objects.instance.Instance to be unquiesced
+        :param image_meta: image object returned by nova.image.glance that
+                           defines the image from which this instance
+                           was created
+        """
+        raise NotImplementedError()
+
 
 def load_compute_driver(virtapi, compute_driver=None):
     """Load a compute driver module.
@@ -1392,17 +1381,17 @@ def load_compute_driver(virtapi, compute_driver=None):
         compute_driver = CONF.compute_driver
 
     if not compute_driver:
-        LOG.error(_("Compute driver option required, but not specified"))
+        LOG.error(_LE("Compute driver option required, but not specified"))
         sys.exit(1)
 
-    LOG.info(_("Loading compute driver '%s'") % compute_driver)
+    LOG.info(_LI("Loading compute driver '%s'"), compute_driver)
     try:
         driver = importutils.import_object_ns('nova.virt',
                                               compute_driver,
                                               virtapi)
         return utils.check_isinstance(driver, ComputeDriver)
     except ImportError:
-        LOG.exception(_("Unable to load the virtualization driver"))
+        LOG.exception(_LE("Unable to load the virtualization driver"))
         sys.exit(1)
 
 

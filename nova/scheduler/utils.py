@@ -14,18 +14,19 @@
 
 """Utility methods for scheduling."""
 
+import collections
 import sys
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
 
 from nova.compute import flavors
 from nova.compute import utils as compute_utils
-from nova import db
 from nova import exception
-from nova.i18n import _, _LW
+from nova.i18n import _, _LE, _LW
 from nova import notifications
+from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import rpc
 
@@ -41,6 +42,10 @@ scheduler_opts = [
 CONF = cfg.CONF
 CONF.register_opts(scheduler_opts)
 
+CONF.import_opt('scheduler_default_filters', 'nova.scheduler.host_manager')
+
+GroupDetails = collections.namedtuple('GroupDetails', ['hosts', 'policies'])
+
 
 def build_request_spec(ctxt, image, instances, instance_type=None):
     """Build a request_spec for the scheduler.
@@ -54,10 +59,15 @@ def build_request_spec(ctxt, image, instances, instance_type=None):
 
     if instance_type is None:
         instance_type = flavors.extract_flavor(instance)
-    # NOTE(comstud): This is a bit ugly, but will get cleaned up when
-    # we're passing an InstanceType internal object.
-    extra_specs = db.flavor_extra_specs_get(ctxt, instance_type['flavorid'])
-    instance_type['extra_specs'] = extra_specs
+        # NOTE(danms): This won't have extra_specs, so fill in the gaps
+        _instance_type = objects.Flavor.get_by_flavor_id(
+            ctxt, instance_type['flavorid'])
+        instance_type.extra_specs = instance_type.get('extra_specs', {})
+        instance_type.extra_specs.update(_instance_type.extra_specs)
+
+    if isinstance(instance_type, objects.Flavor):
+        instance_type = obj_base.obj_to_primitive(instance_type)
+
     request_spec = {
             'image': image or {},
             'instance_properties': instance,
@@ -92,9 +102,16 @@ def set_vm_state_and_notify(context, service, method, updates, ex,
                         instance_uuid=instance_uuid)
 
             # update instance state and notify on the transition
+            # NOTE(hanlind): the send_update() call below is going to want to
+            # know about the flavor, so we need to join the appropriate things
+            # here and objectify the results.
             (old_ref, new_ref) = db.instance_update_and_get_original(
-                    context, instance_uuid, updates)
-            notifications.send_update(context, old_ref, new_ref,
+                    context, instance_uuid, updates,
+                    columns_to_join=['system_metadata'])
+            inst_obj = objects.Instance._from_db_object(
+                    context, objects.Instance(), new_ref,
+                    expected_attrs=['system_metadata'])
+            notifications.send_update(context, old_ref, inst_obj,
                     service=service)
             compute_utils.add_instance_fault_from_exc(context,
                     new_ref, ex, sys.exc_info())
@@ -174,8 +191,8 @@ def _log_compute_error(instance_uuid, retry):
         return  # no previously attempted hosts, skip
 
     last_host, last_node = hosts[-1]
-    LOG.error(_('Error from last host: %(last_host)s (node %(last_node)s):'
-                ' %(exc)s'),
+    LOG.error(_LE('Error from last host: %(last_host)s (node %(last_node)s):'
+                  ' %(exc)s'),
               {'last_host': last_host,
                'last_node': last_node,
                'exc': exc},
@@ -228,13 +245,82 @@ def parse_options(opts, sep='=', converter=str, name=""):
         else:
             bad.append(opt)
     if bad:
-        LOG.warn(_LW("Ignoring the invalid elements of the option "
-                     "%(name)s: %(options)s"),
-                 {'name': name,
-                  'options': ", ".join(bad)})
+        LOG.warning(_LW("Ignoring the invalid elements of the option "
+                        "%(name)s: %(options)s"),
+                    {'name': name,
+                     'options': ", ".join(bad)})
     return good
 
 
 def validate_filter(filter):
     """Validates that the filter is configured in the default filters."""
     return filter in CONF.scheduler_default_filters
+
+
+_SUPPORTS_AFFINITY = None
+_SUPPORTS_ANTI_AFFINITY = None
+
+
+def _get_group_details(context, instance_uuids, user_group_hosts=None):
+    """Provide group_hosts and group_policies sets related to instances if
+    those instances are belonging to a group and if corresponding filters are
+    enabled.
+
+    :param instance_uuids: list of instance uuids
+    :param user_group_hosts: Hosts from the group or empty set
+
+    :returns: None or namedtuple GroupDetails
+    """
+    global _SUPPORTS_AFFINITY
+    if _SUPPORTS_AFFINITY is None:
+        _SUPPORTS_AFFINITY = validate_filter(
+            'ServerGroupAffinityFilter')
+    global _SUPPORTS_ANTI_AFFINITY
+    if _SUPPORTS_ANTI_AFFINITY is None:
+        _SUPPORTS_ANTI_AFFINITY = validate_filter(
+            'ServerGroupAntiAffinityFilter')
+    _supports_server_groups = any((_SUPPORTS_AFFINITY,
+                                   _SUPPORTS_ANTI_AFFINITY))
+    if not _supports_server_groups or not instance_uuids:
+        return
+
+    try:
+        # NOTE(sbauza) If there are multiple instance UUIDs, it's a boot
+        # request and they will all be in the same group, so it's safe to
+        # only check the first one.
+        group = objects.InstanceGroup.get_by_instance_uuid(context,
+                                                           instance_uuids[0])
+    except exception.InstanceGroupNotFound:
+        return
+
+    policies = set(('anti-affinity', 'affinity'))
+    if any((policy in policies) for policy in group.policies):
+        if (not _SUPPORTS_AFFINITY and 'affinity' in group.policies):
+            msg = _("ServerGroupAffinityFilter not configured")
+            LOG.error(msg)
+            raise exception.NoValidHost(reason=msg)
+        if (not _SUPPORTS_ANTI_AFFINITY and 'anti-affinity' in group.policies):
+            msg = _("ServerGroupAntiAffinityFilter not configured")
+            LOG.error(msg)
+            raise exception.NoValidHost(reason=msg)
+        group_hosts = set(group.get_hosts(context))
+        user_hosts = set(user_group_hosts) if user_group_hosts else set()
+        return GroupDetails(hosts=user_hosts | group_hosts,
+                            policies=group.policies)
+
+
+def setup_instance_group(context, request_spec, filter_properties):
+    """Add group_hosts and group_policies fields to filter_properties dict
+    based on instance uuids provided in request_spec, if those instances are
+    belonging to a group.
+
+    :param request_spec: Request spec
+    :param filter_properties: Filter properties
+    """
+    group_hosts = filter_properties.get('group_hosts')
+    instance_uuids = request_spec.get('instance_uuids')
+    group_info = _get_group_details(context, instance_uuids, group_hosts)
+    if group_info is not None:
+        filter_properties['group_updated'] = True
+        filter_properties['group_hosts'] = group_info.hosts
+        filter_properties['group_policies'] = group_info.policies

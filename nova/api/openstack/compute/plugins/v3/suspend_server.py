@@ -12,7 +12,6 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-import webob
 from webob import exc
 
 from nova.api.openstack import common
@@ -20,9 +19,7 @@ from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
-from nova.openstack.common import log as logging
 
-LOG = logging.getLogger(__name__)
 ALIAS = "os-suspend-server"
 
 
@@ -36,6 +33,7 @@ class SuspendServerController(wsgi.Controller):
         super(SuspendServerController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409))
     @wsgi.action('suspend')
     def _suspend(self, req, id, body):
@@ -50,9 +48,9 @@ class SuspendServerController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'suspend')
-        return webob.Response(status_int=202)
+                    'suspend', id)
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409))
     @wsgi.action('resume')
     def _resume(self, req, id, body):
@@ -67,8 +65,7 @@ class SuspendServerController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'resume')
-        return webob.Response(status_int=202)
+                    'resume', id)
 
 
 class SuspendServer(extensions.V3APIExtensionBase):

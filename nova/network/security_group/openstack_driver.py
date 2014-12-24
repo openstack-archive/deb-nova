@@ -14,8 +14,7 @@
 #    under the License.
 
 from oslo.config import cfg
-
-from nova.openstack.common import importutils
+from oslo.utils import importutils
 
 security_group_opts = [
     cfg.StrOpt('security_group_api',
@@ -26,16 +25,15 @@ security_group_opts = [
 CONF = cfg.CONF
 CONF.register_opts(security_group_opts)
 
-NOVA_DRIVER = ('nova.api.openstack.compute.contrib.security_groups.'
-               'NativeNovaSecurityGroupAPI')
-NEUTRON_DRIVER = ('nova.api.openstack.compute.contrib.security_groups.'
-                  'NativeNeutronSecurityGroupAPI')
+NOVA_DRIVER = ('nova.compute.api.SecurityGroupAPI')
+NEUTRON_DRIVER = ('nova.network.security_group.neutron_driver.'
+                  'SecurityGroupAPI')
 
 
 def get_openstack_security_group_driver():
     if CONF.security_group_api.lower() == 'nova':
         return importutils.import_object(NOVA_DRIVER)
-    elif CONF.security_group_api.lower() in ('neutron', 'quantum'):
+    elif is_neutron_security_groups():
         return importutils.import_object(NEUTRON_DRIVER)
     else:
         return importutils.import_object(CONF.security_group_api)

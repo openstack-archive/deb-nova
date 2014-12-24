@@ -152,7 +152,7 @@ class Controller(object):
 
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'update metadata')
+                    'update metadata', server_id)
 
     @wsgi.serializers(xml=common.MetaItemTemplate)
     def show(self, req, server_id, id):
@@ -177,9 +177,9 @@ class Controller(object):
             msg = _("Metadata item was not found")
             raise exc.HTTPNotFound(explanation=msg)
 
+        server = common.get_instance(self.compute_api, context, server_id,
+                                     want_objects=True)
         try:
-            server = self.compute_api.get(context, server_id,
-                                          want_objects=True)
             self.compute_api.delete_instance_metadata(context, server, id)
 
         except exception.InstanceNotFound:
@@ -191,7 +191,7 @@ class Controller(object):
 
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'delete metadata')
+                    'delete metadata', server_id)
 
 
 def create_resource():

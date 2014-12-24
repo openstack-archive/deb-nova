@@ -23,15 +23,12 @@ import random
 
 from oslo.config import cfg
 
-from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
-from nova.i18n import _, _LW
-from nova import objects
+from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova import rpc
 from nova.scheduler import driver
 from nova.scheduler import scheduler_options
-from nova.scheduler import utils as scheduler_utils
 
 
 CONF = cfg.CONF
@@ -58,84 +55,7 @@ class FilterScheduler(driver.Scheduler):
     def __init__(self, *args, **kwargs):
         super(FilterScheduler, self).__init__(*args, **kwargs)
         self.options = scheduler_options.SchedulerOptions()
-        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.notifier = rpc.get_notifier('scheduler')
-        self._supports_affinity = scheduler_utils.validate_filter(
-            'ServerGroupAffinityFilter')
-        self._supports_anti_affinity = scheduler_utils.validate_filter(
-            'ServerGroupAntiAffinityFilter')
-
-    # NOTE(alaski): Remove this method when the scheduler rpc interface is
-    # bumped to 4.x as it is no longer used.
-    def schedule_run_instance(self, context, request_spec,
-                              admin_password, injected_files,
-                              requested_networks, is_first_time,
-                              filter_properties, legacy_bdm_in_spec):
-        """Provisions instances that needs to be scheduled
-
-        Applies filters and weighters on request properties to get a list of
-        compute hosts and calls them to spawn instance(s).
-        """
-        payload = dict(request_spec=request_spec)
-        self.notifier.info(context, 'scheduler.run_instance.start', payload)
-
-        instance_uuids = request_spec.get('instance_uuids')
-        LOG.info(_("Attempting to build %(num_instances)d instance(s) "
-                    "uuids: %(instance_uuids)s"),
-                  {'num_instances': len(instance_uuids),
-                   'instance_uuids': instance_uuids})
-        LOG.debug("Request Spec: %s" % request_spec)
-
-        # check retry policy.  Rather ugly use of instance_uuids[0]...
-        # but if we've exceeded max retries... then we really only
-        # have a single instance.
-        scheduler_utils.populate_retry(filter_properties,
-                                       instance_uuids[0])
-        weighed_hosts = self._schedule(context, request_spec,
-                                       filter_properties)
-
-        # NOTE: Pop instance_uuids as individual creates do not need the
-        # set of uuids. Do not pop before here as the upper exception
-        # handler fo NoValidHost needs the uuid to set error state
-        instance_uuids = request_spec.pop('instance_uuids')
-
-        # NOTE(comstud): Make sure we do not pass this through.  It
-        # contains an instance of RpcContext that cannot be serialized.
-        filter_properties.pop('context', None)
-
-        for num, instance_uuid in enumerate(instance_uuids):
-            request_spec['instance_properties']['launch_index'] = num
-
-            try:
-                try:
-                    weighed_host = weighed_hosts.pop(0)
-                    LOG.info(_("Choosing host %(weighed_host)s "
-                                "for instance %(instance_uuid)s"),
-                              {'weighed_host': weighed_host,
-                               'instance_uuid': instance_uuid})
-                except IndexError:
-                    raise exception.NoValidHost(reason="")
-
-                self._provision_resource(context, weighed_host,
-                                         request_spec,
-                                         filter_properties,
-                                         requested_networks,
-                                         injected_files, admin_password,
-                                         is_first_time,
-                                         instance_uuid=instance_uuid,
-                                         legacy_bdm_in_spec=legacy_bdm_in_spec)
-            except Exception as ex:
-                # NOTE(vish): we don't reraise the exception here to make sure
-                #             that all instances in the request get set to
-                #             error properly
-                driver.handle_schedule_error(context, ex, instance_uuid,
-                                             request_spec)
-            # scrub retry host list in case we're scheduling multiple
-            # instances:
-            retry = filter_properties.get('retry', {})
-            retry['hosts'] = []
-
-        self.notifier.info(context, 'scheduler.run_instance.end', payload)
 
     def select_destinations(self, context, request_spec, filter_properties):
         """Selects a filtered set of hosts and nodes."""
@@ -148,7 +68,16 @@ class FilterScheduler(driver.Scheduler):
 
         # Couldn't fulfill the request_spec
         if len(selected_hosts) < num_instances:
-            raise exception.NoValidHost(reason='')
+            # Log the details but don't put those into the reason since
+            # we don't want to give away too much information about our
+            # actual environment.
+            LOG.debug('There are %(hosts)d hosts available but '
+                      '%(num_instances)d instances requested to build.',
+                      {'hosts': len(selected_hosts),
+                       'num_instances': num_instances})
+
+            reason = _('There are not enough hosts available.')
+            raise exception.NoValidHost(reason=reason)
 
         dests = [dict(host=host.obj.host, nodename=host.obj.nodename,
                       limits=host.obj.limits) for host in selected_hosts]
@@ -156,42 +85,6 @@ class FilterScheduler(driver.Scheduler):
         self.notifier.info(context, 'scheduler.select_destinations.end',
                            dict(request_spec=request_spec))
         return dests
-
-    def _provision_resource(self, context, weighed_host, request_spec,
-            filter_properties, requested_networks, injected_files,
-            admin_password, is_first_time, instance_uuid=None,
-            legacy_bdm_in_spec=True):
-        """Create the requested resource in this Zone."""
-        # NOTE(vish): add our current instance back into the request spec
-        request_spec['instance_uuids'] = [instance_uuid]
-        payload = dict(request_spec=request_spec,
-                       weighted_host=weighed_host.to_dict(),
-                       instance_id=instance_uuid)
-        self.notifier.info(context,
-                           'scheduler.run_instance.scheduled', payload)
-
-        # Update the metadata if necessary
-        try:
-            updated_instance = driver.instance_update_db(context,
-                                                         instance_uuid)
-        except exception.InstanceNotFound:
-            LOG.warning(_LW("Instance disappeared during scheduling"),
-                        context=context, instance_uuid=instance_uuid)
-
-        else:
-            scheduler_utils.populate_filter_properties(filter_properties,
-                    weighed_host.obj)
-
-            self.compute_rpcapi.run_instance(context,
-                    instance=updated_instance,
-                    host=weighed_host.obj.host,
-                    request_spec=request_spec,
-                    filter_properties=filter_properties,
-                    requested_networks=requested_networks,
-                    injected_files=injected_files,
-                    admin_password=admin_password, is_first_time=is_first_time,
-                    node=weighed_host.obj.nodename,
-                    legacy_bdm_in_spec=legacy_bdm_in_spec)
 
     def _get_configuration_options(self):
         """Fetch options dictionary. Broken out for testing."""
@@ -207,32 +100,6 @@ class FilterScheduler(driver.Scheduler):
         filter_properties['project_id'] = project_id
         filter_properties['os_type'] = os_type
 
-    def _setup_instance_group(self, context, filter_properties):
-        update_group_hosts = False
-        scheduler_hints = filter_properties.get('scheduler_hints') or {}
-        group_hint = scheduler_hints.get('group', None)
-        if group_hint:
-            group = objects.InstanceGroup.get_by_hint(context, group_hint)
-            policies = set(('anti-affinity', 'affinity', 'legacy'))
-            if any((policy in policies) for policy in group.policies):
-                if ('affinity' in group.policies and
-                        not self._supports_affinity):
-                        msg = _("ServerGroupAffinityFilter not configured")
-                        LOG.error(msg)
-                        raise exception.NoValidHost(reason=msg)
-                if ('anti-affinity' in group.policies and
-                        not self._supports_anti_affinity):
-                        msg = _("ServerGroupAntiAffinityFilter not configured")
-                        LOG.error(msg)
-                        raise exception.NoValidHost(reason=msg)
-                update_group_hosts = True
-                filter_properties.setdefault('group_hosts', set())
-                user_hosts = set(filter_properties['group_hosts'])
-                group_hosts = set(group.get_hosts(context))
-                filter_properties['group_hosts'] = user_hosts | group_hosts
-                filter_properties['group_policies'] = group.policies
-        return update_group_hosts
-
     def _schedule(self, context, request_spec, filter_properties):
         """Returns a list of hosts that meet the required specs,
         ordered by their fitness.
@@ -242,8 +109,7 @@ class FilterScheduler(driver.Scheduler):
         instance_type = request_spec.get("instance_type", None)
         instance_uuids = request_spec.get("instance_uuids", None)
 
-        update_group_hosts = self._setup_instance_group(context,
-                filter_properties)
+        update_group_hosts = filter_properties.get('group_updated', False)
 
         config_options = self._get_configuration_options()
 
@@ -297,18 +163,14 @@ class FilterScheduler(driver.Scheduler):
 
             # Now consume the resources so the filter/weights
             # will change for the next instance.
-            # NOTE (baoli) adding and deleting pci_requests is a temporary
-            # fix to avoid DB access in consume_from_instance() while getting
-            # pci_requests. The change can be removed once pci_requests is
-            # part of the instance object that is passed into the scheduler
-            # APIs
-            pci_requests = filter_properties.get('pci_requests')
-            if pci_requests:
-                instance_properties['pci_requests'] = pci_requests
             chosen_host.obj.consume_from_instance(instance_properties)
-            if pci_requests:
-                del instance_properties['pci_requests']
             if update_group_hosts is True:
+                # NOTE(sbauza): Group details are serialized into a list now
+                # that they are populated by the conductor, we need to
+                # deserialize them
+                if isinstance(filter_properties['group_hosts'], list):
+                    filter_properties['group_hosts'] = set(
+                        filter_properties['group_hosts'])
                 filter_properties['group_hosts'].add(chosen_host.obj.host)
         return selected_hosts
 

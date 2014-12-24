@@ -29,6 +29,7 @@ from nova.api.openstack import wsgi
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LC
+from nova.i18n import _LE
 from nova.i18n import _LI
 from nova.i18n import _LW
 from nova.i18n import translate
@@ -62,10 +63,10 @@ CONF.register_opts(api_opts, api_opts_group)
 # List of v3 API extensions which are considered to form
 # the core API and so must be present
 # TODO(cyeoh): Expand this list as the core APIs are ported to V3
-API_V3_CORE_EXTENSIONS = set(['consoles',
+API_V3_CORE_EXTENSIONS = set(['os-consoles',
                               'extensions',
-                              'flavor-extra-specs',
-                              'flavor-manage',
+                              'os-flavor-extra-specs',
+                              'os-flavor-manage',
                               'flavors',
                               'ips',
                               'os-keypairs',
@@ -89,7 +90,7 @@ class FaultWrapper(base_wsgi.Middleware):
                                   status, webob.exc.HTTPInternalServerError)()
 
     def _error(self, inner, req):
-        LOG.exception(_("Caught error: %s"), unicode(inner))
+        LOG.exception(_LE("Caught error: %s"), unicode(inner))
 
         safe = getattr(inner, 'safe', False)
         headers = getattr(inner, 'headers', None)
@@ -232,9 +233,9 @@ class APIRouter(base_wsgi.Router):
             msg_format_dict = {'collection': collection,
                                'ext_name': extension.extension.name}
             if collection not in self.resources:
-                LOG.warn(_LW('Extension %(ext_name)s: Cannot extend '
-                             'resource %(collection)s: No such resource'),
-                         msg_format_dict)
+                LOG.warning(_LW('Extension %(ext_name)s: Cannot extend '
+                                'resource %(collection)s: No such resource'),
+                            msg_format_dict)
                 continue
 
             LOG.debug('Extension %(ext_name)s extended resource: '
@@ -254,14 +255,16 @@ class APIRouterV21(base_wsgi.Router):
     and method.
     """
 
-    # TODO(oomichi): This namespace will be changed after moving all v3 APIs
-    # to v2.1.
-    API_EXTENSION_NAMESPACE = 'nova.api.v3.extensions'
-
     @classmethod
     def factory(cls, global_config, **local_config):
         """Simple paste factory, :class:`nova.wsgi.Router` doesn't have one."""
         return cls()
+
+    @staticmethod
+    def api_extension_namespace():
+        # TODO(oomichi): This namespaces will be changed after moving all v3
+        # APIs to v2.1.
+        return 'nova.api.v3.extensions'
 
     def __init__(self, init_only=None, v3mode=False):
         # TODO(cyeoh): bp v3-api-extension-framework. Currently load
@@ -283,11 +286,11 @@ class APIRouterV21(base_wsgi.Router):
                     if ext.obj.alias not in CONF.osapi_v3.extensions_blacklist:
                         return self._register_extension(ext)
                     else:
-                        LOG.warn(_LW("Not loading %s because it is "
-                                     "in the blacklist"), ext.obj.alias)
+                        LOG.warning(_LW("Not loading %s because it is "
+                                        "in the blacklist"), ext.obj.alias)
                         return False
                 else:
-                    LOG.warn(
+                    LOG.warning(
                         _LW("Not loading %s because it is not in the "
                             "whitelist"), ext.obj.alias)
                     return False
@@ -308,11 +311,11 @@ class APIRouterV21(base_wsgi.Router):
             CONF.osapi_v3.extensions_whitelist).intersection(
                 CONF.osapi_v3.extensions_blacklist)
         if len(in_blacklist_and_whitelist) != 0:
-            LOG.warn(_LW("Extensions in both blacklist and whitelist: %s"),
-                     list(in_blacklist_and_whitelist))
+            LOG.warning(_LW("Extensions in both blacklist and whitelist: %s"),
+                        list(in_blacklist_and_whitelist))
 
         self.api_extension_manager = stevedore.enabled.EnabledExtensionManager(
-            namespace=self.API_EXTENSION_NAMESPACE,
+            namespace=self.api_extension_namespace(),
             check_func=_check_load_extension,
             invoke_on_load=True,
             invoke_kwds={"extension_info": self.loaded_extension_info})
@@ -329,8 +332,7 @@ class APIRouterV21(base_wsgi.Router):
         if list(self.api_extension_manager):
             # NOTE(cyeoh): Stevedore raises an exception if there are
             # no plugins detected. I wonder if this is a bug.
-            self.api_extension_manager.map(self._register_resources,
-                                           mapper=mapper)
+            self._register_resources_check_inherits(mapper)
             self.api_extension_manager.map(self._register_controllers)
 
         missing_core_extensions = self.get_missing_core_extensions(
@@ -342,6 +344,25 @@ class APIRouterV21(base_wsgi.Router):
                 missing_apis=missing_core_extensions)
 
         super(APIRouterV21, self).__init__(mapper)
+
+    def _register_resources_list(self, ext_list, mapper):
+        for ext in ext_list:
+            self._register_resources(ext, mapper)
+
+    def _register_resources_check_inherits(self, mapper):
+        ext_has_inherits = []
+        ext_no_inherits = []
+
+        for ext in self.api_extension_manager:
+            for resource in ext.obj.get_resources():
+                if resource.inherits:
+                    ext_has_inherits.append(ext)
+                    break
+            else:
+                ext_no_inherits.append(ext)
+
+        self._register_resources_list(ext_no_inherits, mapper)
+        self._register_resources_list(ext_has_inherits, mapper)
 
     @staticmethod
     def get_missing_core_extensions(extensions_loaded):
@@ -374,8 +395,8 @@ class APIRouterV21(base_wsgi.Router):
                 inherits = self.resources.get(resource.inherits)
                 if not resource.controller:
                     resource.controller = inherits.controller
-            wsgi_resource = wsgi.Resource(resource.controller,
-                                          inherits=inherits)
+            wsgi_resource = wsgi.ResourceV21(resource.controller,
+                                             inherits=inherits)
             self.resources[resource.collection] = wsgi_resource
             kargs = dict(
                 controller=wsgi_resource,
@@ -414,9 +435,9 @@ class APIRouterV21(base_wsgi.Router):
             controller = extension.controller
 
             if collection not in self.resources:
-                LOG.warn(_LW('Extension %(ext_name)s: Cannot extend '
-                             'resource %(collection)s: No such resource'),
-                         {'ext_name': ext_name, 'collection': collection})
+                LOG.warning(_LW('Extension %(ext_name)s: Cannot extend '
+                                'resource %(collection)s: No such resource'),
+                            {'ext_name': ext_name, 'collection': collection})
                 continue
 
             LOG.debug('Extension %(ext_name)s extending resource: '

@@ -21,6 +21,8 @@ model.
 import copy
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import importutils
 
 from nova.compute import claims
 from nova.compute import flavors
@@ -30,13 +32,11 @@ from nova.compute import task_states
 from nova.compute import vm_states
 from nova import conductor
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LI, _LW
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.pci import pci_manager
+from nova.pci import manager as pci_manager
 from nova import rpc
 from nova.scheduler import client as scheduler_client
 from nova import utils
@@ -111,14 +111,14 @@ class ResourceTracker(object):
 
         # sanity checks:
         if instance_ref['host']:
-            LOG.warning(_("Host field should not be set on the instance until "
-                          "resources have been claimed."),
-                          instance=instance_ref)
+            LOG.warning(_LW("Host field should not be set on the instance "
+                            "until resources have been claimed."),
+                        instance=instance_ref)
 
         if instance_ref['node']:
-            LOG.warning(_("Node field should not be set on the instance "
-                          "until resources have been claimed."),
-                          instance=instance_ref)
+            LOG.warning(_LW("Node field should not be set on the instance "
+                            "until resources have been claimed."),
+                        instance=instance_ref)
 
         # get memory overhead required to build this instance:
         overhead = self.driver.estimate_instance_overhead(instance_ref)
@@ -195,7 +195,7 @@ class ResourceTracker(object):
         claim will not be lost if the audit process starts.
         """
         old_instance_type = flavors.extract_flavor(instance)
-        migration = objects.Migration()
+        migration = objects.Migration(context=context.elevated())
         migration.dest_compute = self.host
         migration.dest_node = self.nodename
         migration.dest_host = self.driver.get_host_ip_addr()
@@ -205,7 +205,7 @@ class ResourceTracker(object):
         migration.instance_uuid = instance['uuid']
         migration.source_compute = instance['host']
         migration.source_node = instance['node']
-        migration.create(context.elevated())
+        migration.create()
         return migration
 
     def _set_instance_host_and_node(self, context, instance_ref):
@@ -247,9 +247,8 @@ class ResourceTracker(object):
                         instance['system_metadata'])
 
             if instance_type['id'] == itype['id']:
-                numa_topology = (
-                        hardware.VirtNUMAInstanceTopology.get_constraints(
-                            itype, image_meta))
+                numa_topology = hardware.numa_get_constraints(
+                    itype, image_meta)
                 usage = self._get_usage_dict(
                         itype, numa_topology=numa_topology)
                 if self.pci_tracker:
@@ -292,7 +291,7 @@ class ResourceTracker(object):
             try:
                 metrics += monitor.get_metrics(nodename=nodename)
             except Exception:
-                LOG.warn(_("Cannot get the metrics from %s."), monitor)
+                LOG.warning(_LW("Cannot get the metrics from %s."), monitor)
         if metrics:
             metrics_info['nodename'] = nodename
             metrics_info['metrics'] = metrics
@@ -398,17 +397,20 @@ class ResourceTracker(object):
         if not self.compute_node:
             # Need to create the ComputeNode record:
             resources['service_id'] = service['id']
+            resources['host'] = self.host
             self._create(context, resources)
             if self.pci_tracker:
                 self.pci_tracker.set_compute_node_id(self.compute_node['id'])
-            LOG.info(_('Compute_service record created for %(host)s:%(node)s')
-                    % {'host': self.host, 'node': self.nodename})
+            LOG.info(_LI('Compute_service record created for '
+                         '%(host)s:%(node)s'),
+                     {'host': self.host, 'node': self.nodename})
 
         else:
             # just update the record:
             self._update(context, resources)
-            LOG.info(_('Compute_service record updated for %(host)s:%(node)s')
-                    % {'host': self.host, 'node': self.nodename})
+            LOG.info(_LI('Compute_service record updated for '
+                         '%(host)s:%(node)s'),
+                     {'host': self.host, 'node': self.nodename})
 
     def _write_ext_resources(self, resources):
         resources['stats'] = {}
@@ -434,7 +436,7 @@ class ResourceTracker(object):
             return self.conductor_api.service_get_by_compute_host(context,
                                                                   self.host)
         except exception.NotFound:
-            LOG.warn(_("No service record for host %s"), self.host)
+            LOG.warning(_LW("No service record for host %s"), self.host)
 
     def _report_hypervisor_resource_view(self, resources):
         """Log the hypervisor's view of free resources.
@@ -478,7 +480,10 @@ class ResourceTracker(object):
                     "total allocated virtual ram (MB): %(vram)s"),
                     {'pram': resources['memory_mb'],
                      'vram': resources['memory_mb_used']})
-        LOG.audit(_("Free disk (GB): %s") % resources['free_disk_gb'])
+        LOG.audit(_("Total physical disk (GB): %(pdisk)s, "
+                    "total allocated virtual disk (GB): %(vdisk)s"),
+                  {'pdisk': resources['local_gb'],
+                   'vdisk': resources['local_gb_used']})
 
         vcpus = resources['vcpus']
         if vcpus:
@@ -596,13 +601,11 @@ class ResourceTracker(object):
         if itype:
             host_topology = resources.get('numa_topology')
             if host_topology:
-                host_topology = hardware.VirtNUMAHostTopology.from_json(
+                host_topology = objects.NUMATopology.obj_from_db_obj(
                         host_topology)
+            numa_topology = hardware.numa_get_constraints(itype, image_meta)
             numa_topology = (
-                    hardware.VirtNUMAInstanceTopology.get_constraints(
-                        itype, image_meta))
-            numa_topology = (
-                    hardware.VirtNUMAHostTopology.fit_instance_to_host(
+                    hardware.numa_fit_instance_to_host(
                         host_topology, numa_topology))
             usage = self._get_usage_dict(
                         itype, numa_topology=numa_topology)
@@ -636,8 +639,8 @@ class ResourceTracker(object):
 
             # skip migration if instance isn't in a resize state:
             if not self._instance_in_resize_state(instance):
-                LOG.warn(_("Instance not resizing, skipping migration."),
-                         instance_uuid=uuid)
+                LOG.warning(_LW("Instance not resizing, skipping migration."),
+                            instance_uuid=uuid)
                 continue
 
             # filter to most recently updated migration for each instance:
@@ -651,8 +654,8 @@ class ResourceTracker(object):
                 self._update_usage_from_migration(context, instance, None,
                                                   resources, migration)
             except exception.FlavorNotFound:
-                LOG.warn(_("Flavor could not be found, skipping "
-                           "migration."), instance_uuid=uuid)
+                LOG.warning(_LW("Flavor could not be found, skipping "
+                                "migration."), instance_uuid=uuid)
                 continue
 
     def _update_usage_from_instance(self, context, resources, instance):
@@ -741,9 +744,9 @@ class ResourceTracker(object):
         for orphan in orphans:
             memory_mb = orphan['memory_mb']
 
-            LOG.warn(_("Detected running orphan instance: %(uuid)s (consuming "
-                       "%(memory_mb)s MB memory)"),
-                     {'uuid': orphan['uuid'], 'memory_mb': memory_mb})
+            LOG.warning(_LW("Detected running orphan instance: %(uuid)s "
+                            "(consuming %(memory_mb)s MB memory)"),
+                        {'uuid': orphan['uuid'], 'memory_mb': memory_mb})
 
             # just record memory usage for the orphan
             usage = {'memory_mb': memory_mb}
@@ -782,11 +785,12 @@ class ResourceTracker(object):
         See bug 1164110
         """
         try:
-            return flavors.extract_flavor(instance, prefix)
+            extracted_flavor = flavors.extract_flavor(instance, prefix)
         except KeyError:
             if not instance_type_id:
                 instance_type_id = instance['instance_type_id']
             return objects.Flavor.get_by_id(context, instance_type_id)
+        return extracted_flavor
 
     def _get_usage_dict(self, object_or_dict, **updates):
         """Make a usage dict _update methods expect.

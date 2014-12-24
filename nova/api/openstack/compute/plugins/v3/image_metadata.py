@@ -16,8 +16,10 @@
 from webob import exc
 
 from nova.api.openstack import common
+from nova.api.openstack.compute.schemas.v3 import image_metadata
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import exception
 from nova.i18n import _
 import nova.image
@@ -25,7 +27,7 @@ import nova.image
 ALIAS = 'image-metadata'
 
 
-class ImageMetadataController(object):
+class ImageMetadataController(wsgi.Controller):
     """The image metadata API controller for the OpenStack API."""
 
     def __init__(self):
@@ -57,12 +59,12 @@ class ImageMetadataController(object):
             raise exc.HTTPNotFound()
 
     @extensions.expected_errors((400, 403, 404, 413))
+    @validation.schema(image_metadata.create)
     def create(self, req, image_id, body):
         context = req.environ['nova.context']
         image = self._get_image(context, image_id)
-        if 'metadata' in body:
-            for key, value in body['metadata'].iteritems():
-                image['properties'][key] = value
+        for key, value in body['metadata'].iteritems():
+            image['properties'][key] = value
         common.check_img_metadata_properties_quota(context,
                                                    image['properties'])
         try:
@@ -73,20 +75,14 @@ class ImageMetadataController(object):
         return dict(metadata=image['properties'])
 
     @extensions.expected_errors((400, 403, 404, 413))
+    @validation.schema(image_metadata.update)
     def update(self, req, image_id, id, body):
         context = req.environ['nova.context']
 
-        try:
-            meta = body['meta']
-        except KeyError:
-            expl = _('Incorrect request body format')
-            raise exc.HTTPBadRequest(explanation=expl)
+        meta = body['meta']
 
         if id not in meta:
             expl = _('Request body and URI mismatch')
-            raise exc.HTTPBadRequest(explanation=expl)
-        if len(meta) > 1:
-            expl = _('Request body contains too many items')
             raise exc.HTTPBadRequest(explanation=expl)
 
         image = self._get_image(context, image_id)
@@ -101,10 +97,11 @@ class ImageMetadataController(object):
         return dict(meta=meta)
 
     @extensions.expected_errors((400, 403, 404, 413))
+    @validation.schema(image_metadata.update_all)
     def update_all(self, req, image_id, body):
         context = req.environ['nova.context']
         image = self._get_image(context, image_id)
-        metadata = body.get('metadata', {})
+        metadata = body['metadata']
         common.check_img_metadata_properties_quota(context, metadata)
         image['properties'] = metadata
         try:
@@ -152,6 +149,7 @@ class ImageMetadata(extensions.V3APIExtensionBase):
         return []
 
     def image_metadata_map(self, mapper, wsgi_resource):
-        mapper.connect("metadata", "/images/{image_id}/metadata",
+        mapper.connect("metadata",
+                       "/{project_id}/images/{image_id}/metadata",
                        controller=wsgi_resource,
                        action='update_all', conditions={"method": ['PUT']})

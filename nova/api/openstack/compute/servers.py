@@ -20,6 +20,8 @@ import re
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.utils import strutils
+from oslo.utils import timeutils
 import six
 import webob
 from webob import exc
@@ -37,8 +39,6 @@ from nova.i18n import _
 from nova.i18n import _LW
 from nova import objects
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
-from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import policy
 from nova import utils
@@ -79,8 +79,8 @@ def make_server(elem, detailed=False):
 
     global XML_WARNING
     if not XML_WARNING:
-        LOG.warn(_LW('XML support has been deprecated and may be removed '
-                     'as early as the Juno release.'))
+        LOG.warning(_LW('XML support has been deprecated and may be removed '
+                        'as early as the Juno release.'))
         XML_WARNING = True
 
     if detailed:
@@ -596,19 +596,24 @@ class Controller(wsgi.Controller):
                 search_opts['user_id'] = context.user_id
 
         limit, marker = common.get_limit_and_marker(req)
+        # Sorting by multiple keys and directions is conditionally enabled
+        sort_keys, sort_dirs = None, None
+        if self.ext_mgr.is_loaded('os-server-sort-keys'):
+            sort_keys, sort_dirs = common.get_sort_params(req.params)
         try:
             instance_list = self.compute_api.get_all(context,
                                                      search_opts=search_opts,
                                                      limit=limit,
                                                      marker=marker,
-                                                     want_objects=True)
+                                                     want_objects=True,
+                                                     sort_keys=sort_keys,
+                                                     sort_dirs=sort_dirs)
         except exception.MarkerNotFound:
             msg = _('marker [%s] not found') % marker
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.FlavorNotFound:
             LOG.debug("Flavor '%s' could not be found", search_opts['flavor'])
-            # TODO(mriedem): Move to ObjectListBase.__init__ for empty lists.
-            instance_list = objects.InstanceList(objects=[])
+            instance_list = objects.InstanceList()
 
         if is_detail:
             instance_list.fill_faults()
@@ -620,12 +625,8 @@ class Controller(wsgi.Controller):
 
     def _get_server(self, context, req, instance_uuid):
         """Utility function for looking up an instance by uuid."""
-        try:
-            instance = self.compute_api.get(context, instance_uuid,
-                                            want_objects=True)
-        except exception.NotFound:
-            msg = _("Instance could not be found")
-            raise exc.HTTPNotFound(explanation=msg)
+        instance = common.get_instance(self.compute_api, context,
+                                       instance_uuid, want_objects=True)
         req.cache_db_instance(instance)
         return instance
 
@@ -761,15 +762,9 @@ class Controller(wsgi.Controller):
     @wsgi.serializers(xml=ServerTemplate)
     def show(self, req, id):
         """Returns server details by server id."""
-        try:
-            context = req.environ['nova.context']
-            instance = self.compute_api.get(context, id,
-                                            want_objects=True)
-            req.cache_db_instance(instance)
-            return self._view_builder.show(req, instance)
-        except exception.NotFound:
-            msg = _("Instance could not be found")
-            raise exc.HTTPNotFound(explanation=msg)
+        context = req.environ['nova.context']
+        instance = self._get_server(context, req, id)
+        return self._view_builder.show(req, instance)
 
     @wsgi.response(202)
     @wsgi.serializers(xml=FullServerTemplate)
@@ -858,6 +853,9 @@ class Controller(wsgi.Controller):
         legacy_bdm = True
         if self.ext_mgr.is_loaded('os-volumes'):
             block_device_mapping = server_dict.get('block_device_mapping', [])
+            if not isinstance(block_device_mapping, list):
+                msg = _('block_device_mapping must be a list')
+                raise exc.HTTPBadRequest(explanation=msg)
             for bdm in block_device_mapping:
                 try:
                     block_device.validate_device_name(bdm.get("device_name"))
@@ -879,6 +877,10 @@ class Controller(wsgi.Controller):
                     expl = _('Using different block_device_mapping syntaxes '
                              'is not allowed in the same request.')
                     raise exc.HTTPBadRequest(explanation=expl)
+
+                if not isinstance(block_device_mapping_v2, list):
+                    msg = _('block_device_mapping_v2 must be a list')
+                    raise exc.HTTPBadRequest(explanation=msg)
 
                 # Assume legacy format
                 legacy_bdm = not bool(block_device_mapping_v2)
@@ -981,7 +983,7 @@ class Controller(wsgi.Controller):
                                                  'err_msg': err.value}
             raise exc.HTTPBadRequest(explanation=msg)
         except UnicodeDecodeError as error:
-            msg = "UnicodeError: %s" % unicode(error)
+            msg = "UnicodeError: %s" % error
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
                 exception.FlavorDiskTooSmall,
@@ -1002,6 +1004,7 @@ class Controller(wsgi.Controller):
                 exception.ImageNUMATopologyMemoryOutOfRange) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
+                exception.InstanceExists,
                 exception.NoUniqueMatch) as error:
             raise exc.HTTPConflict(explanation=error.format_message())
         except exception.Invalid as error:
@@ -1076,12 +1079,11 @@ class Controller(wsgi.Controller):
             msg = _("Personality cannot be updated.")
             raise exc.HTTPBadRequest(explanation=msg)
 
+        instance = self._get_server(ctxt, req, id)
         try:
-            instance = self.compute_api.get(ctxt, id,
-                                            want_objects=True)
-            req.cache_db_instance(instance)
             policy.enforce(ctxt, 'compute:update', instance)
             instance.update(update_dict)
+            # Note instance.save can throw a NotFound exception
             instance.save()
         except exception.NotFound:
             msg = _("Instance could not be found")
@@ -1105,7 +1107,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'confirmResize')
+                    'confirmResize', id)
 
     @wsgi.response(202)
     @wsgi.serializers(xml=FullServerTemplate)
@@ -1126,7 +1128,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'revertResize')
+                    'revertResize', id)
         return webob.Response(status_int=202)
 
     @wsgi.response(202)
@@ -1159,7 +1161,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'reboot')
+                    'reboot', id)
         return webob.Response(status_int=202)
 
     def _resize(self, req, instance_id, flavor_id, **kwargs):
@@ -1184,7 +1186,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'resize')
+                    'resize', instance_id)
         except exception.ImageNotAuthorized:
             msg = _("You are not authorized to access the image "
                     "the instance was started with.")
@@ -1193,12 +1195,12 @@ class Controller(wsgi.Controller):
             msg = _("Image that the instance was started "
                     "with could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.Invalid:
-            msg = _("Invalid instance image.")
-            raise exc.HTTPBadRequest(explanation=msg)
         except (exception.NoValidHost,
                 exception.AutoDiskConfigDisabledByImage) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
+        except exception.Invalid:
+            msg = _("Invalid instance image.")
+            raise exc.HTTPBadRequest(explanation=msg)
 
         return webob.Response(status_int=202)
 
@@ -1214,7 +1216,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'delete')
+                    'delete', id)
 
     def _image_ref_from_req_data(self, data):
         try:
@@ -1391,7 +1393,7 @@ class Controller(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'rebuild')
+                    'rebuild', id)
         except exception.InstanceNotFound:
             msg = _("Instance could not be found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -1477,7 +1479,7 @@ class Controller(wsgi.Controller):
                                                   extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                        'createImage')
+                        'createImage', id)
         except exception.Invalid as err:
             raise exc.HTTPBadRequest(explanation=err.format_message())
 

@@ -21,20 +21,19 @@ import os
 import posixpath
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import importutils
+from oslo.utils import timeutils
 
 from nova.api.ec2 import ec2utils
 from nova.api.metadata import password
 from nova import block_device
-from nova.compute import flavors
 from nova import conductor
 from nova import context
 from nova import network
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova import utils
 from nova.virt import netutils
 
@@ -239,7 +238,7 @@ class InstanceMetadata():
             'ami-manifest-path': 'FIXME',
             'instance-id': self.ec2_ids['instance-id'],
             'hostname': hostname,
-            'local-ipv4': self.address or fixed_ip,
+            'local-ipv4': fixed_ip or self.address,
             'reservation-id': self.instance['reservation_id'],
             'security-groups': fmt_sgroups}
 
@@ -267,7 +266,7 @@ class InstanceMetadata():
             meta_data['product-codes'] = []
 
         if self._check_version('2007-08-29', version):
-            instance_type = flavors.extract_flavor(self.instance)
+            instance_type = self.instance.get_flavor()
             meta_data['instance-type'] = instance_type['name']
 
         if False and self._check_version('2007-10-10', version):

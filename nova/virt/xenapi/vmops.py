@@ -25,10 +25,15 @@ import zlib
 from eventlet import greenthread
 import netaddr
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+from oslo.utils import importutils
+from oslo.utils import strutils
+from oslo.utils import timeutils
+from oslo.utils import units
 
 from nova import block_device
 from nova import compute
-from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_mode
@@ -36,16 +41,10 @@ from nova.compute import vm_states
 from nova.console import type as ctype
 from nova import context as nova_context
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
-from nova.openstack.common import excutils
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
-from nova.openstack.common import timeutils
-from nova.openstack.common import units
-from nova.pci import pci_manager
+from nova.pci import manager as pci_manager
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import driver as virt_driver
@@ -345,7 +344,7 @@ class VMOps(object):
             msg = "block device info: %s" % block_device_info
             # NOTE(mriedem): block_device_info can contain an auth_password
             # so we have to scrub the message before logging it.
-            LOG.debug(logging.mask_password(msg), instance=instance)
+            LOG.debug(strutils.mask_password(msg), instance=instance)
             root_device_name = block_device_info['root_device_name']
 
             for bdm in block_device_info['block_device_mapping']:
@@ -424,8 +423,8 @@ class VMOps(object):
                     vm_utils.handle_ipxe_iso(
                         self._session, instance, vdis['iso'], network_info)
                 else:
-                    LOG.warning(_('ipxe_boot is True but no ISO image found'),
-                                instance=instance)
+                    LOG.warning(_LW('ipxe_boot is True but no ISO image '
+                                    'found'), instance=instance)
 
             if resize:
                 self._resize_up_vdis(instance, vdis)
@@ -641,12 +640,12 @@ class VMOps(object):
     def _attach_disks(self, instance, vm_ref, name_label, vdis,
                       disk_image_type, network_info, rescue=False,
                       admin_password=None, files=None):
-        flavor = flavors.extract_flavor(instance)
+        flavor = instance.get_flavor()
 
         # Attach (required) root disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
             # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
-            root_disk_size = flavor['root_gb']
+            root_disk_size = flavor.root_gb
             if root_disk_size > 0:
                 vm_utils.generate_iso_blank_root_disk(self._session, instance,
                     vm_ref, DEVICE_ROOT, name_label, root_disk_size)
@@ -662,7 +661,7 @@ class VMOps(object):
                           "resize root disk...", instance=instance)
                 vm_utils.try_auto_configure_disk(self._session,
                                                  root_vdi['ref'],
-                                                 flavor['root_gb'])
+                                                 flavor.root_gb)
 
             vm_utils.create_vbd(self._session, vm_ref, root_vdi['ref'],
                                 DEVICE_ROOT, bootable=True,
@@ -685,12 +684,12 @@ class VMOps(object):
         # _attach_orig_disks
 
         # Attach (optional) swap disk
-        swap_mb = flavor['swap']
+        swap_mb = flavor.swap
         if not rescue and swap_mb:
             vm_utils.generate_swap(self._session, instance, vm_ref,
                                    DEVICE_SWAP, name_label, swap_mb)
 
-        ephemeral_gb = flavor['ephemeral_gb']
+        ephemeral_gb = flavor.ephemeral_gb
         if not rescue and ephemeral_gb:
             ephemeral_vdis = vdis.get('ephemerals')
             if ephemeral_vdis:
@@ -815,6 +814,7 @@ class VMOps(object):
         vm_ref = self._get_vm_opaque_ref(instance)
         label = "%s-snapshot" % instance['name']
 
+        start_time = timeutils.utcnow()
         with vm_utils.snapshot_attached_here(
                 self._session, instance, vm_ref, label,
                 post_snapshot_callback=update_task_state) as vdi_uuids:
@@ -823,10 +823,14 @@ class VMOps(object):
             self.image_upload_handler.upload_image(context,
                                                    self._session,
                                                    instance,
+                                                   image_id,
                                                    vdi_uuids,
-                                                   image_id)
+                                                   )
 
-        LOG.debug("Finished snapshot and upload for VM",
+        duration = timeutils.delta_seconds(start_time, timeutils.utcnow())
+        LOG.debug("Finished snapshot and upload for VM, duration: "
+                  "%(duration).2f secs for image %(image_id)s",
+                  {'image_id': image_id, 'duration': duration},
                   instance=instance)
 
     def post_interrupted_snapshot_cleanup(self, context, instance):
@@ -917,8 +921,8 @@ class VMOps(object):
                 undo_mgr, old_vdi_ref)
             transfer_vhd_to_dest(new_vdi_ref, new_vdi_uuid)
         except Exception as error:
-            LOG.exception(_("_migrate_disk_resizing_down failed. "
-                            "Restoring orig vm due_to: %s."), error,
+            LOG.exception(_LE("_migrate_disk_resizing_down failed. "
+                              "Restoring orig vm due_to: %s."), error,
                           instance=instance)
             undo_mgr._rollback()
             raise exception.InstanceFaultRollback(error)
@@ -1071,16 +1075,16 @@ class VMOps(object):
                 transfer_ephemeral_disks_then_all_leaf_vdis()
 
         except Exception as error:
-            LOG.exception(_("_migrate_disk_resizing_up failed. "
-                            "Restoring orig vm due_to: %s."), error,
+            LOG.exception(_LE("_migrate_disk_resizing_up failed. "
+                              "Restoring orig vm due_to: %s."), error,
                           instance=instance)
             try:
                 self._restore_orig_vm_and_cleanup_orphan(instance)
                 # TODO(johngarbutt) should also cleanup VHDs at destination
             except Exception as rollback_error:
-                LOG.warn(_("_migrate_disk_resizing_up failed to "
-                           "rollback: %s"), rollback_error,
-                         instance=instance)
+                LOG.warning(_LW("_migrate_disk_resizing_up failed to "
+                                "rollback: %s"), rollback_error,
+                            instance=instance)
             raise exception.InstanceFaultRollback(error)
 
     def _apply_orig_vm_name_label(self, instance, vm_ref):
@@ -1206,15 +1210,15 @@ class VMOps(object):
             details = exc.details
             if (details[0] == 'VM_BAD_POWER_STATE' and
                     details[-1] == 'halted'):
-                LOG.info(_("Starting halted instance found during reboot"),
-                    instance=instance)
+                LOG.info(_LI("Starting halted instance found during reboot"),
+                         instance=instance)
                 self._start(instance, vm_ref=vm_ref,
                             bad_volumes_callback=bad_volumes_callback)
                 return
             elif details[0] == 'SR_BACKEND_FAILURE_46':
-                LOG.warn(_("Reboot failed due to bad volumes, detaching bad"
-                           " volumes and starting halted instance"),
-                         instance=instance)
+                LOG.warning(_LW("Reboot failed due to bad volumes, detaching "
+                                "bad volumes and starting halted instance"),
+                            instance=instance)
                 self._start(instance, vm_ref=vm_ref,
                             bad_volumes_callback=bad_volumes_callback)
                 return
@@ -1290,8 +1294,8 @@ class VMOps(object):
             # Skip the update when not possible, as the updated metadata will
             # get added when the VM is being booted up at the end of the
             # resize or rebuild.
-            LOG.warn(_("Unable to update metadata, VM not found."),
-                     instance=instance, exc_info=True)
+            LOG.warning(_LW("Unable to update metadata, VM not found."),
+                        instance=instance, exc_info=True)
             return
 
         def process_change(location, change):
@@ -1410,7 +1414,7 @@ class VMOps(object):
         destroy_* methods are internal.
 
         """
-        LOG.info(_("Destroying VM"), instance=instance)
+        LOG.info(_LI("Destroying VM"), instance=instance)
 
         # We don't use _get_vm_opaque_ref because the instance may
         # truly not exist because of a failure during build. A valid
@@ -1425,11 +1429,14 @@ class VMOps(object):
         # NOTE(sirp): `block_device_info` is not used, information about which
         # volumes should be detached is determined by the
         # VBD.other_config['osvol'] attribute
+        # NOTE(alaski): `block_device_info` is used to determine if there's a
+        # volume still attached if the VM is not present.
         return self._destroy(instance, vm_ref, network_info=network_info,
-                             destroy_disks=destroy_disks)
+                             destroy_disks=destroy_disks,
+                             block_device_info=block_device_info)
 
     def _destroy(self, instance, vm_ref, network_info=None,
-                 destroy_disks=True):
+                 destroy_disks=True, block_device_info=None):
         """Destroys VM instance by performing:
 
             1. A shutdown
@@ -1439,8 +1446,36 @@ class VMOps(object):
 
         """
         if vm_ref is None:
-            LOG.warning(_("VM is not present, skipping destroy..."),
+            LOG.warning(_LW("VM is not present, skipping destroy..."),
                         instance=instance)
+            # NOTE(alaski): There should not be a block device mapping here,
+            # but if there is it very likely means there was an error cleaning
+            # it up previously and there is now an orphaned sr/pbd.  This will
+            # prevent both volume and instance deletes from completing.
+            bdms = block_device_info['block_device_mapping'] or []
+            if not bdms:
+                return
+            for bdm in bdms:
+                volume_id = bdm['connection_info']['data']['volume_id']
+                sr_uuid = 'FA15E-D15C-%s' % volume_id
+                sr_ref = None
+                try:
+                    sr_ref = volume_utils.find_sr_by_uuid(self._session,
+                            sr_uuid)
+                except Exception:
+                    LOG.exception(_LE('Failed to find an SR for volume %s'),
+                            volume_id, instance=instance)
+
+                try:
+                    if sr_ref:
+                        volume_utils.forget_sr(self._session, sr_ref)
+                    else:
+                        LOG.error(_LE('Volume %s is associated with the '
+                            'instance but no SR was found for it'), volume_id,
+                                instance=instance)
+                except Exception:
+                    LOG.exception(_LE('Failed to forget the SR for volume %s'),
+                            volume_id, instance=instance)
             return
 
         vm_utils.hard_shutdown_vm(self._session, instance, vm_ref)
@@ -1532,7 +1567,7 @@ class VMOps(object):
         try:
             vm_ref = self._get_vm_opaque_ref(instance)
         except exception.NotFound:
-            LOG.warning(_("VM is not present, skipping soft delete..."),
+            LOG.warning(_LW("VM is not present, skipping soft delete..."),
                         instance=instance)
         else:
             vm_utils.hard_shutdown_vm(self._session, instance, vm_ref)
@@ -1581,11 +1616,11 @@ class VMOps(object):
                 timeout=timeout)
 
         if instances_info["instance_count"] > 0:
-            LOG.info(_("Found %(instance_count)d hung reboots "
-                       "older than %(timeout)d seconds") % instances_info)
+            LOG.info(_LI("Found %(instance_count)d hung reboots "
+                         "older than %(timeout)d seconds") % instances_info)
 
         for instance in instances:
-            LOG.info(_("Automatically hard rebooting"), instance=instance)
+            LOG.info(_LI("Automatically hard rebooting"), instance=instance)
             self.compute_api.reboot(ctxt, instance, "HARD")
 
     def get_info(self, instance, vm_ref=None):
@@ -1860,18 +1895,18 @@ class VMOps(object):
         except self._session.XenAPI.Failure as e:
             err_msg = e.details[-1].splitlines()[-1]
             if 'TIMEOUT:' in err_msg:
-                LOG.error(_('TIMEOUT: The call to %(method)s timed out. '
-                            'args=%(args)r'),
+                LOG.error(_LE('TIMEOUT: The call to %(method)s timed out. '
+                              'args=%(args)r'),
                           {'method': method, 'args': args}, instance=instance)
                 return {'returncode': 'timeout', 'message': err_msg}
             elif 'NOT IMPLEMENTED:' in err_msg:
-                LOG.error(_('NOT IMPLEMENTED: The call to %(method)s is not'
-                            ' supported by the agent. args=%(args)r'),
+                LOG.error(_LE('NOT IMPLEMENTED: The call to %(method)s is not'
+                              ' supported by the agent. args=%(args)r'),
                           {'method': method, 'args': args}, instance=instance)
                 return {'returncode': 'notimplemented', 'message': err_msg}
             else:
-                LOG.error(_('The call to %(method)s returned an error: %(e)s. '
-                            'args=%(args)r'),
+                LOG.error(_LE('The call to %(method)s returned an error: '
+                              '%(e)s. args=%(args)r'),
                           {'method': method, 'args': args, 'e': e},
                           instance=instance)
                 return {'returncode': 'error', 'message': err_msg}

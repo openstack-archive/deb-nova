@@ -13,7 +13,6 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-import webob
 from webob import exc
 
 from nova.api.openstack import common
@@ -36,6 +35,7 @@ class PauseServerController(wsgi.Controller):
         super(PauseServerController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409, 501))
     @wsgi.action('pause')
     def _pause(self, req, id, body):
@@ -50,14 +50,14 @@ class PauseServerController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'pause')
+                    'pause', id)
         except exception.InstanceNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
         except NotImplementedError:
             msg = _("Virt driver does not implement pause function.")
             raise exc.HTTPNotImplemented(explanation=msg)
-        return webob.Response(status_int=202)
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409, 501))
     @wsgi.action('unpause')
     def _unpause(self, req, id, body):
@@ -72,13 +72,12 @@ class PauseServerController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'unpause')
+                    'unpause', id)
         except exception.InstanceNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
         except NotImplementedError:
             msg = _("Virt driver does not implement pause function.")
             raise exc.HTTPNotImplemented(explanation=msg)
-        return webob.Response(status_int=202)
 
 
 class PauseServer(extensions.V3APIExtensionBase):

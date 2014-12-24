@@ -21,14 +21,12 @@ from nova.api.openstack import extensions
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.openstack.common import log as logging
 
 CONF = cfg.CONF
 CONF.import_opt('default_floating_pool', 'nova.network.floating_ips')
 CONF.import_opt('public_interface', 'nova.network.linux_net')
 
 
-LOG = logging.getLogger(__name__)
 authorize = extensions.extension_authorizer('compute', 'floating_ips_bulk')
 
 
@@ -65,14 +63,17 @@ class FloatingIPBulkController(object):
 
         for floating_ip in floating_ips:
             instance_uuid = None
+            fixed_ip = None
             if floating_ip.fixed_ip:
                 instance_uuid = floating_ip.fixed_ip.instance_uuid
+                fixed_ip = str(floating_ip.fixed_ip.address)
 
-            result = {'address': str(floating_ip['address']),
-                      'pool': floating_ip['pool'],
-                      'interface': floating_ip['interface'],
-                      'project_id': floating_ip['project_id'],
-                      'instance_uuid': instance_uuid}
+            result = {'address': str(floating_ip.address),
+                      'pool': floating_ip.pool,
+                      'interface': floating_ip.interface,
+                      'project_id': floating_ip.project_id,
+                      'instance_uuid': instance_uuid,
+                      'fixed_ip': fixed_ip}
             floating_ip_info['floating_ip_info'].append(result)
 
         return floating_ip_info
@@ -102,7 +103,7 @@ class FloatingIPBulkController(object):
         try:
             objects.FloatingIPList.create(context, ips)
         except exception.FloatingIpExists as exc:
-            raise webob.exc.HTTPBadRequest(explanation=exc.format_message())
+            raise webob.exc.HTTPConflict(explanation=exc.format_message())
 
         return {"floating_ips_bulk_create": {"ip_range": ip_range,
                                                "pool": pool,

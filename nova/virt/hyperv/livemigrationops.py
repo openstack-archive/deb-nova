@@ -19,9 +19,9 @@ Management class for live migration VM operations.
 import functools
 
 from oslo.config import cfg
+from oslo.utils import excutils
 
 from nova.i18n import _
-from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import utilsfactory
@@ -66,10 +66,8 @@ class LiveMigrationOps(object):
 
         try:
             self._vmops.copy_vm_console_logs(instance_name, dest)
-            iscsi_targets = self._livemigrutils.live_migrate_vm(instance_name,
-                                                                dest)
-            for (target_iqn, target_lun) in iscsi_targets:
-                self._volumeops.logout_storage_target(target_iqn)
+            self._livemigrutils.live_migrate_vm(instance_name,
+                                                dest)
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.debug("Calling live migration recover_method "
@@ -92,7 +90,11 @@ class LiveMigrationOps(object):
             if not boot_from_volume:
                 self._imagecache.get_cached_image(context, instance)
 
-        self._volumeops.login_storage_targets(block_device_info)
+        self._volumeops.initialize_volumes_connection(block_device_info)
+
+    @check_os_version_requirement
+    def post_live_migration(self, context, instance, block_device_info):
+        self._volumeops.disconnect_volumes(block_device_info)
 
     @check_os_version_requirement
     def post_live_migration_at_destination(self, ctxt, instance_ref,

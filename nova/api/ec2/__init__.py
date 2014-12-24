@@ -18,10 +18,12 @@ Starting point for routing EC2 requests.
 
 """
 
-from eventlet.green import httplib
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import importutils
+from oslo.utils import timeutils
+import requests
 import six
-import six.moves.urllib.parse as urlparse
 import webob
 import webob.dec
 import webob.exc
@@ -35,11 +37,9 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
+from nova.openstack.common import context as common_context
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
-from nova.openstack.common import timeutils
 from nova import utils
 from nova import wsgi
 
@@ -70,11 +70,14 @@ ec2_opts = [
     cfg.IntOpt('ec2_timestamp_expiry',
                default=300,
                help='Time in seconds before ec2 timestamp expires'),
+    cfg.BoolOpt('keystone_ec2_insecure', default=False, help='Disable SSL '
+                'certificate verification.'),
     ]
 
 CONF = cfg.CONF
 CONF.register_opts(ec2_opts)
 CONF.import_opt('use_forwarded_for', 'nova.api.auth')
+CONF.import_group('ssl', 'nova.openstack.common.sslutils')
 
 
 # Fault Wrapper around all EC2 requests
@@ -86,7 +89,7 @@ class FaultWrapper(wsgi.Middleware):
         try:
             return req.get_response(self.application)
         except Exception as ex:
-            LOG.exception(_("FaultWrapper: %s"), unicode(ex))
+            LOG.exception(_LE("FaultWrapper: %s"), ex)
             return faults.Fault(webob.exc.HTTPInternalServerError())
 
 
@@ -166,12 +169,13 @@ class Lockout(wsgi.Middleware):
                 # NOTE(vish): To use incr, failures has to be a string.
                 self.mc.set(failures_key, '1', time=CONF.lockout_window * 60)
             elif failures >= CONF.lockout_attempts:
-                LOG.warn(_LW('Access key %(access_key)s has had %(failures)d '
-                             'failed authentications and will be locked out '
-                             'for %(lock_mins)d minutes.'),
-                         {'access_key': access_key,
-                          'failures': failures,
-                          'lock_mins': CONF.lockout_minutes})
+                LOG.warning(_LW('Access key %(access_key)s has had '
+                                '%(failures)d failed authentications and '
+                                'will be locked out for %(lock_mins)d '
+                                'minutes.'),
+                            {'access_key': access_key,
+                             'failures': failures,
+                             'lock_mins': CONF.lockout_minutes})
                 self.mc.set(failures_key, str(failures),
                             time=CONF.lockout_minutes * 60)
         return res
@@ -182,7 +186,7 @@ class EC2KeystoneAuth(wsgi.Middleware):
 
     @webob.dec.wsgify(RequestClass=wsgi.Request)
     def __call__(self, req):
-        request_id = context.generate_request_id()
+        request_id = common_context.generate_request_id()
         signature = req.params.get('Signature')
         if not signature:
             msg = _("Signature not provided")
@@ -214,23 +218,25 @@ class EC2KeystoneAuth(wsgi.Middleware):
         creds_json = jsonutils.dumps(creds)
         headers = {'Content-Type': 'application/json'}
 
-        o = urlparse.urlparse(CONF.keystone_ec2_url)
-        if o.scheme == "http":
-            conn = httplib.HTTPConnection(o.netloc)
-        else:
-            conn = httplib.HTTPSConnection(o.netloc)
-        conn.request('POST', o.path, body=creds_json, headers=headers)
-        response = conn.getresponse()
-        data = response.read()
-        if response.status != 200:
-            if response.status == 401:
-                msg = response.reason
-            else:
-                msg = _("Failure communicating with keystone")
+        verify = not CONF.keystone_ec2_insecure
+        if verify and CONF.ssl.ca_file:
+            verify = CONF.ssl.ca_file
+
+        cert = None
+        if CONF.ssl.cert_file and CONF.ssl.key_file:
+            cert = (CONF.ssl.cert_file, CONF.ssl.key_file)
+        elif CONF.ssl.cert_file:
+            cert = CONF.ssl.cert_file
+
+        response = requests.request('POST', CONF.keystone_ec2_url,
+                                    data=creds_json, headers=headers,
+                                    verify=verify, cert=cert)
+        status_code = response.status_code
+        if status_code != 200:
+            msg = response.reason
             return faults.ec2_error_response(request_id, "AuthFailure", msg,
-                                             status=response.status)
-        result = jsonutils.loads(data)
-        conn.close()
+                                             status=status_code)
+        result = response.json()
 
         try:
             token_id = result['access']['token']['id']
@@ -242,7 +248,7 @@ class EC2KeystoneAuth(wsgi.Middleware):
                      in result['access']['user']['roles']]
         except (AttributeError, KeyError) as e:
             LOG.error(_LE("Keystone failure: %s"), e)
-            msg = _("Failure communicating with keystone")
+            msg = _("Failure parsing response from keystone: %s") % e
             return faults.ec2_error_response(request_id, "AuthFailure", msg,
                                              status=400)
 
@@ -320,7 +326,7 @@ class Requestify(wsgi.Middleware):
         except KeyError:
             raise webob.exc.HTTPBadRequest()
         except exception.InvalidRequest as err:
-            raise webob.exc.HTTPBadRequest(explanation=unicode(err))
+            raise webob.exc.HTTPBadRequest(explanation=six.text_type(err))
 
         LOG.debug('action: %s', action)
         for key, value in args.items():
@@ -505,9 +511,9 @@ def ec2_error_ex(ex, req, code=None, message=None, unexpected=False):
     request_id = context.request_id
     log_msg_args = {
         'ex_name': type(ex).__name__,
-        'ex_str': unicode(ex)
+        'ex_str': ex
     }
-    log_fun(log_msg % log_msg_args, context=context)
+    log_fun(log_msg, log_msg_args, context=context)
 
     if ex.args and not message and (not unexpected or status < 500):
         message = unicode(ex.args[0])

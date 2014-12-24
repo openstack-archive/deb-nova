@@ -28,7 +28,7 @@ if sys.platform == 'win32':
     import wmi
 
 from nova import block_device
-from nova.i18n import _
+from nova.i18n import _LI
 from nova.openstack.common import log as logging
 from nova.virt import driver
 
@@ -68,8 +68,8 @@ class BaseVolumeUtils(object):
             initiator_name = str(temp[0])
             _winreg.CloseKey(key)
         except Exception:
-            LOG.info(_("The ISCSI initiator name can't be found. "
-                       "Choosing the default one"))
+            LOG.info(_LI("The ISCSI initiator name can't be found. "
+                         "Choosing the default one"))
             initiator_name = "iqn.1991-05.com.microsoft:" + hostname.lower()
             if computer_system.PartofDomain:
                 initiator_name += '.' + computer_system.Domain.lower()
@@ -118,22 +118,26 @@ class BaseVolumeUtils(object):
                 if device_number == drive_number:
                     return initiator_session.SessionId
 
-    def get_device_number_for_target(self, target_iqn, target_lun):
+    def _get_devices_for_target(self, target_iqn):
         initiator_sessions = self._conn_wmi.query("SELECT * FROM "
                                                   "MSiSCSIInitiator_Session"
                                                   "Class WHERE TargetName='%s'"
                                                   % target_iqn)
         if not initiator_sessions:
-            return None
+            return []
 
-        devices = initiator_sessions[0].Devices
+        return initiator_sessions[0].Devices
 
-        if not devices:
-            return None
+    def get_device_number_for_target(self, target_iqn, target_lun):
+        devices = self._get_devices_for_target(target_iqn)
 
         for device in devices:
             if device.ScsiLun == target_lun:
                 return device.DeviceNumber
+
+    def get_target_lun_count(self, target_iqn):
+        devices = self._get_devices_for_target(target_iqn)
+        return len(devices)
 
     def get_target_from_disk_path(self, disk_path):
         initiator_sessions = self._conn_wmi.MSiSCSIInitiator_SessionClass()

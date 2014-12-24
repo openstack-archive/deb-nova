@@ -23,6 +23,7 @@ from nova import block_device
 from nova.cells import rpcapi as cells_rpcapi
 from nova.cells import utils as cells_utils
 from nova.compute import api as compute_api
+from nova.compute import delete_types
 from nova.compute import rpcapi as compute_rpcapi
 from nova import exception
 from nova import objects
@@ -225,14 +226,13 @@ class ComputeCellsAPI(compute_api.API):
         return rv
 
     def soft_delete(self, context, instance):
-        self._handle_cell_delete(context, instance, 'soft_delete')
+        self._handle_cell_delete(context, instance, delete_types.SOFT_DELETE)
 
     def delete(self, context, instance):
-        self._handle_cell_delete(context, instance, 'delete')
+        self._handle_cell_delete(context, instance, delete_types.DELETE)
 
-    def _handle_cell_delete(self, context, instance, method_name):
+    def _handle_cell_delete(self, context, instance, delete_type):
         if not instance['cell_name']:
-            delete_type = method_name == 'soft_delete' and 'soft' or 'hard'
             self.cells_rpcapi.instance_delete_everywhere(context,
                     instance, delete_type)
             bdms = block_device.legacy_mapping(
@@ -241,11 +241,11 @@ class ComputeCellsAPI(compute_api.API):
             # NOTE(danms): If we try to delete an instance with no cell,
             # there isn't anything to salvage, so we can hard-delete here.
             super(ComputeCellsAPI, self)._local_delete(context, instance, bdms,
-                                                       method_name,
+                                                       delete_type,
                                                        self._do_delete)
             return
 
-        method = getattr(super(ComputeCellsAPI, self), method_name)
+        method = getattr(super(ComputeCellsAPI, self), delete_type)
         method(context, instance)
 
     @check_instance_cell
@@ -258,7 +258,7 @@ class ComputeCellsAPI(compute_api.API):
     def force_delete(self, context, instance):
         """Force delete a previously deleted (but not reclaimed) instance."""
         super(ComputeCellsAPI, self).force_delete(context, instance)
-        self._cast_to_cells(context, instance, 'force_delete')
+        self._cast_to_cells(context, instance, delete_types.FORCE_DELETE)
 
     @check_instance_cell
     def evacuate(self, context, instance, *args, **kwargs):
@@ -301,14 +301,16 @@ class ComputeCellsAPI(compute_api.API):
 
     @check_instance_cell
     def rescue(self, context, instance, rescue_password=None,
-               rescue_image_ref=None):
+               rescue_image_ref=None, clean_shutdown=True):
         """Rescue the given instance."""
         super(ComputeCellsAPI, self).rescue(context, instance,
                 rescue_password=rescue_password,
-                rescue_image_ref=rescue_image_ref)
+                rescue_image_ref=rescue_image_ref,
+                clean_shutdown=clean_shutdown)
         self._cast_to_cells(context, instance, 'rescue',
                 rescue_password=rescue_password,
-                rescue_image_ref=rescue_image_ref)
+                rescue_image_ref=rescue_image_ref,
+                clean_shutdown=clean_shutdown)
 
     @check_instance_cell
     def unrescue(self, context, instance):
@@ -318,16 +320,21 @@ class ComputeCellsAPI(compute_api.API):
 
     @wrap_check_policy
     @check_instance_cell
-    def shelve(self, context, instance):
+    def shelve(self, context, instance, clean_shutdown=True):
         """Shelve the given instance."""
-        self._cast_to_cells(context, instance, 'shelve')
+        super(ComputeCellsAPI, self).shelve(context, instance,
+                clean_shutdown=clean_shutdown)
+        self._cast_to_cells(context, instance, 'shelve',
+                clean_shutdown=clean_shutdown)
 
     @wrap_check_policy
     @check_instance_cell
-    def shelve_offload(self, context, instance):
+    def shelve_offload(self, context, instance, clean_shutdown=True):
         """Offload the shelved instance."""
-        super(ComputeCellsAPI, self).shelve_offload(context, instance)
-        self._cast_to_cells(context, instance, 'shelve_offload')
+        super(ComputeCellsAPI, self).shelve_offload(context, instance,
+                clean_shutdown=clean_shutdown)
+        self._cast_to_cells(context, instance, 'shelve_offload',
+                clean_shutdown=clean_shutdown)
 
     @wrap_check_policy
     @check_instance_cell
@@ -552,10 +559,16 @@ class HostAPI(compute_api.HostAPI):
         # NOTE(danms): Currently cells does not support objects as
         # return values, so just convert the db-formatted service objects
         # to new-world objects here
+
+        # NOTE(dheeraj): Use ServiceProxy here too. See johannes'
+        # note on service_get_all
         if db_service:
-            return objects.Service._from_db_object(context,
-                                                   objects.Service(),
-                                                   db_service)
+            cell_path, _id = cells_utils.split_cell_and_item(db_service['id'])
+            db_service['id'] = _id
+            ser_obj = objects.Service._from_db_object(context,
+                                                      objects.Service(),
+                                                      db_service)
+            return ServiceProxy(ser_obj, cell_path)
 
     def service_update(self, context, host_name, binary, params_to_update):
         """Used to enable/disable a service. For compute services, setting to
@@ -571,10 +584,16 @@ class HostAPI(compute_api.HostAPI):
         # NOTE(danms): Currently cells does not support objects as
         # return values, so just convert the db-formatted service objects
         # to new-world objects here
+
+        # NOTE(dheeraj): Use ServiceProxy here too. See johannes'
+        # note on service_get_all
         if db_service:
-            return objects.Service._from_db_object(context,
-                                                   objects.Service(),
-                                                   db_service)
+            cell_path, _id = cells_utils.split_cell_and_item(db_service['id'])
+            db_service['id'] = _id
+            ser_obj = objects.Service._from_db_object(context,
+                                                      objects.Service(),
+                                                      db_service)
+            return ServiceProxy(ser_obj, cell_path)
 
     def service_delete(self, context, service_id):
         """Deletes the specified service."""

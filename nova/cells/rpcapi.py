@@ -25,11 +25,11 @@ messging module.
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.serialization import jsonutils
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LE
 from nova.objects import base as objects_base
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova import rpc
 
@@ -101,6 +101,10 @@ class CellsAPI(object):
         ... Juno supports message version 1.29.  So, any changes to
         existing methods in 1.x after that point should be done such that they
         can handle the version_cap being set to 1.29.
+
+        * 1.30 - Make build_instances() use flavor object
+        * 1.31 - Add clean_shutdown to stop, resize, rescue, and shelve
+        * 1.32 - Send objects for instances in build_instances()
     '''
 
     VERSION_ALIASES = {
@@ -146,11 +150,21 @@ class CellsAPI(object):
         """Build instances."""
         build_inst_kwargs = kwargs
         instances = build_inst_kwargs['instances']
-        instances_p = [jsonutils.to_primitive(inst) for inst in instances]
-        build_inst_kwargs['instances'] = instances_p
         build_inst_kwargs['image'] = jsonutils.to_primitive(
                 build_inst_kwargs['image'])
-        cctxt = self.client.prepare(version='1.8')
+        version = '1.32'
+        if not self.client.can_send_version('1.32'):
+            instances_p = [jsonutils.to_primitive(inst) for inst in instances]
+            build_inst_kwargs['instances'] = instances_p
+            version = '1.30'
+        if not self.client.can_send_version('1.30'):
+            if 'filter_properties' in build_inst_kwargs:
+                filter_properties = build_inst_kwargs['filter_properties']
+                flavor = filter_properties['instance_type']
+                flavor_p = objects_base.obj_to_primitive(flavor)
+                filter_properties['instance_type'] = flavor_p
+            version = '1.8'
+        cctxt = self.client.prepare(version=version)
         cctxt.cast(ctxt, 'build_instances',
                    build_inst_kwargs=build_inst_kwargs)
 
@@ -170,8 +184,8 @@ class CellsAPI(object):
         self.client.cast(ctxt, 'instance_destroy_at_top', instance=instance_p)
 
     def instance_delete_everywhere(self, ctxt, instance, delete_type):
-        """Delete instance everywhere.  delete_type may be 'soft'
-        or 'hard'.  This is generally only used to resolve races
+        """Delete instance everywhere.  delete_type may be 'soft_delete'
+        or 'delete'.  This is generally only used to resolve races
         when API cell doesn't know to what cell an instance belongs.
         """
         if not CONF.cells.enable:
@@ -381,7 +395,7 @@ class CellsAPI(object):
             cctxt.cast(ctxt, 'bdm_update_or_create_at_top',
                        bdm=bdm, create=create)
         except Exception:
-            LOG.exception(_("Failed to notify cells of BDM update/create."))
+            LOG.exception(_LE("Failed to notify cells of BDM update/create."))
 
     def bdm_destroy_at_top(self, ctxt, instance_uuid, device_name=None,
                            volume_id=None):
@@ -397,7 +411,7 @@ class CellsAPI(object):
                        device_name=device_name,
                        volume_id=volume_id)
         except Exception:
-            LOG.exception(_("Failed to notify cells of BDM destroy."))
+            LOG.exception(_LE("Failed to notify cells of BDM destroy."))
 
     def get_migrations(self, ctxt, filters):
         """Get all migrations applying the filters."""
@@ -429,17 +443,23 @@ class CellsAPI(object):
         cctxt = self.client.prepare(version='1.12')
         cctxt.cast(ctxt, 'start_instance', instance=instance)
 
-    def stop_instance(self, ctxt, instance, do_cast=True):
+    def stop_instance(self, ctxt, instance, do_cast=True, clean_shutdown=True):
         """Stop an instance in its cell.
 
         This method takes a new-world instance object.
         """
         if not CONF.cells.enable:
             return
-        cctxt = self.client.prepare(version='1.12')
+        msg_args = {'instance': instance,
+                    'do_cast': do_cast}
+        if self.client.can_send_version('1.31'):
+            version = '1.31'
+            msg_args['clean_shutdown'] = clean_shutdown
+        else:
+            version = '1.12'
+        cctxt = self.client.prepare(version=version)
         method = do_cast and cctxt.cast or cctxt.call
-        return method(ctxt, 'stop_instance',
-                      instance=instance, do_cast=do_cast)
+        return method(ctxt, 'stop_instance', **msg_args)
 
     def cell_create(self, ctxt, values):
         cctxt = self.client.prepare(version='1.13')

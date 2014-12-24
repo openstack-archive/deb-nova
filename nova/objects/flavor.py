@@ -22,7 +22,9 @@ from nova.objects import fields
 OPTIONAL_FIELDS = ['extra_specs', 'projects']
 
 
-class Flavor(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class Flavor(base.NovaPersistentObject, base.NovaObject,
+             base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Added save_projects(), save_extra_specs(), removed
     #              remoteable from save()
@@ -48,7 +50,7 @@ class Flavor(base.NovaPersistentObject, base.NovaObject):
     def __init__(self, *args, **kwargs):
         super(Flavor, self).__init__(*args, **kwargs)
         self._orig_extra_specs = {}
-        self._orig_projects = {}
+        self._orig_projects = []
 
     @staticmethod
     def _from_db_object(context, flavor, db_flavor, expected_attrs=None):
@@ -77,7 +79,7 @@ class Flavor(base.NovaPersistentObject, base.NovaObject):
         self.projects = [x['project_id'] for x in
                          db.flavor_access_get_by_flavor_id(context,
                                                            self.flavorid)]
-        self.obj_reset_changes('projects')
+        self.obj_reset_changes(['projects'])
 
     def obj_load_attr(self, attrname):
         # NOTE(danms): Only projects could be lazy-loaded right now

@@ -19,9 +19,9 @@ import string
 import traceback
 
 from oslo.config import cfg
+from oslo.utils import encodeutils
 
 from nova import block_device
-from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
@@ -64,7 +64,19 @@ def exception_to_dict(fault):
     # NOTE(dripton) The message field in the database is limited to 255 chars.
     # MySQL silently truncates overly long messages, but PostgreSQL throws an
     # error if we don't truncate it.
-    u_message = unicode(message)[:255]
+    b_message = encodeutils.safe_encode(message)[:255]
+
+    # NOTE(chaochin) UTF-8 character byte size varies from 1 to 6. If
+    # truncating a long byte string to 255, the last character may be
+    # cut in the middle, so that UnicodeDecodeError will occur when
+    # converting it back to unicode.
+    decode_ok = False
+    while not decode_ok:
+        try:
+            u_message = encodeutils.safe_decode(b_message)
+            decode_ok = True
+        except UnicodeDecodeError:
+            b_message = b_message[:-1]
 
     fault_dict = dict(exception=fault)
     fault_dict["message"] = u_message
@@ -135,6 +147,8 @@ def get_next_device_name(instance, device_name_list,
     /dev/vdc is specified but the backend uses /dev/xvdc), the device
     name will be converted to the appropriate format.
     """
+    is_xen = driver.compute_driver_matches('xenapi.XenAPIDriver')
+
     req_prefix = None
     req_letter = None
 
@@ -154,7 +168,7 @@ def get_next_device_name(instance, device_name_list,
         raise exception.InvalidDevicePath(path=root_device_name)
 
     # NOTE(vish): remove this when xenapi is setting default_root_device
-    if driver.compute_driver_matches('xenapi.XenAPIDriver'):
+    if is_xen:
         prefix = '/dev/xvd'
 
     if req_prefix != prefix:
@@ -168,12 +182,12 @@ def get_next_device_name(instance, device_name_list,
 
     # NOTE(vish): remove this when xenapi is properly setting
     #             default_ephemeral_device and default_swap_device
-    if driver.compute_driver_matches('xenapi.XenAPIDriver'):
-        flavor = flavors.extract_flavor(instance)
-        if flavor['ephemeral_gb']:
+    if is_xen:
+        flavor = instance.get_flavor()
+        if flavor.ephemeral_gb:
             used_letters.add('b')
 
-        if flavor['swap']:
+        if flavor.swap:
             used_letters.add('c')
 
     if not req_letter:
@@ -196,19 +210,22 @@ def _get_unused_letter(used_letters):
 
 
 def get_image_metadata(context, image_api, image_id_or_uri, instance):
-    # If the base image is still available, get its metadata
-    try:
-        image = image_api.get(context, image_id_or_uri)
-    except (exception.ImageNotAuthorized,
-            exception.ImageNotFound,
-            exception.Invalid) as e:
-        LOG.warning(_LW("Can't access image %(image_id)s: %(error)s"),
-                    {"image_id": image_id_or_uri, "error": e},
-                    instance=instance)
-        image_system_meta = {}
-    else:
-        flavor = flavors.extract_flavor(instance)
-        image_system_meta = utils.get_system_metadata_from_image(image, flavor)
+    image_system_meta = {}
+    # In case of boot from volume, image_id_or_uri may be None
+    if image_id_or_uri is not None:
+        # If the base image is still available, get its metadata
+        try:
+            image = image_api.get(context, image_id_or_uri)
+        except (exception.ImageNotAuthorized,
+                exception.ImageNotFound,
+                exception.Invalid) as e:
+            LOG.warning(_LW("Can't access image %(image_id)s: %(error)s"),
+                        {"image_id": image_id_or_uri, "error": e},
+                        instance=instance)
+        else:
+            flavor = instance.get_flavor()
+            image_system_meta = utils.get_system_metadata_from_image(image,
+                                                                     flavor)
 
     # Get the system metadata from the instance
     system_meta = utils.instance_sys_meta(instance)
@@ -315,6 +332,17 @@ def notify_about_instance_usage(notifier, context, instance, event_suffix,
     method(context, 'compute.instance.%s' % event_suffix, usage_info)
 
 
+def notify_about_server_group_update(context, event_suffix, sg_payload):
+    """Send a notification about server group update.
+
+    :param event_suffix: Event type like "create.start" or "create.end"
+    :param sg_payload: payload for server group update
+    """
+    notifier = rpc.get_notifier(service='servergroup')
+
+    notifier.info(context, 'servergroup.%s' % event_suffix, sg_payload)
+
+
 def notify_about_aggregate_update(context, event_suffix, aggregate_payload):
     """Send a notification about aggregate update.
 
@@ -345,8 +373,8 @@ def notify_about_host_update(context, event_suffix, host_payload):
     """
     host_identifier = host_payload.get('host_name')
     if not host_identifier:
-        LOG.warn(_LW("No host name specified for the notification of "
-                   "HostAPI.%s and it will be ignored"), event_suffix)
+        LOG.warning(_LW("No host name specified for the notification of "
+                        "HostAPI.%s and it will be ignored"), event_suffix)
         return
 
     notifier = rpc.get_notifier(service='api', host=host_identifier)
@@ -452,31 +480,3 @@ class EventReporter(object):
                 self.context, uuid, self.event_name, exc_val=exc_val,
                 exc_tb=exc_tb, want_result=False)
         return False
-
-
-def periodic_task_spacing_warn(config_option_name):
-    """Decorator to warn about an upcoming breaking change in methods which
-    use the @periodic_task decorator.
-
-    Some methods using the @periodic_task decorator specify spacing=0 or
-    None to mean "do not call this method", but the decorator itself uses
-    0/None to mean "call at the default rate".
-
-    Starting with the K release the Nova methods will be changed to conform
-    to the Oslo decorator.  This decorator should be present wherever a
-    spacing value from user-supplied config is passed to @periodic_task, and
-    there is also a check to skip the method if the value is zero.  It will
-    log a warning if the spacing value from config is 0/None.
-    """
-    # TODO(gilliard) remove this decorator, its usages and the early returns
-    # near them after the K release.
-    def wrapper(f):
-        if (hasattr(f, "_periodic_spacing") and
-                (f._periodic_spacing == 0 or f._periodic_spacing is None)):
-            LOG.warning(_LW("Value of 0 or None specified for %s."
-                " This behaviour will change in meaning in the K release, to"
-                " mean 'call at the default rate' rather than 'do not call'."
-                " To keep the 'do not call' behaviour, use a negative value."),
-                config_option_name)
-        return f
-    return wrapper

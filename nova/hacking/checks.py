@@ -56,15 +56,24 @@ asse_equal_start_with_none_re = re.compile(
                            r"assertEqual\(None,")
 conf_attribute_set_re = re.compile(r"CONF\.[a-z0-9_.]+\s*=\s*\w")
 log_translation = re.compile(
-    r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)\(\s*('|\")")
+    r"(.)*LOG\.(audit|error|critical)\(\s*('|\")")
+log_translation_info = re.compile(
+    r"(.)*LOG\.(info)\(\s*(_\(|'|\")")
+log_translation_exception = re.compile(
+    r"(.)*LOG\.(exception)\(\s*(_\(|'|\")")
+log_translation_LW = re.compile(
+    r"(.)*LOG\.(warning)\(\s*(_\(|'|\")")
+log_warn = re.compile(
+    r"(.)*LOG\.(warn)\(\s*('|\"|_)")
 translated_log = re.compile(
-    r"(.)*LOG\.(audit|error|info|warn|warning|critical|exception)"
+    r"(.)*LOG\.(audit|error|info|critical|exception)"
     "\(\s*_\(\s*('|\")")
 mutable_default_args = re.compile(r"^\s*def .+\((.+=\{\}|.+=\[\])")
 string_translation = re.compile(r"[^_]*_\(\s*('|\")")
 underscore_import_check = re.compile(r"(.)*import _(.)*")
 # We need this for cases where they have created their own _ function.
 custom_underscore_check = re.compile(r"(.)*_\s*=\s*(.)*")
+api_version_re = re.compile(r"@.*api_version")
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -124,12 +133,16 @@ def import_no_db_in_virt(logical_line, filename):
 
 
 def no_db_session_in_public_api(logical_line, filename):
-    if "db/api.py" in filename or "db/sqlalchemy/api.py" in filename:
+    if "db/api.py" in filename:
         if session_check.match(logical_line):
             yield (0, "N309: public db api methods may not accept session")
 
 
-def use_timeutils_utcnow(logical_line):
+def use_timeutils_utcnow(logical_line, filename):
+    # tools are OK to use the standard datetime module
+    if "/tools/" in filename:
+        return
+
     msg = "N310: timeutils.utcnow() must be used instead of datetime.%s()"
 
     datetime_funcs = ['now', 'utcnow']
@@ -294,10 +307,25 @@ def validate_log_translations(logical_line, physical_line, filename):
     # Translations are not required in the test directory
     # and the Xen utilities
     if ("nova/tests" in filename or
-            "plugins/xenserver/xenapi/etc/xapi.d" in filename):
+        "plugins/xenserver/xenapi/etc/xapi.d" in filename or
+        # TODO(Mike_D):Needs to be remove with:
+        # I075ab2a522272f2082c292dfedc877abd8ebe328
+            "nova/virt/libvirt" in filename):
         return
     if pep8.noqa(physical_line):
         return
+    msg = "N328: LOG.info messages require translations `_LI()`!"
+    if log_translation_info.match(logical_line):
+        yield (0, msg)
+    msg = "N329: LOG.exception messages require translations `_LE()`!"
+    if log_translation_exception.match(logical_line):
+        yield (0, msg)
+    msg = "N330: LOG.warning messages require translations `_LW()`!"
+    if log_translation_LW.match(logical_line):
+        yield (0, msg)
+    msg = "N331: Use LOG.warning due to compatibility with py3"
+    if log_warn.match(logical_line):
+        yield (0, msg)
     msg = "N321: Log messages require translations!"
     if log_translation.match(logical_line):
         yield (0, msg)
@@ -337,6 +365,10 @@ def use_jsonutils(logical_line, filename):
     if "plugins/xenserver" in filename:
         return
 
+    # tools are OK to use the standard json module
+    if "/tools/" in filename:
+        return
+
     msg = "N324: jsonutils.%(fun)s must be used instead of json.%(fun)s"
 
     if "json." in logical_line:
@@ -347,31 +379,28 @@ def use_jsonutils(logical_line, filename):
                 yield (pos, msg % {'fun': f[:-1]})
 
 
-def check_assert_called_once(logical_line, filename):
-    msg = ("N327: assert_called_once is a no-op. please use assert_called_"
-           "once_with to test with explicit parameters or an assertEqual with"
-           " call_count.")
-
-    if 'nova/tests/' in filename:
-        pos = logical_line.find('.assert_called_once(')
-        if pos != -1:
-            yield (pos, msg)
+def check_api_version_decorator(logical_line, blank_before, filename):
+    msg = ("N332: the api_version decorator must be the first decorator"
+           " on a method.")
+    if blank_before == 0 and re.match(api_version_re, logical_line):
+        yield(0, msg)
 
 
-class CheckForStrExc(BaseASTChecker):
-    """Checks for the use of str() on an exception.
+class CheckForStrUnicodeExc(BaseASTChecker):
+    """Checks for the use of str() or unicode() on an exception.
 
-    This currently only handles the case where str() is used in
-    the scope of an exception handler.  If the exception is passed
-    into a function, returned from an assertRaises, or used on an
-    exception created in the same scope, this does not catch it.
+    This currently only handles the case where str() or unicode()
+    is used in the scope of an exception handler.  If the exception
+    is passed into a function, returned from an assertRaises, or
+    used on an exception created in the same scope, this does not
+    catch it.
     """
 
-    CHECK_DESC = ('N325 str() cannot be used on an exception.  '
-                  'Remove or use six.text_type()')
+    CHECK_DESC = ('N325 str() and unicode() cannot be used on an '
+                  'exception.  Remove or use six.text_type()')
 
     def __init__(self, tree, filename):
-        super(CheckForStrExc, self).__init__(tree, filename)
+        super(CheckForStrUnicodeExc, self).__init__(tree, filename)
         self.name = []
         self.already_checked = []
 
@@ -379,19 +408,19 @@ class CheckForStrExc(BaseASTChecker):
         for handler in node.handlers:
             if handler.name:
                 self.name.append(handler.name.id)
-                super(CheckForStrExc, self).generic_visit(node)
+                super(CheckForStrUnicodeExc, self).generic_visit(node)
                 self.name = self.name[:-1]
             else:
-                super(CheckForStrExc, self).generic_visit(node)
+                super(CheckForStrUnicodeExc, self).generic_visit(node)
 
     def visit_Call(self, node):
-        if self._check_call_names(node, ['str']):
+        if self._check_call_names(node, ['str', 'unicode']):
             if node not in self.already_checked:
                 self.already_checked.append(node)
                 if isinstance(node.args[0], ast.Name):
                     if node.args[0].id in self.name:
                         self.add_error(node.args[0])
-        super(CheckForStrExc, self).generic_visit(node)
+        super(CheckForStrUnicodeExc, self).generic_visit(node)
 
 
 class CheckForTransAdd(BaseASTChecker):
@@ -434,6 +463,6 @@ def factory(register):
     register(no_mutable_default_args)
     register(check_explicit_underscore_import)
     register(use_jsonutils)
-    register(check_assert_called_once)
-    register(CheckForStrExc)
+    register(check_api_version_decorator)
+    register(CheckForStrUnicodeExc)
     register(CheckForTransAdd)

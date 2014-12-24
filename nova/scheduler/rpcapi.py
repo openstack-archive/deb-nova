@@ -84,6 +84,11 @@ class SchedulerAPI(object):
         existing methods in 3.x after that point should be done such that they
         can handle the version_cap being set to 3.0.
 
+        * 3.1 - Made select_destinations() send flavor object
+
+        * 4.0 - Removed backwards compat for Icehouse
+
+
     '''
 
     VERSION_ALIASES = {
@@ -91,11 +96,12 @@ class SchedulerAPI(object):
         'havana': '2.9',
         'icehouse': '3.0',
         'juno': '3.0',
+        'kilo': '4.0',
     }
 
     def __init__(self):
         super(SchedulerAPI, self).__init__()
-        target = messaging.Target(topic=CONF.scheduler_topic, version='3.0')
+        target = messaging.Target(topic=CONF.scheduler_topic, version='4.0')
         version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.scheduler,
                                                CONF.upgrade_levels.scheduler)
         serializer = objects_base.NovaObjectSerializer()
@@ -103,6 +109,6 @@ class SchedulerAPI(object):
                                      serializer=serializer)
 
     def select_destinations(self, ctxt, request_spec, filter_properties):
-        cctxt = self.client.prepare()
+        cctxt = self.client.prepare(version='4.0')
         return cctxt.call(ctxt, 'select_destinations',
             request_spec=request_spec, filter_properties=filter_properties)

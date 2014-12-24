@@ -18,6 +18,9 @@ import copy
 import itertools
 
 from oslo import messaging
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+from oslo.utils import timeutils
 import six
 
 from nova.api.ec2 import ec2utils
@@ -31,7 +34,7 @@ from nova.compute import vm_states
 from nova.conductor.tasks import live_migrate
 from nova.db import base
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LW
 from nova import image
 from nova import manager
 from nova import network
@@ -39,13 +42,9 @@ from nova.network.security_group import openstack_driver
 from nova import notifications
 from nova import objects
 from nova.objects import base as nova_object
-from nova.openstack.common import excutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova import quota
 from nova.scheduler import client as scheduler_client
-from nova.scheduler import driver as scheduler_driver
 from nova.scheduler import utils as scheduler_utils
 
 LOG = logging.getLogger(__name__)
@@ -79,7 +78,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    target = messaging.Target(version='2.0')
+    target = messaging.Target(version='2.1')
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -120,16 +119,23 @@ class ConductorManager(manager.Manager):
                         updates, service):
         for key, value in updates.iteritems():
             if key not in allowed_updates:
-                LOG.error(_("Instance update attempted for "
-                            "'%(key)s' on %(instance_uuid)s"),
+                LOG.error(_LE("Instance update attempted for "
+                              "'%(key)s' on %(instance_uuid)s"),
                           {'key': key, 'instance_uuid': instance_uuid})
                 raise KeyError("unexpected update keyword '%s'" % key)
             if key in datetime_fields and isinstance(value, six.string_types):
                 updates[key] = timeutils.parse_strtime(value)
 
+        # NOTE(danms): the send_update() call below is going to want to know
+        # about the flavor, so we need to join the appropriate things here,
+        # and objectify the result.
         old_ref, instance_ref = self.db.instance_update_and_get_original(
-            context, instance_uuid, updates)
-        notifications.send_update(context, old_ref, instance_ref, service)
+            context, instance_uuid, updates,
+            columns_to_join=['system_metadata'])
+        inst_obj = objects.Instance._from_db_object(
+            context, objects.Instance(),
+            instance_ref, expected_attrs=['system_metadata'])
+        notifications.send_update(context, old_ref, inst_obj, service)
         return jsonutils.to_primitive(instance_ref)
 
     @messaging.expected_exceptions(exception.InstanceNotFound)
@@ -341,6 +347,12 @@ class ConductorManager(manager.Manager):
     def notify_usage_exists(self, context, instance, current_period,
                             ignore_missing_network_data,
                             system_metadata, extra_usage_info):
+        if not isinstance(instance, objects.Instance):
+            attrs = ['metadata', 'system_metadata']
+            instance = objects.Instance._from_db_object(context,
+                                                        objects.Instance(),
+                                                        instance,
+                                                        expected_attrs=attrs)
         compute_utils.notify_usage_exists(self.notifier, context, instance,
                                           current_period,
                                           ignore_missing_network_data,
@@ -427,9 +439,9 @@ class ConductorManager(manager.Manager):
                 # Avoid demand-loading anything
                 continue
             if (not oldobj.obj_attr_is_set(name) or
-                    oldobj[name] != objinst[name]):
+                    getattr(oldobj, name) != getattr(objinst, name)):
                 updates[name] = field.to_primitive(objinst, name,
-                                                   objinst[name])
+                                                   getattr(objinst, name))
         # This is safe since a field named this would conflict with the
         # method anyway
         updates['obj_what_changed'] = objinst.obj_what_changed()
@@ -448,7 +460,7 @@ class ComputeTaskManager(base.Base):
     may involve coordinating activities on multiple compute nodes.
     """
 
-    target = messaging.Target(namespace='compute_task', version='1.9')
+    target = messaging.Target(namespace='compute_task', version='1.10')
 
     def __init__(self):
         super(ComputeTaskManager, self).__init__()
@@ -466,7 +478,8 @@ class ComputeTaskManager(base.Base):
                                    exception.InvalidSharedStorage,
                                    exception.HypervisorUnavailable,
                                    exception.InstanceNotRunning,
-                                   exception.MigrationPreCheckError)
+                                   exception.MigrationPreCheckError,
+                                   exception.LiveMigrationWithOldNovaNotSafe)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
             flavor, block_migration, disk_over_commit, reservations=None):
         if instance and not isinstance(instance, nova_object.NovaObject):
@@ -477,6 +490,11 @@ class ComputeTaskManager(base.Base):
             instance = objects.Instance._from_db_object(
                 context, objects.Instance(), instance,
                 expected_attrs=attrs)
+        # NOTE(melwitt): Remove this in version 2.0 of the RPC API
+        if flavor and not isinstance(flavor, objects.Flavor):
+            # Code downstream may expect extra_specs to be populated since it
+            # is receiving an object, so lookup the flavor to ensure this.
+            flavor = objects.Flavor.get_by_id(context, flavor['id'])
         if live and not rebuild and not flavor:
             self._live_migrate(context, instance, scheduler_hint,
                                block_migration, disk_over_commit)
@@ -502,6 +520,8 @@ class ComputeTaskManager(base.Base):
         quotas = objects.Quotas.from_reservations(context,
                                                   reservations,
                                                   instance=instance)
+        scheduler_utils.setup_instance_group(context, request_spec,
+                                             filter_properties)
         try:
             scheduler_utils.populate_retry(filter_properties, instance['uuid'])
             hosts = self.scheduler_client.select_destinations(
@@ -529,11 +549,6 @@ class ComputeTaskManager(base.Base):
             # context is not serializable
             filter_properties.pop('context', None)
 
-            # TODO(timello): originally, instance_type in request_spec
-            # on compute.api.resize does not have 'extra_specs', so we
-            # remove it for now to keep tests backward compatibility.
-            request_spec['instance_type'].pop('extra_specs', None)
-
             (host, node) = (host_state['host'], host_state['nodename'])
             self.compute_rpcapi.prep_resize(
                 context, image, instance,
@@ -557,6 +572,19 @@ class ComputeTaskManager(base.Base):
     def _live_migrate(self, context, instance, scheduler_hint,
                       block_migration, disk_over_commit):
         destination = scheduler_hint.get("host")
+
+        def _set_vm_state(context, instance, ex, vm_state=None,
+                          task_state=None):
+            request_spec = {'instance_properties': {
+                'uuid': instance['uuid'], },
+            }
+            scheduler_utils.set_vm_state_and_notify(context,
+                'compute_task', 'migrate_server',
+                dict(vm_state=vm_state,
+                     task_state=task_state,
+                     expected_task_state=task_states.MIGRATING,),
+                ex, request_spec, self.db)
+
         try:
             live_migrate.execute(context, instance, destination,
                              block_migration, disk_over_commit)
@@ -570,24 +598,19 @@ class ComputeTaskManager(base.Base):
                 exception.InvalidSharedStorage,
                 exception.HypervisorUnavailable,
                 exception.InstanceNotRunning,
-                exception.MigrationPreCheckError) as ex:
+                exception.MigrationPreCheckError,
+                exception.LiveMigrationWithOldNovaNotSafe) as ex:
             with excutils.save_and_reraise_exception():
                 # TODO(johngarbutt) - eventually need instance actions here
-                request_spec = {'instance_properties': {
-                    'uuid': instance['uuid'], },
-                }
-                scheduler_utils.set_vm_state_and_notify(context,
-                        'compute_task', 'migrate_server',
-                        dict(vm_state=instance['vm_state'],
-                             task_state=None,
-                             expected_task_state=task_states.MIGRATING,),
-                        ex, request_spec, self.db)
+                _set_vm_state(context, instance, ex, instance['vm_state'])
         except Exception as ex:
-            LOG.error(_('Migration of instance %(instance_id)s to host'
-                       ' %(dest)s unexpectedly failed.'),
-                       {'instance_id': instance['uuid'], 'dest': destination},
-                       exc_info=True)
-            raise exception.MigrationError(reason=ex)
+            LOG.error(_LE('Migration of instance %(instance_id)s to host'
+                          ' %(dest)s unexpectedly failed.'),
+                      {'instance_id': instance['uuid'], 'dest': destination},
+                      exc_info=True)
+            _set_vm_state(context, instance, ex, vm_states.ERROR,
+                          instance['task_state'])
+            raise exception.MigrationError(reason=six.text_type(ex))
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
@@ -596,6 +619,8 @@ class ComputeTaskManager(base.Base):
         #                 2.0 of the RPC API.
         request_spec = scheduler_utils.build_request_spec(context, image,
                                                           instances)
+        scheduler_utils.setup_instance_group(context, request_spec,
+                                             filter_properties)
         # TODO(danms): Remove this in version 2.0 of the RPC API
         if (requested_networks and
                 not isinstance(requested_networks,
@@ -603,6 +628,13 @@ class ComputeTaskManager(base.Base):
             requested_networks = objects.NetworkRequestList(
                 objects=[objects.NetworkRequest.from_tuple(t)
                          for t in requested_networks])
+        # TODO(melwitt): Remove this in version 2.0 of the RPC API
+        flavor = filter_properties.get('instance_type')
+        if flavor and not isinstance(flavor, objects.Flavor):
+            # Code downstream may expect extra_specs to be populated since it
+            # is receiving an object, so lookup the flavor to ensure this.
+            flavor = objects.Flavor.get_by_id(context, flavor['id'])
+            filter_properties = dict(filter_properties, instance_type=flavor)
 
         try:
             # check retry policy. Rather ugly use of instances[0]...
@@ -613,9 +645,9 @@ class ComputeTaskManager(base.Base):
             hosts = self.scheduler_client.select_destinations(context,
                     request_spec, filter_properties)
         except Exception as exc:
-            for instance in instances:
-                scheduler_driver.handle_schedule_error(context, exc,
-                        instance.uuid, request_spec)
+            updates = {'vm_state': vm_states.ERROR, 'task_state': None}
+            self._set_vm_state_and_notify(context, 'build_instances', updates,
+                                          exc, request_spec)
             return
 
         for (instance, host) in itertools.izip(instances, hosts):
@@ -651,6 +683,8 @@ class ComputeTaskManager(base.Base):
             *instances):
         request_spec = scheduler_utils.build_request_spec(context, image,
                 instances)
+        scheduler_utils.setup_instance_group(context, request_spec,
+                                             filter_properties)
         hosts = self.scheduler_client.select_destinations(context,
                 request_spec, filter_properties)
         return hosts
@@ -660,7 +694,9 @@ class ComputeTaskManager(base.Base):
 
         def safe_image_show(ctx, image_id):
             if image_id:
-                return self.image_api.get(ctx, image_id)
+                return self.image_api.get(ctx, image_id, show_deleted=False)
+            else:
+                raise exception.ImageNotFound(image_id='')
 
         if instance.vm_state == vm_states.SHELVED:
             instance.task_state = task_states.POWERING_ON
@@ -678,8 +714,14 @@ class ComputeTaskManager(base.Base):
                 except exception.ImageNotFound:
                     instance.vm_state = vm_states.ERROR
                     instance.save()
-                    reason = _('Unshelve attempted but the image %s '
-                               'cannot be found.') % image_id
+
+                    if image_id:
+                        reason = _('Unshelve attempted but the image %s '
+                                   'cannot be found.') % image_id
+                    else:
+                        reason = _('Unshelve attempted but the image_id is '
+                                   'not provided')
+
                     LOG.error(reason, instance=instance)
                     raise exception.UnshelveException(
                         instance_id=instance.uuid, reason=reason)
@@ -701,12 +743,12 @@ class ComputeTaskManager(base.Base):
             except exception.NoValidHost:
                 instance.task_state = None
                 instance.save()
-                LOG.warning(_("No valid host found for unshelve instance"),
+                LOG.warning(_LW("No valid host found for unshelve instance"),
                             instance=instance)
                 return
         else:
-            LOG.error(_('Unshelve attempted but vm_state not SHELVED or '
-                        'SHELVED_OFFLOADED'), instance=instance)
+            LOG.error(_LE('Unshelve attempted but vm_state not SHELVED or '
+                          'SHELVED_OFFLOADED'), instance=instance)
             instance.vm_state = vm_states.ERROR
             instance.save()
             return
@@ -731,6 +773,8 @@ class ComputeTaskManager(base.Base):
                 request_spec = scheduler_utils.build_request_spec(context,
                                                                   image_ref,
                                                                   [instance])
+                scheduler_utils.setup_instance_group(context, request_spec,
+                                                     filter_properties)
                 try:
                     hosts = self.scheduler_client.select_destinations(context,
                                                             request_spec,
@@ -742,8 +786,8 @@ class ComputeTaskManager(base.Base):
                                 'rebuild_server',
                                 {'vm_state': instance.vm_state,
                                  'task_state': None}, ex, request_spec)
-                        LOG.warning(_("No valid host found for rebuild"),
-                                      instance=instance)
+                        LOG.warning(_LW("No valid host found for rebuild"),
+                                    instance=instance)
 
             self.compute_rpcapi.rebuild_instance(context,
                     instance=instance,

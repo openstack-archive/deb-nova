@@ -26,8 +26,9 @@ if sys.platform == 'win32':
 
 from xml.etree import ElementTree
 
+from oslo.utils import units
+
 from nova.i18n import _
-from nova.openstack.common import units
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import vhdutils
 from nova.virt.hyperv import vmutils
@@ -67,12 +68,15 @@ class VHDUtilsV2(vhdutils.VHDUtils):
         self._create_vhd(self._VHD_TYPE_DYNAMIC, vhd_format, path,
                          max_internal_size=max_internal_size)
 
-    def create_differencing_vhd(self, path, parent_path, size=None):
+    def create_differencing_vhd(self, path, parent_path):
+        # Although this method can take a size argument in case of VHDX
+        # images, avoid it as the underlying Win32 is currently not
+        # resizing the disk properly. This can be reconsidered once the
+        # Win32 issue is fixed.
         parent_vhd_info = self.get_vhd_info(parent_path)
         self._create_vhd(self._VHD_TYPE_DIFFERENCING,
                          parent_vhd_info["Format"],
-                         path, parent_path=parent_path,
-                         max_internal_size=size)
+                         path, parent_path=parent_path)
 
     def _create_vhd(self, vhd_type, format, path, max_internal_size=None,
                     parent_path=None):
@@ -214,7 +218,12 @@ class VHDUtilsV2(vhdutils.VHDUtils):
         et = ElementTree.fromstring(vhd_info_xml)
         for item in et.findall("PROPERTY"):
             name = item.attrib["NAME"]
-            value_text = item.find("VALUE").text
+            value_item = item.find("VALUE")
+            if value_item is None:
+                value_text = None
+            else:
+                value_text = value_item.text
+
             if name in ["Path", "ParentPath"]:
                 vhd_info_dict[name] = value_text
             elif name in ["BlockSize", "LogicalSectorSize",

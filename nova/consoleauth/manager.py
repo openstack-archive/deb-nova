@@ -20,13 +20,13 @@ import time
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.serialization import jsonutils
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import rpcapi as compute_rpcapi
 from nova.i18n import _, _LW
 from nova import manager
 from nova import objects
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
 
@@ -82,7 +82,7 @@ class ConsoleAuthManager(manager.Manager):
         if not self.mc.set(token.encode('UTF-8'),
                            data, CONF.console_token_ttl):
             LOG.warning(_LW("Token: %(token)s failed to save into memcached."),
-                            {'token': token})
+                        {'token': token})
         tokens = self._get_tokens_for_instance(instance_uuid)
         # Remove the expired tokens from cache.
         for tok in tokens:

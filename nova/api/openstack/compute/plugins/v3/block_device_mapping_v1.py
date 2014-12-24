@@ -15,13 +15,13 @@
 
 """The legacy block device mappings extension."""
 
+from oslo.utils import strutils
 from webob import exc
 
 from nova.api.openstack import extensions
 from nova import block_device
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import strutils
 
 ALIAS = "os-block-device-mapping-v1"
 ATTRIBUTE_NAME = "block_device_mapping"
@@ -53,6 +53,10 @@ class BlockDeviceMappingV1(extensions.V3APIExtensionBase):
             expl = _('Using different block_device_mapping syntaxes '
                      'is not allowed in the same request.')
             raise exc.HTTPBadRequest(explanation=expl)
+
+        if not isinstance(block_device_mapping, list):
+            msg = _('block_device_mapping must be a list')
+            raise exc.HTTPBadRequest(explanation=msg)
 
         for bdm in block_device_mapping:
             try:

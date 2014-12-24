@@ -18,15 +18,19 @@ Datastore utility functions
 import posixpath
 
 from oslo.vmware import exceptions as vexc
+from oslo.vmware import pbm
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LI
 from nova.openstack.common import log as logging
+from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 
 LOG = logging.getLogger(__name__)
-ALLOWED_DATASTORE_TYPES = ['VMFS', 'NFS']
+ALL_SUPPORTED_DS_TYPES = frozenset([constants.DATASTORE_TYPE_VMFS,
+                                    constants.DATASTORE_TYPE_NFS,
+                                    constants.DATASTORE_TYPE_VSAN])
 
 
 class Datastore(object):
@@ -189,23 +193,36 @@ def _get_token(results):
     return getattr(results, 'token', None)
 
 
-def _select_datastore(data_stores, best_match, datastore_regex=None):
+def _select_datastore(session, data_stores, best_match, datastore_regex=None,
+                      storage_policy=None,
+                      allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Find the most preferable datastore in a given RetrieveResult object.
 
+    :param session: vmwareapi session
     :param data_stores: a RetrieveResult object from vSphere API call
     :param best_match: the current best match for datastore
     :param datastore_regex: an optional regular expression to match names
+    :param storage_policy: storage policy for the datastore
+    :param allowed_ds_types: a list of acceptable datastore type names
     :return: datastore_ref, datastore_name, capacity, freespace
     """
 
+    if storage_policy:
+        matching_ds = _filter_datastores_matching_storage_policy(
+            session, data_stores, storage_policy)
+        if not matching_ds:
+            return best_match
+    else:
+        matching_ds = data_stores
+
     # data_stores is actually a RetrieveResult object from vSphere API call
-    for obj_content in data_stores.objects:
+    for obj_content in matching_ds.objects:
         # the propset attribute "need not be set" by returning API
         if not hasattr(obj_content, 'propSet'):
             continue
 
         propdict = vm_util.propset_dict(obj_content.propSet)
-        if _is_datastore_valid(propdict, datastore_regex):
+        if _is_datastore_valid(propdict, datastore_regex, allowed_ds_types):
             new_ds = Datastore(
                     ref=obj_content.obj,
                     name=propdict['summary.name'],
@@ -219,13 +236,13 @@ def _select_datastore(data_stores, best_match, datastore_regex=None):
     return best_match
 
 
-def _is_datastore_valid(propdict, datastore_regex):
+def _is_datastore_valid(propdict, datastore_regex, ds_types):
     """Checks if a datastore is valid based on the following criteria.
 
        Criteria:
        - Datastore is accessible
        - Datastore is not in maintenance mode (optional)
-       - Datastore is of a supported disk type
+       - Datastore's type is one of the given ds_types
        - Datastore matches the supplied regex (optional)
 
        :param propdict: datastore summary dict
@@ -237,18 +254,22 @@ def _is_datastore_valid(propdict, datastore_regex):
     return (propdict.get('summary.accessible') and
             (propdict.get('summary.maintenanceMode') is None or
              propdict.get('summary.maintenanceMode') == 'normal') and
-            propdict['summary.type'] in ALLOWED_DATASTORE_TYPES and
+            propdict['summary.type'] in ds_types and
             (datastore_regex is None or
              datastore_regex.match(propdict['summary.name'])))
 
 
-def get_datastore(session, cluster, datastore_regex=None):
+def get_datastore(session, cluster, datastore_regex=None,
+                  storage_policy=None,
+                  allowed_ds_types=ALL_SUPPORTED_DS_TYPES):
     """Get the datastore list and choose the most preferable one."""
     datastore_ret = session._call_method(
                                 vim_util,
                                 "get_dynamic_property", cluster,
                                 "ClusterComputeResource", "datastore")
-    if datastore_ret is None:
+    # If there are no hosts in the cluster then an empty string is
+    # returned
+    if not datastore_ret:
         raise exception.DatastoreNotFound()
 
     data_store_mors = datastore_ret.ManagedObjectReference
@@ -262,8 +283,12 @@ def get_datastore(session, cluster, datastore_regex=None):
 
     best_match = None
     while data_stores:
-        best_match = _select_datastore(data_stores, best_match,
-                                       datastore_regex)
+        best_match = _select_datastore(session,
+                                       data_stores,
+                                       best_match,
+                                       datastore_regex,
+                                       storage_policy,
+                                       allowed_ds_types)
         token = _get_token(data_stores)
         if not token:
             break
@@ -272,7 +297,12 @@ def get_datastore(session, cluster, datastore_regex=None):
                                            token)
     if best_match:
         return best_match
-    if datastore_regex:
+
+    if storage_policy:
+        raise exception.DatastoreNotFound(
+            _("Storage policy %s did not match any datastores")
+            % storage_policy)
+    elif datastore_regex:
         raise exception.DatastoreNotFound(
             _("Datastore regex %s did not match any datastores")
             % datastore_regex.pattern)
@@ -288,7 +318,9 @@ def _get_allowed_datastores(data_stores, datastore_regex):
             continue
 
         propdict = vm_util.propset_dict(obj_content.propSet)
-        if _is_datastore_valid(propdict, datastore_regex):
+        if _is_datastore_valid(propdict,
+                               datastore_regex,
+                               ALL_SUPPORTED_DS_TYPES):
             allowed.append(Datastore(ref=obj_content.obj,
                                      name=propdict['summary.name']))
 
@@ -328,17 +360,63 @@ def get_available_datastores(session, cluster=None, datastore_regex=None):
     return allowed
 
 
+def get_allowed_datastore_types(disk_type):
+    if disk_type == constants.DISK_TYPE_STREAM_OPTIMIZED:
+        return ALL_SUPPORTED_DS_TYPES
+    return ALL_SUPPORTED_DS_TYPES - frozenset([constants.DATASTORE_TYPE_VSAN])
+
+
 def file_delete(session, ds_path, dc_ref):
     LOG.debug("Deleting the datastore file %s", ds_path)
-    vim = session._get_vim()
+    vim = session.vim
     file_delete_task = session._call_method(
-            session._get_vim(),
+            vim,
             "DeleteDatastoreFile_Task",
             vim.service_content.fileManager,
             name=str(ds_path),
             datacenter=dc_ref)
     session._wait_for_task(file_delete_task)
     LOG.debug("Deleted the datastore file")
+
+
+def disk_move(session, dc_ref, src_file, dst_file):
+    """Moves the source virtual disk to the destination.
+
+    The list of possible faults that the server can return on error
+    include:
+
+    * CannotAccessFile: Thrown if the source file or folder cannot be
+      moved because of insufficient permissions.
+    * FileAlreadyExists: Thrown if a file with the given name already
+      exists at the destination.
+    * FileFault: Thrown if there is a generic file error
+    * FileLocked: Thrown if the source file or folder is currently
+      locked or in use.
+    * FileNotFound: Thrown if the file or folder specified by sourceName
+      is not found.
+    * InvalidDatastore: Thrown if the operation cannot be performed on
+      the source or destination datastores.
+    * NoDiskSpace: Thrown if there is not enough space available on the
+      destination datastore.
+    * RuntimeFault: Thrown if any type of runtime fault is thrown that
+      is not covered by the other faults; for example,
+      a communication error.
+
+    """
+    LOG.debug("Moving virtual disk from %(src)s to %(dst)s.",
+              {'src': src_file, 'dst': dst_file})
+    move_task = session._call_method(
+            session.vim,
+            "MoveVirtualDisk_Task",
+            session.vim.service_content.virtualDiskManager,
+            sourceName=str(src_file),
+            sourceDatacenter=dc_ref,
+            destName=str(dst_file),
+            destDatacenter=dc_ref,
+            force=False)
+    session._wait_for_task(move_task)
+    LOG.info(_LI("Moved virtual disk from %(src)s to %(dst)s."),
+             {'src': src_file, 'dst': dst_file})
 
 
 def file_move(session, dc_ref, src_file, dst_file):
@@ -367,9 +445,9 @@ def file_move(session, dc_ref, src_file, dst_file):
     """
     LOG.debug("Moving file from %(src)s to %(dst)s.",
               {'src': src_file, 'dst': dst_file})
-    vim = session._get_vim()
+    vim = session.vim
     move_task = session._call_method(
-            session._get_vim(),
+            vim,
             "MoveDatastoreFile_Task",
             vim.service_content.fileManager,
             sourceName=str(src_file),
@@ -389,9 +467,9 @@ def search_datastore_spec(client_factory, file_name):
 
 def file_exists(session, ds_browser, ds_path, file_name):
     """Check if the file exists on the datastore."""
-    client_factory = session._get_vim().client.factory
+    client_factory = session.vim.client.factory
     search_spec = search_datastore_spec(client_factory, file_name)
-    search_task = session._call_method(session._get_vim(),
+    search_task = session._call_method(session.vim,
                                              "SearchDatastore_Task",
                                              ds_browser,
                                              datastorePath=str(ds_path),
@@ -412,8 +490,8 @@ def mkdir(session, ds_path, dc_ref):
     DataStore.
     """
     LOG.debug("Creating directory with path %s", ds_path)
-    session._call_method(session._get_vim(), "MakeDirectory",
-            session._get_vim().service_content.fileManager,
+    session._call_method(session.vim, "MakeDirectory",
+            session.vim.service_content.fileManager,
             name=str(ds_path), datacenter=dc_ref,
             createParentDirectories=True)
     LOG.debug("Created directory with path %s", ds_path)
@@ -425,7 +503,7 @@ def get_sub_folders(session, ds_browser, ds_path):
     If the path does not exist then an empty set is returned.
     """
     search_task = session._call_method(
-            session._get_vim(),
+            session.vim,
             "SearchDatastore_Task",
             ds_browser,
             datastorePath=str(ds_path))
@@ -437,3 +515,29 @@ def get_sub_folders(session, ds_browser, ds_path):
     if hasattr(task_info.result, 'file'):
         return set([file.path for file in task_info.result.file])
     return set()
+
+
+def _filter_datastores_matching_storage_policy(session, data_stores,
+                                               storage_policy):
+    """Get datastores matching the given storage policy.
+
+    :param data_stores: the list of retrieve result wrapped datastore objects
+    :param storage_policy: the storage policy name
+    :return the list of datastores conforming to the given storage policy
+    """
+    profile_id = pbm.get_profile_id_by_name(session, storage_policy)
+    if profile_id:
+        factory = session.pbm.client.factory
+        ds_mors = [oc.obj for oc in data_stores.objects]
+        hubs = pbm.convert_datastores_to_hubs(factory, ds_mors)
+        matching_hubs = pbm.filter_hubs_by_profile(session, hubs,
+                                                   profile_id)
+        if matching_hubs:
+            matching_ds = pbm.filter_datastores_by_hubs(matching_hubs,
+                                                        ds_mors)
+            object_contents = [oc for oc in data_stores.objects
+                               if oc.obj in matching_ds]
+            data_stores.objects = object_contents
+            return data_stores
+    LOG.error(_LE("Unable to retrieve storage policy with name %s"),
+              storage_policy)

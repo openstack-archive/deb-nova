@@ -94,7 +94,15 @@ class AggregateController(object):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InvalidAggregateAction as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
-        return self._marshall_aggregate(aggregate)
+
+        agg = self._marshall_aggregate(aggregate)
+
+        # To maintain the same API result as before the changes for returning
+        # nova objects were made.
+        del agg['aggregate']['hosts']
+        del agg['aggregate']['metadata']
+
+        return agg
 
     def show(self, req, id):
         """Shows the details of an aggregate, hosts and metadata included."""
@@ -180,12 +188,12 @@ class AggregateController(object):
             aggregate = self.api.add_host_to_aggregate(context, id, host)
         except (exception.AggregateNotFound, exception.ComputeHostNotFound):
             msg = _('Cannot add host %(host)s in aggregate'
-                    ' %(id)s') % {'host': host, 'id': id}
+                    ' %(id)s: not found') % {'host': host, 'id': id}
             raise exc.HTTPNotFound(explanation=msg)
         except (exception.AggregateHostExists,
                 exception.InvalidAggregateAction):
             msg = _('Cannot add host %(host)s in aggregate'
-                    ' %(id)s') % {'host': host, 'id': id}
+                    ' %(id)s: host exists') % {'host': host, 'id': id}
             raise exc.HTTPConflict(explanation=msg)
         return self._marshall_aggregate(aggregate)
 
@@ -199,11 +207,11 @@ class AggregateController(object):
         except (exception.AggregateNotFound, exception.AggregateHostNotFound,
                 exception.ComputeHostNotFound):
             msg = _('Cannot remove host %(host)s in aggregate'
-                    ' %(id)s') % {'host': host, 'id': id}
+                    ' %(id)s: not found') % {'host': host, 'id': id}
             raise exc.HTTPNotFound(explanation=msg)
         except exception.InvalidAggregateAction:
             msg = _('Cannot remove host %(host)s in aggregate'
-                    ' %(id)s') % {'host': host, 'id': id}
+                    ' %(id)s: invalid') % {'host': host, 'id': id}
             raise exc.HTTPConflict(explanation=msg)
         return self._marshall_aggregate(aggregate)
 

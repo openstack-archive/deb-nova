@@ -24,6 +24,8 @@ task states for various commands issued by the user:
     soft_deleted [label="SOFT_DELETED"]
     deleted [label="DELETED"]
     error [label="ERROR"]
+    shelved [label="SHELVED"]
+    shelved_offloaded [label="SHELVED_OFFLOADED"]
         
     /* apis */
     create [shape="rectangle"]
@@ -148,11 +150,31 @@ task states for various commands issued by the user:
     live_migrate -> active
     live_migrate -> error
     active -> live_migrate
+
+    shelve [shape="rectangle"]
+    shelve -> shelved
+    shelve -> shelved_offloaded
+    shelve -> error
+    active -> shelve
+    stopped -> shelve
+    paused -> shelve
+    suspended -> shelve
+
+    shelve_offload [shape="rectangle"]
+    shelve_offload -> shelved_offloaded
+    shelve_offload -> error
+    shelved -> shelve_offload
+
+    unshelve [shape="rectangle"]
+    unshelve -> active
+    unshelve -> error
+    shelved -> unshelve
+    shelved_offloaded -> unshelve
   }
 
-.. image:: /images/PowerStates1.png
+.. image:: ../images/PowerStates1.png
 
-.. image:: /images/PowerStates2.png
+.. image:: ../images/PowerStates2.png
 
 
 Create instance states
@@ -162,4 +184,4 @@ The following diagram shows the sequence of VM states, task states, and
 power states when a new VM instance is created.
 
 
-.. image:: /images/run_instance_walkthrough.png
+.. image:: ../images/run_instance_walkthrough.png

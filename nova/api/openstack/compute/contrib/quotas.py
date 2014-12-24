@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.utils import strutils
 import six.moves.urllib.parse as urlparse
 import webob
 
@@ -23,8 +24,6 @@ import nova.context
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
 from nova import quota
 from nova import utils
 
@@ -35,9 +34,6 @@ NON_QUOTA_KEYS = ['tenant_id', 'id', 'force']
 # Quotas that are only enabled by specific extensions
 EXTENDED_QUOTAS = {'server_groups': 'os-server-group-quotas',
                    'server_group_members': 'os-server-group-quotas'}
-
-LOG = logging.getLogger(__name__)
-
 
 authorize_update = extensions.extension_authorizer('compute', 'quotas:update')
 authorize_show = extensions.extension_authorizer('compute', 'quotas:show')
@@ -89,14 +85,17 @@ class QuotaSetsController(wsgi.Controller):
                      "must be -1 or greater.") %
                    {'limit': limit, 'resource': resource})
             raise webob.exc.HTTPBadRequest(explanation=msg)
-        if ((limit < minimum) and
-           (maximum != -1 or (maximum == -1 and limit != -1))):
+
+        def conv_inf(value):
+            return float("inf") if value == -1 else value
+
+        if conv_inf(limit) < conv_inf(minimum):
             msg = (_("Quota limit %(limit)s for %(resource)s must "
                      "be greater than or equal to already used and "
                      "reserved %(minimum)s.") %
                    {'limit': limit, 'resource': resource, 'minimum': minimum})
             raise webob.exc.HTTPBadRequest(explanation=msg)
-        if maximum != -1 and limit > maximum:
+        if conv_inf(limit) > conv_inf(maximum):
             msg = (_("Quota limit %(limit)s for %(resource)s must be "
                      "less than or equal to %(maximum)s.") %
                    {'limit': limit, 'resource': resource, 'maximum': maximum})
@@ -179,8 +178,6 @@ class QuotaSetsController(wsgi.Controller):
                 except exception.InvalidInput as e:
                     raise webob.exc.HTTPBadRequest(
                         explanation=e.format_message())
-
-        LOG.debug("force update quotas: %s", force_update)
 
         if bad_keys:
             msg = _("Bad key(s) %s in quota_set") % ",".join(bad_keys)

@@ -21,20 +21,21 @@ import time
 
 from oslo.config import cfg
 from oslo import messaging as oslo_messaging
+from oslo.utils import importutils
+from oslo.utils import timeutils
 
 from nova.cells import messaging
 from nova.cells import state as cells_state
 from nova.cells import utils as cells_utils
 from nova import context
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LW
 from nova import manager
 from nova import objects
 from nova.objects import base as base_obj
-from nova.openstack.common import importutils
+from nova.objects import instance as instance_obj
 from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
-from nova.openstack.common import timeutils
 
 cell_manager_opts = [
         cfg.StrOpt('driver',
@@ -73,15 +74,15 @@ class CellsManager(manager.Manager):
     Scheduling requests get passed to the scheduler class.
     """
 
-    target = oslo_messaging.Target(version='1.29')
+    target = oslo_messaging.Target(version='1.32')
 
     def __init__(self, *args, **kwargs):
-        LOG.warn(_('The cells feature of Nova is considered experimental '
-                   'by the OpenStack project because it receives much '
-                   'less testing than the rest of Nova. This may change '
-                   'in the future, but current deployers should be aware '
-                   'that the use of it in production right now may be '
-                   'risky.'))
+        LOG.warning(_LW('The cells feature of Nova is considered experimental '
+                        'by the OpenStack project because it receives much '
+                        'less testing than the rest of Nova. This may change '
+                        'in the future, but current deployers should be aware '
+                        'that the use of it in production right now may be '
+                        'risky.'))
         # Mostly for tests.
         cell_state_manager = kwargs.pop('cell_state_manager', None)
         super(CellsManager, self).__init__(service_name='cells',
@@ -197,6 +198,22 @@ class CellsManager(manager.Manager):
         forward the request accordingly.
         """
         # Target is ourselves first.
+        filter_properties = build_inst_kwargs.get('filter_properties')
+        if (filter_properties is not None and
+            not isinstance(filter_properties['instance_type'],
+                           objects.Flavor)):
+            # NOTE(danms): Handle pre-1.30 build_instances() call. Remove me
+            # when we bump the RPC API version to 2.0.
+            flavor = objects.Flavor(**filter_properties['instance_type'])
+            build_inst_kwargs['filter_properties'] = dict(
+                filter_properties, instance_type=flavor)
+        instances = build_inst_kwargs['instances']
+        if not isinstance(instances[0], objects.Instance):
+            # NOTE(danms): Handle pre-1.32 build_instances() call. Remove me
+            # when we bump the RPC API version to 2.0
+            build_inst_kwargs['instances'] = instance_obj._make_instance_list(
+                ctxt, objects.InstanceList(), instances, ['system_metadata',
+                                                          'metadata'])
         our_cell = self.state_manager.get_my_state()
         self.msg_runner.build_instances(ctxt, our_cell, build_inst_kwargs)
 
@@ -456,10 +473,12 @@ class CellsManager(manager.Manager):
         """Start an instance in its cell."""
         self.msg_runner.start_instance(ctxt, instance)
 
-    def stop_instance(self, ctxt, instance, do_cast=True):
+    def stop_instance(self, ctxt, instance, do_cast=True,
+                      clean_shutdown=True):
         """Stop an instance in its cell."""
         response = self.msg_runner.stop_instance(ctxt, instance,
-                                                 do_cast=do_cast)
+                                                 do_cast=do_cast,
+                                                 clean_shutdown=clean_shutdown)
         if not do_cast:
             return response.value_or_raise()
 

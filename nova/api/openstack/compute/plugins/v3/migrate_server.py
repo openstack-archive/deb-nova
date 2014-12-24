@@ -13,7 +13,7 @@
 #   License for the specific language governing permissions and limitations
 #   under the License.
 
-import webob
+from oslo.utils import strutils
 from webob import exc
 
 from nova.api.openstack import common
@@ -23,7 +23,6 @@ from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova import exception
-from nova.openstack.common import strutils
 
 ALIAS = "os-migrate-server"
 
@@ -38,6 +37,7 @@ class MigrateServerController(wsgi.Controller):
         super(MigrateServerController, self).__init__(*args, **kwargs)
         self.compute_api = compute.API()
 
+    @wsgi.response(202)
     @extensions.expected_errors((400, 403, 404, 409))
     @wsgi.action('migrate')
     def _migrate(self, req, id, body):
@@ -55,14 +55,13 @@ class MigrateServerController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'migrate')
+                    'migrate', id)
         except exception.InstanceNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.NoValidHost as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
 
-        return webob.Response(status_int=202)
-
+    @wsgi.response(202)
     @extensions.expected_errors((400, 404, 409))
     @wsgi.action('os-migrateLive')
     @validation.schema(migrate_server.migrate_live)
@@ -95,14 +94,14 @@ class MigrateServerController(wsgi.Controller):
                 exception.InvalidSharedStorage,
                 exception.HypervisorUnavailable,
                 exception.InstanceNotRunning,
-                exception.MigrationPreCheckError) as ex:
+                exception.MigrationPreCheckError,
+                exception.LiveMigrationWithOldNovaNotSafe) as ex:
             raise exc.HTTPBadRequest(explanation=ex.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'os-migrateLive')
-        return webob.Response(status_int=202)
+                    'os-migrateLive', id)
 
 
 class MigrateServer(extensions.V3APIExtensionBase):

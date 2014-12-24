@@ -25,15 +25,14 @@ helpers for populating up config object instances.
 
 import time
 
+from lxml import etree
+from oslo.utils import units
 import six
 
 from nova import exception
 from nova.openstack.common import log as logging
-from nova.openstack.common import units
-from nova.pci import pci_utils
+from nova.pci import utils as pci_utils
 from nova.virt import hardware
-
-from lxml import etree
 
 
 LOG = logging.getLogger(__name__)
@@ -154,6 +153,7 @@ class LibvirtConfigCapsNUMACell(LibvirtConfigObject):
 
         self.id = None
         self.memory = None
+        self.mempages = []
         self.cpus = []
 
     def parse_dom(self, xmldoc):
@@ -163,6 +163,10 @@ class LibvirtConfigCapsNUMACell(LibvirtConfigObject):
         for c in xmldoc.getchildren():
             if c.tag == "memory":
                 self.memory = int(c.text)
+            elif c.tag == "pages":
+                pages = LibvirtConfigCapsNUMAPages()
+                pages.parse_dom(c)
+                self.mempages.append(pages)
             elif c.tag == "cpus":
                 for c2 in c.getchildren():
                     cpu = LibvirtConfigCapsNUMACPU()
@@ -178,6 +182,9 @@ class LibvirtConfigCapsNUMACell(LibvirtConfigObject):
         mem.set("unit", "KiB")
         mem.text = str(self.memory)
         cell.append(mem)
+
+        for pages in self.mempages:
+            cell.append(pages.format_dom())
 
         cpus = etree.Element("cpus")
         cpus.set("num", str(len(self.cpus)))
@@ -225,6 +232,31 @@ class LibvirtConfigCapsNUMACPU(LibvirtConfigObject):
                     hardware.format_cpu_spec(self.siblings))
 
         return cpu
+
+
+class LibvirtConfigCapsNUMAPages(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigCapsNUMAPages, self).__init__(
+            root_name="pages", **kwargs)
+
+        self.size = None
+        self.total = None
+
+    def parse_dom(self, xmldoc):
+        super(LibvirtConfigCapsNUMAPages, self).parse_dom(xmldoc)
+
+        self.size = int(xmldoc.get("size"))
+        self.total = int(xmldoc.text)
+
+    def format_dom(self):
+        pages = super(LibvirtConfigCapsNUMAPages, self).format_dom()
+
+        pages.text = str(self.total)
+        pages.set("size", str(self.size))
+        pages.set("unit", "KiB")
+
+        return pages
 
 
 class LibvirtConfigCapsHost(LibvirtConfigObject):
@@ -1400,12 +1432,18 @@ class LibvirtConfigGuestChar(LibvirtConfigGuestCharBase):
         super(LibvirtConfigGuestChar, self).__init__(**kwargs)
 
         self.target_port = None
+        self.target_type = None
 
     def format_dom(self):
         dev = super(LibvirtConfigGuestChar, self).format_dom()
 
-        if self.target_port is not None:
-            dev.append(etree.Element("target", port=str(self.target_port)))
+        if self.target_port is not None or self.target_type is not None:
+            target = etree.Element("target")
+            if self.target_port is not None:
+                target.set("port", str(self.target_port))
+            if self.target_type is not None:
+                target.set("type", self.target_type)
+            dev.append(target)
 
         return dev
 
@@ -1482,6 +1520,25 @@ class LibvirtConfigGuestCPUTuneVCPUPin(LibvirtConfigObject):
         return root
 
 
+class LibvirtConfigGuestCPUTuneEmulatorPin(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestCPUTuneEmulatorPin, self).__init__(
+            root_name="emulatorpin",
+            **kwargs)
+
+        self.cpuset = None
+
+    def format_dom(self):
+        root = super(LibvirtConfigGuestCPUTuneEmulatorPin, self).format_dom()
+
+        if self.cpuset is not None:
+            root.set("cpuset",
+                     hardware.format_cpu_spec(self.cpuset))
+
+        return root
+
+
 class LibvirtConfigGuestCPUTune(LibvirtConfigObject):
 
     def __init__(self, **kwargs):
@@ -1491,6 +1548,7 @@ class LibvirtConfigGuestCPUTune(LibvirtConfigObject):
         self.quota = None
         self.period = None
         self.vcpupin = []
+        self.emulatorpin = None
 
     def format_dom(self):
         root = super(LibvirtConfigGuestCPUTune, self).format_dom()
@@ -1502,6 +1560,8 @@ class LibvirtConfigGuestCPUTune(LibvirtConfigObject):
         if self.period is not None:
             root.append(self._text_node("period", str(self.period)))
 
+        if self.emulatorpin is not None:
+            root.append(self.emulatorpin.format_dom())
         for vcpu in self.vcpupin:
             root.append(vcpu.format_dom())
 
@@ -1514,7 +1574,7 @@ class LibvirtConfigGuestMemoryBacking(LibvirtConfigObject):
         super(LibvirtConfigGuestMemoryBacking, self).__init__(
             root_name="memoryBacking", **kwargs)
 
-        self.hugepages = False
+        self.hugepages = []
         self.sharedpages = True
         self.locked = False
 
@@ -1522,13 +1582,35 @@ class LibvirtConfigGuestMemoryBacking(LibvirtConfigObject):
         root = super(LibvirtConfigGuestMemoryBacking, self).format_dom()
 
         if self.hugepages:
-            root.append(etree.Element("hugepages"))
+            hugepages = etree.Element("hugepages")
+            for item in self.hugepages:
+                hugepages.append(item.format_dom())
+            root.append(hugepages)
         if not self.sharedpages:
             root.append(etree.Element("nosharedpages"))
         if self.locked:
             root.append(etree.Element("locked"))
 
         return root
+
+
+class LibvirtConfigGuestMemoryBackingPage(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestMemoryBackingPage, self).__init__(
+            root_name="page", **kwargs)
+
+        self.size_kb = None
+        self.nodeset = None
+
+    def format_dom(self):
+        page = super(LibvirtConfigGuestMemoryBackingPage, self).format_dom()
+
+        page.set("size", str(self.size_kb))
+        page.set("nodeset", hardware.format_cpu_spec(self.nodeset))
+        page.set("unit", "KiB")
+
+        return page
 
 
 class LibvirtConfigGuestMemoryTune(LibvirtConfigObject):
@@ -1565,6 +1647,64 @@ class LibvirtConfigGuestMemoryTune(LibvirtConfigObject):
         return root
 
 
+class LibvirtConfigGuestNUMATuneMemory(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestNUMATuneMemory, self).__init__(
+            root_name="memory", **kwargs)
+
+        self.mode = "strict"
+        self.nodeset = []
+
+    def format_dom(self):
+        root = super(LibvirtConfigGuestNUMATuneMemory, self).format_dom()
+
+        root.set("mode", self.mode)
+        root.set("nodeset", hardware.format_cpu_spec(self.nodeset))
+
+        return root
+
+
+class LibvirtConfigGuestNUMATuneMemNode(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestNUMATuneMemNode, self).__init__(
+            root_name="memnode", **kwargs)
+
+        self.cellid = 0
+        self.mode = "strict"
+        self.nodeset = []
+
+    def format_dom(self):
+        root = super(LibvirtConfigGuestNUMATuneMemNode, self).format_dom()
+
+        root.set("cellid", str(self.cellid))
+        root.set("mode", self.mode)
+        root.set("nodeset", hardware.format_cpu_spec(self.nodeset))
+
+        return root
+
+
+class LibvirtConfigGuestNUMATune(LibvirtConfigObject):
+
+    def __init__(self, **kwargs):
+        super(LibvirtConfigGuestNUMATune, self).__init__(
+            root_name="numatune", **kwargs)
+
+        self.memory = None
+        self.memnodes = []
+
+    def format_dom(self):
+        root = super(LibvirtConfigGuestNUMATune, self).format_dom()
+
+        if self.memory is not None:
+            root.append(self.memory.format_dom())
+        for node in self.memnodes:
+            root.append(node.format_dom())
+
+        return root
+
+
 class LibvirtConfigGuest(LibvirtConfigObject):
 
     def __init__(self, **kwargs):
@@ -1577,6 +1717,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.memory = 500 * units.Mi
         self.membacking = None
         self.memtune = None
+        self.numatune = None
         self.vcpus = 1
         self.cpuset = None
         self.cpu = None
@@ -1608,6 +1749,8 @@ class LibvirtConfigGuest(LibvirtConfigObject):
             root.append(self.membacking.format_dom())
         if self.memtune is not None:
             root.append(self.memtune.format_dom())
+        if self.numatune is not None:
+            root.append(self.numatune.format_dom())
         if self.cpuset is not None:
             vcpu = self._text_node("vcpu", self.vcpus)
             vcpu.set("cpuset", hardware.format_cpu_spec(self.cpuset))
@@ -1826,10 +1969,10 @@ class LibvirtConfigNodeDevicePciCap(LibvirtConfigObject):
                 self.function = int(c.text)
             elif c.tag == "product":
                 self.product = c.text
-                self.product_id = c.get('id')
+                self.product_id = int(c.get('id'), 16)
             elif c.tag == "vendor":
                 self.vendor = c.text
-                self.vendor_id = c.get('id')
+                self.vendor_id = int(c.get('id'), 16)
             elif c.tag == "capability" and c.get('type') in \
                             ('virt_functions', 'phys_function'):
                 funcap = LibvirtConfigNodeDevicePciSubFunctionCap()
@@ -1849,10 +1992,10 @@ class LibvirtConfigNodeDevicePciSubFunctionCap(LibvirtConfigObject):
         self.type = xmldoc.get("type")
         for c in xmldoc.getchildren():
             if c.tag == "address":
-                self.device_addrs.append((c.get('domain'),
-                                          c.get('bus'),
-                                          c.get('slot'),
-                                          c.get('function')))
+                self.device_addrs.append((int(c.get('domain'), 16),
+                                          int(c.get('bus'), 16),
+                                          int(c.get('slot'), 16),
+                                          int(c.get('function'), 16)))
 
 
 class LibvirtConfigGuestRng(LibvirtConfigGuestDevice):

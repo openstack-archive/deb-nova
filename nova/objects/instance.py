@@ -12,6 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.utils import timeutils
+
 from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import flavors
@@ -23,7 +25,6 @@ from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova import utils
 
 from oslo.config import cfg
@@ -36,13 +37,16 @@ LOG = logging.getLogger(__name__)
 # List of fields that can be joined in DB layer.
 _INSTANCE_OPTIONAL_JOINED_FIELDS = ['metadata', 'system_metadata',
                                     'info_cache', 'security_groups',
-                                    'pci_devices']
+                                    'pci_devices', 'tags']
 # These are fields that are optional but don't translate to db columns
-_INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault', 'numa_topology']
+_INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault']
+# These are fields that are optional and in instance_extra
+_INSTANCE_EXTRA_FIELDS = ['numa_topology', 'pci_requests']
 
 # These are fields that can be specified as expected_attrs
 INSTANCE_OPTIONAL_ATTRS = (_INSTANCE_OPTIONAL_JOINED_FIELDS +
-                           _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS)
+                           _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS +
+                           _INSTANCE_EXTRA_FIELDS)
 # These are fields that most query calls load by default
 INSTANCE_DEFAULT_FIELDS = ['metadata', 'system_metadata',
                            'info_cache', 'security_groups']
@@ -52,11 +56,20 @@ def _expected_cols(expected_attrs):
     """Return expected_attrs that are columns needing joining."""
     if not expected_attrs:
         return expected_attrs
-    return [attr for attr in expected_attrs
-                 if attr in _INSTANCE_OPTIONAL_JOINED_FIELDS]
+    simple_cols = [attr for attr in expected_attrs
+                   if attr in _INSTANCE_OPTIONAL_JOINED_FIELDS]
+
+    complex_cols = ['extra.%s' % field
+                    for field in _INSTANCE_EXTRA_FIELDS
+                    if field in expected_attrs]
+    if complex_cols:
+        simple_cols.append('extra')
+    return simple_cols + complex_cols
 
 
-class Instance(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class Instance(base.NovaPersistentObject, base.NovaObject,
+               base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Added info_cache
     # Version 1.2: Added security_groups
@@ -74,7 +87,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
     # Version 1.13: Added delete_metadata_key()
     # Version 1.14: Added numa_topology
     # Version 1.15: PciDeviceList 1.1
-    VERSION = '1.15'
+    # Version 1.16: Added pci_requests
+    # Version 1.17: Added tags
+    VERSION = '1.17'
 
     fields = {
         'id': fields.IntegerField(),
@@ -161,10 +176,23 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
 
         'pci_devices': fields.ObjectField('PciDeviceList', nullable=True),
         'numa_topology': fields.ObjectField('InstanceNUMATopology',
-                                            nullable=True)
+                                            nullable=True),
+        'pci_requests': fields.ObjectField('InstancePCIRequests',
+                                           nullable=True),
+        'tags': fields.ObjectField('TagList'),
         }
 
     obj_extra_fields = ['name']
+
+    obj_relationships = {
+        'fault': [('1.0', '1.0')],
+        'info_cache': [('1.1', '1.0'), ('1.9', '1.4'), ('1.10', '1.5')],
+        'security_groups': [('1.2', '1.0')],
+        'pci_devices': [('1.6', '1.0'), ('1.15', '1.1')],
+        'numa_topology': [('1.14', '1.0')],
+        'pci_requests': [('1.16', '1.1')],
+        'tags': [('1.17', '1.0')],
+    }
 
     def __init__(self, *args, **kwargs):
         super(Instance, self).__init__(*args, **kwargs)
@@ -199,6 +227,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         return self
 
     def obj_make_compatible(self, primitive, target_version):
+        super(Instance, self).obj_make_compatible(primitive, target_version)
         target_version = utils.convert_version_to_tuple(target_version)
         unicode_attributes = ['user_id', 'project_id', 'image_ref',
                               'kernel_id', 'ramdisk_id', 'hostname',
@@ -210,28 +239,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                               'default_ephemeral_device',
                               'default_swap_device', 'config_drive',
                               'cell_name']
-        if target_version < (1, 14) and 'numa_topology' in primitive:
-            del primitive['numa_topology']
-        if target_version < (1, 10) and 'info_cache' in primitive:
-            # NOTE(danms): Instance <= 1.9 (havana) had info_cache 1.4
-            self.info_cache.obj_make_compatible(
-                    primitive['info_cache']['nova_object.data'], '1.4')
-            primitive['info_cache']['nova_object.version'] = '1.4'
         if target_version < (1, 7):
             # NOTE(danms): Before 1.7, we couldn't handle unicode in
             # string fields, so squash it here
             for field in [x for x in unicode_attributes if x in primitive
                           and primitive[x] is not None]:
                 primitive[field] = primitive[field].encode('ascii', 'replace')
-        if target_version < (1, 15) and 'pci_devices' in primitive:
-            # NOTE(baoli): Instance <= 1.14 (icehouse) had PciDeviceList 1.0
-            self.pci_devices.obj_make_compatible(
-                    primitive['pci_devices']['nova_object.data'], '1.0')
-            primitive['pci_devices']['nova_object.version'] = '1.0'
-        if target_version < (1, 6):
-            # NOTE(danms): Before 1.6 there was no pci_devices list
-            if 'pci_devices' in primitive:
-                del primitive['pci_devices']
 
     @property
     def name(self):
@@ -285,7 +298,11 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                 objects.InstanceFault.get_latest_for_instance(
                     context, instance.uuid))
         if 'numa_topology' in expected_attrs:
-            instance._load_numa_topology()
+            instance._load_numa_topology(
+                db_inst.get('extra').get('numa_topology'))
+        if 'pci_requests' in expected_attrs:
+            instance._load_pci_requests(
+                db_inst.get('extra').get('pci_requests'))
 
         if 'info_cache' in expected_attrs:
             if db_inst['info_cache'] is None:
@@ -312,6 +329,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                     context, objects.SecurityGroupList(context),
                     objects.SecurityGroup, db_inst['security_groups'])
             instance['security_groups'] = sec_groups
+
+        if 'tags' in expected_attrs:
+            tags = base.obj_make_list(
+                context, objects.TagList(context),
+                objects.Tag, db_inst['tags'])
+            instance['tags'] = tags
 
         instance.obj_reset_changes()
         return instance
@@ -352,12 +375,17 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             updates['info_cache'] = {
                 'network_info': updates['info_cache'].network_info.json()
                 }
+        updates['extra'] = {}
         numa_topology = updates.pop('numa_topology', None)
-        db_inst = db.instance_create(context, updates)
         if numa_topology:
             expected_attrs.append('numa_topology')
-            numa_topology.instance_uuid = db_inst['uuid']
-            numa_topology.create(context)
+            updates['extra']['numa_topology'] = numa_topology._to_json()
+        pci_requests = updates.pop('pci_requests', None)
+        if pci_requests:
+            expected_attrs.append('pci_requests')
+            updates['extra']['pci_requests'] = (
+                pci_requests.to_json())
+        db_inst = db.instance_create(context, updates)
         self._from_db_object(context, self, db_inst, expected_attrs)
 
     @base.remotable
@@ -404,6 +432,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         else:
             objects.InstanceNUMATopology.delete_by_instance_uuid(
                     context, self.uuid)
+
+    def _save_pci_requests(self, context):
+        # NOTE(danms): No need for this yet.
+        pass
 
     def _save_pci_devices(self, context):
         # NOTE(yjiang5): All devices held by PCI tracker, only PCI tracker
@@ -514,7 +546,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
 
         self._from_db_object(context, self, inst_ref,
                              expected_attrs=expected_attrs)
-        notifications.send_update(context, old_ref, inst_ref)
+        notifications.send_update(context, old_ref, self)
         self.obj_reset_changes()
 
     @base.remotable
@@ -533,8 +565,6 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
             if self.obj_attr_is_set(field):
                 if field == 'info_cache':
                     self.info_cache.refresh()
-                    # NOTE(danms): Make sure this shows up as touched
-                    self.info_cache = self.info_cache
                 elif self[field] != current[field]:
                     self[field] = current[field]
         self.obj_reset_changes()
@@ -556,13 +586,28 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         self.fault = objects.InstanceFault.get_latest_for_instance(
             self._context, self.uuid)
 
-    def _load_numa_topology(self):
-        try:
+    def _load_numa_topology(self, db_topology=None):
+        if db_topology is not None:
             self.numa_topology = \
-                objects.InstanceNUMATopology.get_by_instance_uuid(
+                objects.InstanceNUMATopology.obj_from_db_obj(self.uuid,
+                                                             db_topology)
+        else:
+            try:
+                self.numa_topology = \
+                    objects.InstanceNUMATopology.get_by_instance_uuid(
+                        self._context, self.uuid)
+            except exception.NumaTopologyNotFound:
+                self.numa_topology = None
+
+    def _load_pci_requests(self, db_requests=None):
+        # FIXME: also do this if none!
+        if db_requests is not None:
+            self.pci_requests = objects.InstancePCIRequests.obj_from_db(
+                self._context, self.uuid, db_requests)
+        else:
+            self.pci_requests = \
+                objects.InstancePCIRequests.get_by_instance_uuid(
                     self._context, self.uuid)
-        except exception.NumaTopologyNotFound:
-            self.numa_topology = None
 
     def obj_load_attr(self, attrname):
         if attrname not in INSTANCE_OPTIONAL_ATTRS:
@@ -578,14 +623,17 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
                    'name': self.obj_name(),
                    'uuid': self.uuid,
                    })
-        # FIXME(comstud): This should be optimized to only load the attr.
+
+        # NOTE(danms): We handle some fields differently here so that we
+        # can be more efficient
         if attrname == 'fault':
-            # NOTE(danms): We handle fault differently here so that we
-            # can be more efficient
             self._load_fault()
         elif attrname == 'numa_topology':
             self._load_numa_topology()
+        elif attrname == 'pci_requests':
+            self._load_pci_requests()
         else:
+            # FIXME(comstud): This should be optimized to only load the attr.
             self._load_generic(attrname)
         self.obj_reset_changes([attrname])
 
@@ -623,8 +671,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject):
         md_was_changed = 'metadata' in self.obj_what_changed()
         del self.metadata[key]
         self._orig_metadata.pop(key, None)
-        instance_dict = base.obj_to_primitive(self)
-        notifications.send_update(context, instance_dict, instance_dict)
+        notifications.send_update(context, self, self)
         if not md_was_changed:
             self.obj_reset_changes(['metadata'])
 
@@ -666,7 +713,11 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.7: Added use_slave to get_active_by_window_joined
     # Version 1.8: Instance <= version 1.14
     # Version 1.9: Instance <= version 1.15
-    VERSION = '1.9'
+    # Version 1.10: Instance <= version 1.16
+    # Version 1.11: Added sort_keys and sort_dirs to get_by_filters
+    # Version 1.12: Pass expected_attrs to instance_get_active_by_window_joined
+    # Version 1.13: Instance <= version 1.17
+    VERSION = '1.13'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -682,16 +733,27 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         '1.7': '1.13',
         '1.8': '1.14',
         '1.9': '1.15',
+        '1.10': '1.16',
+        '1.11': '1.16',
+        '1.12': '1.16',
+        '1.13': '1.17',
         }
 
     @base.remotable_classmethod
     def get_by_filters(cls, context, filters,
                        sort_key='created_at', sort_dir='desc', limit=None,
-                       marker=None, expected_attrs=None, use_slave=False):
-        db_inst_list = db.instance_get_all_by_filters(
-            context, filters, sort_key, sort_dir, limit=limit, marker=marker,
-            columns_to_join=_expected_cols(expected_attrs),
-            use_slave=use_slave)
+                       marker=None, expected_attrs=None, use_slave=False,
+                       sort_keys=None, sort_dirs=None):
+        if sort_keys or sort_dirs:
+            db_inst_list = db.instance_get_all_by_filters_sort(
+                context, filters, limit=limit, marker=marker,
+                columns_to_join=_expected_cols(expected_attrs),
+                use_slave=use_slave, sort_keys=sort_keys, sort_dirs=sort_dirs)
+        else:
+            db_inst_list = db.instance_get_all_by_filters(
+                context, filters, sort_key, sort_dir, limit=limit,
+                marker=marker, columns_to_join=_expected_cols(expected_attrs),
+                use_slave=use_slave)
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 
@@ -706,7 +768,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_by_host_and_node(cls, context, host, node, expected_attrs=None):
         db_inst_list = db.instance_get_all_by_host_and_node(
-            context, host, node)
+            context, host, node,
+            columns_to_join=_expected_cols(expected_attrs))
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 
@@ -735,11 +798,9 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         # to timezone-aware datetime objects for the DB API call.
         begin = timeutils.parse_isotime(begin)
         end = timeutils.parse_isotime(end) if end else None
-        db_inst_list = db.instance_get_active_by_window_joined(context,
-                                                               begin,
-                                                               end,
-                                                               project_id,
-                                                               host)
+        db_inst_list = db.instance_get_active_by_window_joined(
+            context, begin, end, project_id, host,
+            columns_to_join=_expected_cols(expected_attrs))
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 

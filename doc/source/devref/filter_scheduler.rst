@@ -8,7 +8,7 @@ only working with Compute Nodes.
 Filtering
 ---------
 
-.. image:: /images/filteringWorkflow1.png
+.. image:: ../images/filteringWorkflow1.png
 
 During its work Filter Scheduler firstly makes dictionary of unfiltered hosts,
 then filters them using filter properties and finally chooses hosts for the
@@ -91,7 +91,7 @@ There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
   different ratio settings), the minimum value will be used.
 * |DiskFilter| - filters hosts by their disk allocation. Only hosts with sufficient
   disk space to host the instance are passed.
-  ``disk_allocation_ration`` setting. It's virtual disk to physical disk
+  ``disk_allocation_ratio`` setting. It's virtual disk to physical disk
   allocation ratio and it's 1.0 by default. The total allow allocated disk size will
   be physical disk multiplied this ratio.
 * |AggregateDiskFilter| - filters hosts by disk allocation with per-aggregate
@@ -146,12 +146,6 @@ There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
 * |ServerGroupAffinityFilter| - This filter works the same way as
   ServerGroupAntiAffinityFilter.  The difference is that when you create the server
   group, you should specify a policy of 'affinity'.
-* |GroupAntiAffinityFilter| - This filter is deprecated in favor of
-  ServerGroupAntiAffinityFilter.  Note that this should not be enabled at the
-  same time as GroupAffinityFilter or neither filter will work properly.
-* |GroupAffinityFilter| - This filter is deprecated in favor of
-  ServerGroupAffinityFilter.  Note that this should not be enabled at the same
-  time as GroupAntiAffinityFilter or neither filter will work properly.
 * |AggregateMultiTenancyIsolation| - isolate tenants in specific aggregates.
 * |AggregateImagePropertiesIsolation| - isolates hosts based on image
   properties and aggregate metadata.
@@ -231,14 +225,6 @@ one of the set of instances uses.
 |SimpleCIDRAffinityFilter| looks at the subnet mask and investigates if
 the network address of the current host is in the same sub network as it was
 defined in the request.
-
-|GroupAntiAffinityFilter| its method ``host_passes`` returns ``True`` if host
-to place the instance on is not in a group of hosts. The group of hosts is
-maintained by a group name. The scheduler hint contains the group name.
-
-|GroupAffinityFilter| its method ``host_passes`` returns ``True`` if host to
-place the instance on is in a group of hosts. The group of hosts is
-maintained by a group name. The scheduler hint contains the group name.
 
 |JsonFilter| - this filter provides the opportunity to write complicated
 queries for the hosts capabilities filtering, based on simple JSON-like syntax.
@@ -363,13 +349,18 @@ The Filter Scheduler weighs hosts based on the config option
 
     metrics_weight_setting = name1=1.0, name2=-1.0
 
+* |IoOpsWeigher| The weigher can compute the weight based on the compute node
+  host's workload. The default is to preferably choose light workload compute
+  hosts. If the multiplier is positive, the weigher prefer choosing heavy
+  workload compute hosts, the weighing has the opposite effect of the default.
+
 Filter Scheduler finds local list of acceptable hosts by repeated filtering and
 weighing. Each time it chooses a host, it virtually consumes resources on it,
 so subsequent selections can adjust accordingly. It is useful if the customer
 asks for the some large amount of instances, because weight is computed for
 each instance requested.
 
-.. image:: /images/filteringWorkflow2.png
+.. image:: ../images/filteringWorkflow2.png
 
 In the end Filter Scheduler sorts selected hosts by their weight and provisions
 instances on them.
@@ -397,8 +388,6 @@ in :mod:``nova.tests.scheduler``.
 .. |AggregateIoOpsFilter| replace:: :class:`AggregateIoOpsFilter <nova.scheduler.filters.io_ops_filter.AggregateIoOpsFilter>`
 .. |PciPassthroughFilter| replace:: :class:`PciPassthroughFilter <nova.scheduler.filters.pci_passthrough_filter.PciPassthroughFilter>`
 .. |SimpleCIDRAffinityFilter| replace:: :class:`SimpleCIDRAffinityFilter <nova.scheduler.filters.affinity_filter.SimpleCIDRAffinityFilter>`
-.. |GroupAntiAffinityFilter| replace:: :class:`GroupAntiAffinityFilter <nova.scheduler.filters.affinity_filter.GroupAntiAffinityFilter>`
-.. |GroupAffinityFilter| replace:: :class:`GroupAffinityFilter <nova.scheduler.filters.affinity_filter.GroupAffinityFilter>`
 .. |DifferentHostFilter| replace:: :class:`DifferentHostFilter <nova.scheduler.filters.affinity_filter.DifferentHostFilter>`
 .. |SameHostFilter| replace:: :class:`SameHostFilter <nova.scheduler.filters.affinity_filter.SameHostFilter>`
 .. |RetryFilter| replace:: :class:`RetryFilter <nova.scheduler.filters.retry_filter.RetryFilter>`
@@ -414,3 +403,4 @@ in :mod:``nova.tests.scheduler``.
 .. |AggregateImagePropertiesIsolation| replace:: :class:`AggregateImagePropertiesIsolation <nova.scheduler.filters.aggregate_image_properties_isolation.AggregateImagePropertiesIsolation>`
 .. |MetricsFilter| replace:: :class:`MetricsFilter <nova.scheduler.filters.metrics_filter.MetricsFilter>`
 .. |MetricsWeigher| replace:: :class:`MetricsWeigher <nova.scheduler.weights.metrics.MetricsWeigher>`
+.. |IoOpsWeigher| replace:: :class:`IoOpsWeigher <nova.scheduler.weights.io_ops.IoOpsWeigher>`

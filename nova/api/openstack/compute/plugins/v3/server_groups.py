@@ -32,9 +32,6 @@ LOG = logging.getLogger(__name__)
 
 ALIAS = "os-server-groups"
 
-# NOTE(russellb) There is one other policy, 'legacy', but we don't allow that
-# being set via the API.  It's only used when a group gets automatically
-# created to support the legacy behavior of the 'group' scheduler hint.
 SUPPORTED_POLICIES = ['anti-affinity', 'affinity']
 
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
@@ -136,6 +133,7 @@ class ServerGroupController(wsgi.Controller):
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         return {'server_group': self._format_server_group(context, sg)}
 
+    @wsgi.response(204)
     @extensions.expected_errors(404)
     def delete(self, req, id):
         """Delete an server group."""
@@ -158,7 +156,7 @@ class ServerGroupController(wsgi.Controller):
                                   "server group"))
 
         try:
-            sg.destroy(context)
+            sg.destroy()
         except nova.exception.InstanceGroupNotFound as e:
             if quotas:
                 quotas.rollback()
@@ -166,8 +164,6 @@ class ServerGroupController(wsgi.Controller):
 
         if quotas:
             quotas.commit()
-
-        return webob.Response(status_int=204)
 
     @extensions.expected_errors(())
     def index(self, req):

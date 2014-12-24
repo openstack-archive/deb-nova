@@ -19,7 +19,9 @@ from nova.objects import base
 from nova.objects import fields
 
 
-class VirtualInterface(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class VirtualInterface(base.NovaPersistentObject, base.NovaObject,
+                       base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     VERSION = '1.0'
 

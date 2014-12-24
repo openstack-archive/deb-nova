@@ -40,14 +40,13 @@ class NUMATopologyFilter(filters.BaseHostFilter):
                     cell.id, cell.cpuset, cell.memory,
                     max_cell_cpu, max_cell_memory))
             limits = hardware.VirtNUMALimitTopology(cells=limit_cells)
-            instance_topology = (
-                    hardware.VirtNUMAHostTopology.fit_instance_to_host(
+            instance_topology = (hardware.numa_fit_instance_to_host(
                         host_topology, requested_topology,
                         limits_topology=limits))
             if not instance_topology:
                 return False
             host_state.limits['numa_topology'] = limits.to_json()
-            instance['numa_topology'] = instance_topology.to_json()
+            instance['numa_topology'] = instance_topology
             return True
         elif requested_topology:
             return False

@@ -115,9 +115,9 @@ function run_tests {
     if [ "$testropts" = "" ] && [ "$testrargs" = "" ]; then
       # Default to running all tests if specific test is not
       # provided.
-      testrargs="discover ./nova/tests"
+      testrargs="discover ./nova/tests/unit"
     fi
-    ${wrapper} python -m nova.openstack.common.lockutils python -m testtools.run $testropts $testrargs
+    ${wrapper} python -m testtools.run $testropts $testrargs
 
     # Short circuit because all of the testr and coverage stuff
     # below does not make sense when running testtools.run for
@@ -184,7 +184,7 @@ function run_pep8 {
 }
 
 
-TESTRTESTS="python -m nova.openstack.common.lockutils python setup.py testr"
+TESTRTESTS="python setup.py testr"
 
 if [ $never_venv -eq 0 ]
 then

@@ -19,19 +19,24 @@ from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.openstack.common import log as logging
-from nova import utils
 
 
 LOG = logging.getLogger(__name__)
 
 
-class Service(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class Service(base.NovaPersistentObject, base.NovaObject,
+              base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Added compute_node nested object
     # Version 1.2: String attributes updated to support unicode
     # Version 1.3: ComputeNode version 1.5
     # Version 1.4: Added use_slave to get_by_compute_host
-    VERSION = '1.4'
+    # Version 1.5: ComputeNode version 1.6
+    # Version 1.6: ComputeNode version 1.7
+    # Version 1.7: ComputeNode version 1.8
+    # Version 1.8: ComputeNode version 1.9
+    VERSION = '1.8'
 
     fields = {
         'id': fields.IntegerField(read_only=True),
@@ -45,12 +50,10 @@ class Service(base.NovaPersistentObject, base.NovaObject):
         'compute_node': fields.ObjectField('ComputeNode'),
         }
 
-    def obj_make_compatible(self, primitive, target_version):
-        target_version = utils.convert_version_to_tuple(target_version)
-        if target_version < (1, 3) and 'compute_node' in primitive:
-            self.compute_node.obj_make_compatible(
-                    primitive['compute_node']['nova_object.data'], '1.4')
-            primitive['compute_node']['nova_object.version'] = '1.4'
+    obj_relationships = {
+        'compute_node': [('1.1', '1.4'), ('1.3', '1.5'), ('1.5', '1.6'),
+                         ('1.7', '1.8'), ('1.8', '1.9')],
+    }
 
     @staticmethod
     def _do_compute_node(context, service, db_service):
@@ -140,7 +143,11 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
     #              Service <= version 1.2
     # Version 1.1  Service version 1.3
     # Version 1.2: Service version 1.4
-    VERSION = '1.2'
+    # Version 1.3: Service version 1.5
+    # Version 1.4: Service version 1.6
+    # Version 1.5: Service version 1.7
+    # Version 1.6: Service version 1.8
+    VERSION = '1.6'
 
     fields = {
         'objects': fields.ListOfObjectsField('Service'),
@@ -150,6 +157,10 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
         # NOTE(danms): Service was at 1.2 before we added this
         '1.1': '1.3',
         '1.2': '1.4',
+        '1.3': '1.5',
+        '1.4': '1.6',
+        '1.5': '1.7',
+        '1.6': '1.8',
         }
 
     @base.remotable_classmethod

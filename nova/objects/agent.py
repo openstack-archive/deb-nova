@@ -19,7 +19,9 @@ from nova.objects import base
 from nova.objects import fields
 
 
-class Agent(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class Agent(base.NovaPersistentObject, base.NovaObject,
+            base.NovaObjectDictCompat):
     VERSION = '1.0'
 
     fields = {

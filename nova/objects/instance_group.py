@@ -12,6 +12,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from nova.compute import utils as compute_utils
 from nova import db
 from nova import exception
 from nova import objects
@@ -21,7 +22,9 @@ from nova.openstack.common import uuidutils
 from nova import utils
 
 
-class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class InstanceGroup(base.NovaPersistentObject, base.NovaObject,
+                    base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: String attributes updated to support unicode
     # Version 1.2: Use list/dict helpers for policies, metadetails, members
@@ -31,7 +34,8 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
     # Version 1.6: Add get_by_name()
     # Version 1.7: Deprecate metadetails
     # Version 1.8: Add count_members_by_user()
-    VERSION = '1.8'
+    # Version 1.9: Add get_by_instance_uuid()
+    VERSION = '1.9'
 
     fields = {
         'id': fields.IntegerField(),
@@ -89,6 +93,11 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
 
         raise exception.InstanceGroupNotFound(group_uuid=name)
 
+    @base.remotable_classmethod
+    def get_by_instance_uuid(cls, context, instance_uuid):
+        db_inst = db.instance_group_get_by_instance(context, instance_uuid)
+        return cls._from_db_object(context, cls(), db_inst)
+
     @classmethod
     def get_by_hint(cls, context, hint):
         if uuidutils.is_uuid_like(hint):
@@ -104,9 +113,14 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
         if not updates:
             return
 
+        payload = dict(updates)
+        payload['server_group_id'] = self.uuid
+
         db.instance_group_update(context, self.uuid, updates)
         db_inst = db.instance_group_get(context, self.uuid)
         self._from_db_object(context, self, db_inst)
+        compute_utils.notify_about_server_group_update(context,
+                                                       "update", payload)
 
     @base.remotable
     def refresh(self, context):
@@ -123,6 +137,7 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
         updates = self.obj_get_changes()
+        payload = dict(updates)
         updates.pop('id', None)
         policies = updates.pop('policies', None)
         members = updates.pop('members', None)
@@ -131,16 +146,26 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject):
                                            policies=policies,
                                            members=members)
         self._from_db_object(context, self, db_inst)
+        payload['server_group_id'] = self.uuid
+        compute_utils.notify_about_server_group_update(context,
+                                                       "create", payload)
 
     @base.remotable
     def destroy(self, context):
+        payload = {'server_group_id': self.uuid}
         db.instance_group_delete(context, self.uuid)
         self.obj_reset_changes()
+        compute_utils.notify_about_server_group_update(context,
+                                                       "delete", payload)
 
     @base.remotable_classmethod
     def add_members(cls, context, group_uuid, instance_uuids):
+        payload = {'server_group_id': group_uuid,
+                   'instance_uuids': instance_uuids}
         members = db.instance_group_members_add(context, group_uuid,
                 instance_uuids)
+        compute_utils.notify_about_server_group_update(context,
+                                                       "addmember", payload)
         return list(members)
 
     @base.remotable
@@ -179,7 +204,8 @@ class InstanceGroupList(base.ObjectListBase, base.NovaObject):
     # Version 1.3: InstanceGroup <= version 1.6
     # Version 1.4: InstanceGroup <= version 1.7
     # Version 1.5: InstanceGroup <= version 1.8
-    VERSION = '1.5'
+    # Version 1.6: InstanceGroup <= version 1.9
+    VERSION = '1.6'
 
     fields = {
         'objects': fields.ListOfObjectsField('InstanceGroup'),
@@ -192,6 +218,7 @@ class InstanceGroupList(base.ObjectListBase, base.NovaObject):
         '1.3': '1.6',
         '1.4': '1.7',
         '1.5': '1.8',
+        '1.6': '1.9',
         }
 
     @base.remotable_classmethod

@@ -26,10 +26,10 @@ import functools
 import sys
 
 from oslo.config import cfg
+from oslo.utils import excutils
 import webob.exc
 
-from nova.i18n import _
-from nova.openstack.common import excutils
+from nova.i18n import _, _LE
 from nova.openstack.common import log as logging
 from nova import safe_utils
 
@@ -121,7 +121,7 @@ class NovaException(Exception):
                 exc_info = sys.exc_info()
                 # kwargs doesn't match a variable in the message
                 # log the issue and the kwargs
-                LOG.exception(_('Exception in string format operation'))
+                LOG.exception(_LE('Exception in string format operation'))
                 for name, value in kwargs.iteritems():
                     LOG.error("%s: %s" % (name, value))    # noqa
 
@@ -158,6 +158,10 @@ class VirtualInterfaceCreateException(NovaException):
 class VirtualInterfaceMacAddressException(NovaException):
     msg_fmt = _("Creation of virtual interface with "
                 "unique mac address failed")
+
+
+class VirtualInterfacePlugException(NovaException):
+    msg_fmt = _("Virtual interface plugin failed")
 
 
 class GlanceConnectionFailed(NovaException):
@@ -321,6 +325,20 @@ class InvalidUnicodeParameter(Invalid):
                 "Unicode is not supported by the current database.")
 
 
+class InvalidAPIVersionString(Invalid):
+    msg_fmt = _("API Version String %(version)s is of invalid format. Must "
+                "be of format MajorNum.MinorNum.")
+
+
+class VersionNotFoundForAPIMethod(Invalid):
+    msg_fmt = _("API version %(version)s is not supported on this method.")
+
+
+class InvalidGlobalAPIVersion(Invalid):
+    msg_fmt = _("Version %(req_ver)s is not supported by the API. Minimum "
+                "is %(min_ver)s and maximum is %(max_ver)s.")
+
+
 # Cannot be templated as the error syntax varies.
 # msg needs to be constructed when raised.
 class InvalidParameterValue(Invalid):
@@ -329,7 +347,27 @@ class InvalidParameterValue(Invalid):
 
 
 class InvalidAggregateAction(Invalid):
-    msg_fmt = _("Cannot perform action '%(action)s' on aggregate "
+    msg_fmt = _("Unacceptable parameters.")
+    code = 400
+
+
+class InvalidAggregateActionAdd(InvalidAggregateAction):
+    msg_fmt = _("Cannot add host to aggregate "
+                "%(aggregate_id)s. Reason: %(reason)s.")
+
+
+class InvalidAggregateActionDelete(InvalidAggregateAction):
+    msg_fmt = _("Cannot remove host from aggregate "
+                "%(aggregate_id)s. Reason: %(reason)s.")
+
+
+class InvalidAggregateActionUpdate(InvalidAggregateAction):
+    msg_fmt = _("Cannot update aggregate "
+                "%(aggregate_id)s. Reason: %(reason)s.")
+
+
+class InvalidAggregateActionUpdateMeta(InvalidAggregateAction):
+    msg_fmt = _("Cannot update metadata of aggregate "
                 "%(aggregate_id)s. Reason: %(reason)s.")
 
 
@@ -677,7 +715,7 @@ class NetworkNotFoundForProject(NotFound):
 
 class NetworkAmbiguous(Invalid):
     msg_fmt = _("More than one possible network found. Specify "
-                "network ID(s) to select which one(s) to connect to,")
+                "network ID(s) to select which one(s) to connect to.")
 
 
 class NetworkRequiresSubnet(Invalid):
@@ -760,7 +798,7 @@ class FixedIpInvalid(Invalid):
 
 class NoMoreFixedIps(NovaException):
     ec2_code = 'UnsupportedOperation'
-    msg_fmt = _("Zero fixed ips available.")
+    msg_fmt = _("No fixed IP addresses available for network: %(net)s")
 
 
 class NoFixedIpsDefined(NotFound):
@@ -1096,6 +1134,10 @@ class ClassNotFound(NotFound):
 
 class NotAllowed(NovaException):
     msg_fmt = _("Action not allowed.")
+
+
+class InstanceTagNotFound(NotFound):
+    msg_fmt = _("Instance %(instance_id)s has no tag '%(tag)s'")
 
 
 class ImageRotationNotAllowed(NovaException):
@@ -1749,9 +1791,34 @@ class InvalidImageConfigDrive(Invalid):
 
 
 class InvalidHypervisorVirtType(Invalid):
-    msg_fmt = _("Hypervisor virtualization type '%(hvtype)s' is not "
+    msg_fmt = _("Hypervisor virtualization type '%(hv_type)s' is not "
                 "recognised")
 
 
 class InvalidVirtualMachineMode(Invalid):
     msg_fmt = _("Virtual machine mode '%(vmmode)s' is not recognised")
+
+
+class InvalidToken(Invalid):
+    msg_fmt = _("The token '%(token)s' is invalid or has expired")
+
+
+class InvalidConnectionInfo(Invalid):
+    msg_fmt = _("Invalid Connection Info")
+
+
+class InstanceQuiesceNotSupported(Invalid):
+    msg_fmt = _('Quiescing is not supported in instance %(instance_id)s: '
+                '%(reason)s')
+
+
+class MemoryPageSizeInvalid(Invalid):
+    msg_fmt = _("Invalid memory page size '%(pagesize)s'")
+
+
+class MemoryPageSizeForbidden(Invalid):
+    msg_fmt = _("Page size %(pagesize)s forbidden against '%(against)s'")
+
+
+class MemoryPageSizeNotSupported(Invalid):
+    msg_fmt = _("Page size %(pagesize)s is not supported by the host.")

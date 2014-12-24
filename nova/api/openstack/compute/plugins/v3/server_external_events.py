@@ -14,13 +14,14 @@
 
 import webob
 
+from nova.api.openstack.compute.schemas.v3 import server_external_events
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import compute
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.objects import external_event as external_event_obj
 from nova.openstack.common import log as logging
 
 
@@ -38,44 +39,31 @@ class ServerExternalEventsController(wsgi.Controller):
 
     @extensions.expected_errors((400, 403, 404))
     @wsgi.response(200)
+    @validation.schema(server_external_events.create)
     def create(self, req, body):
         """Creates a new instance event."""
         context = req.environ['nova.context']
         authorize(context, action='create')
 
-        events = []
-        accepted = []
+        response_events = []
+        accepted_events = []
+        accepted_instances = set()
         instances = {}
         result = 200
 
-        body_events = body.get('events', [])
-        if not isinstance(body_events, list) or not len(body_events):
-            raise webob.exc.HTTPBadRequest()
+        body_events = body['events']
 
         for _event in body_events:
             client_event = dict(_event)
             event = objects.InstanceExternalEvent(context)
 
-            try:
-                event.instance_uuid = client_event.pop('server_uuid')
-                event.name = client_event.pop('name')
-                event.status = client_event.pop('status', 'completed')
-                event.tag = client_event.pop('tag', None)
-            except KeyError as missing_key:
-                msg = _('event entity requires key %(key)s') % missing_key
-                raise webob.exc.HTTPBadRequest(explanation=msg)
+            event.instance_uuid = client_event.pop('server_uuid')
+            event.name = client_event.pop('name')
+            event.status = client_event.pop('status', 'completed')
+            event.tag = client_event.pop('tag', None)
 
-            if client_event:
-                msg = (_('event entity contains unsupported items: %s') %
-                       ', '.join(client_event.keys()))
-                raise webob.exc.HTTPBadRequest(explanation=msg)
-
-            if event.status not in external_event_obj.EVENT_STATUSES:
-                raise webob.exc.HTTPBadRequest(
-                    _('Invalid event status `%s\'') % event.status)
-
-            events.append(_event)
-            if event.instance_uuid not in instances:
+            instance = instances.get(event.instance_uuid)
+            if not instance:
                 try:
                     instance = objects.Instance.get_by_uuid(
                         context, event.instance_uuid)
@@ -88,24 +76,41 @@ class ServerExternalEventsController(wsgi.Controller):
                     _event['code'] = 404
                     result = 207
 
-            if event.instance_uuid in instances:
-                accepted.append(event)
-                _event['code'] = 200
-                LOG.audit(_('Create event %(name)s:%(tag)s for instance '
-                            '%(instance_uuid)s'),
-                          dict(event.iteritems()))
+            # NOTE: before accepting the event, make sure the instance
+            # for which the event is sent is assigned to a host; otherwise
+            # it will not be possible to dispatch the event
+            if instance:
+                if instance.host:
+                    accepted_events.append(event)
+                    accepted_instances.add(instance)
+                    LOG.audit(_('Creating event %(name)s:%(tag)s for instance '
+                                '%(instance_uuid)s'),
+                              dict(event.iteritems()))
+                    # NOTE: as the event is processed asynchronously verify
+                    # whether 202 is a more suitable response code than 200
+                    _event['status'] = 'completed'
+                    _event['code'] = 200
+                else:
+                    LOG.debug("Unable to find a host for instance "
+                              "%(instance)s. Dropping event %(event)s",
+                              {'instance': event.instance_uuid,
+                               'event': event.name})
+                    _event['status'] = 'failed'
+                    _event['code'] = 422
+                    result = 207
 
-        if accepted:
-            self.compute_api.external_instance_event(context,
-                                                     instances.values(),
-                                                     accepted)
+            response_events.append(_event)
+
+        if accepted_events:
+            self.compute_api.external_instance_event(
+                context, accepted_instances, accepted_events)
         else:
             msg = _('No instances found for any event')
             raise webob.exc.HTTPNotFound(explanation=msg)
 
         # FIXME(cyeoh): This needs some infrastructure support so that
         # we have a general way to do this
-        robj = wsgi.ResponseObject({'events': events})
+        robj = wsgi.ResponseObject({'events': response_events})
         robj._code = result
         return robj
 

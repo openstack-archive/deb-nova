@@ -26,18 +26,22 @@ semantics of real hypervisor connections.
 import contextlib
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
 
+from nova.compute import arch
+from nova.compute import hv_type
 from nova.compute import power_state
 from nova.compute import task_states
+from nova.compute import vm_mode
 from nova.console import type as ctype
 from nova import db
 from nova import exception
-from nova.i18n import _
-from nova.openstack.common import jsonutils
+from nova.i18n import _LW
 from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import diagnostics
 from nova.virt import driver
+from nova.virt import hardware
 from nova.virt import virtapi
 
 CONF = cfg.CONF
@@ -55,7 +59,6 @@ def set_nodes(nodes):
     It has effect on the following methods:
         get_available_nodes()
         get_available_resource
-        get_host_stats()
 
     To restore the change, call restore_nodes()
     """
@@ -112,7 +115,9 @@ class FakeDriver(driver.ComputeDriver):
           'hypervisor_hostname': CONF.host,
           'cpu_info': {},
           'disk_available_least': 0,
-          'supported_instances': jsonutils.dumps([(None, 'fake', None)]),
+          'supported_instances': jsonutils.dumps([(arch.X86_64,
+                                                   hv_type.FAKE,
+                                                   vm_mode.HVM)]),
           'numa_topology': None,
           }
         self._mounts = {}
@@ -138,7 +143,8 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info=None, block_device_info=None):
+              admin_password, network_info=None, block_device_info=None,
+              flavor=None):
         name = instance['name']
         state = power_state.RUNNING
         fake_instance = FakeInstance(name, state, instance['uuid'])
@@ -223,7 +229,7 @@ class FakeDriver(driver.ComputeDriver):
         if key in self.instances:
             del self.instances[key]
         else:
-            LOG.warning(_("Key '%(key)s' not in instances '%(inst)s'") %
+            LOG.warning(_LW("Key '%(key)s' not in instances '%(inst)s'"),
                         {'key': key,
                          'inst': self.instances}, instance=instance)
 
@@ -272,11 +278,11 @@ class FakeDriver(driver.ComputeDriver):
         if instance['name'] not in self.instances:
             raise exception.InstanceNotFound(instance_id=instance['name'])
         i = self.instances[instance['name']]
-        return {'state': i.state,
-                'max_mem': 0,
-                'mem': 0,
-                'num_cpu': 2,
-                'cpu_time': 0}
+        return hardware.InstanceInfo(state=i.state,
+                                     max_mem_kb=0,
+                                     mem_kb=0,
+                                     num_cpu=2,
+                                     cpu_time_ns=0)
 
     def get_diagnostics(self, instance_name):
         return {'cpu0_time': 17300000000,
@@ -338,9 +344,6 @@ class FakeDriver(driver.ComputeDriver):
     def block_stats(self, instance_name, disk_id):
         return [0L, 0L, 0L, 0L, None]
 
-    def interface_stats(self, instance_name, iface_id):
-        return [0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L]
-
     def get_console_output(self, context, instance):
         return 'FAKE CONSOLE OUTPUT\nANOTHER\nLAST LINE'
 
@@ -391,21 +394,17 @@ class FakeDriver(driver.ComputeDriver):
         if nodename not in _FAKE_NODES:
             return {}
 
-        status = self.get_host_stats()
-        # samples expect '?' instead of {}
-        if isinstance(status, list):
-            for host in status:
-                if host["hypervisor_hostname"] == nodename:
-                    host['cpu_info'] = '?'
-                    return host
-        else:
-            status['cpu_info'] = '?'
-            return status
+        host_status = self.host_status_base.copy()
+        host_status['hypervisor_hostname'] = nodename
+        host_status['host_hostname'] = nodename
+        host_status['host_name_label'] = nodename
+        host_status['cpu_info'] = '?'
+        return host_status
 
     def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
         return
 
-    def get_instance_disk_info(self, instance_name, block_device_info=None):
+    def get_instance_disk_info(self, instance, block_device_info=None):
         return
 
     def live_migration(self, context, instance_ref, dest,
@@ -426,7 +425,7 @@ class FakeDriver(driver.ComputeDriver):
         return {}
 
     def check_can_live_migrate_source(self, ctxt, instance_ref,
-                                      dest_check_data):
+                                      dest_check_data, block_device_info=None):
         return
 
     def finish_migration(self, context, migration, instance, disk_info,
@@ -448,23 +447,7 @@ class FakeDriver(driver.ComputeDriver):
         """Removes the named VM, as if it crashed. For testing."""
         self.instances.pop(instance_name)
 
-    def get_host_stats(self, refresh=False):
-        """Return fake Host Status of ram, disk, network."""
-        stats = []
-        for nodename in _FAKE_NODES:
-            host_status = self.host_status_base.copy()
-            host_status['hypervisor_hostname'] = nodename
-            host_status['host_hostname'] = nodename
-            host_status['host_name_label'] = nodename
-            stats.append(host_status)
-        if len(stats) == 0:
-            raise exception.NovaException("FakeDriver has no node")
-        elif len(stats) == 1:
-            return stats[0]
-        else:
-            return stats
-
-    def host_power_action(self, host, action):
+    def host_power_action(self, action):
         """Reboots, shuts down or powers up the host."""
         return action
 
@@ -476,20 +459,28 @@ class FakeDriver(driver.ComputeDriver):
             return 'off_maintenance'
         return 'on_maintenance'
 
-    def set_host_enabled(self, host, enabled):
+    def set_host_enabled(self, enabled):
         """Sets the specified host's ability to accept new instances."""
         if enabled:
             return 'enabled'
         return 'disabled'
 
     def get_volume_connector(self, instance):
-        return {'ip': '127.0.0.1', 'initiator': 'fake', 'host': 'fakehost'}
+        return {'ip': CONF.my_block_storage_ip,
+                'initiator': 'fake',
+                'host': 'fakehost'}
 
     def get_available_nodes(self, refresh=False):
         return _FAKE_NODES
 
     def instance_on_disk(self, instance):
         return False
+
+    def quiesce(self, context, instance, image_meta):
+        pass
+
+    def unquiesce(self, context, instance, image_meta):
+        pass
 
 
 class FakeVirtAPI(virtapi.VirtAPI):

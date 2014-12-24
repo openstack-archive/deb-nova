@@ -17,18 +17,18 @@
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.utils import excutils
+from oslo.utils import importutils
+from oslo_concurrency import processutils
 import six
 
 from nova import context
 from nova.db import base
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _LE, _LI, _LW
 from nova.network import rpcapi as network_rpcapi
 from nova import objects
-from nova.openstack.common import excutils
-from nova.openstack.common import importutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
 from nova.openstack.common import uuidutils
 from nova import quota
 from nova import rpc
@@ -83,8 +83,7 @@ class FloatingIP(object):
                 try:
                     fixed_ip = floating_ip.fixed_ip
                 except exception.FixedIpNotFound:
-                    msg = _('Fixed ip %s not found') % floating_ip.fixed_ip_id
-                    LOG.debug(msg)
+                    LOG.debug('Fixed ip %s not found', floating_ip.fixed_ip_id)
                     continue
                 interface = CONF.public_interface or floating_ip.interface
                 try:
@@ -174,7 +173,7 @@ class FloatingIP(object):
                                                   address,
                                                   affect_auto_assigned=True)
                 except exception.FloatingIpNotAssociated:
-                    LOG.info(_("Floating IP %s is not associated. Ignore."),
+                    LOG.info(_LI("Floating IP %s is not associated. Ignore."),
                              address)
                 # deallocate if auto_assigned
                 if floating_ip.auto_assigned:
@@ -193,15 +192,26 @@ class FloatingIP(object):
 
         if floating_ip.project_id != context.project_id:
             if floating_ip.project_id is None:
-                LOG.warn(_('Address |%(address)s| is not allocated'),
-                           {'address': floating_ip.address})
+                LOG.warning(_LW('Address |%(address)s| is not allocated'),
+                            {'address': floating_ip.address})
                 raise exception.Forbidden()
             else:
-                LOG.warn(_('Address |%(address)s| is not allocated to your '
-                           'project |%(project)s|'),
-                           {'address': floating_ip.address,
-                           'project': context.project_id})
+                LOG.warning(_LW('Address |%(address)s| is not allocated '
+                                'to your project |%(project)s|'),
+                            {'address': floating_ip.address,
+                             'project': context.project_id})
                 raise exception.Forbidden()
+
+    def _floating_ip_pool_exists(self, context, name):
+        """Returns true if the specified floating ip pool exists. Otherwise,
+        returns false.
+        """
+        pools = [pool.get('name') for pool in
+                 self.get_floating_ip_pools(context)]
+        if name in pools:
+            return True
+
+        return False
 
     def allocate_floating_ip(self, context, project_id, auto_assigned=False,
                              pool=None):
@@ -210,6 +220,9 @@ class FloatingIP(object):
         pool = pool or CONF.default_floating_pool
         use_quota = not auto_assigned
 
+        if not self._floating_ip_pool_exists(context, pool):
+            raise exception.FloatingIpPoolNotFound()
+
         # Check the quota; can't put this in the API because we get
         # called into from other places
         try:
@@ -217,8 +230,8 @@ class FloatingIP(object):
                 reservations = QUOTAS.reserve(context, floating_ips=1,
                                               project_id=project_id)
         except exception.OverQuota:
-            LOG.warn(_("Quota exceeded for %s, tried to allocate "
-                       "floating IP"), context.project_id)
+            LOG.warning(_LW("Quota exceeded for %s, tried to allocate "
+                            "floating IP"), context.project_id)
             raise exception.FloatingIpLimitExceeded()
 
         try:
@@ -276,8 +289,8 @@ class FloatingIP(object):
                 reservations = None
         except Exception:
             reservations = None
-            LOG.exception(_("Failed to update usages deallocating "
-                            "floating IP"))
+            LOG.exception(_LE("Failed to update usages deallocating "
+                              "floating IP"))
 
         rows_updated = objects.FloatingIP.deallocate(context, address)
         # number of updated rows will be 0 if concurrently another
@@ -374,12 +387,12 @@ class FloatingIP(object):
                         objects.FloatingIP.disassociate(context,
                                                         floating_address)
                     except Exception:
-                        LOG.warn(_('Failed to disassociated floating '
-                                   'address: %s'), floating_address)
+                        LOG.warning(_LW('Failed to disassociated floating '
+                                        'address: %s'), floating_address)
                         pass
                     if "Cannot find device" in six.text_type(e):
                         try:
-                            LOG.error(_('Interface %s not found'), interface)
+                            LOG.error(_LE('Interface %s not found'), interface)
                         except Exception:
                             pass
                         raise exception.NoFloatingIpInterface(
@@ -533,16 +546,17 @@ class FloatingIP(object):
         if not floating_addresses or (source and source == dest):
             return
 
-        LOG.info(_("Starting migration network for instance %s"),
+        LOG.info(_LI("Starting migration network for instance %s"),
                  instance_uuid)
         for address in floating_addresses:
             floating_ip = objects.FloatingIP.get_by_address(context, address)
 
             if self._is_stale_floating_ip_address(context, floating_ip):
-                LOG.warn(_("Floating ip address |%(address)s| no longer "
-                           "belongs to instance %(instance_uuid)s. Will not "
-                           "migrate it "),
-                         {'address': address, 'instance_uuid': instance_uuid})
+                LOG.warning(_LW("Floating ip address |%(address)s| no longer "
+                                "belongs to instance %(instance_uuid)s. "
+                                "Will not migrate it "),
+                            {'address': address,
+                             'instance_uuid': instance_uuid})
                 continue
 
             interface = CONF.public_interface or floating_ip.interface
@@ -568,17 +582,18 @@ class FloatingIP(object):
         if not floating_addresses or (source and source == dest):
             return
 
-        LOG.info(_("Finishing migration network for instance %s"),
+        LOG.info(_LI("Finishing migration network for instance %s"),
                  instance_uuid)
 
         for address in floating_addresses:
             floating_ip = objects.FloatingIP.get_by_address(context, address)
 
             if self._is_stale_floating_ip_address(context, floating_ip):
-                LOG.warn(_("Floating ip address |%(address)s| no longer "
-                           "belongs to instance %(instance_uuid)s. Will not"
-                           "setup it."),
-                         {'address': address, 'instance_uuid': instance_uuid})
+                LOG.warning(_LW("Floating ip address |%(address)s| no longer "
+                                "belongs to instance %(instance_uuid)s. "
+                                "Will not setup it."),
+                            {'address': address,
+                             'instance_uuid': instance_uuid})
                 continue
 
             floating_ip.host = dest
@@ -618,10 +633,10 @@ class FloatingIP(object):
                     if domain_entry:
                         domains.append(domain_entry)
             else:
-                LOG.warn(_('Database inconsistency: DNS domain |%s| is '
-                         'registered in the Nova db but not visible to '
-                         'either the floating or instance DNS driver. It '
-                         'will be ignored.'), dns_domain.domain)
+                LOG.warning(_LW('Database inconsistency: DNS domain |%s| is '
+                                'registered in the Nova db but not visible to '
+                                'either the floating or instance DNS driver. '
+                                'It will be ignored.'), dns_domain.domain)
 
         return domains
 
@@ -658,18 +673,18 @@ class FloatingIP(object):
         try:
             self.instance_dns_manager.create_domain(domain)
         except exception.FloatingIpDNSExists:
-            LOG.warn(_('Domain |%(domain)s| already exists, '
-                       'changing zone to |%(av_zone)s|.'),
-                     {'domain': domain, 'av_zone': av_zone})
+            LOG.warning(_LW('Domain |%(domain)s| already exists, '
+                            'changing zone to |%(av_zone)s|.'),
+                        {'domain': domain, 'av_zone': av_zone})
 
     def create_public_dns_domain(self, context, domain, project):
         objects.DNSDomain.register_for_project(context, domain, project)
         try:
             self.floating_dns_manager.create_domain(domain)
         except exception.FloatingIpDNSExists:
-            LOG.warn(_('Domain |%(domain)s| already exists, '
-                       'changing project to |%(project)s|.'),
-                     {'domain': domain, 'project': project})
+            LOG.warning(_LW('Domain |%(domain)s| already exists, '
+                            'changing project to |%(project)s|.'),
+                        {'domain': domain, 'project': project})
 
     def delete_dns_domain(self, context, domain):
         objects.DNSDomain.delete_by_domain(context, domain)

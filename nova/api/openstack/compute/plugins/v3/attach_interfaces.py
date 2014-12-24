@@ -21,15 +21,14 @@ from webob import exc
 from nova.api.openstack import common
 from nova.api.openstack.compute.schemas.v3 import attach_interfaces
 from nova.api.openstack import extensions
+from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova import exception
 from nova.i18n import _
 from nova import network
-from nova.openstack.common import log as logging
 
 
-LOG = logging.getLogger(__name__)
 ALIAS = 'os-attach-interfaces'
 authorize = extensions.extension_authorizer('compute',
                                             'v3:' + ALIAS)
@@ -46,7 +45,7 @@ def _translate_interface_attachment_view(port_info):
         }
 
 
-class InterfaceAttachmentController(object):
+class InterfaceAttachmentController(wsgi.Controller):
     """The interface attachment API controller for the OpenStack API."""
 
     def __init__(self):
@@ -60,22 +59,29 @@ class InterfaceAttachmentController(object):
         return self._items(req, server_id,
             entity_maker=_translate_interface_attachment_view)
 
-    @extensions.expected_errors(404)
+    @extensions.expected_errors((403, 404))
     def show(self, req, server_id, id):
         """Return data about the given interface attachment."""
         context = req.environ['nova.context']
         authorize(context)
 
         port_id = id
+        # NOTE(mriedem): We need to verify the instance actually exists from
+        # the server_id even though we're not using the instance for anything,
+        # just the port id.
         common.get_instance(self.compute_api, context, server_id)
 
         try:
             port_info = self.network_api.show_port(context, port_id)
-        except exception.NotFound:
-            raise exc.HTTPNotFound()
+        except exception.NotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
+        except exception.Forbidden as e:
+            raise exc.HTTPForbidden(explanation=e.format_message())
 
         if port_info['port']['device_id'] != server_id:
-            raise exc.HTTPNotFound()
+            msg = _("Instance %(instance)s does not have a port with id "
+                    "%(port)s") % {'instance': server_id, 'port': port_id}
+            raise exc.HTTPNotFound(explanation=msg)
 
         return {'interfaceAttachment': _translate_interface_attachment_view(
                 port_info['port'])}
@@ -100,38 +106,39 @@ class InterfaceAttachmentController(object):
                 pass
 
         if network_id and port_id:
-            raise exc.HTTPBadRequest()
+            msg = _("Must not input both network_id and port_id")
+            raise exc.HTTPBadRequest(explanation=msg)
         if req_ip and not network_id:
-            raise exc.HTTPBadRequest()
+            msg = _("Must input network_id when request IP address")
+            raise exc.HTTPBadRequest(explanation=msg)
 
         instance = common.get_instance(self.compute_api, context,
                                        server_id, want_objects=True)
-        LOG.audit(_("Attach interface to %s"), instance=instance)
-
         try:
             vif = self.compute_api.attach_interface(context,
                 instance, network_id, port_id, req_ip)
-        except (exception.PortNotFound,
-                exception.FixedIpAlreadyInUse,
-                exception.PortInUse,
-                exception.NetworkDuplicated,
-                exception.NetworkAmbiguous,
-                exception.NetworkNotFound) as e:
+        except (exception.NetworkDuplicated,
+                exception.NetworkAmbiguous) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
-        except exception.InstanceIsLocked as e:
+        except (exception.InstanceIsLocked,
+                exception.FixedIpAlreadyInUse,
+                exception.PortInUse) as e:
             raise exc.HTTPConflict(explanation=e.format_message())
+        except (exception.PortNotFound,
+                exception.NetworkNotFound) as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except NotImplementedError as e:
             raise webob.exc.HTTPNotImplemented(explanation=e.format_message())
         except exception.InterfaceAttachFailed as e:
-            LOG.exception(e)
             raise webob.exc.HTTPInternalServerError(
                 explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'attach_interface')
+                    'attach_interface', server_id)
 
         return self.show(req, server_id, vif['id'])
 
+    @wsgi.response(202)
     @extensions.expected_errors((404, 409, 501))
     def delete(self, req, server_id, id):
         """Detach an interface from an instance."""
@@ -141,35 +148,33 @@ class InterfaceAttachmentController(object):
 
         instance = common.get_instance(self.compute_api, context, server_id,
                                        want_objects=True)
-        LOG.audit(_("Detach interface %s"), port_id, instance=instance)
         try:
             self.compute_api.detach_interface(context,
                 instance, port_id=port_id)
-        except exception.PortNotFound:
-            raise exc.HTTPNotFound()
+        except exception.PortNotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except NotImplementedError as e:
             raise webob.exc.HTTPNotImplemented(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'detach_interface')
-
-        return webob.Response(status_int=202)
+                    'detach_interface', server_id)
 
     def _items(self, req, server_id, entity_maker):
         """Returns a list of attachments, transformed through entity_maker."""
         context = req.environ['nova.context']
         authorize(context)
 
-        instance = common.get_instance(self.compute_api, context, server_id)
+        instance = common.get_instance(self.compute_api, context, server_id,
+                                       want_objects=True)
         results = []
-        search_opts = {'device_id': instance['uuid']}
+        search_opts = {'device_id': instance.uuid}
 
         try:
             data = self.network_api.list_ports(context, **search_opts)
-        except exception.NotFound:
-            raise exc.HTTPNotFound()
+        except exception.NotFound as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except NotImplementedError:
             msg = _("Network driver does not support this function.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)

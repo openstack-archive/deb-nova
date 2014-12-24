@@ -16,13 +16,14 @@
 import functools
 import inspect
 
+from oslo.utils import excutils
+from oslo_concurrency import lockutils
+
 from nova.db import base
 from nova import hooks
-from nova.i18n import _
+from nova.i18n import _, _LE
 from nova.network import model as network_model
 from nova import objects
-from nova.openstack.common import excutils
-from nova.openstack.common import lockutils
 from nova.openstack.common import log as logging
 
 
@@ -37,7 +38,9 @@ def update_instance_cache_with_nw_info(impl, context, instance,
             nw_info = None
         if nw_info is None:
             nw_info = impl._get_instance_nw_info(context, instance)
+
         LOG.debug('Updating cache with info: %s', nw_info)
+
         # NOTE(comstud): The save() method actually handles updating or
         # creating the instance.  We don't need to retrieve the object
         # from the DB first.
@@ -46,7 +49,7 @@ def update_instance_cache_with_nw_info(impl, context, instance,
         ic.save(update_cells=update_cells)
     except Exception:
         with excutils.save_and_reraise_exception():
-            LOG.exception(_('Failed storing info cache'), instance=instance)
+            LOG.exception(_LE('Failed storing info cache'), instance=instance)
 
 
 def refresh_cache(f):
@@ -128,10 +131,6 @@ class NetworkAPI(base.Base):
 
     def get_floating_ips_by_project(self, context):
         """Get floating ips by project."""
-        raise NotImplementedError()
-
-    def get_floating_ips_by_fixed_address(self, context, fixed_address):
-        """Get floating ips by fixed address."""
         raise NotImplementedError()
 
     def get_instance_id_by_floating_address(self, context, address):
@@ -255,12 +254,6 @@ class NetworkAPI(base.Base):
 
         Return the number of instances that can be successfully allocated
         with the requested network configuration.
-        """
-        raise NotImplementedError()
-
-    def get_instance_uuids_by_ip_filter(self, context, filters):
-        """Returns a list of dicts in the form of
-        {'instance_uuid': uuid, 'ip': ip} that matched the ip_filter
         """
         raise NotImplementedError()
 

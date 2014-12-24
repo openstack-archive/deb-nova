@@ -18,18 +18,19 @@
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.utils import strutils
 import six
 from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack.compute.schemas.v3 import cells
 from nova.api.openstack import extensions
+from nova.api.openstack import wsgi
 from nova.api import validation
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import api as compute
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import strutils
 from nova import rpc
 
 
@@ -91,7 +92,7 @@ def _scrub_cell(cell, detail=False):
     return cell_info
 
 
-class CellsController(object):
+class CellsController(wsgi.Controller):
     """Controller for Cell resources."""
 
     def __init__(self):
@@ -216,7 +217,8 @@ class CellsController(object):
         if not transport_url.hosts:
             transport_url.hosts.append(messaging.TransportHost())
         transport_host = transport_url.hosts[0]
-
+        if 'rpc_port' in cell:
+            cell['rpc_port'] = int(cell['rpc_port'])
         # Copy over the input fields
         transport_field_map = {
             'username': 'username',

@@ -32,11 +32,16 @@ import traceback
 from eventlet import queue
 from oslo.config import cfg
 from oslo import messaging
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+from oslo.utils import importutils
+from oslo.utils import timeutils
 import six
 
 from nova.cells import state as cells_state
 from nova.cells import utils as cells_utils
 from nova import compute
+from nova.compute import delete_types
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import vm_states
@@ -44,15 +49,11 @@ from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import context
 from nova.db import base
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LI, _LW
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import base as objects_base
-from nova.openstack.common import excutils
-from nova.openstack.common import importutils
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova.openstack.common import uuidutils
 from nova import rpc
 from nova import utils
@@ -201,7 +202,7 @@ class _BaseMessage(object):
         except Exception as exc:
             resp_value = sys.exc_info()
             failure = True
-            LOG.exception(_("Error processing message locally: %(exc)s"),
+            LOG.exception(_LE("Error processing message locally: %(exc)s"),
                           {'exc': exc})
         return Response(self.routing_path, resp_value, failure)
 
@@ -406,7 +407,7 @@ class _TargetedMessage(_BaseMessage):
             next_hop = self._get_next_hop()
         except Exception as exc:
             exc_info = sys.exc_info()
-            LOG.exception(_("Error locating next hop for message: %(exc)s"),
+            LOG.exception(_LE("Error locating next hop for message: %(exc)s"),
                           {'exc': exc})
             return self._send_response_from_exception(exc_info)
 
@@ -512,7 +513,7 @@ class _BroadcastMessage(_BaseMessage):
             next_hops = self._get_next_hops()
         except Exception as exc:
             exc_info = sys.exc_info()
-            LOG.exception(_("Error locating next hops for message: %(exc)s"),
+            LOG.exception(_LE("Error locating next hops for message: %(exc)s"),
                           {'exc': exc})
             return self._send_response_from_exception(exc_info)
 
@@ -532,7 +533,7 @@ class _BroadcastMessage(_BaseMessage):
             # Error just trying to send to cells.  Send a single response
             # with the failure.
             exc_info = sys.exc_info()
-            LOG.exception(_("Error sending message to next hops: %(exc)s"),
+            LOG.exception(_LE("Error sending message to next hops: %(exc)s"),
                           {'exc': exc})
             self._cleanup_response_queue()
             return self._send_response_from_exception(exc_info)
@@ -833,7 +834,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         try:
             # NOTE(comstud): We need to refresh the instance from this
             # cell's view in the DB.
-            instance.refresh(ctxt)
+            instance.refresh()
         except exception.InstanceNotFound:
             with excutils.save_and_reraise_exception():
                 # Must be a race condition.  Let's try to resolve it by
@@ -843,7 +844,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                 self.msg_runner.instance_destroy_at_top(ctxt,
                                                         instance)
         except exception.InstanceInfoCacheNotFound:
-            if method != 'delete':
+            if method != delete_types.DELETE:
                 raise
 
         fn = getattr(self.compute_api, method, None)
@@ -853,11 +854,12 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         """Start an instance via compute_api.start()."""
         self._call_compute_api_with_obj(message.ctxt, instance, 'start')
 
-    def stop_instance(self, message, instance):
+    def stop_instance(self, message, instance, clean_shutdown=True):
         """Stop an instance via compute_api.stop()."""
         do_cast = not message.need_response
         return self._call_compute_api_with_obj(message.ctxt, instance,
-                                               'stop', do_cast=do_cast)
+                                               'stop', do_cast=do_cast,
+                                               clean_shutdown=clean_shutdown)
 
     def reboot_instance(self, message, instance, reboot_type):
         """Reboot an instance via compute_api.reboot()."""
@@ -876,10 +878,12 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         return self.host_api.get_host_uptime(message.ctxt, host_name)
 
     def terminate_instance(self, message, instance):
-        self._call_compute_api_with_obj(message.ctxt, instance, 'delete')
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        delete_types.DELETE)
 
     def soft_delete_instance(self, message, instance):
-        self._call_compute_api_with_obj(message.ctxt, instance, 'soft_delete')
+        self._call_compute_api_with_obj(message.ctxt, instance,
+                                        delete_types.SOFT_DELETE)
 
     def pause_instance(self, message, instance):
         """Pause an instance via compute_api.pause()."""
@@ -1095,7 +1099,7 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         """
         LOG.debug("Got broadcast to %(delete_type)s delete instance",
                   {'delete_type': delete_type}, instance=instance)
-        if delete_type == 'soft':
+        if delete_type == delete_types.SOFT_DELETE:
             self.compute_api.soft_delete(message.ctxt, instance)
         else:
             self.compute_api.delete(message.ctxt, instance)
@@ -1107,9 +1111,7 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         items_to_remove = ['id']
         for key in items_to_remove:
             instance_fault.pop(key, None)
-        log_str = _("Got message to create instance fault: "
-                    "%(instance_fault)s")
-        LOG.debug(log_str, {'instance_fault': instance_fault})
+        LOG.debug("Got message to create instance fault: %s", instance_fault)
         fault = objects.InstanceFault(context=message.ctxt)
         fault.update(instance_fault)
         fault.create()
@@ -1130,8 +1132,8 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
                        **kwargs):
         projid_str = project_id is None and "<all>" or project_id
         since_str = updated_since is None and "<all>" or updated_since
-        LOG.info(_("Forcing a sync of instances, project_id="
-                   "%(projid_str)s, updated_since=%(since_str)s"),
+        LOG.info(_LI("Forcing a sync of instances, project_id="
+                     "%(projid_str)s, updated_since=%(since_str)s"),
                  {'projid_str': projid_str, 'since_str': since_str})
         if updated_since is not None:
             updated_since = timeutils.parse_isotime(updated_since)
@@ -1209,8 +1211,8 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
             if vol_id and instance_bdm['volume_id'] == vol_id:
                 break
         else:
-            LOG.warn(_("No match when trying to update BDM: %(bdm)s"),
-                     dict(bdm=bdm))
+            LOG.warning(_LW("No match when trying to update BDM: %(bdm)s"),
+                        dict(bdm=bdm))
             return
         self.db.block_device_mapping_update(message.ctxt,
                                             instance_bdm['id'], bdm,
@@ -1690,8 +1692,8 @@ class MessageRunner(object):
         """Call instance_<method> in correct cell for instance."""
         cell_name = instance.cell_name
         if not cell_name:
-            LOG.warn(_("No cell_name for %(method)s() from API"),
-                     dict(method=method), instance=instance)
+            LOG.warning(_LW("No cell_name for %(method)s() from API"),
+                        dict(method=method), instance=instance)
             return
         method_kwargs = {'instance': instance}
         if extra_kwargs:
@@ -1707,8 +1709,8 @@ class MessageRunner(object):
         """Update an instance object in its cell."""
         cell_name = instance.cell_name
         if not cell_name:
-            LOG.warn(_("No cell_name for instance update from API"),
-                     instance=instance)
+            LOG.warning(_LW("No cell_name for instance update from API"),
+                        instance=instance)
             return
         method_kwargs = {'instance': instance,
                          'expected_vm_state': expected_vm_state,
@@ -1723,12 +1725,15 @@ class MessageRunner(object):
         """Start an instance in its cell."""
         self._instance_action(ctxt, instance, 'start_instance')
 
-    def stop_instance(self, ctxt, instance, do_cast=True):
+    def stop_instance(self, ctxt, instance, do_cast=True, clean_shutdown=True):
         """Stop an instance in its cell."""
+        extra_kwargs = dict(clean_shutdown=clean_shutdown)
         if do_cast:
-            self._instance_action(ctxt, instance, 'stop_instance')
+            self._instance_action(ctxt, instance, 'stop_instance',
+                                  extra_kwargs=extra_kwargs)
         else:
             return self._instance_action(ctxt, instance, 'stop_instance',
+                                         extra_kwargs=extra_kwargs,
                                          need_response=True)
 
     def reboot_instance(self, ctxt, instance, reboot_type):
@@ -1874,7 +1879,7 @@ def serialize_remote_exception(failure_info, log_failure=True):
     tb = traceback.format_exception(*failure_info)
     failure = failure_info[1]
     if log_failure:
-        LOG.error(_("Returning exception %s to caller"),
+        LOG.error(_LE("Returning exception %s to caller"),
                   six.text_type(failure))
         LOG.error(tb)
 

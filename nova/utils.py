@@ -38,16 +38,16 @@ import eventlet
 import netaddr
 from oslo.config import cfg
 from oslo import messaging
+from oslo.utils import excutils
+from oslo.utils import importutils
+from oslo.utils import timeutils
+from oslo_concurrency import lockutils
+from oslo_concurrency import processutils
 import six
 
 from nova import exception
-from nova.i18n import _
-from nova.openstack.common import excutils
-from nova.openstack.common import importutils
-from nova.openstack.common import lockutils
+from nova.i18n import _, _LE, _LW
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
-from nova.openstack.common import timeutils
 
 notify_decorator = 'nova.notifications.notify_decorator'
 
@@ -144,8 +144,9 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
         sock.close()
     fmt = '!BQxxxxxQxxxx'
     if len(received) != struct.calcsize(fmt):
-        LOG.warn(_('Expected to receive %(exp)s bytes, but actually %(act)s') %
-                 dict(exp=struct.calcsize(fmt), act=len(received)))
+        LOG.warning(_LW('Expected to receive %(exp)s bytes, '
+                        'but actually %(act)s'),
+                    dict(exp=struct.calcsize(fmt), act=len(received)))
         return False
     (identifier, server_sess, client_sess) = struct.unpack(fmt, received)
     if identifier == 0x40 and client_sess == session_id:
@@ -350,7 +351,7 @@ def get_my_ipv4_address():
                 except exception.NovaException:
                     pass
     except Exception as ex:
-        LOG.error(_("Couldn't get IPv4 : %(ex)s") % {'ex': ex})
+        LOG.error(_LE("Couldn't get IPv4 : %(ex)s"), {'ex': ex})
     return LOCALHOST
 
 
@@ -455,10 +456,10 @@ def check_isinstance(obj, cls):
 
 
 def parse_server_string(server_str):
-    """Parses the given server_string and returns a list of host and port.
+    """Parses the given server_string and returns a tuple of host and port.
     If it's not a combination of host part and port, the port element
-    is a null string. If the input is invalid expression, return a null
-    list.
+    is an empty string. If the input is invalid expression, return a tuple of
+    two empty strings.
     """
     try:
         # First of all, exclude pure IPv6 address (w/o port).
@@ -478,8 +479,8 @@ def parse_server_string(server_str):
         (address, port) = server_str.split(':')
         return (address, port)
 
-    except Exception:
-        LOG.error(_('Invalid server_string: %s'), server_str)
+    except (ValueError, netaddr.AddrFormatError):
+        LOG.error(_LE('Invalid server_string: %s'), server_str)
         return ('', '')
 
 
@@ -495,14 +496,14 @@ def is_valid_ipv4(address):
     """Verify that address represents a valid IPv4 address."""
     try:
         return netaddr.valid_ipv4(address)
-    except Exception:
+    except (ValueError, netaddr.AddrFormatError):
         return False
 
 
 def is_valid_ipv6(address):
     try:
         return netaddr.valid_ipv6(address)
-    except Exception:
+    except (ValueError, netaddr.AddrFormatError):
         return False
 
 
@@ -512,9 +513,9 @@ def is_valid_ip_address(address):
 
 def is_valid_ipv6_cidr(address):
     try:
-        str(netaddr.IPNetwork(address, version=6).cidr)
+        netaddr.IPNetwork(address, version=6).cidr
         return True
-    except Exception:
+    except (TypeError, netaddr.AddrFormatError):
         return False
 
 
@@ -537,11 +538,7 @@ def is_valid_cidr(address):
     try:
         # Validate the correct CIDR Address
         netaddr.IPNetwork(address)
-    except netaddr.core.AddrFormatError:
-        return False
-    except UnboundLocalError:
-        # NOTE(MotoKen): work around bug in netaddr 0.7.5 (see detail in
-        # https://github.com/drkjam/netaddr/issues/2)
+    except netaddr.AddrFormatError:
         return False
 
     # Prior validation partially verify /xx part
@@ -770,7 +767,7 @@ def tempdir(**kwargs):
         try:
             shutil.rmtree(tmpdir)
         except OSError as e:
-            LOG.error(_('Could not remove tmpdir: %s'), e)
+            LOG.error(_LE('Could not remove tmpdir: %s'), e)
 
 
 def walk_class_hierarchy(clazz, encountered=None):

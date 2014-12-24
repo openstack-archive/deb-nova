@@ -18,17 +18,18 @@ import webob
 
 from nova.api.openstack.compute.schemas.v3 import flavors_extraspecs
 from nova.api.openstack import extensions
+from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import exception
 from nova.i18n import _
 from nova import objects
 from nova import utils
 
-ALIAS = 'flavor-extra-specs'
+ALIAS = 'os-flavor-extra-specs'
 authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
 
 
-class FlavorExtraSpecsController(object):
+class FlavorExtraSpecsController(wsgi.Controller):
     """The flavor extra specs API controller for the OpenStack API."""
 
     def __init__(self, *args, **kwargs):

@@ -15,6 +15,7 @@
 import os.path
 import traceback
 
+from oslo.utils import strutils
 import six
 import webob
 from webob import exc
@@ -28,7 +29,6 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
 
 LOG = logging.getLogger(__name__)
 
@@ -61,7 +61,7 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'pause')
+                    'pause', id)
         except exception.InstanceNotFound:
             msg = _("Server not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -84,7 +84,7 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'unpause')
+                    'unpause', id)
         except exception.InstanceNotFound:
             msg = _("Server not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -107,7 +107,7 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'suspend')
+                    'suspend', id)
         except exception.InstanceNotFound:
             msg = _("Server not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -130,7 +130,7 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'resume')
+                    'resume', id)
         except exception.InstanceNotFound:
             msg = _("Server not found")
             raise exc.HTTPNotFound(explanation=msg)
@@ -155,7 +155,7 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'migrate')
+                    'migrate', id)
         except exception.InstanceNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.NoValidHost as e:
@@ -298,7 +298,7 @@ class AdminActionsController(wsgi.Controller):
                     backup_type, rotation, extra_properties=props)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'createBackup')
+                    'createBackup', id)
 
         resp = webob.Response(status_int=202)
 
@@ -348,7 +348,8 @@ class AdminActionsController(wsgi.Controller):
                 exception.InvalidSharedStorage,
                 exception.HypervisorUnavailable,
                 exception.InstanceNotRunning,
-                exception.MigrationPreCheckError) as ex:
+                exception.MigrationPreCheckError,
+                exception.LiveMigrationWithOldNovaNotSafe) as ex:
             raise exc.HTTPBadRequest(explanation=ex.format_message())
         except exception.InstanceNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
@@ -356,7 +357,7 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                    'os-migrateLive')
+                    'os-migrateLive', id)
         except Exception:
             if host is None:
                 msg = _("Live migration of instance %s to another host "

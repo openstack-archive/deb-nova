@@ -10,14 +10,17 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo.serialization import jsonutils
+
 from nova import db
 from nova.objects import base
 from nova.objects import fields
-from nova.openstack.common import jsonutils
 from nova import utils
 
 
-class InstancePCIRequest(base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class InstancePCIRequest(base.NovaObject,
+                         base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: Add request_id
     VERSION = '1.1'
@@ -48,7 +51,9 @@ class InstancePCIRequest(base.NovaObject):
             del primitive['request_id']
 
 
-class InstancePCIRequests(base.NovaObject):
+# TODO(berrange): Remove NovaObjectDictCompat
+class InstancePCIRequests(base.NovaObject,
+                          base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: InstancePCIRequest 1.1
     VERSION = '1.1'
@@ -56,6 +61,10 @@ class InstancePCIRequests(base.NovaObject):
     fields = {
         'instance_uuid': fields.UUIDField(),
         'requests': fields.ListOfObjectsField('InstancePCIRequest'),
+    }
+
+    obj_relationships = {
+        'requests': [('1.0', '1.0'), ('1.1', '1.1')],
     }
 
     def obj_make_compatible(self, primitive, target_version):
@@ -66,30 +75,29 @@ class InstancePCIRequests(base.NovaObject):
                     primitive['requests'][index]['nova_object.data'], '1.0')
                 primitive['requests'][index]['nova_object.version'] = '1.0'
 
+    @classmethod
+    def obj_from_db(cls, context, instance_uuid, db_requests):
+        self = cls(context=context, requests=[],
+                   instance_uuid=instance_uuid)
+        try:
+            requests = jsonutils.loads(db_requests['pci_requests'])
+        except TypeError:
+            requests = []
+        for request in requests:
+            request_obj = InstancePCIRequest(
+                count=request['count'], spec=request['spec'],
+                alias_name=request['alias_name'], is_new=request['is_new'],
+                request_id=request['request_id'])
+            request_obj.obj_reset_changes()
+            self.requests.append(request_obj)
+        self.obj_reset_changes()
+        return self
+
     @base.remotable_classmethod
     def get_by_instance_uuid(cls, context, instance_uuid):
-        obj_pci_requests = cls(instance_uuid=instance_uuid)
-        obj_pci_requests.requests = []
-        obj_pci_requests._context = context
-
         db_pci_requests = db.instance_extra_get_by_instance_uuid(
-                context, instance_uuid)
-        if db_pci_requests:
-            try:
-                requests = jsonutils.loads(db_pci_requests['pci_requests'])
-            except TypeError:
-                requests = []
-            for request in requests:
-                request_obj = InstancePCIRequest(
-                    count=request['count'], spec=request['spec'],
-                    alias_name=request['alias_name'], is_new=request['is_new'],
-                    request_id=request['request_id'])
-                request_obj.obj_reset_changes()
-                obj_pci_requests.requests.append(request_obj)
-
-            obj_pci_requests.obj_reset_changes()
-
-        return obj_pci_requests
+                context, instance_uuid, columns=['pci_requests'])
+        return cls.obj_from_db(context, instance_uuid, db_pci_requests)
 
     @classmethod
     def get_by_instance_uuid_and_newness(cls, context, instance_uuid, is_new):
@@ -130,13 +138,16 @@ class InstancePCIRequests(base.NovaObject):
         else:
             return cls.get_by_instance_uuid(context, instance['uuid'])
 
-    @base.remotable
-    def save(self, context):
+    def to_json(self):
         blob = [{'count': x.count,
                  'spec': x.spec,
                  'alias_name': x.alias_name,
                  'is_new': x.is_new,
                  'request_id': x.request_id} for x in self.requests]
-        requests = jsonutils.dumps(blob)
+        return jsonutils.dumps(blob)
+
+    @base.remotable
+    def save(self, context):
+        blob = self.to_json()
         db.instance_extra_update_by_uuid(context, self.instance_uuid,
-                                         {'pci_requests': requests})
+                                         {'pci_requests': blob})

@@ -18,6 +18,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+# NOTE: XenServer still only supports Python 2.4 in it's dom0 userspace
+# which means the Nova xenapi plugins must use only Python 2.4 features
+
 """Handle the uploading and downloading of images via Glance."""
 
 import httplib
@@ -25,9 +28,8 @@ import md5
 import socket
 import urllib2
 
-import utils
-
 import pluginlib_nova
+import utils
 
 
 pluginlib_nova.configure_logging('glance')
@@ -147,7 +149,9 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
             conn = httplib.HTTPSConnection(glance_host, glance_port)
         else:
             conn = httplib.HTTPConnection(glance_host, glance_port)
+        conn.connect()
     except Exception, error:
+        logging.exception('Failed to connect %(url)s' % locals())
         raise RetryableError(error)
 
     try:
@@ -155,38 +159,40 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
             # NOTE(sirp): httplib under python2.4 won't accept
             # a file-like object to request
             conn.putrequest('PUT', '/v1/images/%s' % image_id)
+
+            # NOTE(sirp): There is some confusion around OVF. Here's a summary
+            # of where we currently stand:
+            #   1. OVF as a container format is misnamed. We really should be
+            #      using OVA since that is the name for the container format;
+            #      OVF is the standard applied to the manifest file contained
+            #      within.
+            #   2. We're currently uploading a vanilla tarball. In order to be
+            #      OVF/OVA compliant, we'll need to embed a minimal OVF
+            #      manifest as the first file.
+
+            # NOTE(dprince): In order to preserve existing Glance properties
+            # we set X-Glance-Registry-Purge-Props on this request.
+            headers = {
+                'content-type': 'application/octet-stream',
+                'transfer-encoding': 'chunked',
+                'x-image-meta-is-public': 'False',
+                'x-image-meta-status': 'queued',
+                'x-image-meta-disk-format': 'vhd',
+                'x-image-meta-container-format': 'ovf',
+                'x-glance-registry-purge-props': 'False'}
+
+            headers.update(**extra_headers)
+
+            for key, value in properties.iteritems():
+                header_key = "x-image-meta-property-%s" % key.replace('_', '-')
+                headers[header_key] = str(value)
+
+            for header, value in headers.iteritems():
+                conn.putheader(header, value)
+            conn.endheaders()
         except Exception, error:
+            logging.exception('Failed to upload %(url)s' % locals())
             raise RetryableError(error)
-
-        # NOTE(sirp): There is some confusion around OVF. Here's a summary of
-        # where we currently stand:
-        #   1. OVF as a container format is misnamed. We really should be using
-        #      OVA since that is the name for the container format; OVF is the
-        #      standard applied to the manifest file contained within.
-        #   2. We're currently uploading a vanilla tarball. In order to be
-        #      OVF/OVA compliant, we'll need to embed a minimal OVF manifest
-        #      as the first file.
-
-        # NOTE(dprince): In order to preserve existing Glance properties
-        # we set X-Glance-Registry-Purge-Props on this request.
-        headers = {
-            'content-type': 'application/octet-stream',
-            'transfer-encoding': 'chunked',
-            'x-image-meta-is-public': 'False',
-            'x-image-meta-status': 'queued',
-            'x-image-meta-disk-format': 'vhd',
-            'x-image-meta-container-format': 'ovf',
-            'x-glance-registry-purge-props': 'False'}
-
-        headers.update(**extra_headers)
-
-        for key, value in properties.iteritems():
-            header_key = "x-image-meta-property-%s" % key.replace('_', '-')
-            headers[header_key] = str(value)
-
-        for header, value in headers.iteritems():
-            conn.putheader(header, value)
-        conn.endheaders()
 
         callback_data = {'bytes_written': 0}
 
@@ -196,6 +202,7 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
             try:
                 conn.send("%x\r\n%s\r\n" % (chunk_len, chunk))
             except Exception, error:
+                logging.exception('Failed to upload when sending chunks')
                 raise RetryableError(error)
 
         compression_level = properties.get('xenapi_image_compression_level')
@@ -205,7 +212,7 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
                     None, staging_path, callback=send_chunked_transfer_encoded,
                     compression_level=compression_level)
         finally:
-            send_chunked_transfer_encoded('') # Chunked-Transfer terminator
+            send_chunked_transfer_encoded('')  # Chunked-Transfer terminator
 
         bytes_written = callback_data['bytes_written']
         logging.info("Wrote %d bytes to %s" % (bytes_written, url))
@@ -218,22 +225,54 @@ def _upload_tarball(staging_path, image_id, glance_host, glance_port,
                       "Response Status: %i, Response body: %s"
                       % (url, resp.status, resp.read()))
 
-        if resp.status in (httplib.UNAUTHORIZED,
-                           httplib.REQUEST_ENTITY_TOO_LARGE,
-                           httplib.PRECONDITION_FAILED,
-                           httplib.CONFLICT,
-                           httplib.FORBIDDEN,
-                           httplib.INTERNAL_SERVER_ERROR):
-            # No point in retrying for these conditions
-            raise PluginError("Got Error response [%i] while uploading "
-                              "image [%s] "
-                              "to glance host [%s:%s]"
+        # Note(Jesse): This branch sorts errors into those that are permanent,
+        # those that are ephemeral, and those that are unexpected.
+        if resp.status in (httplib.BAD_REQUEST,                      # 400
+                           httplib.UNAUTHORIZED,                     # 401
+                           httplib.PAYMENT_REQUIRED,                 # 402
+                           httplib.FORBIDDEN,                        # 403
+                           httplib.NOT_FOUND,                        # 404
+                           httplib.METHOD_NOT_ALLOWED,               # 405
+                           httplib.NOT_ACCEPTABLE,                   # 406
+                           httplib.PROXY_AUTHENTICATION_REQUIRED,    # 407
+                           httplib.CONFLICT,                         # 409
+                           httplib.GONE,                             # 410
+                           httplib.LENGTH_REQUIRED,                  # 411
+                           httplib.PRECONDITION_FAILED,              # 412
+                           httplib.REQUEST_ENTITY_TOO_LARGE,         # 413
+                           httplib.REQUEST_URI_TOO_LONG,             # 414
+                           httplib.UNSUPPORTED_MEDIA_TYPE,           # 415
+                           httplib.REQUESTED_RANGE_NOT_SATISFIABLE,  # 416
+                           httplib.EXPECTATION_FAILED,               # 417
+                           httplib.UNPROCESSABLE_ENTITY,             # 422
+                           httplib.LOCKED,                           # 423
+                           httplib.FAILED_DEPENDENCY,                # 424
+                           httplib.UPGRADE_REQUIRED,                 # 426
+                           httplib.NOT_IMPLEMENTED,                  # 501
+                           httplib.HTTP_VERSION_NOT_SUPPORTED,       # 505
+                           httplib.NOT_EXTENDED,                     # 510
+                           ):
+            raise PluginError("Got Permanent Error response [%i] while "
+                              "uploading image [%s] to glance host [%s:%s]"
                               % (resp.status, image_id,
                                  glance_host, glance_port))
+        elif resp.status in (httplib.REQUEST_TIMEOUT,                # 408
+                             httplib.INTERNAL_SERVER_ERROR,          # 500
+                             httplib.BAD_GATEWAY,                    # 502
+                             httplib.SERVICE_UNAVAILABLE,            # 503
+                             httplib.GATEWAY_TIMEOUT,                # 504
+                             httplib.INSUFFICIENT_STORAGE,           # 507
+                             ):
+            raise RetryableError("Got Ephemeral Error response [%i] while "
+                                 "uploading image [%s] to glance host [%s:%s]"
+                                 % (resp.status, image_id,
+                                    glance_host, glance_port))
         else:
-            raise RetryableError("Unexpected response [%i] while uploading "
-                                 "image [%s] "
-                                 "to glance host [%s:%s]"
+            # Note(Jesse): Assume unexpected errors are retryable. If you are
+            # seeing this error message, the error should probably be added
+            # to either the ephemeral or permanent error list.
+            raise RetryableError("Got Unexpected Error response [%i] while "
+                                 "uploading image [%s] to glance host [%s:%s]"
                                  % (resp.status, image_id,
                                     glance_host, glance_port))
     finally:

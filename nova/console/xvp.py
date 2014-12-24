@@ -20,13 +20,13 @@ import signal
 
 import jinja2
 from oslo.config import cfg
+from oslo.utils import excutils
+from oslo_concurrency import processutils
 
 from nova import context
 from nova import db
-from nova.i18n import _
-from nova.openstack.common import excutils
+from nova.i18n import _, _LE
 from nova.openstack.common import log as logging
-from nova.openstack.common import processutils
 from nova import paths
 from nova import utils
 
@@ -121,7 +121,7 @@ class XVPConsoleProxy(object):
                 cfile.write(config)
         except IOError:
             with excutils.save_and_reraise_exception():
-                LOG.exception(_("Failed to write configuration file"))
+                LOG.exception(_LE("Failed to write configuration file"))
 
     def _xvp_stop(self):
         LOG.debug('Stopping xvp')
@@ -144,7 +144,7 @@ class XVPConsoleProxy(object):
                           '-c', CONF.console_xvp_conf,
                           '-l', CONF.console_xvp_log)
         except processutils.ProcessExecutionError as err:
-            LOG.error(_('Error starting xvp: %s') % err)
+            LOG.error(_LE('Error starting xvp: %s'), err)
 
     def _xvp_restart(self):
         LOG.debug('Restarting xvp')

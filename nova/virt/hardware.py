@@ -16,13 +16,14 @@ import collections
 import itertools
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import units
 import six
 
 from nova import context
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
 
 virt_cpu_opts = [
@@ -35,6 +36,10 @@ CONF = cfg.CONF
 CONF.register_opts(virt_cpu_opts)
 
 LOG = logging.getLogger(__name__)
+
+MEMPAGES_SMALL = -1
+MEMPAGES_LARGE = -2
+MEMPAGES_ANY = -3
 
 
 def get_vcpu_pin_set():
@@ -190,347 +195,357 @@ def get_number_of_serial_ports(flavor, image_meta):
     return flavor_num_ports or image_num_ports or 1
 
 
-class VirtCPUTopology(object):
+class InstanceInfo(object):
 
-    def __init__(self, sockets, cores, threads):
-        """Create a new CPU topology object
+    def __init__(self, state=None, max_mem_kb=0, mem_kb=0, num_cpu=0,
+                 cpu_time_ns=0, id=None):
+        """Create a new Instance Info object
 
-        :param sockets: number of sockets, at least 1
-        :param cores: number of cores, at least 1
-        :param threads: number of threads, at least 1
-
-        Create a new CPU topology object representing the
-        number of sockets, cores and threads to use for
-        the virtual instance.
+        :param state: the running state, one of the power_state codes
+        :param max_mem_kb: (int) the maximum memory in KBytes allowed
+        :param mem_kb: (int) the memory in KBytes used by the instance
+        :param num_cpu: (int) the number of virtual CPUs for the instance
+        :param cpu_time_ns: (int) the CPU time used in nanoseconds
+        :param id: a unique ID for the instance
         """
+        self.state = state
+        self.max_mem_kb = max_mem_kb
+        self.mem_kb = mem_kb
+        self.num_cpu = num_cpu
+        self.cpu_time_ns = cpu_time_ns
+        self.id = id
 
-        self.sockets = sockets
-        self.cores = cores
-        self.threads = threads
+    def __eq__(self, other):
+        return (self.__class__ == other.__class__ and
+                self.__dict__ == other.__dict__)
 
-    def score(self, wanttopology):
-        """Calculate score for the topology against a desired configuration
 
-        :param wanttopology: VirtCPUTopology instance for preferred topology
+def _score_cpu_topology(topology, wanttopology):
+    """Calculate score for the topology against a desired configuration
 
-        Calculate a score indicating how well this topology
-        matches against a preferred topology. A score of 3
-        indicates an exact match for sockets, cores and threads.
-        A score of 2 indicates a match of sockets & cores or
-        sockets & threads or cores and threads. A score of 1
-        indicates a match of sockets or cores or threads. A
-        score of 0 indicates no match
+    :param wanttopology: nova.objects.VirtCPUTopology instance for
+                         preferred topology
 
-        :returns: score in range 0 (worst) to 3 (best)
-        """
+    Calculate a score indicating how well this topology
+    matches against a preferred topology. A score of 3
+    indicates an exact match for sockets, cores and threads.
+    A score of 2 indicates a match of sockets & cores or
+    sockets & threads or cores and threads. A score of 1
+    indicates a match of sockets or cores or threads. A
+    score of 0 indicates no match
 
-        score = 0
-        if (wanttopology.sockets != -1 and
-            self.sockets == wanttopology.sockets):
-            score = score + 1
-        if (wanttopology.cores != -1 and
-            self.cores == wanttopology.cores):
-            score = score + 1
-        if (wanttopology.threads != -1 and
-            self.threads == wanttopology.threads):
-            score = score + 1
-        return score
+    :returns: score in range 0 (worst) to 3 (best)
+    """
 
-    @staticmethod
-    def get_topology_constraints(flavor, image_meta):
-        """Get the topology constraints declared in flavor or image
+    score = 0
+    if (wanttopology.sockets != -1 and
+        topology.sockets == wanttopology.sockets):
+        score = score + 1
+    if (wanttopology.cores != -1 and
+        topology.cores == wanttopology.cores):
+        score = score + 1
+    if (wanttopology.threads != -1 and
+        topology.threads == wanttopology.threads):
+        score = score + 1
+    return score
 
-        :param flavor: Flavor object to read extra specs from
-        :param image_meta: Image object to read image metadata from
 
-        Gets the topology constraints from the configuration defined
-        in the flavor extra specs or the image metadata. In the flavor
-        this will look for
+def _get_cpu_topology_constraints(flavor, image_meta):
+    """Get the topology constraints declared in flavor or image
 
-         hw:cpu_sockets - preferred socket count
-         hw:cpu_cores - preferred core count
-         hw:cpu_threads - preferred thread count
-         hw:cpu_maxsockets - maximum socket count
-         hw:cpu_maxcores - maximum core count
-         hw:cpu_maxthreads - maximum thread count
+    :param flavor: Flavor object to read extra specs from
+    :param image_meta: Image object to read image metadata from
 
-        In the image metadata this will look at
+    Gets the topology constraints from the configuration defined
+    in the flavor extra specs or the image metadata. In the flavor
+    this will look for
 
-         hw_cpu_sockets - preferred socket count
-         hw_cpu_cores - preferred core count
-         hw_cpu_threads - preferred thread count
-         hw_cpu_maxsockets - maximum socket count
-         hw_cpu_maxcores - maximum core count
-         hw_cpu_maxthreads - maximum thread count
+     hw:cpu_sockets - preferred socket count
+     hw:cpu_cores - preferred core count
+     hw:cpu_threads - preferred thread count
+     hw:cpu_maxsockets - maximum socket count
+     hw:cpu_maxcores - maximum core count
+     hw:cpu_maxthreads - maximum thread count
 
-        The image metadata must be strictly lower than any values
-        set in the flavor. All values are, however, optional.
+    In the image metadata this will look at
 
-        This will return a pair of VirtCPUTopology instances,
-        the first giving the preferred socket/core/thread counts,
-        and the second giving the upper limits on socket/core/
-        thread counts.
+     hw_cpu_sockets - preferred socket count
+     hw_cpu_cores - preferred core count
+     hw_cpu_threads - preferred thread count
+     hw_cpu_maxsockets - maximum socket count
+     hw_cpu_maxcores - maximum core count
+     hw_cpu_maxthreads - maximum thread count
 
-        exception.ImageVCPULimitsRangeExceeded will be raised
-        if the maximum counts set against the image exceed
-        the maximum counts set against the flavor
+    The image metadata must be strictly lower than any values
+    set in the flavor. All values are, however, optional.
 
-        exception.ImageVCPUTopologyRangeExceeded will be raised
-        if the preferred counts set against the image exceed
-        the maximum counts set against the image or flavor
+    This will return a pair of nova.objects.VirtCPUTopology instances,
+    the first giving the preferred socket/core/thread counts,
+    and the second giving the upper limits on socket/core/
+    thread counts.
 
-        :returns: (preferred topology, maximum topology)
-        """
+    exception.ImageVCPULimitsRangeExceeded will be raised
+    if the maximum counts set against the image exceed
+    the maximum counts set against the flavor
 
-        # Obtain the absolute limits from the flavor
-        flvmaxsockets = int(flavor.extra_specs.get(
-            "hw:cpu_max_sockets", 65536))
-        flvmaxcores = int(flavor.extra_specs.get(
-            "hw:cpu_max_cores", 65536))
-        flvmaxthreads = int(flavor.extra_specs.get(
-            "hw:cpu_max_threads", 65536))
+    exception.ImageVCPUTopologyRangeExceeded will be raised
+    if the preferred counts set against the image exceed
+    the maximum counts set against the image or flavor
 
-        LOG.debug("Flavor limits %(sockets)d:%(cores)d:%(threads)d",
-                  {"sockets": flvmaxsockets,
-                   "cores": flvmaxcores,
-                   "threads": flvmaxthreads})
+    :returns: (preferred topology, maximum topology)
+    """
 
-        # Get any customized limits from the image
-        maxsockets = int(image_meta.get("properties", {})
-                         .get("hw_cpu_max_sockets", flvmaxsockets))
-        maxcores = int(image_meta.get("properties", {})
-                       .get("hw_cpu_max_cores", flvmaxcores))
-        maxthreads = int(image_meta.get("properties", {})
-                         .get("hw_cpu_max_threads", flvmaxthreads))
+    # Obtain the absolute limits from the flavor
+    flvmaxsockets = int(flavor.extra_specs.get(
+        "hw:cpu_max_sockets", 65536))
+    flvmaxcores = int(flavor.extra_specs.get(
+        "hw:cpu_max_cores", 65536))
+    flvmaxthreads = int(flavor.extra_specs.get(
+        "hw:cpu_max_threads", 65536))
 
-        LOG.debug("Image limits %(sockets)d:%(cores)d:%(threads)d",
-                  {"sockets": maxsockets,
-                   "cores": maxcores,
-                   "threads": maxthreads})
+    LOG.debug("Flavor limits %(sockets)d:%(cores)d:%(threads)d",
+              {"sockets": flvmaxsockets,
+               "cores": flvmaxcores,
+               "threads": flvmaxthreads})
 
-        # Image limits are not permitted to exceed the flavor
-        # limits. ie they can only lower what the flavor defines
-        if ((maxsockets > flvmaxsockets) or
-            (maxcores > flvmaxcores) or
-            (maxthreads > flvmaxthreads)):
-            raise exception.ImageVCPULimitsRangeExceeded(
-                sockets=maxsockets,
-                cores=maxcores,
-                threads=maxthreads,
-                maxsockets=flvmaxsockets,
-                maxcores=flvmaxcores,
-                maxthreads=flvmaxthreads)
+    # Get any customized limits from the image
+    maxsockets = int(image_meta.get("properties", {})
+                     .get("hw_cpu_max_sockets", flvmaxsockets))
+    maxcores = int(image_meta.get("properties", {})
+                   .get("hw_cpu_max_cores", flvmaxcores))
+    maxthreads = int(image_meta.get("properties", {})
+                     .get("hw_cpu_max_threads", flvmaxthreads))
 
-        # Get any default preferred topology from the flavor
-        flvsockets = int(flavor.extra_specs.get("hw:cpu_sockets", -1))
-        flvcores = int(flavor.extra_specs.get("hw:cpu_cores", -1))
-        flvthreads = int(flavor.extra_specs.get("hw:cpu_threads", -1))
+    LOG.debug("Image limits %(sockets)d:%(cores)d:%(threads)d",
+              {"sockets": maxsockets,
+               "cores": maxcores,
+               "threads": maxthreads})
 
-        LOG.debug("Flavor pref %(sockets)d:%(cores)d:%(threads)d",
-                  {"sockets": flvsockets,
-                   "cores": flvcores,
-                   "threads": flvthreads})
+    # Image limits are not permitted to exceed the flavor
+    # limits. ie they can only lower what the flavor defines
+    if ((maxsockets > flvmaxsockets) or
+        (maxcores > flvmaxcores) or
+        (maxthreads > flvmaxthreads)):
+        raise exception.ImageVCPULimitsRangeExceeded(
+            sockets=maxsockets,
+            cores=maxcores,
+            threads=maxthreads,
+            maxsockets=flvmaxsockets,
+            maxcores=flvmaxcores,
+            maxthreads=flvmaxthreads)
 
-        # If the image limits have reduced the flavor limits
-        # we might need to discard the preferred topology
-        # from the flavor
-        if ((flvsockets > maxsockets) or
-            (flvcores > maxcores) or
-            (flvthreads > maxthreads)):
-            flvsockets = flvcores = flvthreads = -1
+    # Get any default preferred topology from the flavor
+    flvsockets = int(flavor.extra_specs.get("hw:cpu_sockets", -1))
+    flvcores = int(flavor.extra_specs.get("hw:cpu_cores", -1))
+    flvthreads = int(flavor.extra_specs.get("hw:cpu_threads", -1))
 
-        # Finally see if the image has provided a preferred
-        # topology to use
-        sockets = int(image_meta.get("properties", {})
-                      .get("hw_cpu_sockets", -1))
-        cores = int(image_meta.get("properties", {})
-                    .get("hw_cpu_cores", -1))
-        threads = int(image_meta.get("properties", {})
-                      .get("hw_cpu_threads", -1))
+    LOG.debug("Flavor pref %(sockets)d:%(cores)d:%(threads)d",
+              {"sockets": flvsockets,
+               "cores": flvcores,
+               "threads": flvthreads})
 
-        LOG.debug("Image pref %(sockets)d:%(cores)d:%(threads)d",
-                  {"sockets": sockets,
-                   "cores": cores,
-                   "threads": threads})
+    # If the image limits have reduced the flavor limits
+    # we might need to discard the preferred topology
+    # from the flavor
+    if ((flvsockets > maxsockets) or
+        (flvcores > maxcores) or
+        (flvthreads > maxthreads)):
+        flvsockets = flvcores = flvthreads = -1
 
-        # Image topology is not permitted to exceed image/flavor
-        # limits
-        if ((sockets > maxsockets) or
-            (cores > maxcores) or
-            (threads > maxthreads)):
-            raise exception.ImageVCPUTopologyRangeExceeded(
-                sockets=sockets,
-                cores=cores,
-                threads=threads,
-                maxsockets=maxsockets,
-                maxcores=maxcores,
-                maxthreads=maxthreads)
+    # Finally see if the image has provided a preferred
+    # topology to use
+    sockets = int(image_meta.get("properties", {})
+                  .get("hw_cpu_sockets", -1))
+    cores = int(image_meta.get("properties", {})
+                .get("hw_cpu_cores", -1))
+    threads = int(image_meta.get("properties", {})
+                  .get("hw_cpu_threads", -1))
 
-        # If no preferred topology was set against the image
-        # then use the preferred topology from the flavor
-        # We use 'and' not 'or', since if any value is set
-        # against the image this invalidates the entire set
-        # of values from the flavor
-        if sockets == -1 and cores == -1 and threads == -1:
-            sockets = flvsockets
-            cores = flvcores
-            threads = flvthreads
+    LOG.debug("Image pref %(sockets)d:%(cores)d:%(threads)d",
+              {"sockets": sockets,
+               "cores": cores,
+               "threads": threads})
 
-        LOG.debug("Chosen %(sockets)d:%(cores)d:%(threads)d limits "
-                  "%(maxsockets)d:%(maxcores)d:%(maxthreads)d",
-                  {"sockets": sockets, "cores": cores,
-                   "threads": threads, "maxsockets": maxsockets,
-                   "maxcores": maxcores, "maxthreads": maxthreads})
+    # Image topology is not permitted to exceed image/flavor
+    # limits
+    if ((sockets > maxsockets) or
+        (cores > maxcores) or
+        (threads > maxthreads)):
+        raise exception.ImageVCPUTopologyRangeExceeded(
+            sockets=sockets,
+            cores=cores,
+            threads=threads,
+            maxsockets=maxsockets,
+            maxcores=maxcores,
+            maxthreads=maxthreads)
 
-        return (VirtCPUTopology(sockets, cores, threads),
-                VirtCPUTopology(maxsockets, maxcores, maxthreads))
+    # If no preferred topology was set against the image
+    # then use the preferred topology from the flavor
+    # We use 'and' not 'or', since if any value is set
+    # against the image this invalidates the entire set
+    # of values from the flavor
+    if sockets == -1 and cores == -1 and threads == -1:
+        sockets = flvsockets
+        cores = flvcores
+        threads = flvthreads
 
-    @staticmethod
-    def get_possible_topologies(vcpus, maxtopology, allow_threads):
-        """Get a list of possible topologies for a vCPU count
-        :param vcpus: total number of CPUs for guest instance
-        :param maxtopology: VirtCPUTopology for upper limits
-        :param allow_threads: if the hypervisor supports CPU threads
+    LOG.debug("Chosen %(sockets)d:%(cores)d:%(threads)d limits "
+              "%(maxsockets)d:%(maxcores)d:%(maxthreads)d",
+              {"sockets": sockets, "cores": cores,
+               "threads": threads, "maxsockets": maxsockets,
+               "maxcores": maxcores, "maxthreads": maxthreads})
 
-        Given a total desired vCPU count and constraints on the
-        maximum number of sockets, cores and threads, return a
-        list of VirtCPUTopology instances that represent every
-        possible topology that satisfies the constraints.
+    return (objects.VirtCPUTopology(sockets=sockets, cores=cores,
+                                    threads=threads),
+            objects.VirtCPUTopology(sockets=maxsockets, cores=maxcores,
+                                    threads=maxthreads))
 
-        exception.ImageVCPULimitsRangeImpossible is raised if
-        it is impossible to achieve the total vcpu count given
-        the maximum limits on sockets, cores & threads.
 
-        :returns: list of VirtCPUTopology instances
-        """
+def _get_possible_cpu_topologies(vcpus, maxtopology, allow_threads):
+    """Get a list of possible topologies for a vCPU count
+    :param vcpus: total number of CPUs for guest instance
+    :param maxtopology: nova.objects.VirtCPUTopology for upper limits
+    :param allow_threads: if the hypervisor supports CPU threads
 
-        # Clamp limits to number of vcpus to prevent
-        # iterating over insanely large list
-        maxsockets = min(vcpus, maxtopology.sockets)
-        maxcores = min(vcpus, maxtopology.cores)
-        maxthreads = min(vcpus, maxtopology.threads)
+    Given a total desired vCPU count and constraints on the
+    maximum number of sockets, cores and threads, return a
+    list of nova.objects.VirtCPUTopology instances that represent every
+    possible topology that satisfies the constraints.
 
-        if not allow_threads:
-            maxthreads = 1
+    exception.ImageVCPULimitsRangeImpossible is raised if
+    it is impossible to achieve the total vcpu count given
+    the maximum limits on sockets, cores & threads.
 
-        LOG.debug("Build topologies for %(vcpus)d vcpu(s) "
-                  "%(maxsockets)d:%(maxcores)d:%(maxthreads)d",
-                  {"vcpus": vcpus, "maxsockets": maxsockets,
-                   "maxcores": maxcores, "maxthreads": maxthreads})
+    :returns: list of nova.objects.VirtCPUTopology instances
+    """
 
-        # Figure out all possible topologies that match
-        # the required vcpus count and satisfy the declared
-        # limits. If the total vCPU count were very high
-        # it might be more efficient to factorize the vcpu
-        # count and then only iterate over its factors, but
-        # that's overkill right now
-        possible = []
-        for s in range(1, maxsockets + 1):
-            for c in range(1, maxcores + 1):
-                for t in range(1, maxthreads + 1):
-                    if t * c * s == vcpus:
-                        possible.append(VirtCPUTopology(s, c, t))
+    # Clamp limits to number of vcpus to prevent
+    # iterating over insanely large list
+    maxsockets = min(vcpus, maxtopology.sockets)
+    maxcores = min(vcpus, maxtopology.cores)
+    maxthreads = min(vcpus, maxtopology.threads)
 
-        # We want to
-        #  - Minimize threads (ie larger sockets * cores is best)
-        #  - Prefer sockets over cores
-        possible = sorted(possible, reverse=True,
-                          key=lambda x: (x.sockets * x.cores,
-                                         x.sockets,
-                                         x.threads))
+    if not allow_threads:
+        maxthreads = 1
 
-        LOG.debug("Got %d possible topologies", len(possible))
-        if len(possible) == 0:
-            raise exception.ImageVCPULimitsRangeImpossible(vcpus=vcpus,
-                                                           sockets=maxsockets,
-                                                           cores=maxcores,
-                                                           threads=maxthreads)
+    LOG.debug("Build topologies for %(vcpus)d vcpu(s) "
+              "%(maxsockets)d:%(maxcores)d:%(maxthreads)d",
+              {"vcpus": vcpus, "maxsockets": maxsockets,
+               "maxcores": maxcores, "maxthreads": maxthreads})
 
-        return possible
+    # Figure out all possible topologies that match
+    # the required vcpus count and satisfy the declared
+    # limits. If the total vCPU count were very high
+    # it might be more efficient to factorize the vcpu
+    # count and then only iterate over its factors, but
+    # that's overkill right now
+    possible = []
+    for s in range(1, maxsockets + 1):
+        for c in range(1, maxcores + 1):
+            for t in range(1, maxthreads + 1):
+                if t * c * s == vcpus:
+                    o = objects.VirtCPUTopology(sockets=s, cores=c,
+                                                threads=t)
 
-    @staticmethod
-    def sort_possible_topologies(possible, wanttopology):
-        """Sort the topologies in order of preference
-        :param possible: list of VirtCPUTopology instances
-        :param wanttopology: VirtCPUTopology for preferred topology
+                    possible.append(o)
 
-        This takes the list of possible topologies and resorts
-        it such that those configurations which most closely
-        match the preferred topology are first.
+    # We want to
+    #  - Minimize threads (ie larger sockets * cores is best)
+    #  - Prefer sockets over cores
+    possible = sorted(possible, reverse=True,
+                      key=lambda x: (x.sockets * x.cores,
+                                     x.sockets,
+                                     x.threads))
 
-        :returns: sorted list of VirtCPUTopology instances
-        """
+    LOG.debug("Got %d possible topologies", len(possible))
+    if len(possible) == 0:
+        raise exception.ImageVCPULimitsRangeImpossible(vcpus=vcpus,
+                                                       sockets=maxsockets,
+                                                       cores=maxcores,
+                                                       threads=maxthreads)
 
-        # Look at possible topologies and score them according
-        # to how well they match the preferred topologies
-        # We don't use python's sort(), since we want to
-        # preserve the sorting done when populating the
-        # 'possible' list originally
-        scores = collections.defaultdict(list)
-        for topology in possible:
-            score = topology.score(wanttopology)
-            scores[score].append(topology)
+    return possible
 
-        # Build list of all possible topologies sorted
-        # by the match score, best match first
-        desired = []
-        desired.extend(scores[3])
-        desired.extend(scores[2])
-        desired.extend(scores[1])
-        desired.extend(scores[0])
 
-        return desired
+def _sort_possible_cpu_topologies(possible, wanttopology):
+    """Sort the topologies in order of preference
+    :param possible: list of nova.objects.VirtCPUTopology instances
+    :param wanttopology: nova.objects.VirtCPUTopology for preferred
+                         topology
 
-    @staticmethod
-    def get_desirable_configs(flavor, image_meta, allow_threads=True):
-        """Get desired CPU topologies according to settings
+    This takes the list of possible topologies and resorts
+    it such that those configurations which most closely
+    match the preferred topology are first.
 
-        :param flavor: Flavor object to query extra specs from
-        :param image_meta: ImageMeta object to query properties from
-        :param allow_threads: if the hypervisor supports CPU threads
+    :returns: sorted list of nova.objects.VirtCPUTopology instances
+    """
 
-        Look at the properties set in the flavor extra specs and
-        the image metadata and build up a list of all possible
-        valid CPU topologies that can be used in the guest. Then
-        return this list sorted in order of preference.
+    # Look at possible topologies and score them according
+    # to how well they match the preferred topologies
+    # We don't use python's sort(), since we want to
+    # preserve the sorting done when populating the
+    # 'possible' list originally
+    scores = collections.defaultdict(list)
+    for topology in possible:
+        score = _score_cpu_topology(topology, wanttopology)
+        scores[score].append(topology)
 
-        :returns: sorted list of VirtCPUTopology instances
-        """
+    # Build list of all possible topologies sorted
+    # by the match score, best match first
+    desired = []
+    desired.extend(scores[3])
+    desired.extend(scores[2])
+    desired.extend(scores[1])
+    desired.extend(scores[0])
 
-        LOG.debug("Getting desirable topologies for flavor %(flavor)s "
-                  "and image_meta %(image_meta)s",
-                  {"flavor": flavor, "image_meta": image_meta})
+    return desired
 
-        preferred, maximum = (
-            VirtCPUTopology.get_topology_constraints(flavor,
-                                                     image_meta))
 
-        possible = VirtCPUTopology.get_possible_topologies(
-            flavor.vcpus, maximum, allow_threads)
-        desired = VirtCPUTopology.sort_possible_topologies(
-            possible, preferred)
+def _get_desirable_cpu_topologies(flavor, image_meta, allow_threads=True):
+    """Get desired CPU topologies according to settings
 
-        return desired
+    :param flavor: Flavor object to query extra specs from
+    :param image_meta: ImageMeta object to query properties from
+    :param allow_threads: if the hypervisor supports CPU threads
 
-    @staticmethod
-    def get_best_config(flavor, image_meta, allow_threads=True):
-        """Get bst CPU topology according to settings
+    Look at the properties set in the flavor extra specs and
+    the image metadata and build up a list of all possible
+    valid CPU topologies that can be used in the guest. Then
+    return this list sorted in order of preference.
 
-        :param flavor: Flavor object to query extra specs from
-        :param image_meta: ImageMeta object to query properties from
-        :param allow_threads: if the hypervisor supports CPU threads
+    :returns: sorted list of nova.objects.VirtCPUTopology instances
+    """
 
-        Look at the properties set in the flavor extra specs and
-        the image metadata and build up a list of all possible
-        valid CPU topologies that can be used in the guest. Then
-        return the best topology to use
+    LOG.debug("Getting desirable topologies for flavor %(flavor)s "
+              "and image_meta %(image_meta)s",
+              {"flavor": flavor, "image_meta": image_meta})
 
-        :returns: a VirtCPUTopology instance for best topology
-        """
+    preferred, maximum = _get_cpu_topology_constraints(flavor, image_meta)
 
-        return VirtCPUTopology.get_desirable_configs(flavor,
-                                                     image_meta,
-                                                     allow_threads)[0]
+    possible = _get_possible_cpu_topologies(flavor.vcpus,
+                                            maximum,
+                                            allow_threads)
+    desired = _sort_possible_cpu_topologies(possible, preferred)
+
+    return desired
+
+
+def get_best_cpu_topology(flavor, image_meta, allow_threads=True):
+    """Get best CPU topology according to settings
+
+    :param flavor: Flavor object to query extra specs from
+    :param image_meta: ImageMeta object to query properties from
+    :param allow_threads: if the hypervisor supports CPU threads
+
+    Look at the properties set in the flavor extra specs and
+    the image metadata and build up a list of all possible
+    valid CPU topologies that can be used in the guest. Then
+    return the best topology to use
+
+    :returns: a nova.objects.VirtCPUTopology instance for best topology
+    """
+
+    return _get_desirable_cpu_topologies(flavor, image_meta, allow_threads)[0]
 
 
 class VirtNUMATopologyCell(object):
@@ -545,7 +560,7 @@ class VirtNUMATopologyCell(object):
 
         :param id: integer identifier of cell
         :param cpuset: set containing list of CPU indexes
-        :param memory: RAM measured in KiB
+        :param memory: RAM measured in MiB
 
         Creates a new NUMA cell object to record the hardware
         resources.
@@ -578,9 +593,9 @@ class VirtNUMATopologyCellLimit(VirtNUMATopologyCell):
 
         :param id: integer identifier of cell
         :param cpuset: set containing list of CPU indexes
-        :param memory: RAM measured in KiB
+        :param memory: RAM measured in MiB
         :param cpu_limit: maximum number of  CPUs allocated
-        :param memory_usage: maxumum RAM allocated in KiB
+        :param memory_usage: maxumum RAM allocated in MiB
 
         Creates a new NUMA cell object to represent the max hardware
         resources and utilization. The number of CPUs specified
@@ -615,83 +630,69 @@ class VirtNUMATopologyCellLimit(VirtNUMATopologyCell):
         return cls(cell_id, cpuset, memory, cpu_limit, memory_limit)
 
 
-class VirtNUMATopologyCellUsage(VirtNUMATopologyCell):
-    """Class for reporting NUMA resources and usage in a cell
+def _numa_cell_supports_pagesize_request(host_cell, inst_cell):
+    """Determines whether the cell can accept the request.
 
-    The VirtNUMATopologyCellUsage class specializes
-    VirtNUMATopologyCell to include information about the
-    utilization of hardware resources in a NUMA cell.
+    :param host_cell: host cell to fit the instance cell onto
+    :param inst_cell: instance cell we want to fit
+
+    :returns: The page size able to be handled by host_cell
     """
+    avail_pagesize = [page.size_kb for page in host_cell.mempages]
+    avail_pagesize.sort(reverse=True)
 
-    def __init__(self, id, cpuset, memory, cpu_usage=0, memory_usage=0):
-        """Create a new NUMA Cell with usage
+    def verify_pagesizes(host_cell, inst_cell, avail_pagesize):
+        inst_cell_mem = inst_cell.memory * units.Ki
+        for pagesize in avail_pagesize:
+            if host_cell.can_fit_hugepages(pagesize, inst_cell_mem):
+                return pagesize
 
-        :param id: integer identifier of cell
-        :param cpuset: set containing list of CPU indexes
-        :param memory: RAM measured in KiB
-        :param cpu_usage: number of  CPUs allocated
-        :param memory_usage: RAM allocated in KiB
+    if inst_cell.pagesize == MEMPAGES_SMALL:
+        return verify_pagesizes(host_cell, inst_cell, avail_pagesize[-1:])
+    elif inst_cell.pagesize == MEMPAGES_LARGE:
+        return verify_pagesizes(host_cell, inst_cell, avail_pagesize[:-1])
+    elif inst_cell.pagesize == MEMPAGES_ANY:
+        return verify_pagesizes(host_cell, inst_cell, avail_pagesize)
+    else:
+        return verify_pagesizes(host_cell, inst_cell, [inst_cell.pagesize])
 
-        Creates a new NUMA cell object to record the hardware
-        resources and utilization. The number of CPUs specified
-        by the @cpu_usage parameter may be larger than the number
-        of bits set in @cpuset if CPU overcommit is used. Likewise
-        the amount of RAM specified by the @memory_usage parameter
-        may be larger than the available RAM in @memory if RAM
-        overcommit is used.
 
-        :returns: a new NUMA cell object
-        """
+def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
+    """Check if a instance cell can fit and set it's cell id
 
-        super(VirtNUMATopologyCellUsage, self).__init__(
-            id, cpuset, memory)
+    :param host_cell: host cell to fit the instance cell onto
+    :param instance_cell: instance cell we want to fit
+    :param limit_cell: cell with limits of the host_cell if any
 
-        self.cpu_usage = cpu_usage
-        self.memory_usage = memory_usage
+    Make sure we can fit the instance cell onto a host cell and if so,
+    return a new objects.InstanceNUMACell with the id set to that of
+    the host, or None if the cell exceeds the limits of the host
 
-    @classmethod
-    def fit_instance_cell(cls, host_cell, instance_cell, limit_cell=None):
-        """Check if a instance cell can fit and set it's cell id
+    :returns: a new instance cell or None
+    """
+    # NOTE (ndipanov): do not allow an instance to overcommit against
+    # itself on any NUMA cell
+    if (instance_cell.memory > host_cell.memory or
+            len(instance_cell.cpuset) > len(host_cell.cpuset)):
+        return None
 
-        :param host_cell: host cell to fit the instance cell onto
-        :param instance_cell: instance cell we want to fit
-        :param limit_cell: cell with limits of the host_cell if any
-
-        Make sure we can fit the instance cell onto a host cell and if so,
-        return a new VirtNUMATopologyCell with the id set to that of
-        the host, or None if the cell exceeds the limits of the host
-
-        :returns: a new instance cell or None
-        """
-        # NOTE (ndipanov): do not allow an instance to overcommit against
-        # itself on any NUMA cell
-        if (instance_cell.memory > host_cell.memory or
-                len(instance_cell.cpuset) > len(host_cell.cpuset)):
+    if limit_cell:
+        memory_usage = host_cell.memory_usage + instance_cell.memory
+        cpu_usage = host_cell.cpu_usage + len(instance_cell.cpuset)
+        if (memory_usage > limit_cell.memory_limit or
+                cpu_usage > limit_cell.cpu_limit):
             return None
 
-        if limit_cell:
-            memory_usage = host_cell.memory_usage + instance_cell.memory
-            cpu_usage = host_cell.cpu_usage + len(instance_cell.cpuset)
-            if (memory_usage > limit_cell.memory_limit or
-                    cpu_usage > limit_cell.cpu_limit):
-                return None
-        return VirtNUMATopologyCell(
-                host_cell.id, instance_cell.cpuset, instance_cell.memory)
+    pagesize = None
+    if instance_cell.pagesize:
+        pagesize = _numa_cell_supports_pagesize_request(
+            host_cell, instance_cell)
+        if not pagesize:
+            return
 
-    def _to_dict(self):
-        data_dict = super(VirtNUMATopologyCellUsage, self)._to_dict()
-        data_dict['mem']['used'] = self.memory_usage
-        data_dict['cpu_usage'] = self.cpu_usage
-        return data_dict
-
-    @classmethod
-    def _from_dict(cls, data_dict):
-        cpuset = parse_cpu_spec(data_dict.get('cpus', ''))
-        cpu_usage = data_dict.get('cpu_usage', 0)
-        memory = data_dict.get('mem', {}).get('total', 0)
-        memory_usage = data_dict.get('mem', {}).get('used', 0)
-        cell_id = data_dict.get('id')
-        return cls(cell_id, cpuset, memory, cpu_usage, memory_usage)
+    return objects.InstanceNUMACell(
+        id=host_cell.id, cpuset=instance_cell.cpuset,
+        memory=instance_cell.memory, pagesize=pagesize)
 
 
 class VirtNUMATopology(object):
@@ -737,124 +738,183 @@ class VirtNUMATopology(object):
         return cls._from_dict(jsonutils.loads(json_string))
 
 
-class VirtNUMAInstanceTopology(VirtNUMATopology):
-    """Class to represent the topology configured for a guest
-    instance. It provides helper APIs to determine configuration
-    from the metadata specified against the flavour and or
-    disk image
+def _numa_get_flavor_or_image_prop(flavor, image_meta, propname):
+    flavor_val = flavor.get('extra_specs', {}).get("hw:" + propname)
+    image_val = image_meta.get("hw_" + propname)
+
+    if flavor_val is not None:
+        if image_val is not None:
+            raise exception.ImageNUMATopologyForbidden(
+                name='hw_' + propname)
+
+        return flavor_val
+    else:
+        return image_val
+
+
+def _numa_get_pagesize_constraints(flavor, image_meta):
+    """Return the requested memory page size
+
+    :param flavor: a Flavor object to read extra specs from
+    :param image_meta: an Image object to read meta data from
+
+    :raises: MemoryPagesSizeInvalid or MemoryPageSizeForbidden
+    :returns: a page size requested or MEMPAGES_*
     """
 
-    cell_class = VirtNUMATopologyCell
-
-    @staticmethod
-    def _get_flavor_or_image_prop(flavor, image_meta, propname):
-        flavor_val = flavor.get('extra_specs', {}).get("hw:" + propname)
-        image_val = image_meta.get("hw_" + propname)
-
-        if flavor_val is not None:
-            if image_val is not None:
-                raise exception.ImageNUMATopologyForbidden(
-                    name='hw_' + propname)
-
-            return flavor_val
+    def check_and_return_pages_size(request):
+        if request == "any":
+            return MEMPAGES_ANY
+        elif request == "large":
+            return MEMPAGES_LARGE
+        elif request == "small":
+            return MEMPAGES_SMALL
         else:
-            return image_val
+            try:
+                request = int(request)
+            except ValueError:
+                request = 0
 
-    @classmethod
-    def _get_constraints_manual(cls, nodes, flavor, image_meta):
-        cells = []
-        totalmem = 0
+        if request <= 0:
+            raise exception.MemoryPageSizeInvalid(pagesize=request)
 
-        availcpus = set(range(flavor['vcpus']))
+        return request
 
-        for node in range(nodes):
-            cpus = cls._get_flavor_or_image_prop(
-                flavor, image_meta, "numa_cpus.%d" % node)
-            mem = cls._get_flavor_or_image_prop(
-                flavor, image_meta, "numa_mem.%d" % node)
+    image_meta_prop = (image_meta or {}).get("properties", {})
 
-            # We're expecting both properties set, so
-            # raise an error if either is missing
-            if cpus is None or mem is None:
-                raise exception.ImageNUMATopologyIncomplete()
+    flavor_request = flavor.get('extra_specs', {}).get("hw:mem_page_size", "")
+    image_request = image_meta_prop.get("hw_mem_page_size", "")
 
-            mem = int(mem)
-            cpuset = parse_cpu_spec(cpus)
+    if not flavor_request and image_request:
+        raise exception.MemoryPageSizeForbidden(
+            pagesize=image_request,
+            against="<empty>")
 
-            for cpu in cpuset:
-                if cpu > (flavor['vcpus'] - 1):
-                    raise exception.ImageNUMATopologyCPUOutOfRange(
-                        cpunum=cpu, cpumax=(flavor['vcpus'] - 1))
+    if not flavor_request:
+        # Nothing was specified for hugepages,
+        # let's the default process running.
+        return None
 
-                if cpu not in availcpus:
-                    raise exception.ImageNUMATopologyCPUDuplicates(
-                        cpunum=cpu)
+    pagesize = check_and_return_pages_size(flavor_request)
+    if image_request and (pagesize in (MEMPAGES_ANY, MEMPAGES_LARGE)):
+        return check_and_return_pages_size(image_request)
+    elif image_request:
+        raise exception.MemoryPageSizeForbidden(
+            pagesize=image_request,
+            against=flavor_request)
 
-                availcpus.remove(cpu)
+    return pagesize
 
-            cells.append(VirtNUMATopologyCell(node, cpuset, mem))
-            totalmem = totalmem + mem
 
-        if availcpus:
-            raise exception.ImageNUMATopologyCPUsUnassigned(
-                cpuset=str(availcpus))
+def _numa_get_constraints_manual(nodes, flavor, image_meta):
+    cells = []
+    totalmem = 0
 
-        if totalmem != flavor['memory_mb']:
-            raise exception.ImageNUMATopologyMemoryOutOfRange(
-                memsize=totalmem,
-                memtotal=flavor['memory_mb'])
+    availcpus = set(range(flavor['vcpus']))
 
-        return cls(cells)
+    for node in range(nodes):
+        cpus = _numa_get_flavor_or_image_prop(
+            flavor, image_meta, "numa_cpus.%d" % node)
+        mem = _numa_get_flavor_or_image_prop(
+            flavor, image_meta, "numa_mem.%d" % node)
 
-    @classmethod
-    def _get_constraints_auto(cls, nodes, flavor, image_meta):
-        if ((flavor['vcpus'] % nodes) > 0 or
-            (flavor['memory_mb'] % nodes) > 0):
-            raise exception.ImageNUMATopologyAsymmetric()
+        # We're expecting both properties set, so
+        # raise an error if either is missing
+        if cpus is None or mem is None:
+            raise exception.ImageNUMATopologyIncomplete()
 
-        cells = []
-        for node in range(nodes):
-            cpus = cls._get_flavor_or_image_prop(
-                flavor, image_meta, "numa_cpus.%d" % node)
-            mem = cls._get_flavor_or_image_prop(
-                flavor, image_meta, "numa_mem.%d" % node)
+        mem = int(mem)
+        cpuset = parse_cpu_spec(cpus)
 
-            # We're not expecting any properties set, so
-            # raise an error if there are any
-            if cpus is not None or mem is not None:
-                raise exception.ImageNUMATopologyIncomplete()
+        for cpu in cpuset:
+            if cpu > (flavor['vcpus'] - 1):
+                raise exception.ImageNUMATopologyCPUOutOfRange(
+                    cpunum=cpu, cpumax=(flavor['vcpus'] - 1))
 
-            ncpus = int(flavor['vcpus'] / nodes)
-            mem = int(flavor['memory_mb'] / nodes)
-            start = node * ncpus
-            cpuset = set(range(start, start + ncpus))
+            if cpu not in availcpus:
+                raise exception.ImageNUMATopologyCPUDuplicates(
+                    cpunum=cpu)
 
-            cells.append(VirtNUMATopologyCell(node, cpuset, mem))
+            availcpus.remove(cpu)
 
-        return cls(cells)
+        cells.append(objects.InstanceNUMACell(
+            id=node, cpuset=cpuset, memory=mem))
+        totalmem = totalmem + mem
 
-    @classmethod
-    def get_constraints(cls, flavor, image_meta):
-        nodes = cls._get_flavor_or_image_prop(
-            flavor, image_meta, "numa_nodes")
+    if availcpus:
+        raise exception.ImageNUMATopologyCPUsUnassigned(
+            cpuset=str(availcpus))
 
-        if nodes is None:
-            return None
+    if totalmem != flavor['memory_mb']:
+        raise exception.ImageNUMATopologyMemoryOutOfRange(
+            memsize=totalmem,
+            memtotal=flavor['memory_mb'])
 
-        nodes = int(nodes)
+    return objects.InstanceNUMATopology(cells=cells)
 
+
+def _numa_get_constraints_auto(nodes, flavor, image_meta):
+    if ((flavor['vcpus'] % nodes) > 0 or
+        (flavor['memory_mb'] % nodes) > 0):
+        raise exception.ImageNUMATopologyAsymmetric()
+
+    cells = []
+    for node in range(nodes):
+        cpus = _numa_get_flavor_or_image_prop(
+            flavor, image_meta, "numa_cpus.%d" % node)
+        mem = _numa_get_flavor_or_image_prop(
+            flavor, image_meta, "numa_mem.%d" % node)
+
+        # We're not expecting any properties set, so
+        # raise an error if there are any
+        if cpus is not None or mem is not None:
+            raise exception.ImageNUMATopologyIncomplete()
+
+        ncpus = int(flavor['vcpus'] / nodes)
+        mem = int(flavor['memory_mb'] / nodes)
+        start = node * ncpus
+        cpuset = set(range(start, start + ncpus))
+
+        cells.append(objects.InstanceNUMACell(
+            id=node, cpuset=cpuset, memory=mem))
+
+    return objects.InstanceNUMATopology(cells=cells)
+
+
+# TODO(sahid): Move numa related to hardward/numa.py
+def numa_get_constraints(flavor, image_meta):
+    """Return topology related to input request
+
+    :param flavor: Flavor object to read extra specs from
+    :param image_meta: Image object to read image metadata from
+
+    :returns: InstanceNUMATopology or None
+    """
+    nodes = _numa_get_flavor_or_image_prop(
+        flavor, image_meta, "numa_nodes")
+    pagesize = _numa_get_pagesize_constraints(
+        flavor, image_meta)
+
+    topology = None
+    if nodes or pagesize:
+        nodes = nodes and int(nodes) or 1
         # We'll pick what path to go down based on whether
         # anything is set for the first node. Both paths
         # have logic to cope with inconsistent property usage
-        auto = cls._get_flavor_or_image_prop(
+        auto = _numa_get_flavor_or_image_prop(
             flavor, image_meta, "numa_cpus.0") is None
 
         if auto:
-            return cls._get_constraints_auto(
+            topology = _numa_get_constraints_auto(
                 nodes, flavor, image_meta)
         else:
-            return cls._get_constraints_manual(
+            topology = _numa_get_constraints_manual(
                 nodes, flavor, image_meta)
+
+        # We currently support same pagesize for all cells.
+        [setattr(c, 'pagesize', pagesize) for c in topology.cells]
+
+    return topology
 
 
 class VirtNUMALimitTopology(VirtNUMATopology):
@@ -865,138 +925,103 @@ class VirtNUMALimitTopology(VirtNUMATopology):
     cell_class = VirtNUMATopologyCellLimit
 
 
-class VirtNUMAHostTopology(VirtNUMATopology):
+def numa_fit_instance_to_host(
+        host_topology, instance_topology, limits_topology=None):
+    """Fit the instance topology onto the host topology given the limits
 
-    """Class represents the NUMA configuration and utilization
-    of a compute node. As well as exposing the overall topology
-    it tracks the utilization of the resources by guest instances
+    :param host_topology: objects.NUMATopology object to fit an instance on
+    :param instance_topology: objects.InstanceNUMATopology to be fitted
+    :param limits_topology: VirtNUMALimitTopology that defines limits
+
+    Given a host and instance topology and optionally limits - this method
+    will attempt to fit instance cells onto all permutations of host cells
+    by calling the _numa_fit_instance_cell method, and return a new
+    InstanceNUMATopology with it's cell ids set to host cell id's of
+    the first successful permutation, or None.
+    """
+    if (not (host_topology and instance_topology) or
+        len(host_topology) < len(instance_topology)):
+        return
+    else:
+        if limits_topology is None:
+            limits_topology_cells = itertools.repeat(
+                None, len(host_topology))
+        else:
+            limits_topology_cells = limits_topology.cells
+        # TODO(ndipanov): We may want to sort permutations differently
+        # depending on whether we want packing/spreading over NUMA nodes
+        for host_cell_perm in itertools.permutations(
+                zip(host_topology.cells, limits_topology_cells),
+                len(instance_topology)
+        ):
+            cells = []
+            for (host_cell, limit_cell), instance_cell in zip(
+                    host_cell_perm, instance_topology.cells):
+                got_cell = _numa_fit_instance_cell(
+                    host_cell, instance_cell, limit_cell)
+                if got_cell is None:
+                    break
+                cells.append(got_cell)
+            if len(cells) == len(host_cell_perm):
+                return objects.InstanceNUMATopology(cells=cells)
+
+
+def _numa_pagesize_usage_from_cell(hostcell, instancecell, sign):
+    topo = []
+    for pages in hostcell.mempages:
+        if pages.size_kb == instancecell.pagesize:
+            topo.append(objects.NUMAPagesTopology(
+                size_kb=pages.size_kb,
+                total=pages.total,
+                used=max(0, pages.used +
+                         instancecell.memory * units.Ki /
+                         pages.size_kb * sign)))
+        else:
+            topo.append(pages)
+    return topo
+
+
+def numa_usage_from_instances(host, instances, free=False):
+    """Get host topology usage
+
+    :param host: objects.NUMATopology with usage information
+    :param instances: list of objects.InstanceNUMATopology
+    :param free: If True usage of the host will be decreased
+
+    Sum the usage from all @instances to report the overall
+    host topology usage
+
+    :returns: objects.NUMATopology including usage information
     """
 
-    cell_class = VirtNUMATopologyCellUsage
+    if host is None:
+        return
 
-    @staticmethod
-    def can_fit_instances(host, instances):
-        """Test if the instance topology can fit into the host
+    instances = instances or []
+    cells = []
+    sign = -1 if free else 1
+    for hostcell in host.cells:
+        memory_usage = hostcell.memory_usage
+        cpu_usage = hostcell.cpu_usage
+        mempages = hostcell.mempages
+        for instance in instances:
+            for instancecell in instance.cells:
+                if instancecell.id == hostcell.id:
+                    memory_usage = (
+                            memory_usage + sign * instancecell.memory)
+                    cpu_usage = cpu_usage + sign * len(instancecell.cpuset)
+                    if instancecell.pagesize and instancecell.pagesize > 0:
+                        mempages = _numa_pagesize_usage_from_cell(
+                            hostcell, instancecell, sign)
 
-        Returns True if all the cells of the all the instance topologies in
-        'instances' exist in the given 'host' topology. False otherwise.
-        """
-        if not host:
-            return True
+        cell = objects.NUMACell(
+            id=hostcell.id, cpuset=hostcell.cpuset, memory=hostcell.memory,
+            cpu_usage=max(0, cpu_usage), memory_usage=max(0, memory_usage),
+            mempages=mempages)
 
-        host_cells = set(cell.id for cell in host.cells)
-        instances_cells = [set(cell.id for cell in instance.cells)
-                            for instance in instances]
-        return all(instance_cells <= host_cells
-                    for instance_cells in instances_cells)
+        cells.append(cell)
 
-    @classmethod
-    def fit_instance_to_host(cls, host_topology, instance_topology,
-                                 limits_topology=None):
-        """Fit the instance topology onto the host topology given the limits
-
-        :param host_topology: VirtNUMAHostTopology object to fit an instance on
-        :param instance_topology: VirtNUMAInstanceTopology object to be fitted
-        :param limits_topology: VirtNUMALimitTopology that defines limits
-
-        Given a host and instance topology and optionally limits - this method
-        will attempt to fit instance cells onto all permutations of host cells
-        by calling the fit_instance_cell method, and return a new
-        VirtNUMAInstanceTopology with it's cell ids set to host cell id's of
-        the first successful permutation, or None.
-        """
-        if (not (host_topology and instance_topology) or
-                len(host_topology) < len(instance_topology)):
-            return
-        else:
-            if limits_topology is None:
-                limits_topology_cells = itertools.repeat(
-                        None, len(host_topology))
-            else:
-                limits_topology_cells = limits_topology.cells
-            # TODO(ndipanov): We may want to sort permutations differently
-            # depending on whether we want packing/spreading over NUMA nodes
-            for host_cell_perm in itertools.permutations(
-                        zip(host_topology.cells, limits_topology_cells),
-                        len(instance_topology)
-                    ):
-                cells = []
-                for (host_cell, limit_cell), instance_cell in zip(
-                        host_cell_perm, instance_topology.cells):
-                    got_cell = cls.cell_class.fit_instance_cell(
-                        host_cell, instance_cell, limit_cell)
-                    if got_cell is None:
-                        break
-                    cells.append(got_cell)
-                if len(cells) == len(host_cell_perm):
-                    return VirtNUMAInstanceTopology(cells=cells)
-
-    @classmethod
-    def usage_from_instances(cls, host, instances, free=False):
-        """Get host topology usage
-
-        :param host: VirtNUMAHostTopology with usage information
-        :param instances: list of VirtNUMAInstanceTopology
-        :param free: If True usage of the host will be decreased
-
-        Sum the usage from all @instances to report the overall
-        host topology usage
-
-        :returns: VirtNUMAHostTopology including usage information
-        """
-
-        if host is None:
-            return
-
-        instances = instances or []
-        cells = []
-        sign = -1 if free else 1
-        for hostcell in host.cells:
-            memory_usage = hostcell.memory_usage
-            cpu_usage = hostcell.cpu_usage
-            for instance in instances:
-                for instancecell in instance.cells:
-                    if instancecell.id == hostcell.id:
-                        memory_usage = (
-                                memory_usage + sign * instancecell.memory)
-                        cpu_usage = cpu_usage + sign * len(instancecell.cpuset)
-
-            cell = cls.cell_class(
-                hostcell.id, hostcell.cpuset, hostcell.memory,
-                max(0, cpu_usage), max(0, memory_usage))
-
-            cells.append(cell)
-
-        return cls(cells)
-
-    @classmethod
-    def claim_test(cls, host, instances, limits=None):
-        """Test if we can claim an instance on the host with given limits.
-
-        :param host: VirtNUMAHostTopology with usage information
-        :param instances: list of VirtNUMAInstanceTopology
-        :param limits: VirtNUMALimitTopology with max values set. Should
-                       match the host topology otherwise
-
-        :returns: None if the claim succeeds or text explaining the error.
-        """
-        if not (host and instances):
-            return
-
-        if not cls.can_fit_instances(host, instances):
-            return (_("Requested instance NUMA topology cannot fit "
-                      "the given host NUMA topology."))
-
-        if not limits:
-            return
-
-        claimed_host = cls.usage_from_instances(host, instances)
-
-        for claimed_cell, limit_cell in zip(claimed_host.cells, limits.cells):
-            if (claimed_cell.memory_usage > limit_cell.memory_limit or
-                    claimed_cell.cpu_usage > limit_cell.cpu_limit):
-                return (_("Requested instance NUMA topology is too large for "
-                          "the given host NUMA topology limits."))
+    return objects.NUMATopology(cells=cells)
 
 
 # TODO(ndipanov): Remove when all code paths are using objects
@@ -1026,25 +1051,32 @@ def instance_topology_from_instance(instance):
 
     if instance_numa_topology:
         if isinstance(instance_numa_topology, six.string_types):
-            instance_numa_topology = VirtNUMAInstanceTopology.from_json(
-                            instance_numa_topology)
+            instance_numa_topology = (
+                objects.InstanceNUMATopology.obj_from_primitive(
+                    jsonutils.loads(instance_numa_topology)))
+
         elif isinstance(instance_numa_topology, dict):
-            # NOTE (ndipanov): A horrible hack so that we can use this in the
-            # scheduler, since the InstanceNUMATopology object is serialized
-            # raw using the obj_base.obj_to_primitive, (which is buggy and will
-            # give us a dict with a list of InstanceNUMACell objects), and then
-            # passed to jsonutils.to_primitive, which will make a dict out of
-            # those objects. All of this is done by
-            # scheduler.utils.build_request_spec called in the conductor.
+            # NOTE (ndipanov): A horrible hack so that we can use
+            # this in the scheduler, since the
+            # InstanceNUMATopology object is serialized raw using
+            # the obj_base.obj_to_primitive, (which is buggy and
+            # will give us a dict with a list of InstanceNUMACell
+            # objects), and then passed to jsonutils.to_primitive,
+            # which will make a dict out of those objects. All of
+            # this is done by scheduler.utils.build_request_spec
+            # called in the conductor.
             #
             # Remove when request_spec is a proper object itself!
             dict_cells = instance_numa_topology.get('cells')
             if dict_cells:
-                cells = [VirtNUMATopologyCell(cell['id'],
-                                              set(cell['cpuset']),
-                                              cell['memory'])
+                cells = [objects.InstanceNUMACell(
+                    id=cell['id'],
+                    cpuset=set(cell['cpuset']),
+                    memory=cell['memory'],
+                    pagesize=cell.get('pagesize'))
                          for cell in dict_cells]
-                instance_numa_topology = VirtNUMAInstanceTopology(cells=cells)
+                instance_numa_topology = objects.InstanceNUMATopology(
+                    cells=cells)
 
     return instance_numa_topology
 
@@ -1055,7 +1087,7 @@ def host_topology_and_format_from_host(host):
 
     Since we may get a host as either a dict, a db object, or an actual
     ComputeNode object, or an instance of HostState class, this makes sure we
-    get beck either None, or an instance of VirtNUMAHostTopology class.
+    get beck either None, or an instance of objects.NUMATopology class.
 
     :returns: A two-tuple, first element is the topology itself or None, second
               is a boolean set to True if topology was in json format.
@@ -1069,7 +1101,9 @@ def host_topology_and_format_from_host(host):
     if host_numa_topology is not None and isinstance(
             host_numa_topology, six.string_types):
         was_json = True
-        host_numa_topology = VirtNUMAHostTopology.from_json(host_numa_topology)
+
+        host_numa_topology = (objects.NUMATopology.obj_from_db_obj(
+            host_numa_topology))
 
     return host_numa_topology, was_json
 
@@ -1091,10 +1125,10 @@ def get_host_numa_usage_from_instance(host, instance, free=False,
     :param free: if True the the returned topology will have it's usage
                  decreased instead.
     :param never_serialize_result: if True result will always be an instance of
-                                   VirtNUMAHostTopology class.
+                                   objects.NUMATopology class.
 
     :returns: numa_usage in the format it was on the host or
-              VirtNUMAHostTopology instance if never_serialize_result was True
+              objects.NUMATopology instance if never_serialize_result was True
     """
     instance_numa_topology = instance_topology_from_instance(instance)
     if instance_numa_topology:
@@ -1104,11 +1138,11 @@ def get_host_numa_usage_from_instance(host, instance, free=False,
             host)
 
     updated_numa_topology = (
-        VirtNUMAHostTopology.usage_from_instances(
-                host_numa_topology, instance_numa_topology, free=free))
+        numa_usage_from_instances(
+            host_numa_topology, instance_numa_topology, free=free))
 
     if updated_numa_topology is not None:
         if jsonify_result and not never_serialize_result:
-            updated_numa_topology = updated_numa_topology.to_json()
+            updated_numa_topology = updated_numa_topology._to_json()
 
     return updated_numa_topology

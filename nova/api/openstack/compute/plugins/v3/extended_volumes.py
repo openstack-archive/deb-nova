@@ -13,7 +13,6 @@
 #   under the License.
 
 """The Extended Volumes API extension."""
-import webob
 from webob import exc
 
 from nova.api.openstack import common
@@ -25,11 +24,9 @@ from nova import compute
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.openstack.common import log as logging
 from nova import volume
 
 ALIAS = "os-extended-volumes"
-LOG = logging.getLogger(__name__)
 authorize = extensions.soft_extension_authorizer('compute', 'v3:' + ALIAS)
 authorize_attach = extensions.extension_authorizer('compute',
                                                    'v3:%s:attach' % ALIAS)
@@ -52,6 +49,7 @@ class ExtendedVolumesController(wsgi.Controller):
         key = "%s:volumes_attached" % ExtendedVolumes.alias
         server[key] = [{'id': volume_id} for volume_id in volume_ids]
 
+    @wsgi.response(202)
     @extensions.expected_errors((400, 404, 409))
     @wsgi.action('swap_volume_attachment')
     @validation.schema(extended_volumes.swap_volume_attachment)
@@ -92,14 +90,13 @@ class ExtendedVolumesController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
-                                                              'swap_volume')
+                                                              'swap_volume',
+                                                              id)
 
         if not found:
             msg = _("The volume was either invalid or not attached to the "
                     "instance.")
             raise exc.HTTPNotFound(explanation=msg)
-        else:
-            return webob.Response(status_int=202)
 
     @wsgi.extends
     def show(self, req, resp_obj, id):
@@ -136,13 +133,6 @@ class ExtendedVolumesController(wsgi.Controller):
         disk_bus = body['attach'].get('disk_bus')
         device_type = body['attach'].get('device_type')
 
-        LOG.audit(_("Attach volume %(volume_id)s to instance %(server_id)s "
-                    "at %(device)s"),
-                  {'volume_id': volume_id,
-                   'device': device,
-                   'server_id': server_id},
-                  context=context)
-
         instance = common.get_instance(self.compute_api, context, server_id,
                                        want_objects=True)
         try:
@@ -156,7 +146,7 @@ class ExtendedVolumesController(wsgi.Controller):
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(
-                state_error, 'attach_volume')
+                state_error, 'attach_volume', server_id)
         except exception.InvalidVolume as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.InvalidDevicePath as e:
@@ -173,11 +163,6 @@ class ExtendedVolumesController(wsgi.Controller):
 
         volume_id = body['detach']['volume_id']
 
-        LOG.audit(_("Detach volume %(volume_id)s from "
-                    "instance %(server_id)s"),
-                  {"volume_id": volume_id,
-                   "server_id": id,
-                   "context": context})
         instance = common.get_instance(self.compute_api, context, server_id,
                                        want_objects=True)
         try:
@@ -191,7 +176,6 @@ class ExtendedVolumesController(wsgi.Controller):
             msg = _("Volume %(volume_id)s is not attached to the "
                     "instance %(server_id)s") % {'server_id': server_id,
                                                  'volume_id': volume_id}
-            LOG.debug(msg)
             raise exc.HTTPNotFound(explanation=msg)
 
         for bdm in bdms:
@@ -213,7 +197,7 @@ class ExtendedVolumesController(wsgi.Controller):
                 raise exc.HTTPConflict(explanation=e.format_message())
             except exception.InstanceInvalidState as state_error:
                 common.raise_http_conflict_for_instance_invalid_state(
-                    state_error, 'detach_volume')
+                    state_error, 'detach_volume', server_id)
         else:
             msg = _("Volume %(volume_id)s is not attached to the "
                     "instance %(server_id)s") % {'server_id': server_id,

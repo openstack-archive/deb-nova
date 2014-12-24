@@ -22,17 +22,17 @@ import time
 import uuid
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import strutils
 
 from nova.api.metadata import password
 from nova.compute import utils as compute_utils
 from nova import context
 from nova import crypto
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
-from nova.openstack.common import jsonutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import strutils
 from nova import utils
 
 
@@ -109,18 +109,25 @@ def _call_agent(session, instance, vm_ref, method, addl_args=None,
     except session.XenAPI.Failure as e:
         err_msg = e.details[-1].splitlines()[-1]
         if 'TIMEOUT:' in err_msg:
-            LOG.error(_('TIMEOUT: The call to %(method)s timed out. '
-                        'args=%(args)r'),
+            LOG.error(_LE('TIMEOUT: The call to %(method)s timed out. '
+                          'args=%(args)r'),
                       {'method': method, 'args': args}, instance=instance)
             raise exception.AgentTimeout(method=method)
+        elif 'REBOOT:' in err_msg:
+            LOG.debug('REBOOT: The call to %(method)s detected a reboot. '
+                      'args=%(args)r',
+                      {'method': method, 'args': args}, instance=instance)
+            _wait_for_new_dom_id(session, vm_ref, dom_id, method)
+            return _call_agent(session, instance, vm_ref, method,
+                               addl_args, timeout, success_codes)
         elif 'NOT IMPLEMENTED:' in err_msg:
-            LOG.error(_('NOT IMPLEMENTED: The call to %(method)s is not '
-                        'supported by the agent. args=%(args)r'),
+            LOG.error(_LE('NOT IMPLEMENTED: The call to %(method)s is not '
+                          'supported by the agent. args=%(args)r'),
                       {'method': method, 'args': args}, instance=instance)
             raise exception.AgentNotImplemented(method=method)
         else:
-            LOG.error(_('The call to %(method)s returned an error: %(e)s. '
-                        'args=%(args)r'),
+            LOG.error(_LE('The call to %(method)s returned an error: %(e)s. '
+                          'args=%(args)r'),
                       {'method': method, 'args': args, 'e': e},
                       instance=instance)
             raise exception.AgentError(method=method)
@@ -129,15 +136,15 @@ def _call_agent(session, instance, vm_ref, method, addl_args=None,
         try:
             ret = jsonutils.loads(ret)
         except TypeError:
-            LOG.error(_('The agent call to %(method)s returned an invalid '
-                        'response: %(ret)r. args=%(args)r'),
+            LOG.error(_LE('The agent call to %(method)s returned an invalid '
+                          'response: %(ret)r. args=%(args)r'),
                       {'method': method, 'ret': ret, 'args': args},
                       instance=instance)
             raise exception.AgentError(method=method)
 
     if ret['returncode'] not in success_codes:
-        LOG.error(_('The agent call to %(method)s returned an '
-                    'an error: %(ret)r. args=%(args)r'),
+        LOG.error(_LE('The agent call to %(method)s returned an '
+                      'an error: %(ret)r. args=%(args)r'),
                   {'method': method, 'ret': ret, 'args': args},
                   instance=instance)
         raise exception.AgentError(method=method)
@@ -150,6 +157,22 @@ def _call_agent(session, instance, vm_ref, method, addl_args=None,
     # Some old versions of the Windows agent have a trailing \\r\\n
     # (ie CRLF escaped) for some reason. Strip that off.
     return ret['message'].replace('\\r\\n', '')
+
+
+def _wait_for_new_dom_id(session, vm_ref, old_dom_id, method):
+    expiration = time.time() + CONF.xenserver.agent_timeout
+    while True:
+        dom_id = session.VM.get_domid(vm_ref)
+
+        if dom_id and dom_id != -1 and dom_id != old_dom_id:
+            LOG.debug("Found new dom_id %s" % dom_id)
+            return
+
+        if time.time() > expiration:
+            LOG.debug("Timed out waiting for new dom_id %s" % dom_id)
+            raise exception.AgentTimeout(method=method)
+
+        time.sleep(1)
 
 
 def is_upgrade_required(current_version, available_version):
@@ -168,8 +191,8 @@ class XenAPIBasedAgent(object):
         self.vm_ref = vm_ref
 
     def _add_instance_fault(self, error, exc_info):
-        LOG.warning(_("Ignoring error while configuring instance with "
-                      "agent: %s") % error,
+        LOG.warning(_LW("Ignoring error while configuring instance with "
+                        "agent: %s"), error,
                     instance=self.instance, exc_info=True)
         try:
             ctxt = context.get_admin_context()
@@ -244,8 +267,8 @@ class XenAPIBasedAgent(object):
             self._call_agent('agentupdate', args)
         except exception.AgentError as exc:
             # Silently fail for agent upgrades
-            LOG.warning(_("Unable to update the agent due "
-                          "to: %(exc)s") % dict(exc=exc),
+            LOG.warning(_LW("Unable to update the agent due "
+                            "to: %(exc)s"), dict(exc=exc),
                         instance=self.instance)
 
     def _exchange_key_with_agent(self):
@@ -370,20 +393,20 @@ def find_guest_agent(base_dir):
         # reconfigure the network from xenstore data,
         # so manipulation of files in /etc is not
         # required
-        LOG.info(_('XenServer tools installed in this '
-                   'image are capable of network injection.  '
-                   'Networking files will not be'
-                   'manipulated'))
+        LOG.info(_LI('XenServer tools installed in this '
+                     'image are capable of network injection.  '
+                     'Networking files will not be'
+                     'manipulated'))
         return True
     xe_daemon_filename = os.path.join(base_dir,
         'usr', 'sbin', 'xe-daemon')
     if os.path.isfile(xe_daemon_filename):
-        LOG.info(_('XenServer tools are present '
-                   'in this image but are not capable '
-                   'of network injection'))
+        LOG.info(_LI('XenServer tools are present '
+                     'in this image but are not capable '
+                     'of network injection'))
     else:
-        LOG.info(_('XenServer tools are not '
-                   'installed in this image'))
+        LOG.info(_LI('XenServer tools are not '
+                     'installed in this image'))
     return False
 
 
@@ -396,9 +419,9 @@ def should_use_agent(instance):
         try:
             return strutils.bool_from_string(use_agent_raw, strict=True)
         except ValueError:
-            LOG.warn(_("Invalid 'agent_present' value. "
-                       "Falling back to the default."),
-                       instance=instance)
+            LOG.warning(_LW("Invalid 'agent_present' value. "
+                            "Falling back to the default."),
+                        instance=instance)
             return CONF.xenserver.use_agent_default
 
 

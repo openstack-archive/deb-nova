@@ -17,9 +17,9 @@
 
 from oslo.config import cfg
 from oslo import messaging
+from oslo.serialization import jsonutils
 
 from nova.objects import base as objects_base
-from nova.openstack.common import jsonutils
 from nova import rpc
 
 CONF = cfg.CONF
@@ -151,6 +151,8 @@ class ConductorAPI(object):
     * Remove instance_get_by_uuid()
     * Remove agent_build_get_by_triple()
 
+    * 2.1  - Make notify_usage_exists() take an instance object
+
     ... Juno supports message version 2.0.  So, any changes to
     existing methods in 2.x after that point should be done such
     that they can handle the version_cap being set to 2.0.
@@ -281,7 +283,20 @@ class ConductorAPI(object):
 
     def service_update(self, context, service, values):
         service_p = jsonutils.to_primitive(service)
-        cctxt = self.client.prepare()
+
+        # (NOTE:jichenjc)If we're calling this periodically, it makes no
+        # sense for the RPC timeout to be more than the service
+        # report interval. Select 5 here is only find a reaonable long
+        # interval as threshold.
+        timeout = CONF.report_interval
+        if timeout and timeout > 5:
+            timeout -= 1
+
+        if timeout:
+            cctxt = self.client.prepare(timeout=timeout)
+        else:
+            cctxt = self.client.prepare()
+
         return cctxt.call(context, 'service_update',
                           service=service_p, values=values)
 
@@ -309,13 +324,17 @@ class ConductorAPI(object):
     def notify_usage_exists(self, context, instance, current_period=False,
                             ignore_missing_network_data=True,
                             system_metadata=None, extra_usage_info=None):
-        instance_p = jsonutils.to_primitive(instance)
+        if self.client.can_send_version('2.1'):
+            version = '2.1'
+        else:
+            version = '2.0'
+            instance = jsonutils.to_primitive(instance)
         system_metadata_p = jsonutils.to_primitive(system_metadata)
         extra_usage_info_p = jsonutils.to_primitive(extra_usage_info)
-        cctxt = self.client.prepare()
+        cctxt = self.client.prepare(version=version)
         return cctxt.call(
             context, 'notify_usage_exists',
-            instance=instance_p,
+            instance=instance,
             current_period=current_period,
             ignore_missing_network_data=ignore_missing_network_data,
             system_metadata=system_metadata_p,
@@ -371,6 +390,7 @@ class ComputeTaskAPI(object):
     1.7 - Do not send block_device_mapping and legacy_bdm to build_instances
     1.8 - Add rebuild_instance
     1.9 - Converted requested_networks to NetworkRequestList object
+    1.10 - Made migrate_server() and build_instances() send flavor objects
 
     """
 
@@ -385,17 +405,18 @@ class ComputeTaskAPI(object):
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
                   flavor, block_migration, disk_over_commit,
                   reservations=None):
-        if self.client.can_send_version('1.6'):
+        version = '1.10'
+        if not self.client.can_send_version(version):
+            flavor = objects_base.obj_to_primitive(flavor)
             version = '1.6'
-        else:
+        if not self.client.can_send_version(version):
             instance = jsonutils.to_primitive(
                     objects_base.obj_to_primitive(instance))
             version = '1.4'
-        flavor_p = jsonutils.to_primitive(flavor)
         cctxt = self.client.prepare(version=version)
         return cctxt.call(context, 'migrate_server',
                           instance=instance, scheduler_hint=scheduler_hint,
-                          live=live, rebuild=rebuild, flavor=flavor_p,
+                          live=live, rebuild=rebuild, flavor=flavor,
                           block_migration=block_migration,
                           disk_over_commit=disk_over_commit,
                           reservations=reservations)
@@ -404,15 +425,21 @@ class ComputeTaskAPI(object):
             admin_password, injected_files, requested_networks,
             security_groups, block_device_mapping, legacy_bdm=True):
         image_p = jsonutils.to_primitive(image)
+        version = '1.10'
+        if not self.client.can_send_version(version):
+            version = '1.9'
+            if 'instance_type' in filter_properties:
+                flavor = filter_properties['instance_type']
+                flavor_p = objects_base.obj_to_primitive(flavor)
+                filter_properties = dict(filter_properties,
+                                         instance_type=flavor_p)
         kw = {'instances': instances, 'image': image_p,
                'filter_properties': filter_properties,
                'admin_password': admin_password,
                'injected_files': injected_files,
                'requested_networks': requested_networks,
                'security_groups': security_groups}
-
-        version = '1.9'
-        if not self.client.can_send_version('1.9'):
+        if not self.client.can_send_version(version):
             version = '1.8'
             kw['requested_networks'] = kw['requested_networks'].as_tuples()
         if not self.client.can_send_version('1.7'):

@@ -18,12 +18,11 @@ Image caching and management.
 import os
 
 from oslo.config import cfg
+from oslo.utils import excutils
+from oslo.utils import units
 
-from nova.compute import flavors
 from nova.i18n import _
-from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
-from nova.openstack.common import units
 from nova import utils
 from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmutils
@@ -43,9 +42,8 @@ class ImageCache(object):
     def _get_root_vhd_size_gb(self, instance):
         try:
             # In case of resizes we need the old root disk size
-            old_flavor = flavors.extract_flavor(
-                instance, prefix='old_')
-            return old_flavor['root_gb']
+            old_flavor = instance.get_flavor('old')
+            return old_flavor.root_gb
         except KeyError:
             return instance['root_gb']
 

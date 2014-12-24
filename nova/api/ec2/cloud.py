@@ -24,6 +24,7 @@ import base64
 import time
 
 from oslo.config import cfg
+from oslo.utils import timeutils
 
 from nova.api.ec2 import ec2utils
 from nova.api.ec2 import inst_state
@@ -42,10 +43,10 @@ from nova.i18n import _LW
 from nova.image import s3
 from nova import network
 from nova.network.security_group import neutron_driver
+from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import base as obj_base
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 from nova import quota
 from nova import servicegroup
 from nova import utils
@@ -1173,7 +1174,8 @@ class CloudController(object):
                 search_opts['deleted'] = False
                 instances = self.compute_api.get_all(context,
                                                      search_opts=search_opts,
-                                                     sort_dir='asc',
+                                                     sort_keys=['created_at'],
+                                                     sort_dirs=['asc'],
                                                      want_objects=True)
             except exception.NotFound:
                 instances = []
@@ -1294,7 +1296,8 @@ class CloudController(object):
                   {'public_ip': public_ip, 'instance_id': instance_id},
                   context=context)
         instance_uuid = ec2utils.ec2_inst_id_to_uuid(context, instance_id)
-        instance = self.compute_api.get(context, instance_uuid)
+        instance = self.compute_api.get(context, instance_uuid,
+                                        want_objects=True)
 
         cached_ipinfo = ec2utils.get_ip_info_for_instance(context, instance)
         fixed_ips = cached_ipinfo['fixed_ips'] + cached_ipinfo['fixed_ip6s']
@@ -1307,8 +1310,8 @@ class CloudController(object):
         # changed to support specifying a particular fixed_ip if
         # multiple exist but this may not apply to ec2..
         if len(fixed_ips) > 1:
-            LOG.warn(_LW('multiple fixed_ips exist, using the first: %s'),
-                     fixed_ips[0])
+            LOG.warning(_LW('multiple fixed_ips exist, using the first: %s'),
+                        fixed_ips[0])
 
         self.network_api.associate_floating_ip(context, instance,
                                                floating_address=public_ip,
@@ -1319,7 +1322,8 @@ class CloudController(object):
         instance_id = self.network_api.get_instance_id_by_floating_address(
                                                          context, public_ip)
         if instance_id:
-            instance = self.compute_api.get(context, instance_id)
+            instance = self.compute_api.get(context, instance_id,
+                                            want_objects=True)
             LOG.audit(_("Disassociate address %s"), public_ip, context=context)
             self.network_api.disassociate_floating_ip(context, instance,
                                                       address=public_ip)
@@ -1992,7 +1996,7 @@ class CloudSecurityGroupNeutronAPI(EC2SecurityGroupExceptions,
 def get_cloud_security_group_api():
     if cfg.CONF.security_group_api.lower() == 'nova':
         return CloudSecurityGroupNovaAPI()
-    elif cfg.CONF.security_group_api.lower() in ('neutron', 'quantum'):
+    elif openstack_driver.is_neutron_security_groups():
         return CloudSecurityGroupNeutronAPI()
     else:
         raise NotImplementedError()

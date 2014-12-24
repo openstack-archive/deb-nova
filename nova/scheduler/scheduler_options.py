@@ -24,12 +24,12 @@ import datetime
 import os
 
 from oslo.config import cfg
+from oslo.serialization import jsonutils
+from oslo.utils import excutils
+from oslo.utils import timeutils
 
-from nova.i18n import _
-from nova.openstack.common import excutils
-from nova.openstack.common import jsonutils
+from nova.i18n import _LE
 from nova.openstack.common import log as logging
-from nova.openstack.common import timeutils
 
 
 scheduler_json_config_location_opt = cfg.StrOpt(
@@ -66,8 +66,8 @@ class SchedulerOptions(object):
             return os.path.getmtime(filename)
         except os.error as e:
             with excutils.save_and_reraise_exception():
-                LOG.exception(_("Could not stat scheduler options file "
-                                "%(filename)s: '%(e)s'"),
+                LOG.exception(_LE("Could not stat scheduler options file "
+                                  "%(filename)s: '%(e)s'"),
                               {'filename': filename, 'e': e})
 
     def _load_file(self, handle):
@@ -75,7 +75,7 @@ class SchedulerOptions(object):
         try:
             return jsonutils.load(handle)
         except ValueError as e:
-            LOG.exception(_("Could not decode scheduler options: '%s'"), e)
+            LOG.exception(_LE("Could not decode scheduler options: '%s'"), e)
             return {}
 
     def _get_time_now(self):
