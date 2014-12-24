@@ -4934,6 +4934,22 @@ class LibvirtDriver(driver.ComputeDriver):
         return stats
 
     def check_instance_shared_storage_local(self, context, instance):
+        """Check if instance files located on shared storage.
+
+        This runs check on the destination host, and then calls
+        back to the source host to check the results.
+
+        :param context: security context
+        :param instance: nova.db.sqlalchemy.models.Instance
+        :returns:
+             :tempfile: A dict containing the tempfile info on the destination
+                  host
+             :None: 1. If the instance path is not existing
+                  2. If the image backend is shared block storage type
+        """
+        if self.image_backend.backend().is_shared_block_storage():
+            return None
+
         dirpath = libvirt_utils.get_instance_path(instance)
 
         if not os.path.exists(dirpath):
@@ -6220,7 +6236,13 @@ class LibvirtDriver(driver.ComputeDriver):
         # ensure directories exist and are writable
         instance_path = libvirt_utils.get_instance_path(instance)
         LOG.debug('Checking instance files accessibility %s', instance_path)
-        return os.access(instance_path, os.W_OK)
+        shared_instance_path = os.access(instance_path, os.W_OK)
+        # NOTE(flwang): For shared block storage scenario, the file system is
+        # not really shared by the two hosts, but the volume of evacuated
+        # instance is reachable.
+        shared_block_storage = (self.image_backend.backend().
+                                is_shared_block_storage())
+        return shared_instance_path or shared_block_storage
 
     def inject_network_info(self, instance, nw_info):
         self.firewall_driver.setup_basic_filtering(instance, nw_info)
