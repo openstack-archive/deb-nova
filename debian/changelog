@@ -1,3 +1,9 @@
+nova (2015.1~b1-1) UNRELEASED; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 24 Dec 2014 09:53:43 +0800
+
 nova (2014.2.1-2) experimental; urgency=medium
 
   * Now build-depends on openstack-pkg-tools (>= 20~).
