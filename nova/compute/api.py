@@ -2040,9 +2040,6 @@ class API(base.Base):
         if 'ip6' in filters or 'ip' in filters:
             inst_models = self._ip_filter(inst_models, filters)
 
-        if 'ip6' in filters or 'ip' in filters:
-            inst_models = self._ip_filter(inst_models, filters)
-
         if want_objects:
             return inst_models
 
