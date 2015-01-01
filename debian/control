@@ -254,8 +254,7 @@ Depends: adduser,
          python-libvirt (>= 1.2.5),
          ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-baremetal,
-           nova-compute-kvm,
+Conflicts: nova-compute-kvm,
            nova-compute-qemu,
            nova-compute-uml,
            nova-compute-xen
@@ -285,8 +284,7 @@ Depends: adduser,
          user-mode-linux,
          ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-baremetal,
-           nova-compute-kvm,
+Conflicts: nova-compute-kvm,
            nova-compute-lxc,
            nova-compute-qemu,
            nova-compute-xen
@@ -309,8 +307,7 @@ Description: OpenStack Compute - compute node (UserModeLinux)
 #Pre-Depends: dpkg (>= 1.15.6~)
 #Depends: adduser, nova-common, nova-compute, python-xenapi, ${misc:Depends}
 #Provides: nova-compute-hypervisor
-#Conflicts: nova-baremetal,
-#           nova-compute-kvm,
+#Conflicts: nova-compute-kvm,
 #           nova-compute-lxc,
 #           nova-compute-qemu,
 #           nova-compute-uml
@@ -341,8 +338,7 @@ Depends: adduser,
          qemu,
          ${misc:Depends}
 Provides: nova-compute-hypervisor
-Conflicts: nova-baremetal,
-           nova-compute-kvm,
+Conflicts: nova-compute-kvm,
            nova-compute-lxc,
            nova-compute-uml,
            nova-compute-xen
@@ -373,8 +369,7 @@ Depends: adduser,
          ${misc:Depends}
 Provides: nova-compute-hypervisor
 Recommends: guestmount
-Conflicts: nova-baremetal,
-           nova-compute-lxc,
+Conflicts: nova-compute-lxc,
            nova-compute-qemu,
            nova-compute-uml,
            nova-compute-xen
@@ -647,37 +642,6 @@ Description: Openstack Compute - cells
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
  This is the Nova cells component.
-
-Package: nova-baremetal
-Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: dnsmasq,
-         ipmitool,
-         nova-common (= ${binary:Version}),
-         open-iscsi,
-         syslinux,
-         ${misc:Depends},
-         ${ostack-lsb-base},
-         ${python:Depends}
-Provides: nova-compute-hypervisor
-Conflicts: nova-compute-kvm,
-           nova-compute-lxc,
-           nova-compute-qemu,
-           nova-compute-uml,
-           nova-compute-xen
-Description: Openstack Compute - baremetal virt
- OpenStack is a reliable cloud infrastructure. Its mission is to produce
- the ubiquitous cloud computing platform that will meet the needs of public
- and private cloud providers regardless of size, by being simple to implement
- and massively scalable.
- .
- OpenStack Compute, codenamed Nova, is a cloud computing fabric controller
- designed to be modular and easy to extend and adapt. In addition to its
- "native" OpenStack API, it also supports the Amazon EC2 API, and it supports
- many different database backends (including SQLite, MySQL, and PostgreSQL),
- hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
- .
- This is the baremetal virt component.
 
 Package: nova-consoleproxy
 Architecture: all

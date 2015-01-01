@@ -2,6 +2,7 @@ nova (2015.1~b1-1) UNRELEASED; urgency=medium
 
   * New upstream release.
   * Reviewed (build-)depends for this release.
+  * Removed the nova-baremetal package, since there's now Ironic.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 24 Dec 2014 09:53:43 +0800
 
