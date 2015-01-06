@@ -9,7 +9,7 @@ Uploaders: Julien Danjou <acid@debian.org>,
            gustavo panizzo <gfa@zumbi.com.ar>
 Build-Depends: debhelper (>= 9),
                dh-systemd,
-               openstack-pkg-tools (>= 20~),
+               openstack-pkg-tools (>= 21~),
                po-debconf,
                python-all (>= 2.6.6-3~),
                python-pbr (>= 0.6),
