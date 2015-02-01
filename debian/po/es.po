@@ -31,7 +31,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-05-03 03:26+0000\n"
+"POT-Creation-Date: 2015-02-02 01:36+0100\n"
 "PO-Revision-Date: 2014-12-11 18:12+0000\n"
 "Last-Translator: Jonathan Bustillos <jathanblackred@openmailbox.com>\n"
 "Language-Team: Debian Spanish <debian-l10n-spanish@lists.debian.org>\n"
@@ -165,8 +165,6 @@ msgstr "Valor para my_ip:"
 #. Type: string
 #. Description
 #: ../nova-common.templates:8001
-#| msgid ""
-#| "Enter the IP address that will be set in the my_ip directive of nova.conf."
 msgid "This value will be stored in the my_ip directive of nova.conf."
 msgstr ""
 "Este valor será almacenado en la directiva «my_ip» del archivo «nova.conf»."
@@ -186,7 +184,6 @@ msgstr "Introduzca la URL para el servidor Neutron."
 #. Type: string
 #. Description
 #: ../nova-common.templates:10001
-#| msgid "Auth server tenant name:"
 msgid "Neutron admin tenant name:"
 msgstr "Nombre del inquilino («tenant») administrador del servidor Neutron:"
 
@@ -211,37 +208,30 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#| msgid "Auth server tenant name:"
 msgid "Neutron administrator username:"
 msgstr "Nombre para el administrador de Neutron:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:11001
-#| msgid ""
-#| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please enter the username of the Neutron administrator."
 msgstr "Introduzca el nombre de administrador de Neutron:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#| msgid "Auth server tenant name:"
 msgid "Neutron administrator password:"
 msgstr "Contraseña del administrador de Neutron:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:12001
-#| msgid ""
-#| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please enter the password of the Neutron administrator."
 msgstr "Introduzca la contraseña del administrador de Neutron."
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:13001
-#| msgid "Ip address of your rabbitmq host:"
 msgid "IP address of your RabbitMQ host:"
 msgstr "Dirección IP del servidor RabbitMQ:"
 
@@ -269,15 +259,12 @@ msgstr "Introduzca la dirección IP de ese servidor."
 #. Type: string
 #. Description
 #: ../nova-common.templates:14001
-#| msgid "Username to connect to XenAPI:"
 msgid "Username for connection to the RabbitMQ server:"
 msgstr "Nombre de usuario para la conexión al servidor RabbitMQ:"
 
 #. Type: string
 #. Description
 #: ../nova-common.templates:14001
-#| msgid ""
-#| "Please enter the username used to connect to your XenAPI (XCP server)."
 msgid "Please specify the username used to connect to the RabbitMQ server."
 msgstr ""
 "Introduzca el nombre de usuario utilizado para conectarse al servidor "
@@ -286,18 +273,40 @@ msgstr ""
 #. Type: password
 #. Description
 #: ../nova-common.templates:15001
-#| msgid "Password to connect to XenAPI:"
 msgid "Password for connection to the RabbitMQ server:"
 msgstr "Contraseña para conectarse al servidor RabbitMQ:"
 
 #. Type: password
 #. Description
 #: ../nova-common.templates:15001
-#| msgid ""
-#| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
 "Introduzca la contraseña utilizada para conectarse al servidor RabbitMQ."
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid "Metadata proxy shared secret:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"VM instances using Neutron to handle networking retrieve their metadata "
+"through the Neutron metadata agent, which serves as a proxy to the Nova "
+"metadata REST API server."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"Please enter the password that should be used to protect communications "
+"between the Neutron metadata proxy agent and the Nova metadata server. The "
+"same shared password should be used when setting up the neutron-metadata-"
+"agent package."
+msgstr ""
 
 #. Type: string
 #. Description

@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2014.1.3-6\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-05-03 03:26+0000\n"
+"POT-Creation-Date: 2015-02-02 01:36+0100\n"
 "PO-Revision-Date: 2014-11-29 08:44+0200\n"
 "Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
 "Language-Team: German <debian-l10n-german@lists.debian.org>\n"
@@ -142,7 +142,8 @@ msgstr "Wert für »my_ip«:"
 #. Description
 #: ../nova-common.templates:8001
 msgid "This value will be stored in the my_ip directive of nova.conf."
-msgstr "Dieser Wert wird in der Richtlinie »my_ip« der »nova.conf« gespeichert."
+msgstr ""
+"Dieser Wert wird in der Richtlinie »my_ip« der »nova.conf« gespeichert."
 
 #. Type: string
 #. Description
@@ -200,8 +201,7 @@ msgstr "Passwort des Neutron-Administrators:"
 #. Description
 #: ../nova-common.templates:12001
 msgid "Please enter the password of the Neutron administrator."
-msgstr ""
-"Bitte geben Sie das Passwort für des Neutron-Administrators ein."
+msgstr "Bitte geben Sie das Passwort für des Neutron-Administrators ein."
 
 #. Type: string
 #. Description
@@ -257,6 +257,31 @@ msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr ""
 "Bitte geben Sie das Passwort ein, das Sie zum Verbinden mit dem RabbitMQ-"
 "Server verwenden."
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid "Metadata proxy shared secret:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"VM instances using Neutron to handle networking retrieve their metadata "
+"through the Neutron metadata agent, which serves as a proxy to the Nova "
+"metadata REST API server."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"Please enter the password that should be used to protect communications "
+"between the Neutron metadata proxy agent and the Nova metadata server. The "
+"same shared password should be used when setting up the neutron-metadata-"
+"agent package."
+msgstr ""
 
 #. Type: string
 #. Description

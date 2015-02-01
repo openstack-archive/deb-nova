@@ -46,10 +46,14 @@ manage_nova_my_ip () {
 }
 
 read_neutron_config () {
+	# Keystone auth credential to talk to Neutron
 	pkgos_read_config -p high ${NOVA_CONF} neutron url nova/neutron_url
 	pkgos_read_config -p medium ${NOVA_CONF} neutron admin_tenant_name nova/neutron_admin_tenant_name
 	pkgos_read_config -p medium ${NOVA_CONF} neutron admin_username nova/neutron_admin_username
 	pkgos_read_config -p high ${NOVA_CONF} neutron admin_password nova/neutron_admin_password
+
+	# The metadata_proxy_shared_secret
+	pkgos_read_config -p high ${NOVA_CONF} neutron metadata_proxy_shared_secret nova/metadata_secret
 }
 
 pkgos_var_user_group nova

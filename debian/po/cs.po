@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2013.1.2-3\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-05-03 03:26+0000\n"
+"POT-Creation-Date: 2015-02-02 01:36+0100\n"
 "PO-Revision-Date: 2013-08-27 12:31+0200\n"
 "Last-Translator: Michal Simunek <michal.simunek@gmail.com>\n"
 "Language-Team: Czech <debian-l10n-czech@lists.debian.org>\n"
@@ -276,6 +276,31 @@ msgstr "Heslo pro připojení ke XenAPI:"
 #| "Please enter the password used to connect to your XenAPI (XCP server)."
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr "Zadejte prosím heslo pro připojení ke XenAPI (XCP serveru)."
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid "Metadata proxy shared secret:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"VM instances using Neutron to handle networking retrieve their metadata "
+"through the Neutron metadata agent, which serves as a proxy to the Nova "
+"metadata REST API server."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"Please enter the password that should be used to protect communications "
+"between the Neutron metadata proxy agent and the Nova metadata server. The "
+"same shared password should be used when setting up the neutron-metadata-"
+"agent package."
+msgstr ""
 
 #. Type: string
 #. Description

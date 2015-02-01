@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2014-05-03 03:26+0000\n"
+"POT-Creation-Date: 2015-02-02 01:36+0100\n"
 "PO-Revision-Date: 2012-08-27 16:48+0800\n"
 "Last-Translator: ben <duyujie.dyj@gmail.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -248,6 +248,31 @@ msgstr "链接到XenAPI的密码："
 msgid "Please specify the password used to connect to the RabbitMQ server."
 msgstr "请输入链接到您的XenAPI（XCP服务器）的密码。"
 
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid "Metadata proxy shared secret:"
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"VM instances using Neutron to handle networking retrieve their metadata "
+"through the Neutron metadata agent, which serves as a proxy to the Nova "
+"metadata REST API server."
+msgstr ""
+
+#. Type: password
+#. Description
+#: ../nova-common.templates:16001
+msgid ""
+"Please enter the password that should be used to protect communications "
+"between the Neutron metadata proxy agent and the Nova metadata server. The "
+"same shared password should be used when setting up the neutron-metadata-"
+"agent package."
+msgstr ""
+
 #. Type: string
 #. Description
 #: ../nova-compute-xen.templates:2001
@@ -273,8 +298,8 @@ msgid ""
 "(XCP) appliance installed from an ISO image, or even the Kronos Project's "
 "XCP (available in Debian and Ubuntu as the package xcp-xapi)."
 msgstr ""
-"这可能是一个运行Citrix XenServer的服务器，或者从一个ISO镜像安装的CentOS "
-"XCP(Xen Cloud Platform)应用程序，或者Kronos 项目的XCP（可以从Debian和Ubuntu的"
+"这可能是一个运行Citrix XenServer的服务器，或者从一个ISO镜像安装的CentOS XCP"
+"(Xen Cloud Platform)应用程序，或者Kronos 项目的XCP（可以从Debian和Ubuntu的"
 "xcp-xapi包获得）。"
 
 #. Type: string
