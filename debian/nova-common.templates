@@ -115,3 +115,15 @@ _Description: Password for connection to the RabbitMQ server:
  needs to connect to a central RabbitMQ server.
  .
  Please specify the password used to connect to the RabbitMQ server.
+
+Template: nova/metadata_secret
+Type: password
+_Description: Metadata proxy shared secret:
+ VM instances using Neutron to handle networking retrieve their metadata
+ through the Neutron metadata agent, which serves as a proxy to the Nova
+ metadata REST API server.
+ .
+ Please enter the password that should be used to protect communications
+ between the Neutron metadata proxy agent and the Nova metadata server. The
+ same shared password should be used when setting up the neutron-metadata-agent
+ package.
