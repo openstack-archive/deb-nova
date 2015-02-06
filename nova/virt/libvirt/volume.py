@@ -285,10 +285,29 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                           check_exit_code=[0, 255])[0] \
                 or ""
 
-            for ip, iqn in self._get_target_portals_from_iscsiadm_output(out):
+            # There are two types of iSCSI multipath devices.  One which shares
+            # the same iqn between multiple portals, and the other which use
+            # different iqns on different portals.  Try to identify the type by
+            # checking the iscsiadm output if the iqn is used by multiple
+            # portals.  If it is, it's the former, so use the supplied iqn.
+            # Otherwise, it's the latter, so try the ip,iqn combinations to
+            # find the targets which constitutes the multipath device.
+            ips_iqns = self._get_target_portals_from_iscsiadm_output(out)
+            same_portal = False
+            all_portals = set()
+            match_portals = set()
+            for ip, iqn in ips_iqns:
+                all_portals.add(ip)
+                if iqn == iscsi_properties['target_iqn']:
+                    match_portals.add(ip)
+            if len(all_portals) == len(match_portals):
+                same_portal = True
+
+            for ip, iqn in ips_iqns:
                 props = iscsi_properties.copy()
-                props['target_portal'] = ip
-                props['target_iqn'] = iqn
+                props['target_portal'] = ip.split(",")[0]
+                if not same_portal:
+                    props['target_iqn'] = iqn
                 self._connect_to_iscsi_portal(props)
 
             self._rescan_iscsi()
@@ -423,7 +442,23 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
                                       check_exit_code=[0, 255])[0] \
             or ""
 
-        ips_iqns = self._get_target_portals_from_iscsiadm_output(out)
+        # Extract targets for the current multipath device.
+        ips_iqns = []
+        entries = self._get_iscsi_devices()
+        for ip, iqn in self._get_target_portals_from_iscsiadm_output(out):
+            ip_iqn = "%s-iscsi-%s" % (ip.split(",")[0], iqn)
+            for entry in entries:
+                entry_ip_iqn = entry.split("-lun-")[0]
+                if entry_ip_iqn[:3] == "ip-":
+                    entry_ip_iqn = entry_ip_iqn[3:]
+                if (ip_iqn != entry_ip_iqn):
+                    continue
+                entry_real_path = os.path.realpath("/dev/disk/by-path/%s" %
+                                                   entry)
+                entry_mpdev = self._get_multipath_device_name(entry_real_path)
+                if entry_mpdev == multipath_device:
+                    ips_iqns.append([ip, iqn])
+                    break
 
         if not devices:
             # disconnect if no other multipath devices
@@ -1130,3 +1165,18 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
             msg = _LW("Cannot mount Scality SOFS, check syslog for errors")
             LOG.warn(msg)
             raise exception.NovaException(msg)
+
+
+class LibvirtGPFSVolumeDriver(LibvirtBaseVolumeDriver):
+    """Class for volumes backed by gpfs volume."""
+    def __init__(self, connection):
+        super(LibvirtGPFSVolumeDriver,
+              self).__init__(connection, is_block_dev=False)
+
+    def get_config(self, connection_info, disk_info):
+        """Returns xml for libvirt."""
+        conf = super(LibvirtGPFSVolumeDriver,
+                     self).get_config(connection_info, disk_info)
+        conf.source_type = "file"
+        conf.source_path = connection_info['data']['device_path']
+        return conf

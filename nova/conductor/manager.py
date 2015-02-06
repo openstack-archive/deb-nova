@@ -466,7 +466,8 @@ class ComputeTaskManager(base.Base):
                                    exception.InvalidSharedStorage,
                                    exception.HypervisorUnavailable,
                                    exception.InstanceNotRunning,
-                                   exception.MigrationPreCheckError)
+                                   exception.MigrationPreCheckError,
+                                   exception.LiveMigrationWithOldNovaNotSafe)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
             flavor, block_migration, disk_over_commit, reservations=None):
         if instance and not isinstance(instance, nova_object.NovaObject):
@@ -570,7 +571,8 @@ class ComputeTaskManager(base.Base):
                 exception.InvalidSharedStorage,
                 exception.HypervisorUnavailable,
                 exception.InstanceNotRunning,
-                exception.MigrationPreCheckError) as ex:
+                exception.MigrationPreCheckError,
+                exception.LiveMigrationWithOldNovaNotSafe) as ex:
             with excutils.save_and_reraise_exception():
                 # TODO(johngarbutt) - eventually need instance actions here
                 request_spec = {'instance_properties': {
@@ -670,19 +672,26 @@ class ComputeTaskManager(base.Base):
             if snapshot_id:
                 self._delete_image(context, snapshot_id)
         elif instance.vm_state == vm_states.SHELVED_OFFLOADED:
+            image = None
             image_id = sys_meta.get('shelved_image_id')
-            with compute_utils.EventReporter(
-                context, 'get_image_info', instance.uuid):
-                try:
-                    image = safe_image_show(context, image_id)
-                except exception.ImageNotFound:
-                    instance.vm_state = vm_states.ERROR
-                    instance.save()
-                    reason = _('Unshelve attempted but the image %s '
-                               'cannot be found.') % image_id
-                    LOG.error(reason, instance=instance)
-                    raise exception.UnshelveException(
-                        instance_id=instance.uuid, reason=reason)
+            # No need to check for image if image_id is None as
+            # "shelved_image_id" key is not set for volume backed
+            # instance during the shelve process
+            if image_id:
+                with compute_utils.EventReporter(
+                    context, 'get_image_info', instance.uuid):
+                    try:
+                        image = safe_image_show(context, image_id)
+                    except exception.ImageNotFound:
+                        instance.vm_state = vm_states.ERROR
+                        instance.save()
+
+                        reason = _('Unshelve attempted but the image %s '
+                                   'cannot be found.') % image_id
+
+                        LOG.error(reason, instance=instance)
+                        raise exception.UnshelveException(
+                            instance_id=instance.uuid, reason=reason)
 
             try:
                 with compute_utils.EventReporter(context, 'schedule_instances',
