@@ -1,3 +1,9 @@
+nova (2014.2.2-1) experimental; urgency=medium
+
+  * New upstream point release.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 06 Feb 2015 22:51:36 +0100
+
 nova (2014.2.1-4) experimental; urgency=medium
 
   * New code and Debconf templates for handing metadata_proxy_shared_secret.
