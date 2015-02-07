@@ -25,7 +25,6 @@ import webob.exc
 
 import nova.api.openstack
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
@@ -51,10 +50,6 @@ class ExtensionDescriptor(object):
     alias = None
 
     # Description comes from the docstring for the class
-
-    # The XML namespace for the extension, e.g.,
-    # 'http://www.fox.in.socks/api/ext/pie/v1.0'
-    namespace = None
 
     # The timestamp when the extension was last updated, e.g.,
     # '2011-01-22T19:25:27Z'
@@ -83,54 +78,19 @@ class ExtensionDescriptor(object):
         controller_exts = []
         return controller_exts
 
-    @classmethod
-    def nsmap(cls):
-        """Synthesize a namespace map from extension."""
+    def __repr__(self):
+        return "<Extension: name=%s, alias=%s, updated=%s>" % (
+            self.name, self.alias, self.updated)
 
-        # Start with a base nsmap
-        nsmap = ext_nsmap.copy()
+    def is_valid(self):
+        """Validate required fields for extensions.
 
-        # Add the namespace for the extension
-        nsmap[cls.alias] = cls.namespace
-
-        return nsmap
-
-    @classmethod
-    def xmlname(cls, name):
-        """Synthesize element and attribute names."""
-
-        return '{%s}%s' % (cls.namespace, name)
-
-
-def make_ext(elem):
-    elem.set('name')
-    elem.set('namespace')
-    elem.set('alias')
-    elem.set('updated')
-
-    desc = xmlutil.SubTemplateElement(elem, 'description')
-    desc.text = 'description'
-
-    xmlutil.make_links(elem, 'links')
-
-
-ext_nsmap = {None: xmlutil.XMLNS_COMMON_V10, 'atom': xmlutil.XMLNS_ATOM}
-
-
-class ExtensionTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('extension', selector='extension')
-        make_ext(root)
-        return xmlutil.MasterTemplate(root, 1, nsmap=ext_nsmap)
-
-
-class ExtensionsTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('extensions')
-        elem = xmlutil.SubTemplateElement(root, 'extension',
-                                          selector='extensions')
-        make_ext(elem)
-        return xmlutil.MasterTemplate(root, 1, nsmap=ext_nsmap)
+        Raises an attribute error if the attr is not defined
+        """
+        for attr in ('name', 'alias', 'updated', 'namespace'):
+            if getattr(self, attr) is None:
+                raise AttributeError("%s is None, needs to be defined" % attr)
+        return True
 
 
 class ExtensionsController(wsgi.Resource):
@@ -149,14 +109,12 @@ class ExtensionsController(wsgi.Resource):
         ext_data['links'] = []  # TODO(dprince): implement extension links
         return ext_data
 
-    @wsgi.serializers(xml=ExtensionsTemplate)
     def index(self, req):
         extensions = []
         for ext in self.extension_manager.sorted_extensions():
             extensions.append(self._translate(ext))
         return dict(extensions=extensions)
 
-    @wsgi.serializers(xml=ExtensionTemplate)
     def show(self, req, id):
         try:
             # NOTE(dprince): the extensions alias is used as the 'id' for show
@@ -233,12 +191,7 @@ class ExtensionManager(object):
     def _check_extension(self, extension):
         """Checks for required methods in extension objects."""
         try:
-            LOG.debug('Ext name: %s', extension.name)
-            LOG.debug('Ext alias: %s', extension.alias)
-            LOG.debug('Ext description: %s',
-                      ' '.join(extension.__doc__.strip().split()))
-            LOG.debug('Ext namespace: %s', extension.namespace)
-            LOG.debug('Ext updated: %s', extension.updated)
+            extension.is_valid()
         except AttributeError as ex:
             LOG.exception(_LE("Exception loading extension: %s"), ex)
             return False
@@ -381,6 +334,7 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
         dirnames[:] = subdirs
 
 
+# This will be deprecated after policy cleanup finished
 def core_authorizer(api_name, extension_name):
     def authorize(context, target=None, action=None):
         if target is None:
@@ -394,33 +348,65 @@ def core_authorizer(api_name, extension_name):
     return authorize
 
 
+# This is only used for Nova V2 API, after v2 API depreciated, this will be
+# deprecated also.
 def extension_authorizer(api_name, extension_name):
     return core_authorizer('%s_extension' % api_name, extension_name)
 
 
-def soft_authorizer(hard_authorizer, api_name, extension_name):
+def _soft_authorizer(hard_authorizer, api_name, extension_name):
     hard_authorize = hard_authorizer(api_name, extension_name)
 
-    def authorize(context, action=None):
+    def authorize(context, target=None, action=None):
         try:
-            hard_authorize(context, action=action)
+            hard_authorize(context, target=target, action=action)
             return True
         except exception.Forbidden:
             return False
     return authorize
 
 
+# This is only used for Nova V2 API, after V2 API depreciated, this will be
+# deprecated also.
 def soft_extension_authorizer(api_name, extension_name):
-    return soft_authorizer(extension_authorizer, api_name, extension_name)
+    return _soft_authorizer(extension_authorizer, api_name, extension_name)
 
 
+# This will be deprecated after policy cleanup finished
 def soft_core_authorizer(api_name, extension_name):
-    return soft_authorizer(core_authorizer, api_name, extension_name)
+    return _soft_authorizer(core_authorizer, api_name, extension_name)
 
 
+# This will be deprecated after ec2 old style policy removed in later release
 def check_compute_policy(context, action, target, scope='compute'):
     _action = '%s:%s' % (scope, action)
     nova.policy.enforce(context, _action, target)
+
+
+# NOTE(alex_xu): The functions os_compute_authorizer and
+# os_compute_soft_authorizer are used to policy enforcement for Openstack
+# Compute API, now Nova V2.1 REST API will invoke it. Currently this function
+# still uses the old policy rule name style as below:
+#   core api: 'compute:v3:[extension]:[action]'
+#   extension api: 'compute_extension:v3:[extension]:[action]'
+#
+# After the policy cleanup is finished, the policy rule name will be renamed
+# to 'os_compute_api:[extension]:[action]'. And the parameter 'core' will be
+# deleted, because there isn't distinguish between core or extension API in
+# the future.
+
+def os_compute_authorizer(extension_name, core=False):
+    if core:
+        return core_authorizer('compute', 'v3:%s' % extension_name)
+    else:
+        return extension_authorizer('compute', 'v3:%s' % extension_name)
+
+
+def os_compute_soft_authorizer(extension_name, core=False):
+    if core:
+        return soft_core_authorizer('compute', 'v3:%s' % extension_name)
+    else:
+        return soft_extension_authorizer('compute', 'v3:%s' % extension_name)
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -468,6 +454,20 @@ class V3APIExtensionBase(object):
     def version(self):
         """Version of the extension."""
         pass
+
+    def __repr__(self):
+        return "<Extension: name=%s, alias=%s, version=%s>" % (
+            self.name, self.alias, self.version)
+
+    def is_valid(self):
+        """Validate required fields for extensions.
+
+        Raises an attribute error if the attr is not defined
+        """
+        for attr in ('name', 'alias', 'version'):
+            if getattr(self, attr) is None:
+                raise AttributeError("%s is None, needs to be defined" % attr)
+        return True
 
 
 def expected_errors(errors):

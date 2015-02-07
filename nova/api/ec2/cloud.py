@@ -45,7 +45,6 @@ from nova import network
 from nova.network.security_group import neutron_driver
 from nova.network.security_group import openstack_driver
 from nova import objects
-from nova.objects import base as obj_base
 from nova.openstack.common import log as logging
 from nova import quota
 from nova import servicegroup
@@ -826,12 +825,13 @@ class CloudController(object):
         v['size'] = volume['size']
         v['availabilityZone'] = volume['availability_zone']
         v['createTime'] = volume['created_at']
-        if volume['attach_status'] == 'attached':
-            v['attachmentSet'] = [{'attachTime': volume['attach_time'],
+        if v['status'] == 'in-use':
+            v['attachmentSet'] = [{'attachTime': volume.get('attach_time'),
                                    'deleteOnTermination': False,
                                    'device': volume['mountpoint'],
                                    'instanceId': instance_ec2_id,
-                                   'status': 'attached',
+                                   'status': self._get_volume_attach_status(
+                                                                    volume),
                                    'volumeId': v['volumeId']}]
         else:
             v['attachmentSet'] = [{}]
@@ -1114,7 +1114,7 @@ class CloudController(object):
             ebs = {'volumeId': ec2utils.id_to_ec2_vol_id(volume_id),
                    'deleteOnTermination': bdm.delete_on_termination,
                    'attachTime': vol['attach_time'] or '',
-                   'status': vol['attach_status'], }
+                   'status': self._get_volume_attach_status(vol), }
             res = {'deviceName': bdm.device_name,
                    'ebs': ebs, }
             mapping.append(res)
@@ -1122,6 +1122,12 @@ class CloudController(object):
         if mapping:
             result['blockDeviceMapping'] = mapping
         result['rootDeviceType'] = root_device_type
+
+    @staticmethod
+    def _get_volume_attach_status(volume):
+        return (volume['status']
+                if volume['status'] in ('attaching', 'detaching') else
+                volume['attach_status'])
 
     @staticmethod
     def _format_instance_root_device_name(instance, result):
@@ -1234,8 +1240,8 @@ class CloudController(object):
             self._format_instance_root_device_name(instance, i)
             self._format_instance_bdm(context, instance['uuid'],
                                       i['rootDeviceName'], i)
-            host = instance['host']
-            zone = ec2utils.get_availability_zone_by_host(host)
+            zone = availability_zones.get_instance_availability_zone(context,
+                                                                     instance)
             i['placement'] = {'availabilityZone': zone}
             if instance['reservation_id'] not in reservations:
                 r = {}
@@ -1386,7 +1392,7 @@ class CloudController(object):
                                             kwargs.get('instance_type', None))
 
         (instances, resv_id) = self.compute_api.create(context,
-            instance_type=obj_base.obj_to_primitive(flavor),
+            instance_type=flavor,
             image_href=image_uuid,
             max_count=int(kwargs.get('max_count', min_count)),
             min_count=min_count,

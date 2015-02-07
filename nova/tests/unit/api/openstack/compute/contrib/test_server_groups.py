@@ -13,13 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
 import webob
 
 from nova.api.openstack.compute.contrib import server_groups
 from nova.api.openstack.compute.plugins.v3 import server_groups as sg_v3
 from nova.api.openstack import extensions
-from nova.api.openstack import wsgi
 from nova import context
 import nova.db
 from nova import exception
@@ -27,7 +25,6 @@ from nova import objects
 from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.unit.api.openstack import fakes
-from nova.tests.unit import utils
 
 FAKE_UUID1 = 'a47ae74e-ab08-447f-8eee-ffd43fc46c16'
 FAKE_UUID2 = 'c6e6430a-6563-4efa-9542-5e93c9e97d18'
@@ -81,36 +78,34 @@ def server_group_db(sg):
 
 
 class ServerGroupTestV21(test.TestCase):
+    validation_error = exception.ValidationError
 
     def setUp(self):
         super(ServerGroupTestV21, self).setUp()
         self._setup_controller()
-        self.app = self._get_app()
+        self.req = fakes.HTTPRequest.blank('')
 
     def _setup_controller(self):
         self.controller = sg_v3.ServerGroupController()
 
-    def _get_app(self):
-        return fakes.wsgi_app_v21(init_only=('os-server-groups',))
-
-    def _get_url(self):
-        return '/v2/fake'
-
     def test_create_server_group_with_no_policies(self):
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
         sgroup = server_group_template()
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
-    def test_create_server_group_normal(self):
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
+    def _create_server_group_normal(self, policies):
         sgroup = server_group_template()
-        policies = ['anti-affinity']
         sgroup['policies'] = policies
-        res_dict = self.controller.create(req, {'server_group': sgroup})
+        res_dict = self.controller.create(self.req,
+                                          body={'server_group': sgroup})
         self.assertEqual(res_dict['server_group']['name'], 'test')
         self.assertTrue(uuidutils.is_uuid_like(res_dict['server_group']['id']))
         self.assertEqual(res_dict['server_group']['policies'], policies)
+
+    def test_create_server_group(self):
+        policies = ['affinity', 'anti-affinity']
+        for policy in policies:
+            self._create_server_group_normal([policy])
 
     def _create_instance(self, context):
         instance = objects.Instance(context=context, image_ref=1, node='node1',
@@ -135,8 +130,7 @@ class ServerGroupTestV21(test.TestCase):
     def test_display_members(self):
         ctx = context.RequestContext('fake_user', 'fake')
         (ig_uuid, instances, members) = self._create_groups_and_instances(ctx)
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        res_dict = self.controller.show(req, ig_uuid)
+        res_dict = self.controller.show(self.req, ig_uuid)
         result_members = res_dict['server_group']['members']
         self.assertEqual(2, len(result_members))
         for member in members:
@@ -145,7 +139,6 @@ class ServerGroupTestV21(test.TestCase):
     def test_display_active_members_only(self):
         ctx = context.RequestContext('fake_user', 'fake')
         (ig_uuid, instances, members) = self._create_groups_and_instances(ctx)
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
 
         # delete an instance
         instances[1].destroy()
@@ -153,7 +146,7 @@ class ServerGroupTestV21(test.TestCase):
         self.assertRaises(exception.InstanceNotFound,
                           objects.Instance.get_by_uuid,
                           ctx, instances[1].uuid)
-        res_dict = self.controller.show(req, ig_uuid)
+        res_dict = self.controller.show(self.req, ig_uuid)
         result_members = res_dict['server_group']['members']
         # check that only the active instance is displayed
         self.assertEqual(1, len(result_members))
@@ -162,103 +155,88 @@ class ServerGroupTestV21(test.TestCase):
     def test_create_server_group_with_illegal_name(self):
         # blank name
         sgroup = server_group_template(name='', policies=['test_policy'])
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # name with length 256
         sgroup = server_group_template(name='1234567890' * 26,
                                        policies=['test_policy'])
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # non-string name
         sgroup = server_group_template(name=12, policies=['test_policy'])
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # name with leading spaces
         sgroup = server_group_template(name='  leading spaces',
                                        policies=['test_policy'])
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # name with trailing spaces
         sgroup = server_group_template(name='trailing space ',
                                        policies=['test_policy'])
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # name with all spaces
         sgroup = server_group_template(name='    ',
                                        policies=['test_policy'])
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
     def test_create_server_group_with_illegal_policies(self):
         # blank policy
         sgroup = server_group_template(name='fake-name', policies='')
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # policy as integer
         sgroup = server_group_template(name='fake-name', policies=7)
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # policy as string
         sgroup = server_group_template(name='fake-name', policies='invalid')
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
         # policy as None
         sgroup = server_group_template(name='fake-name', policies=None)
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
     def test_create_server_group_conflicting_policies(self):
         sgroup = server_group_template()
         policies = ['anti-affinity', 'affinity']
         sgroup['policies'] = policies
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
     def test_create_server_group_with_duplicate_policies(self):
         sgroup = server_group_template()
         policies = ['affinity', 'affinity']
         sgroup['policies'] = policies
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
     def test_create_server_group_not_supported(self):
         sgroup = server_group_template()
         policies = ['storage-affinity', 'anti-affinity', 'rack-affinity']
         sgroup['policies'] = policies
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
-                          req, {'server_group': sgroup})
+        self.assertRaises(self.validation_error, self.controller.create,
+                          self.req, body={'server_group': sgroup})
 
     def test_create_server_group_with_no_body(self):
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller.create, req, None)
+        self.assertRaises(self.validation_error,
+                          self.controller.create, self.req, body=None)
 
     def test_create_server_group_with_no_server_group(self):
         body = {'no-instanceGroup': None}
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller.create, req, body)
+        self.assertRaises(self.validation_error,
+                          self.controller.create, self.req, body=body)
 
     def test_list_server_group_by_tenant(self):
         groups = []
@@ -285,8 +263,7 @@ class ServerGroupTestV21(test.TestCase):
         self.stubs.Set(nova.db, 'instance_group_get_all_by_project_id',
                        return_server_groups)
 
-        req = fakes.HTTPRequest.blank(self._get_url() + '/os-server-groups')
-        res_dict = self.controller.index(req)
+        res_dict = self.controller.index(self.req)
         self.assertEqual(res_dict, expected)
 
     def test_list_server_group_all(self):
@@ -324,7 +301,7 @@ class ServerGroupTestV21(test.TestCase):
         self.stubs.Set(nova.db, 'instance_group_get_all_by_project_id',
                        return_tenant_server_groups)
 
-        path = self._get_url() + '/os-server-groups?all_projects=True'
+        path = '/os-server-groups?all_projects=True'
 
         req = fakes.HTTPRequest.blank(path, use_admin_context=True)
         res_dict = self.controller.index(req)
@@ -350,9 +327,7 @@ class ServerGroupTestV21(test.TestCase):
         self.stubs.Set(nova.db, 'instance_group_get',
                        return_server_group)
 
-        req = fakes.HTTPRequest.blank(self._get_url() +
-                                     '/os-server-groups/123')
-        resp = self.controller.delete(req, '123')
+        resp = self.controller.delete(self.req, '123')
         self.assertTrue(self.called)
 
         # NOTE: on v2.1, http status code is set as wsgi_code of API
@@ -364,158 +339,14 @@ class ServerGroupTestV21(test.TestCase):
         self.assertEqual(204, status_int)
 
     def test_delete_non_existing_server_group(self):
-        req = fakes.HTTPRequest.blank(self._get_url() +
-                                     '/os-server-groups/invalid')
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.delete,
-                          req, 'invalid')
+                          self.req, 'invalid')
 
 
 class ServerGroupTestV2(ServerGroupTestV21):
+    validation_error = webob.exc.HTTPBadRequest
 
     def _setup_controller(self):
         ext_mgr = extensions.ExtensionManager()
         ext_mgr.extensions = {}
         self.controller = server_groups.ServerGroupController(ext_mgr)
-
-    def _get_app(self):
-        return fakes.wsgi_app(init_only=('os-server-groups',))
-
-
-class TestServerGroupXMLDeserializer(test.TestCase):
-
-    def setUp(self):
-        super(TestServerGroupXMLDeserializer, self).setUp()
-        self.deserializer = server_groups.ServerGroupXMLDeserializer()
-
-    def test_create_request(self):
-        serial_request = """
-<server_group name="test">
-</server_group>"""
-        request = self.deserializer.deserialize(serial_request)
-        expected = {
-            "server_group": {
-                "name": "test",
-                "policies": []
-            },
-        }
-        self.assertEqual(request['body'], expected)
-
-    def test_update_request(self):
-        serial_request = """
-<server_group name="test">
-<policies>
-<policy>policy-1</policy>
-<policy>policy-2</policy>
-</policies>
-</server_group>"""
-        request = self.deserializer.deserialize(serial_request)
-        expected = {
-            "server_group": {
-                "name": 'test',
-                "policies": ['policy-1', 'policy-2']
-            },
-        }
-        self.assertEqual(request['body'], expected)
-
-    def test_create_request_no_name(self):
-        serial_request = """
-<server_group>
-</server_group>"""
-        request = self.deserializer.deserialize(serial_request)
-        expected = {
-            "server_group": {
-            "policies": []
-            },
-        }
-        self.assertEqual(request['body'], expected)
-
-    def test_corrupt_xml(self):
-        """Should throw a 400 error on corrupt xml."""
-        self.assertRaises(
-                exception.MalformedRequestBody,
-                self.deserializer.deserialize,
-                utils.killer_xml_body())
-
-
-class TestServerGroupXMLSerializer(test.TestCase):
-    def setUp(self):
-        super(TestServerGroupXMLSerializer, self).setUp()
-        self.namespace = wsgi.XMLNS_V11
-        self.index_serializer = server_groups.ServerGroupsTemplate()
-        self.default_serializer = server_groups.ServerGroupTemplate()
-
-    def _tag(self, elem):
-        tagname = elem.tag
-        self.assertEqual(tagname[0], '{')
-        tmp = tagname.partition('}')
-        namespace = tmp[0][1:]
-        self.assertEqual(namespace, self.namespace)
-        return tmp[2]
-
-    def _verify_server_group(self, raw_group, tree):
-        policies = raw_group['policies']
-        members = raw_group['members']
-        self.assertEqual('server_group', self._tag(tree))
-        self.assertEqual(raw_group['id'], tree.get('id'))
-        self.assertEqual(raw_group['name'], tree.get('name'))
-        self.assertEqual(3, len(tree))
-        for child in tree:
-            child_tag = self._tag(child)
-            if child_tag == 'policies':
-                self.assertEqual(len(policies), len(child))
-                for idx, gr_child in enumerate(child):
-                    self.assertEqual(self._tag(gr_child), 'policy')
-                    self.assertEqual(policies[idx],
-                                     gr_child.text)
-            elif child_tag == 'members':
-                self.assertEqual(len(members), len(child))
-                for idx, gr_child in enumerate(child):
-                    self.assertEqual(self._tag(gr_child), 'member')
-                    self.assertEqual(members[idx],
-                                     gr_child.text)
-            elif child_tag == 'metadata':
-                self.assertEqual(0, len(child))
-
-    def _verify_server_group_brief(self, raw_group, tree):
-        self.assertEqual('server_group', self._tag(tree))
-        self.assertEqual(raw_group['id'], tree.get('id'))
-        self.assertEqual(raw_group['name'], tree.get('name'))
-
-    def test_group_serializer(self):
-        policies = ["policy-1", "policy-2"]
-        members = ["1", "2"]
-        raw_group = dict(
-            id='890',
-            name='name',
-            policies=policies,
-            members=members)
-        sg_group = dict(server_group=raw_group)
-        text = self.default_serializer.serialize(sg_group)
-
-        tree = etree.fromstring(text)
-
-        self._verify_server_group(raw_group, tree)
-
-    def test_groups_serializer(self):
-        policies = ["policy-1", "policy-2",
-                    "policy-3"]
-        members = ["1", "2", "3"]
-        groups = [dict(
-                 id='890',
-                 name='test',
-                 policies=policies[0:2],
-                 members=members[0:2]),
-                 dict(
-                 id='123',
-                 name='default',
-                 policies=policies[2:],
-                 members=members[2:])]
-        sg_groups = dict(server_groups=groups)
-        text = self.index_serializer.serialize(sg_groups)
-
-        tree = etree.fromstring(text)
-
-        self.assertEqual('server_groups', self._tag(tree))
-        self.assertEqual(len(groups), len(tree))
-        for idx, child in enumerate(tree):
-            self._verify_server_group_brief(groups[idx], child)

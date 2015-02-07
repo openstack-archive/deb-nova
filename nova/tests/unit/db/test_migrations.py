@@ -36,9 +36,9 @@ import glob
 import logging
 import os
 
+from migrate import UniqueConstraint
 from migrate.versioning import repository
 import mock
-from oslo.config import cfg
 from oslo.db.sqlalchemy import test_base
 from oslo.db.sqlalchemy import test_migrations
 from oslo.db.sqlalchemy import utils as oslodbutils
@@ -50,17 +50,17 @@ from sqlalchemy.sql import null
 from nova.db import migration
 from nova.db.sqlalchemy import migrate_repo
 from nova.db.sqlalchemy import migration as sa_migration
+from nova.db.sqlalchemy import models
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
-from nova.i18n import _
 from nova import test
-from nova.tests.unit import conf_fixture
 
 
 LOG = logging.getLogger(__name__)
 
 
-class NovaMigrationsCheckers(test_migrations.WalkVersionsMixin):
+class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
+                             test_migrations.WalkVersionsMixin):
     """Test sqlalchemy-migrate migrations."""
 
     TIMEOUT_SCALING_FACTOR = 2
@@ -87,7 +87,6 @@ class NovaMigrationsCheckers(test_migrations.WalkVersionsMixin):
 
     def setUp(self):
         super(NovaMigrationsCheckers, self).setUp()
-        self.useFixture(conf_fixture.ConfFixture(cfg.CONF))
         # NOTE(viktors): We should reduce log output because it causes issues,
         #                when we run tests with testr
         migrate_log = logging.getLogger('migrate')
@@ -108,6 +107,9 @@ class NovaMigrationsCheckers(test_migrations.WalkVersionsMixin):
     def assertIndexExists(self, engine, table_name, index):
         self.assertTrue(oslodbutils.index_exists(engine, table_name, index))
 
+    def assertIndexNotExists(self, engine, table_name, index):
+        self.assertFalse(oslodbutils.index_exists(engine, table_name, index))
+
     def assertIndexMembers(self, engine, table, index, members):
         # NOTE(johannes): Order of columns can matter. Most SQL databases
         # can use the leading columns for optimizing queries that don't
@@ -123,9 +125,33 @@ class NovaMigrationsCheckers(test_migrations.WalkVersionsMixin):
 
         self.assertEqual(members, index_columns)
 
+    # Implementations for ModelsMigrationsSync
+    def db_sync(self, engine):
+        with mock.patch.object(sa_migration, 'get_engine',
+                               return_value=engine):
+            sa_migration.db_sync()
+
+    def get_engine(self):
+        return self.migrate_engine
+
+    def get_metadata(self):
+        return models.BASE.metadata
+
+    def include_object(self, object_, name, type_, reflected, compare_to):
+        if type_ == 'table':
+            # migrate_version is a sqlalchemy-migrate control table and
+            # isn't included in the model. shadow_* are generated from
+            # the model and have their own tests to ensure they don't
+            # drift.
+            if name == 'migrate_version' or name.startswith('shadow_'):
+                return False
+
+        return True
+
     def _skippable_migrations(self):
         special = [
             216,  # Havana
+            272,  # NOOP migration due to revert
         ]
 
         havana_placeholders = range(217, 227)
@@ -561,13 +587,186 @@ class NovaMigrationsCheckers(test_migrations.WalkVersionsMixin):
         self.assertColumnNotExists(engine, 'compute_nodes', 'host')
         self.assertColumnNotExists(engine, 'shadow_compute_nodes', 'host')
 
+    def _check_269(self, engine, data):
+
+        self.assertColumnExists(engine, 'pci_devices', 'numa_node')
+        self.assertColumnExists(engine, 'shadow_pci_devices', 'numa_node')
+        pci_devices = oslodbutils.get_table(engine, 'pci_devices')
+        shadow_pci_devices = oslodbutils.get_table(
+            engine, 'shadow_pci_devices')
+        self.assertIsInstance(pci_devices.c.numa_node.type,
+                              sqlalchemy.types.Integer)
+        self.assertTrue(pci_devices.c.numa_node.nullable)
+        self.assertIsInstance(shadow_pci_devices.c.numa_node.type,
+                              sqlalchemy.types.Integer)
+        self.assertTrue(shadow_pci_devices.c.numa_node.nullable)
+
+    def _post_downgrade_269(self, engine):
+        self.assertColumnNotExists(engine, 'pci_devices', 'numa_node')
+        self.assertColumnNotExists(engine, 'shadow_pci_devices', 'numa_node')
+
+    def _check_270(self, engine, data):
+        self.assertColumnExists(engine, 'instance_extra', 'flavor')
+        self.assertColumnExists(engine, 'shadow_instance_extra', 'flavor')
+
+        instance_extra = oslodbutils.get_table(engine, 'instance_extra')
+        shadow_instance_extra = oslodbutils.get_table(
+                engine, 'shadow_instance_extra')
+        self.assertIsInstance(instance_extra.c.flavor.type,
+                              sqlalchemy.types.Text)
+        self.assertIsInstance(shadow_instance_extra.c.flavor.type,
+                              sqlalchemy.types.Text)
+
+    def _post_downgrade_270(self, engine):
+        self.assertColumnNotExists(engine, 'instance_extra', 'flavor')
+        self.assertColumnNotExists(engine, 'shadow_instance_extra', 'flavor')
+
+    def _check_271(self, engine, data):
+        self.assertIndexMembers(engine, 'block_device_mapping',
+                                'snapshot_id', ['snapshot_id'])
+        self.assertIndexMembers(engine, 'block_device_mapping',
+                                'volume_id', ['volume_id'])
+        self.assertIndexMembers(engine, 'dns_domains',
+                                'dns_domains_project_id_idx',
+                                ['project_id'])
+        self.assertIndexMembers(engine, 'fixed_ips',
+                                'network_id', ['network_id'])
+        self.assertIndexMembers(engine, 'fixed_ips',
+                                'fixed_ips_instance_uuid_fkey',
+                                ['instance_uuid'])
+        self.assertIndexMembers(engine, 'fixed_ips',
+                                'fixed_ips_virtual_interface_id_fkey',
+                                ['virtual_interface_id'])
+        self.assertIndexMembers(engine, 'floating_ips',
+                                'fixed_ip_id', ['fixed_ip_id'])
+        self.assertIndexMembers(engine, 'iscsi_targets',
+                                'iscsi_targets_volume_id_fkey', ['volume_id'])
+        self.assertIndexMembers(engine, 'virtual_interfaces',
+                                'virtual_interfaces_network_id_idx',
+                                ['network_id'])
+        self.assertIndexMembers(engine, 'virtual_interfaces',
+                                'virtual_interfaces_instance_uuid_fkey',
+                                ['instance_uuid'])
+
+        # Removed on MySQL, never existed on other databases
+        self.assertIndexNotExists(engine, 'dns_domains', 'project_id')
+        self.assertIndexNotExists(engine, 'virtual_interfaces', 'network_id')
+
+    def _post_downgrade_271(self, engine):
+        self.assertIndexNotExists(engine, 'dns_domains',
+                                  'dns_domains_project_id_idx')
+        self.assertIndexNotExists(engine, 'virtual_interfaces',
+                                  'virtual_interfaces_network_id_idx')
+        if engine.name == 'mysql':
+            self.assertIndexMembers(engine, 'dns_domains',
+                                    'project_id',
+                                    ['project_id'])
+            self.assertIndexMembers(engine, 'virtual_interfaces',
+                                    'network_id',
+                                    ['network_id'])
+            # Rest of indexes will still exist on MySQL
+            return
+
+        # Never existed on non-MySQL databases, so shouldn't exist now
+        self.assertIndexNotExists(engine, 'dns_domains', 'project_id')
+        self.assertIndexNotExists(engine, 'virtual_interfaces', 'network_id')
+
+        for table_name, index_name in [
+                ('block_device_mapping', 'snapshot_id'),
+                ('block_device_mapping', 'volume_id'),
+                ('dns_domains', 'dns_domains_project_id_idx'),
+                ('fixed_ips', 'network_id'),
+                ('fixed_ips', 'fixed_ips_instance_uuid_fkey'),
+                ('fixed_ips', 'fixed_ips_virtual_interface_id_fkey'),
+                ('floating_ips', 'fixed_ip_id'),
+                ('iscsi_targets', 'iscsi_targets_volume_id_fkey'),
+                ('virtual_interfaces', 'virtual_interfaces_network_id_idx'),
+                ('virtual_interfaces',
+                 'virtual_interfaces_instance_uuid_fkey')]:
+            self.assertIndexNotExists(engine, table_name, index_name)
+
+    def _pre_upgrade_273(self, engine):
+        if engine.name != 'sqlite':
+            return
+
+        # Drop a variety of unique constraints to ensure that the script
+        # properly readds them back
+        for table_name, constraint_name in [
+                ('compute_nodes', 'uniq_compute_nodes0'
+                                  'host0hypervisor_hostname'),
+                ('fixed_ips', 'uniq_fixed_ips0address0deleted'),
+                ('instance_info_caches', 'uniq_instance_info_caches0'
+                                         'instance_uuid'),
+                ('instance_type_projects', 'uniq_instance_type_projects0'
+                                           'instance_type_id0project_id0'
+                                           'deleted'),
+                ('pci_devices', 'uniq_pci_devices0compute_node_id0'
+                                'address0deleted'),
+                ('virtual_interfaces', 'uniq_virtual_interfaces0'
+                                       'address0deleted')]:
+            table = oslodbutils.get_table(engine, table_name)
+            constraints = [c for c in table.constraints
+                           if c.name == constraint_name]
+            for cons in constraints:
+                # Need to use sqlalchemy-migrate UniqueConstraint
+                cons = UniqueConstraint(*[c.name for c in cons.columns],
+                                        name=cons.name,
+                                        table=table)
+                cons.drop()
+
+    def _check_273(self, engine, data):
+        for src_table, src_column, dst_table, dst_column in [
+                ('fixed_ips', 'instance_uuid', 'instances', 'uuid'),
+                ('block_device_mapping', 'instance_uuid', 'instances', 'uuid'),
+                ('instance_info_caches', 'instance_uuid', 'instances', 'uuid'),
+                ('instance_metadata', 'instance_uuid', 'instances', 'uuid'),
+                ('instance_system_metadata', 'instance_uuid',
+                 'instances', 'uuid'),
+                ('instance_type_projects', 'instance_type_id',
+                 'instance_types', 'id'),
+                ('iscsi_targets', 'volume_id', 'volumes', 'id'),
+                ('reservations', 'usage_id', 'quota_usages', 'id'),
+                ('security_group_instance_association', 'instance_uuid',
+                 'instances', 'uuid'),
+                ('security_group_instance_association', 'security_group_id',
+                 'security_groups', 'id'),
+                ('virtual_interfaces', 'instance_uuid', 'instances', 'uuid'),
+                ('compute_nodes', 'service_id', 'services', 'id'),
+                ('instance_actions', 'instance_uuid', 'instances', 'uuid'),
+                ('instance_faults', 'instance_uuid', 'instances', 'uuid'),
+                ('migrations', 'instance_uuid', 'instances', 'uuid')]:
+            src_table = oslodbutils.get_table(engine, src_table)
+            fkeys = {fk.parent.name: fk.column
+                     for fk in src_table.foreign_keys}
+            self.assertIn(src_column, fkeys)
+            self.assertEqual(fkeys[src_column].table.name, dst_table)
+            self.assertEqual(fkeys[src_column].name, dst_column)
+
+    def _post_downgrade_273(self, engine):
+        # NOTE(johannes): No downgrade implemented, so nothing to check
+        pass
+
+    def _check_274(self, engine, data):
+        self.assertIndexMembers(engine, 'instances',
+                                'instances_project_id_deleted_idx',
+                                ['project_id', 'deleted'])
+        self.assertIndexNotExists(engine, 'instances', 'project_id')
+
+    def _post_downgrade_274(self, engine):
+        self.assertIndexMembers(engine, 'instances',
+                                'project_id', ['project_id'])
+        self.assertIndexNotExists(engine, 'instances',
+                                  'instances_project_id_deleted_idx')
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
+                               test.TestCase,
                                test_base.DbTestCase):
     pass
 
 
 class TestNovaMigrationsMySQL(NovaMigrationsCheckers,
+                              test.TestCase,
                               test_base.MySQLOpportunisticTestCase):
     def test_innodb_tables(self):
         with mock.patch.object(sa_migration, 'get_engine',
@@ -593,6 +792,7 @@ class TestNovaMigrationsMySQL(NovaMigrationsCheckers,
 
 
 class TestNovaMigrationsPostgreSQL(NovaMigrationsCheckers,
+                                   test.TestCase,
                                    test_base.PostgreSQLOpportunisticTestCase):
     pass
 
@@ -619,6 +819,6 @@ class ProjectTestCase(test.NoDBTestCase):
                     fname = os.path.basename(path)
                     missing_downgrade.append(fname)
 
-        helpful_msg = (_("The following migrations are missing a downgrade:"
-                         "\n\t%s") % '\n\t'.join(sorted(missing_downgrade)))
+        helpful_msg = ("The following migrations are missing a downgrade:"
+                       "\n\t%s" % '\n\t'.join(sorted(missing_downgrade)))
         self.assertFalse(missing_downgrade, helpful_msg)

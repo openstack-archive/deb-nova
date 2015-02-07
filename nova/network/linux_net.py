@@ -119,8 +119,8 @@ linux_net_opts = [
                     'always be on the bottom.'),
     cfg.StrOpt('iptables_drop_action',
                default='DROP',
-               help=('The table that iptables to jump to when a packet is '
-                     'to be dropped.')),
+               help='The table that iptables to jump to when a packet is '
+                    'to be dropped.'),
     cfg.IntOpt('ovs_vsctl_timeout',
                default=120,
                help='Amount of time, in seconds, that ovs_vsctl should wait '
@@ -178,7 +178,7 @@ class IptablesRule(object):
     def __ne__(self, other):
         return not self == other
 
-    def __str__(self):
+    def __repr__(self):
         if self.wrap:
             chain = '%s-%s' % (binary_name, self.chain)
         else:
@@ -645,6 +645,21 @@ def write_to_file(file, data, mode='w'):
         f.write(data)
 
 
+def is_pid_cmdline_correct(pid, match):
+    """Ensure that the cmdline for a pid seems sane
+
+    Because pids are recycled, blindly killing by pid is something to
+    avoid. This provides the ability to include a substring that is
+    expected in the cmdline as a safety check.
+    """
+    try:
+        with open('/proc/%d/cmdline' % pid) as f:
+            cmdline = f.read()
+            return match in cmdline
+    except EnvironmentError:
+        return False
+
+
 def metadata_forward():
     """Create forwarding rule for metadata."""
     if CONF.metadata_host != '127.0.0.1':
@@ -782,8 +797,8 @@ def ensure_floating_forward(floating_ip, fixed_ip, device, network):
     regex = '.*\s+%s(/32|\s+|$)' % floating_ip
     num_rules = iptables_manager.ipv4['nat'].remove_rules_regex(regex)
     if num_rules:
-        msg = _('Removed %(num)d duplicate rules for floating ip %(float)s')
-        LOG.warn(msg % {'num': num_rules, 'float': floating_ip})
+        msg = _LW('Removed %(num)d duplicate rules for floating ip %(float)s')
+        LOG.warn(msg, {'num': num_rules, 'float': floating_ip})
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].add_rule(chain, rule)
     iptables_manager.apply()
@@ -1042,9 +1057,7 @@ def kill_dhcp(dev):
     if pid:
         # Check that the process exists and looks like a dnsmasq process
         conffile = _dhcp_file(dev, 'conf')
-        out, _err = _execute('cat', '/proc/%d/cmdline' % pid,
-                             check_exit_code=False)
-        if conffile.split('/')[-1] in out:
+        if is_pid_cmdline_correct(pid, conffile.split('/')[-1]):
             _execute('kill', '-9', pid, run_as_root=True)
         else:
             LOG.debug('Pid %d is stale, skip killing dnsmasq', pid)
@@ -1078,16 +1091,12 @@ def restart_dhcp(context, dev, network_ref, fixedips):
 
     # if dnsmasq is already running, then tell it to reload
     if pid:
-        out, _err = _execute('cat', '/proc/%d/cmdline' % pid,
-                             check_exit_code=False)
-        # Using symlinks can cause problems here so just compare the name
-        # of the file itself
-        if conffile.split('/')[-1] in out:
+        if is_pid_cmdline_correct(pid, conffile.split('/')[-1]):
             try:
                 _execute('kill', '-HUP', pid, run_as_root=True)
                 _add_dnsmasq_accept_rules(dev)
                 return
-            except Exception as exc:  # pylint: disable=W0703
+            except Exception as exc:
                 LOG.error(_LE('Hupping dnsmasq threw %s'), exc)
         else:
             LOG.debug('Pid %d is stale, relaunching dnsmasq', pid)
@@ -1162,12 +1171,10 @@ interface %s
 
     # if radvd is already running, then tell it to reload
     if pid:
-        out, _err = _execute('cat', '/proc/%d/cmdline'
-                             % pid, check_exit_code=False)
-        if conffile in out:
+        if is_pid_cmdline_correct(pid, conffile):
             try:
                 _execute('kill', pid, run_as_root=True)
-            except Exception as exc:  # pylint: disable=W0703
+            except Exception as exc:
                 LOG.error(_LE('killing radvd threw %s'), exc)
         else:
             LOG.debug('Pid %d is stale, relaunching radvd', pid)

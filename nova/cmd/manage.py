@@ -67,7 +67,6 @@ import six
 
 from nova.api.ec2 import ec2utils
 from nova import availability_zones
-from nova.compute import flavors
 from nova import config
 from nova import context
 from nova import db
@@ -178,13 +177,20 @@ class ShellCommands(object):
                 shell = 'ipython'
         if shell == 'ipython':
             try:
-                import IPython
-                # Explicitly pass an empty list as arguments, because
-                # otherwise IPython would use sys.argv from this script.
-                shell = IPython.Shell.IPShell(argv=[])
-                shell.mainloop()
+                from IPython import embed
+                embed()
             except ImportError:
-                shell = 'python'
+                try:
+                    # Ipython < 0.11
+                    # Explicitly pass an empty list as arguments, because
+                    # otherwise IPython would use sys.argv from this script.
+                    import IPython
+
+                    shell = IPython.Shell.IPShell(argv=[])
+                    shell.mainloop()
+                except ImportError:
+                    # no IPython module
+                    shell = 'python'
 
         if shell == 'python':
             import code
@@ -536,8 +542,8 @@ class NetworkCommands(object):
                dns1=None, dns2=None, project_id=None, priority=None,
                uuid=None, fixed_cidr=None):
         """Creates fixed ips for host by range."""
-        kwargs = dict(((k, v) for k, v in locals().iteritems()
-                       if v and k != "self"))
+        kwargs = {k: v for k, v in locals().iteritems()
+                  if v and k != "self"}
         if multi_host is not None:
             kwargs['multi_host'] = multi_host == 'T'
         net_manager = importutils.import_object(CONF.network_manager)
@@ -667,26 +673,27 @@ class VmCommands(object):
                                              _('index'))))
 
         if host is None:
-            instances = db.instance_get_all(context.get_admin_context())
+            instances = objects.InstanceList.get_by_filters(
+                context.get_admin_context(), {}, expected_attrs=['flavor'])
         else:
-            instances = db.instance_get_all_by_host(
-                           context.get_admin_context(), host)
+            instances = objects.InstanceList.get_by_host(
+                context.get_admin_context(), host, expected_attrs=['flavor'])
 
         for instance in instances:
-            instance_type = flavors.extract_flavor(instance)
+            instance_type = instance.get_flavor()
             print(("%-10s %-15s %-10s %-10s %-26s %-9s %-9s %-9s"
-                   " %-10s %-10s %-10s %-5d" % (instance['display_name'],
-                                                instance['host'],
-                                                instance_type['name'],
-                                                instance['vm_state'],
-                                                instance['launched_at'],
-                                                instance['image_ref'],
-                                                instance['kernel_id'],
-                                                instance['ramdisk_id'],
-                                                instance['project_id'],
-                                                instance['user_id'],
-                                                instance['availability_zone'],
-                                                instance['launch_index'])))
+                   " %-10s %-10s %-10s %-5d" % (instance.display_name,
+                                                instance.host,
+                                                instance_type.name,
+                                                instance.vm_state,
+                                                instance.launched_at,
+                                                instance.image_ref,
+                                                instance.kernel_id,
+                                                instance.ramdisk_id,
+                                                instance.project_id,
+                                                instance.user_id,
+                                                instance.availability_zone,
+                                                instance.launch_index)))
 
 
 class ServiceCommands(object):
@@ -947,6 +954,21 @@ class DbCommands(object):
             print(_('There were no records found where '
                     'instance_uuid was NULL.'))
 
+    @args('--max-number', metavar='<number>',
+          help='Maximum number of instances to consider')
+    def migrate_flavor_data(self, max_number):
+        if max_number is not None:
+            max_number = int(max_number)
+            if max_number < 0:
+                print(_('Must supply a positive value for max_number'))
+                return(1)
+        admin_context = context.get_admin_context()
+        flavor_cache = {}
+        match, done = db.migrate_flavor_data(admin_context, max_number,
+                                             flavor_cache)
+        print(_('%(total)i instances matched query, %(done)i completed'),
+              {'total': match, 'done': done})
+
 
 class AgentBuildCommands(object):
     """Class for managing agent builds."""
@@ -1129,8 +1151,8 @@ class CellCommands(object):
         return transport_hosts
 
     @args('--name', metavar='<name>', help='Name for the new cell')
-    @args('--cell_type', metavar='<parent|child>',
-         help='Whether the cell is a parent or child')
+    @args('--cell_type', metavar='<parent|api|child|compute>',
+         help='Whether the cell is parent/api or child/compute')
     @args('--username', metavar='<username>',
          help='Username for the message broker in this cell')
     @args('--password', metavar='<password>',
@@ -1152,8 +1174,9 @@ class CellCommands(object):
                password=None, hostname=None, port=None, virtual_host=None,
                woffset=None, wscale=None):
 
-        if cell_type not in ['parent', 'child']:
-            print("Error: cell type must be 'parent' or 'child'")
+        if cell_type not in ['parent', 'child', 'api', 'compute']:
+            print("Error: cell type must be 'parent'/'api' or "
+                "'child'/'compute'")
             return(2)
 
         # Set up the transport URL
@@ -1165,7 +1188,9 @@ class CellCommands(object):
         transport_url.hosts.extend(transport_hosts)
         transport_url.virtual_host = virtual_host
 
-        is_parent = cell_type == 'parent'
+        is_parent = False
+        if cell_type in ['api', 'parent']:
+            is_parent = True
         values = {'name': name,
                   'is_parent': is_parent,
                   'transport_url': str(transport_url),

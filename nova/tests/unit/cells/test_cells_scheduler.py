@@ -23,6 +23,7 @@ from oslo.config import cfg
 from nova import block_device
 from nova.cells import filters
 from nova.cells import weights
+from nova.compute import flavors
 from nova.compute import vm_states
 from nova import context
 from nova import db
@@ -83,7 +84,7 @@ class CellsSchedulerTestCase(test.TestCase):
         self.instances = [objects.Instance(uuid=uuid, id=id)
                           for id, uuid in enumerate(instance_uuids)]
         self.request_spec = {
-                'instance_uuids': instance_uuids,
+                'num_instances': len(instance_uuids),
                 'instance_properties': self.instances[0],
                 'instance_type': 'fake_type',
                 'image': 'fake_image'}
@@ -96,7 +97,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
     def test_create_instances_here(self):
         # Just grab the first instance type
-        inst_type = db.flavor_get(self.ctxt, 1)
+        inst_type = flavors.get_flavor(1)
         image = {'properties': {}}
         instance_uuids = self.instance_uuids
         instance_props = {'id': 'removed',
@@ -108,8 +109,9 @@ class CellsSchedulerTestCase(test.TestCase):
                           'image_ref': 'fake_image_ref',
                           'user_id': self.ctxt.user_id,
                           # Test these as lists
-                          'metadata': [{'key': 'moo', 'value': 'cow'}],
-                          'system_metadata': [{'key': 'meow', 'value': 'cat'}],
+                          'metadata': {'moo': 'cow'},
+                          'system_metadata': {'meow': 'cat'},
+                          'flavor': inst_type,
                           'project_id': self.ctxt.project_id}
 
         call_info = {'uuids': []}
@@ -127,14 +129,14 @@ class CellsSchedulerTestCase(test.TestCase):
                 ['default'], block_device_mapping)
         self.assertEqual(instance_uuids, call_info['uuids'])
 
-        for instance_uuid in instance_uuids:
+        for count, instance_uuid in enumerate(instance_uuids):
             instance = db.instance_get_by_uuid(self.ctxt, instance_uuid)
             meta = utils.instance_meta(instance)
             self.assertEqual('cow', meta['moo'])
             sys_meta = utils.instance_sys_meta(instance)
             self.assertEqual('cat', sys_meta['meow'])
             self.assertEqual('meow', instance['hostname'])
-            self.assertEqual('moo-%s' % instance['uuid'],
+            self.assertEqual('moo-%d' % (count + 1),
                              instance['display_name'])
             self.assertEqual('fake_image_ref', instance['image_ref'])
 
@@ -162,7 +164,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
         def fake_build_request_spec(ctxt, image, instances):
             request_spec = {
-                    'instance_uuids': [inst['uuid'] for inst in instances],
+                    'num_instances': len(instances),
                     'image': image}
             return request_spec
 
@@ -205,7 +207,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
         def fake_build_request_spec(ctxt, image, instances):
             request_spec = {
-                    'instance_uuids': [inst['uuid'] for inst in instances],
+                    'num_instances': len(instances),
                     'image': image}
             return request_spec
 
@@ -253,7 +255,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
         def fake_build_request_spec(ctxt, image, instances):
             request_spec = {
-                    'instance_uuids': [inst['uuid'] for inst in instances],
+                    'num_instances': len(instances),
                     'image': image}
             return request_spec
 
@@ -297,7 +299,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
         def fake_build_request_spec(ctxt, image, instances):
             request_spec = {
-                    'instance_uuids': [inst['uuid'] for inst in instances],
+                    'num_instances': len(instances),
                     'image': image}
             return request_spec
 
@@ -369,7 +371,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
         def fake_build_request_spec(ctxt, image, instances):
             request_spec = {
-                    'instance_uuids': [inst['uuid'] for inst in instances],
+                    'num_instances': len(instances),
                     'instance_properties': instances[0],
                     'image': image,
                     'instance_type': 'fake_type'}
@@ -484,7 +486,7 @@ class CellsSchedulerTestCase(test.TestCase):
 
         def fake_build_request_spec(ctxt, image, instances):
             request_spec = {
-                    'instance_uuids': [inst['uuid'] for inst in instances],
+                    'num_instances': len(instances),
                     'instance_properties': instances[0],
                     'image': image,
                     'instance_type': 'fake_type'}

@@ -13,29 +13,37 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.api.openstack.compute.plugins.v3 import migrate_server
+from nova.api.openstack.compute.contrib import admin_actions as \
+    migrate_server_v2
+from nova.api.openstack.compute.plugins.v3 import migrate_server as \
+    migrate_server_v21
 from nova import exception
 from nova.openstack.common import uuidutils
-from nova.tests.unit.api.openstack.compute.plugins.v3 import \
-     admin_only_action_common
+from nova.tests.unit.api.openstack.compute import admin_only_action_common
 from nova.tests.unit.api.openstack import fakes
 
 
-class MigrateServerTests(admin_only_action_common.CommonTests):
+class MigrateServerTestsV21(admin_only_action_common.CommonTests):
+    migrate_server = migrate_server_v21
+    controller_name = 'MigrateServerController'
+
     def setUp(self):
-        super(MigrateServerTests, self).setUp()
-        self.controller = migrate_server.MigrateServerController()
+        super(MigrateServerTestsV21, self).setUp()
+        self.controller = getattr(self.migrate_server, self.controller_name)()
         self.compute_api = self.controller.compute_api
 
         def _fake_controller(*args, **kwargs):
             return self.controller
 
-        self.stubs.Set(migrate_server, 'MigrateServerController',
+        self.stubs.Set(self.migrate_server, self.controller_name,
                        _fake_controller)
-        self.app = fakes.wsgi_app_v21(init_only=('servers',
-                                                 'os-migrate-server'),
-                                      fake_auth_context=self.context)
+        self.app = self._get_app()
         self.mox.StubOutWithMock(self.compute_api, 'get')
+
+    def _get_app(self):
+        return fakes.wsgi_app_v21(init_only=('servers',
+                                             'os-migrate-server'),
+                                  fake_auth_context=self.context)
 
     def test_migrate(self):
         method_translations = {'migrate': 'resize',
@@ -165,8 +173,17 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
                                    'disk_over_commit': "foo"}})
         self.assertEqual(400, res.status_int)
 
+    def test_migrate_live_missing_dict_param(self):
+        body = {'os-migrateLive': {'dummy': 'hostname',
+                                   'block_migration': False,
+                                   'disk_over_commit': False}}
+        res = self._make_request('/servers/FAKE/action', body)
+        self.assertEqual(400, res.status_int)
+
     def _test_migrate_live_failed_with_exception(self, fake_exc,
-                                                 uuid=None):
+                                                 uuid=None,
+                                                 expected_status_code=400,
+                                                 check_response=True):
         self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
 
         instance = self._stub_instance_get(uuid=uuid)
@@ -180,8 +197,9 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
                                   {'host': 'hostname',
                                    'block_migration': False,
                                    'disk_over_commit': False}})
-        self.assertEqual(400, res.status_int)
-        self.assertIn(unicode(fake_exc), res.body)
+        self.assertEqual(expected_status_code, res.status_int)
+        if check_response:
+            self.assertIn(unicode(fake_exc), res.body)
 
     def test_migrate_live_compute_service_unavailable(self):
         self._test_migrate_live_failed_with_exception(
@@ -233,3 +251,24 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
     def test_migrate_live_migration_with_old_nova_not_safe(self):
         self._test_migrate_live_failed_with_exception(
             exception.LiveMigrationWithOldNovaNotSafe(server=''))
+
+    def test_migrate_live_migration_with_unexpected_error(self):
+        self._test_migrate_live_failed_with_exception(
+            exception.MigrationError(reason=''), expected_status_code=500,
+            check_response=False)
+
+
+class MigrateServerTestsV2(MigrateServerTestsV21):
+    migrate_server = migrate_server_v2
+    controller_name = 'AdminActionsController'
+
+    def setUp(self):
+        super(MigrateServerTestsV2, self).setUp()
+        self.flags(
+            osapi_compute_extension=[
+            'nova.api.openstack.compute.contrib.select_extensions'],
+            osapi_compute_ext_list=['Admin_actions'])
+
+    def _get_app(self):
+        return fakes.wsgi_app(init_only=('servers',),
+            fake_auth_context=self.context)

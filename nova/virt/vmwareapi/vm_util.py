@@ -18,6 +18,7 @@
 The VMware API VM utility module to build SOAP object specs.
 """
 
+import collections
 import copy
 import functools
 
@@ -25,10 +26,11 @@ from oslo.config import cfg
 from oslo.utils import excutils
 from oslo.utils import units
 from oslo.vmware import exceptions as vexc
+from oslo.vmware.objects import datastore as ds_obj
 from oslo.vmware import pbm
 
 from nova import exception
-from nova.i18n import _, _LW
+from nova.i18n import _, _LI, _LW
 from nova.network import model as network_model
 from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import constants
@@ -120,6 +122,10 @@ def vm_ref_cache_from_name(func):
 # the config key which stores the VNC port
 VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
 
+VmdkInfo = collections.namedtuple('VmdkInfo', ['path', 'adapter_type',
+                                               'disk_type',
+                                               'capacity_in_bytes'])
+
 
 def _iface_id_option_value(client_factory, iface_id, port_index):
     opt = client_factory.create('ns0:OptionValue')
@@ -167,7 +173,7 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     config_spec.memoryMB = int(instance['memory_mb'])
 
     # Configure cpu information
-    if (extra_specs.has_cpu_limits()):
+    if extra_specs.has_cpu_limits():
         allocation = client_factory.create('ns0:ResourceAllocationInfo')
         if extra_specs.cpu_limits.cpu_limit:
             allocation.limit = extra_specs.cpu_limits.cpu_limit
@@ -444,42 +450,54 @@ def get_vm_extra_config_spec(client_factory, extra_opts):
     return config_spec
 
 
-def get_vmdk_path(session, vm_ref, instance):
-    """Gets the vmdk file path for specified instance."""
+def _get_device_capacity(device):
+    # Devices pre-vSphere-5.5 only reports capacityInKB, which has
+    # rounding inaccuracies. Use that only if the more accurate
+    # attribute is absent.
+    if hasattr(device, 'capacityInBytes'):
+        return device.capacityInBytes
+    else:
+        return device.capacityInKB * units.Ki
+
+
+def _get_device_disk_type(device):
+    if getattr(device.backing, 'thinProvisioned', False):
+        return constants.DISK_TYPE_THIN
+    else:
+        if getattr(device.backing, 'eagerlyScrub', False):
+            return constants.DISK_TYPE_EAGER_ZEROED_THICK
+        else:
+            return constants.DEFAULT_DISK_TYPE
+
+
+def get_vmdk_info(session, vm_ref, uuid=None):
+    """Returns information for the primary VMDK attached to the given VM."""
     hardware_devices = session._call_method(vim_util,
             "get_dynamic_property", vm_ref, "VirtualMachine",
             "config.hardware.device")
-    (vmdk_path, adapter_type, disk_type) = get_vmdk_path_and_adapter_type(
-            hardware_devices, uuid=instance['uuid'])
-    return vmdk_path
-
-
-def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
-    """Gets the vmdk file path and the storage adapter type."""
     if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
         hardware_devices = hardware_devices.VirtualDevice
     vmdk_file_path = None
     vmdk_controller_key = None
     disk_type = None
+    capacity_in_bytes = 0
+    vmdk_device = None
+
+    # Determine if we need to get the details of the root disk
+    root_disk = None
+    root_device = None
+    if uuid:
+        root_disk = '%s.vmdk' % uuid
 
     adapter_type_dict = {}
     for device in hardware_devices:
         if device.__class__.__name__ == "VirtualDisk":
             if device.backing.__class__.__name__ == \
                     "VirtualDiskFlatVer2BackingInfo":
-                if uuid:
-                    if uuid in device.backing.fileName:
-                        vmdk_file_path = device.backing.fileName
-                else:
-                    vmdk_file_path = device.backing.fileName
-                vmdk_controller_key = device.controllerKey
-                if getattr(device.backing, 'thinProvisioned', False):
-                    disk_type = "thin"
-                else:
-                    if getattr(device.backing, 'eagerlyScrub', False):
-                        disk_type = "eagerZeroedThick"
-                    else:
-                        disk_type = constants.DEFAULT_DISK_TYPE
+                path = ds_obj.DatastorePath.parse(device.backing.fileName)
+                if root_disk and path.basename == root_disk:
+                    root_device = device
+                vmdk_device = device
         elif device.__class__.__name__ == "VirtualLsiLogicController":
             adapter_type_dict[device.key] = constants.DEFAULT_ADAPTER_TYPE
         elif device.__class__.__name__ == "VirtualBusLogicController":
@@ -491,9 +509,18 @@ def get_vmdk_path_and_adapter_type(hardware_devices, uuid=None):
         elif device.__class__.__name__ == "ParaVirtualSCSIController":
             adapter_type_dict[device.key] = constants.ADAPTER_TYPE_PARAVIRTUAL
 
-    adapter_type = adapter_type_dict.get(vmdk_controller_key, "")
+    if root_disk:
+        vmdk_device = root_device
 
-    return (vmdk_file_path, adapter_type, disk_type)
+    if vmdk_device:
+        vmdk_file_path = vmdk_device.backing.fileName
+        capacity_in_bytes = _get_device_capacity(vmdk_device)
+        vmdk_controller_key = vmdk_device.controllerKey
+        disk_type = _get_device_disk_type(vmdk_device)
+
+    adapter_type = adapter_type_dict.get(vmdk_controller_key)
+    return VmdkInfo(vmdk_file_path, adapter_type, disk_type,
+                    capacity_in_bytes)
 
 
 def _find_controller_slot(controller_keys, taken, max_unit_number):
@@ -964,7 +991,7 @@ def get_vm_state_from_name(session, vm_name):
 
 def get_stats_from_cluster(session, cluster):
     """Get the aggregate resource stats of a cluster."""
-    cpu_info = {'vcpus': 0, 'cores': 0, 'vendor': [], 'model': []}
+    vcpus = 0
     mem_info = {'total': 0, 'free': 0}
     # Get the Host and Resource Pool Managed Object Refs
     prop_dict = session._call_method(vim_util, "get_dynamic_properties",
@@ -985,10 +1012,7 @@ def get_stats_from_cluster(session, cluster):
                     runtime_summary.connectionState == "connected"):
                     # Total vcpus is the sum of all pCPUs of individual hosts
                     # The overcommitment ratio is factored in by the scheduler
-                    cpu_info['vcpus'] += hardware_summary.numCpuThreads
-                    cpu_info['cores'] += hardware_summary.numCpuCores
-                    cpu_info['vendor'].append(hardware_summary.vendor)
-                    cpu_info['model'].append(hardware_summary.cpuModel)
+                    vcpus += hardware_summary.numCpuThreads
 
         res_mor = prop_dict.get('resourcePool')
         if res_mor:
@@ -1000,7 +1024,7 @@ def get_stats_from_cluster(session, cluster):
                 # overallUsage is the hypervisor's view of memory usage by VM's
                 consumed = int(res_usage.overallUsage / units.Mi)
                 mem_info['free'] = mem_info['total'] - consumed
-    stats = {'cpu': cpu_info, 'mem': mem_info}
+    stats = {'vcpus': vcpus, 'mem': mem_info}
     return stats
 
 
@@ -1040,9 +1064,7 @@ def propset_dict(propset):
     if propset is None:
         return {}
 
-    # TODO(hartsocks): once support for Python 2.6 is dropped
-    # change to {[(prop.name, prop.val) for prop in propset]}
-    return dict([(prop.name, prop.val) for prop in propset])
+    return {prop.name: prop.val for prop in propset}
 
 
 def get_vmdk_backed_disk_uuid(hardware_devices, volume_uuid):
@@ -1228,6 +1250,20 @@ def create_vm(session, instance, vm_folder, config_spec, res_pool_ref):
                          {'ostype': config_spec.guestId})
     LOG.debug("Created VM on the ESX host", instance=instance)
     return task_info.result
+
+
+def destroy_vm(session, instance, vm_ref=None):
+    """Destroy a VM instance. Assumes VM is powered off."""
+    try:
+        if not vm_ref:
+            vm_ref = get_vm_ref(session, instance)
+        LOG.debug("Destroying the VM", instance=instance)
+        destroy_task = session._call_method(session.vim, "Destroy_Task",
+                                            vm_ref)
+        session._wait_for_task(destroy_task)
+        LOG.info(_LI("Destroyed the VM"), instance=instance)
+    except Exception as exc:
+        LOG.exception(exc, instance=instance)
 
 
 def create_virtual_disk(session, dc_ref, adapter_type, disk_type,

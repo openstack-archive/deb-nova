@@ -33,7 +33,6 @@ from nova.compute import power_state
 from nova.compute import vm_mode
 from nova import context
 from nova import exception
-from nova.i18n import _
 from nova import objects
 from nova import test
 from nova.tests.unit.objects import test_flavor
@@ -517,9 +516,9 @@ class ResizeHelpersTestCase(VMUtilsTestBase):
 
     def test_log_progress_if_required(self):
         self.mox.StubOutWithMock(vm_utils.LOG, "debug")
-        vm_utils.LOG.debug(_("Sparse copy in progress, "
-                             "%(complete_pct).2f%% complete. "
-                             "%(left)s bytes left to copy"),
+        vm_utils.LOG.debug("Sparse copy in progress, "
+                           "%(complete_pct).2f%% complete. "
+                           "%(left)s bytes left to copy",
                            {"complete_pct": 50.0, "left": 1})
         current = timeutils.utcnow()
         timeutils.set_time_override(current)
@@ -975,6 +974,15 @@ class UnplugVbdTestCase(VMUtilsTestBase):
         self.assertEqual(11, session.call_xenapi.call_count)
         self.assertEqual(10, mock_sleep.call_count)
 
+    def _test_uplug_vbd_retries_with_neg_val(self):
+        session = _get_fake_session()
+        self.flags(num_vbd_unplug_retries=-1, group='xenserver')
+        vbd_ref = "vbd_ref"
+        vm_ref = 'vm_ref'
+
+        vm_utils.unplug_vbd(session, vbd_ref, vm_ref)
+        self.assertEqual(1, session.call_xenapi.call_count)
+
     @mock.patch.object(greenthread, 'sleep')
     def test_uplug_vbd_retries_on_rejected(self, mock_sleep):
         self._test_uplug_vbd_retries(mock_sleep,
@@ -994,7 +1002,7 @@ class VDIOtherConfigTestCase(VMUtilsTestBase):
     def setUp(self):
         super(VDIOtherConfigTestCase, self).setUp()
 
-        class _FakeSession():
+        class _FakeSession(object):
             def call_xenapi(self, operation, *args, **kwargs):
                 # VDI.add_to_other_config -> VDI_add_to_other_config
                 method = getattr(self, operation.replace('.', '_'), None)
@@ -1942,6 +1950,23 @@ class ImportMigratedDisksTestCase(VMUtilsTestBase):
         expected = {'root': 'root_vdi', 'ephemerals': ["a", "b"]}
         self.assertEqual(expected, result)
         mock_root.assert_called_once_with(session, instance)
+        mock_ephemeral.assert_called_once_with(session, instance)
+
+    @mock.patch.object(vm_utils, '_import_migrate_ephemeral_disks')
+    @mock.patch.object(vm_utils, '_import_migrated_root_disk')
+    def test_import_all_migrated_disks_import_root_false(self, mock_root,
+            mock_ephemeral):
+        session = "session"
+        instance = "instance"
+        mock_root.return_value = "root_vdi"
+        mock_ephemeral.return_value = ["a", "b"]
+
+        result = vm_utils.import_all_migrated_disks(session, instance,
+                import_root=False)
+
+        expected = {'root': None, 'ephemerals': ["a", "b"]}
+        self.assertEqual(expected, result)
+        self.assertEqual(0, mock_root.call_count)
         mock_ephemeral.assert_called_once_with(session, instance)
 
     @mock.patch.object(vm_utils, '_import_migrated_vhds')

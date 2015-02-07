@@ -11,7 +11,7 @@ for your tests. There should be both JSON and XML tests included.
 
 Then run the following command:
 
-  GENERATE_SAMPLES=True tox -epy27 nova.tests.unit.integrated
+  GENERATE_SAMPLES=True tox -e functional
 
 Which will create the files on doc/api_samples.
 
@@ -23,7 +23,6 @@ ensures that it's in sync.
 Debugging sample generation
 ---------------------------
 
-If a .tpl is changed, its matching .xml and .json must be removed
-else the samples won't be generated. If an entirely new extension is
-added, a directory for it must be created before its samples will
-be generated.
+If a .tpl is changed, its matching .json must be removed else the samples
+won't be generated. If an entirely new extension is added, a directory for
+it must be created before its samples will be generated.

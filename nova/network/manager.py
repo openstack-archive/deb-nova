@@ -24,6 +24,7 @@ topologies.  All of the network commands are issued to a subclass of
 
 """
 
+import collections
 import datetime
 import functools
 import itertools
@@ -37,13 +38,14 @@ from oslo.config import cfg
 from oslo import messaging
 from oslo.utils import excutils
 from oslo.utils import importutils
+from oslo.utils import netutils
 from oslo.utils import strutils
 from oslo.utils import timeutils
 
 from nova import conductor
 from nova import context
 from nova import exception
-from nova.i18n import _, _LE, _LW
+from nova.i18n import _, _LI, _LE, _LW
 from nova import ipv6
 from nova import manager
 from nova.network import api as network_api
@@ -324,14 +326,14 @@ class NetworkManager(manager.Manager):
         #             an ip address.
         ctxt = context.get_admin_context()
         for network in objects.NetworkList.get_by_host(ctxt, self.host):
-            LOG.debug('Setup network %s on host %s', network['uuid'],
-                      self.host)
             self._setup_network_on_host(ctxt, network)
             if CONF.update_dns_entries:
                 LOG.debug('Update DNS on network %s for host %s',
                           network['uuid'], self.host)
                 dev = self.driver.get_dev(network)
                 self.driver.update_dns(ctxt, dev, network)
+            LOG.info(_LI('Configured network %(network)s on host %(host)s'),
+                     {'network': network['uuid'], 'host': self.host})
 
     @periodic_task.periodic_task
     def _disassociate_stale_fixed_ips(self, context):
@@ -475,8 +477,6 @@ class NetworkManager(manager.Manager):
         vpn = kwargs['vpn']
         macs = kwargs['macs']
         admin_context = context.elevated()
-        LOG.debug("Allocate network for instance", instance_uuid=instance_uuid,
-                  context=context)
         networks = self._get_networks_for_instance(context,
                                         instance_uuid, project_id,
                                         requested_networks=requested_networks)
@@ -503,8 +503,12 @@ class NetworkManager(manager.Manager):
             network_ids = [network['id'] for network in networks]
             self.network_rpcapi.update_dns(context, network_ids)
 
-        return self.get_instance_nw_info(admin_context, instance_uuid,
-                                         rxtx_factor, host)
+        net_info = self.get_instance_nw_info(admin_context, instance_uuid,
+                                             rxtx_factor, host)
+        LOG.info(_LI("Allocated network: '%s' for instance"), net_info,
+                 instance_uuid=instance_uuid,
+                 context=context)
+        return net_info
 
     def deallocate_for_instance(self, context, **kwargs):
         """Handles deallocating various network resources for an instance.
@@ -560,6 +564,8 @@ class NetworkManager(manager.Manager):
         # deallocate vifs (mac addresses)
         objects.VirtualInterface.delete_by_instance_uuid(
                 read_deleted_context, instance_uuid)
+        LOG.info(_LI("Network deallocated for instance (fixed ips: '%s')"),
+                 fixed_ips, context=context, instance_uuid=instance_uuid)
 
     @messaging.expected_exceptions(exception.InstanceNotFound)
     def get_instance_nw_info(self, context, instance_id, rxtx_factor,
@@ -585,7 +591,7 @@ class NetworkManager(manager.Manager):
 
         nw_info = network_model.NetworkInfo()
 
-        vifs = {}
+        vifs = collections.OrderedDict()
         for fixed_ip in fixed_ips:
             vif = fixed_ip.virtual_interface
             if not vif:
@@ -852,15 +858,14 @@ class NetworkManager(manager.Manager):
                            user_id=quota_user)
             cleanup.append(functools.partial(quotas.rollback, context))
         except exception.OverQuota as exc:
-            quotas = exc.kwargs['quotas']
-            headroom = exc.kwargs['headroom']
-            allowed = quotas['fixed_ips']
-            used = allowed - headroom['fixed_ips']
+            usages = exc.kwargs['usages']
+            used = (usages['fixed_ips']['in_use'] +
+                    usages['fixed_ips']['reserved'])
             LOG.warning(_LW("Quota exceeded for project %(pid)s, tried to "
                             "allocate fixed IP. %(used)s of %(allowed)s are "
                             "in use or are already reserved."),
                         {'pid': quota_project, 'used': used,
-                         'allowed': allowed},
+                         'allowed': exc.kwargs['quotas']['fixed_ips']},
                         instance_uuid=instance_id)
             raise exception.FixedIpLimitExceeded()
 
@@ -1168,7 +1173,7 @@ class NetworkManager(manager.Manager):
                 each_subnet_size = fixnet.size / kwargs["num_networks"]
                 if each_subnet_size > CONF.network_size:
                     subnet = 32 - int(math.log(CONF.network_size, 2))
-                    oversize_msg = _(
+                    oversize_msg = _LW(
                         'Subnet(s) too large, defaulting to /%s.'
                         '  To override, specify network_size flag.') % subnet
                     LOG.warn(oversize_msg)
@@ -1398,12 +1403,12 @@ class NetworkManager(manager.Manager):
         network.destroy()
 
     @property
-    def _bottom_reserved_ips(self):  # pylint: disable=R0201
+    def _bottom_reserved_ips(self):
         """Number of reserved ips at the bottom of the range."""
         return 2  # network, gateway
 
     @property
-    def _top_reserved_ips(self):  # pylint: disable=R0201
+    def _top_reserved_ips(self):
         """Number of reserved ips at the top of the range."""
         return 1  # broadcast
 
@@ -1510,7 +1515,7 @@ class NetworkManager(manager.Manager):
             # check if the fixed IP address is valid and
             # it actually belongs to the network
             if address is not None:
-                if not utils.is_valid_ip_address(address):
+                if not netutils.is_valid_ip(address):
                     raise exception.FixedIpInvalid(address=address)
 
                 fixed_ip_ref = objects.FixedIP.get_by_address(
@@ -1739,18 +1744,15 @@ class FlatManager(NetworkManager):
         #             we major version the network_rpcapi to 2.0.
         return []
 
-    @network_api.wrap_check_policy
     def allocate_floating_ip(self, context, project_id, pool):
         """Gets a floating ip from the pool."""
         return None
 
-    @network_api.wrap_check_policy
     def deallocate_floating_ip(self, context, address,
                                affect_auto_assigned):
         """Returns a floating ip to the pool."""
         return None
 
-    @network_api.wrap_check_policy
     def associate_floating_ip(self, context, floating_address, fixed_address,
                               affect_auto_assigned=False):
         """Associates a floating ip with a fixed ip.
@@ -1760,7 +1762,6 @@ class FlatManager(NetworkManager):
         """
         return None
 
-    @network_api.wrap_check_policy
     def disassociate_floating_ip(self, context, address,
                                  affect_auto_assigned=False):
         """Disassociates a floating ip from its fixed ip.

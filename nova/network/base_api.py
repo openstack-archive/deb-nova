@@ -86,7 +86,8 @@ class NetworkAPI(base.Base):
     """Base Network API for doing networking operations.
     New operations available on specific clients must be added here as well.
     """
-    def __init__(self, **kwargs):
+    def __init__(self, skip_policy_check=False, **kwargs):
+        self.skip_policy_check = skip_policy_check
         super(NetworkAPI, self).__init__(**kwargs)
 
     def get_all(self, context):
@@ -308,4 +309,22 @@ class NetworkAPI(base.Base):
 
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
+        raise NotImplementedError()
+
+    def setup_instance_network_on_host(self, context, instance, host):
+        """Setup network for specified instance on host.
+
+        :param context: The request context.
+        :param instance: nova.objects.instance.Instance object.
+        :param host: The host which network should be setup for instance.
+        """
+        raise NotImplementedError()
+
+    def cleanup_instance_network_on_host(self, context, instance, host):
+        """Cleanup network for specified instance on host.
+
+        :param context: The request context.
+        :param instance: nova.objects.instance.Instance object.
+        :param host: The host which network should be cleanup for instance.
+        """
         raise NotImplementedError()

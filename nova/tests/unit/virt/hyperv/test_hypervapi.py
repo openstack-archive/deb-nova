@@ -22,7 +22,7 @@ import time
 import uuid
 
 import mock
-import mox
+from mox3 import mox
 from oslo.config import cfg
 from oslo.utils import units
 
@@ -31,8 +31,8 @@ from nova.compute import power_state
 from nova import context
 from nova import db
 from nova import exception
-from nova.i18n import _
 from nova.image import glance
+from nova import objects
 from nova.openstack.common import fileutils
 from nova import test
 from nova.tests.unit import fake_network
@@ -46,6 +46,7 @@ from nova.virt.hyperv import basevolumeutils
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import driver as driver_hyperv
 from nova.virt.hyperv import hostutils
+from nova.virt.hyperv import imagecache
 from nova.virt.hyperv import ioutils
 from nova.virt.hyperv import networkutils
 from nova.virt.hyperv import pathutils
@@ -152,6 +153,7 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         self._mox.StubOutWithMock(vmutils.VMUtils, 'create_vm')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'destroy_vm')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'attach_ide_drive')
+        self._mox.StubOutWithMock(vmutils.VMUtils, 'attach_scsi_drive')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'create_scsi_controller')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'create_nic')
         self._mox.StubOutWithMock(vmutils.VMUtils, 'set_vm_state')
@@ -189,6 +191,8 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         self._mox.StubOutWithMock(vhdutils.VHDUtils, 'create_dynamic_vhd')
 
         self._mox.StubOutWithMock(hostutils.HostUtils, 'get_local_ips')
+
+        self._mox.StubOutWithMock(imagecache.ImageCache, 'get_image_details')
 
         self._mox.StubOutWithMock(networkutils.NetworkUtils,
                                   'get_external_vswitch')
@@ -475,9 +479,10 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         self._mox.VerifyAll()
 
     def test_get_instance_disk_info_is_implemented(self):
+        instance = objects.Instance()
         # Ensure that the method has been implemented in the driver
         try:
-            disk_info = self._conn.get_instance_disk_info('fake_instance_name')
+            disk_info = self._conn.get_instance_disk_info(instance)
             self.assertIsNone(disk_info)
         except NotImplementedError:
             self.fail("test_get_instance_disk_info() should not raise "
@@ -531,6 +536,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         vmutils.VMUtils.create_vm(mox.Func(self._check_vm_name), mox.IsA(int),
                                   mox.IsA(int), mox.IsA(bool),
                                   CONF.hyperv.dynamic_memory_ratio,
+                                  mox.IsA(int),
                                   mox.IsA(list))
 
         if not boot_from_volume:
@@ -589,8 +595,8 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         if admin_permissions:
             m.AndReturn(None)
         else:
-            m.AndRaise(vmutils.HyperVAuthorizationException(_(
-                                                'Simulated failure')))
+            m.AndRaise(vmutils.HyperVAuthorizationException(
+                'Simulated failure'))
 
     def _setup_log_vm_output_mocks(self):
         m = fake.PathUtils.get_vm_console_log_paths(mox.IsA(str))
@@ -1180,8 +1186,12 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             self._mock_attach_config_drive(instance, config_drive_format)
 
         self._mox.ReplayAll()
+
+        image_meta = {'properties': {constants.IMAGE_PROP_VM_GEN:
+                                     constants.IMAGE_PROP_VM_GEN_1}}
         self._conn.finish_migration(self._context, None, instance, "",
-                                    network_info, None, False, None, power_on)
+                                    network_info, image_meta, False, None,
+                                    power_on)
         self._mox.VerifyAll()
 
         if config_drive:
@@ -1242,6 +1252,11 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             m.AndReturn(self._test_instance_dir)
         else:
             m.AndReturn(None)
+
+        m = imagecache.ImageCache.get_image_details(mox.IsA(object),
+                                                    mox.IsA(object))
+        m.AndReturn({'properties': {constants.IMAGE_PROP_VM_GEN:
+                                    constants.IMAGE_PROP_VM_GEN_1}})
 
         self._set_vm_name(instance['name'])
         self._setup_create_instance_mocks(None, False,

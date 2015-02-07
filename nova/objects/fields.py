@@ -46,7 +46,8 @@ class ElementTypeError(TypeError):
                    })
 
 
-class AbstractFieldType(six.with_metaclass(abc.ABCMeta, object)):
+@six.add_metaclass(abc.ABCMeta)
+class AbstractFieldType(object):
     @abc.abstractmethod
     def coerce(self, obj, attr, value):
         """This is called to coerce (if possible) a value on assignment.
@@ -455,15 +456,15 @@ class DictProxyField(object):
             return self
         if getattr(obj, self._fld_name) is None:
             return
-        return dict((self._key_type(k), v)
-                     for k, v in six.iteritems(getattr(obj, self._fld_name)))
+        return {self._key_type(k): v
+                for k, v in six.iteritems(getattr(obj, self._fld_name))}
 
     def __set__(self, obj, val):
         if val is None:
             setattr(obj, self._fld_name, val)
         else:
-            setattr(obj, self._fld_name, dict((six.text_type(k), v)
-                                              for k, v in six.iteritems(val)))
+            setattr(obj, self._fld_name, {six.text_type(k): v
+                                          for k, v in six.iteritems(val)})
 
 
 class Set(CompoundFieldType):

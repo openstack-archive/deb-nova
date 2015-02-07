@@ -28,12 +28,10 @@ from oslo.vmware import exceptions as vexc
 from oslo.vmware import pbm
 from oslo.vmware import vim
 from oslo.vmware import vim_util
-import suds
 
 from nova import exception
 from nova.i18n import _, _LI, _LW
 from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova.virt import driver
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import error_util
@@ -214,15 +212,7 @@ class VMwareVCDriver(driver.ComputeDriver):
             self._session._create_session()
 
     def cleanup_host(self, host):
-        # NOTE(hartsocks): we lean on the init_host to force the vim object
-        # to not be None.
-        vim = self._session.vim
-        service_content = vim.service_content
-        session_manager = service_content.sessionManager
-        try:
-            vim.client.service.Logout(session_manager)
-        except suds.WebFault:
-            LOG.debug("No vSphere session was open during cleanup_host.")
+        self._session.logout()
 
     def _register_openstack_extension(self):
         # Register an 'OpenStack' extension in vCenter
@@ -266,8 +256,7 @@ class VMwareVCDriver(driver.ComputeDriver):
 
     def list_instance_uuids(self):
         """List VM instance UUIDs."""
-        uuids = self._vmops.list_instances()
-        return [uuid for uuid in uuids if uuidutils.is_uuid_like(uuid)]
+        return self._vmops.list_instances()
 
     def list_instances(self):
         """List VM instances from all nodes."""
@@ -359,7 +348,8 @@ class VMwareVCDriver(driver.ComputeDriver):
             name = self.dict_mors.get(node)['name']
             nodename = self._create_nodename(node, name)
             _vc_state = host.VCState(self._session, nodename,
-                                     self.dict_mors.get(node)['cluster_mor'])
+                                     self.dict_mors.get(node)['cluster_mor'],
+                                     self._datastore_regex)
             self._resources[nodename] = {'vmops': _vmops,
                                          'volumeops': _volumeops,
                                          'vcstate': _vc_state,
@@ -427,7 +417,11 @@ class VMwareVCDriver(driver.ComputeDriver):
                'hypervisor_type': host_stats['hypervisor_type'],
                'hypervisor_version': host_stats['hypervisor_version'],
                'hypervisor_hostname': host_stats['hypervisor_hostname'],
-               'cpu_info': jsonutils.dumps(host_stats['cpu_info']),
+                # The VMWare driver manages multiple hosts, so there are
+                # likely many different CPU models in use. As such it is
+                # impossible to provide any meaningful info on the CPU
+                # model of the "host"
+               'cpu_info': None,
                'supported_instances': jsonutils.dumps(
                    host_stats['supported_instances']),
                'numa_topology': None,
@@ -600,7 +594,7 @@ class VMwareVCDriver(driver.ComputeDriver):
         """
         raise NotImplementedError()
 
-    def get_host_uptime(self, host):
+    def get_host_uptime(self):
         """Host uptime operation not supported by VC driver."""
 
         msg = _("Multiple hosts may be managed by the VMWare "

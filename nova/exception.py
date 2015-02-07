@@ -55,13 +55,13 @@ class ConvertedException(webob.exc.WSGIHTTPException):
 
 def _cleanse_dict(original):
     """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
-    return dict((k, v) for k, v in original.iteritems() if "_pass" not in k)
+    return {k: v for k, v in original.iteritems() if "_pass" not in k}
 
 
 def wrap_exception(notifier=None, get_notifier=None):
     """This decorator wraps a method to catch any exceptions that may
-    get thrown. It logs the exception as well as optionally sending
-    it to the notification system.
+    get thrown. It also optionally sends the exception to the notification
+    system.
     """
     def inner(f):
         def wrapped(self, context, *args, **kw):
@@ -780,6 +780,10 @@ class FixedIpNotFoundForSpecificInstance(FixedIpNotFound):
 class FixedIpNotFoundForNetwork(FixedIpNotFound):
     msg_fmt = _("Fixed IP address (%(address)s) does not exist in "
                 "network (%(network_uuid)s).")
+
+
+class FixedIpAssociateFailed(NovaException):
+    msg_fmt = _("Fixed IP associate failed for network: %(net)s.")
 
 
 class FixedIpAlreadyInUse(NovaException):
@@ -1822,3 +1826,17 @@ class MemoryPageSizeForbidden(Invalid):
 
 class MemoryPageSizeNotSupported(Invalid):
     msg_fmt = _("Page size %(pagesize)s is not supported by the host.")
+
+
+class CPUPinningInvalid(Invalid):
+    msg_fmt = _("Cannot pin/unpin cpus %(requested)s from the following "
+                "pinned set %(pinned)s")
+
+
+class ImageCPUPinningForbidden(Invalid):
+    msg_fmt = _("Image property 'hw_cpu_policy' is not permitted to override "
+                "CPU pinning policy set against the flavor")
+
+
+class UnsupportedPolicyException(Invalid):
+    msg_fmt = _("ServerGroup policy is not supported: %(reason)s")

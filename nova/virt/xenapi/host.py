@@ -32,7 +32,6 @@ from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
 from nova.openstack.common import log as logging
-from nova.pci import whitelist as pci_whitelist
 from nova.virt.xenapi import pool_states
 from nova.virt.xenapi import vm_utils
 
@@ -133,7 +132,7 @@ class Host(object):
         response = call_xenhost(self._session, "set_host_enabled", args)
         return response.get("status", response)
 
-    def get_host_uptime(self, _host):
+    def get_host_uptime(self):
         """Returns the result of calling "uptime" on the target host."""
         response = call_xenhost(self._session, "host_uptime", {})
         return response.get("uptime", response)
@@ -147,7 +146,6 @@ class HostState(object):
         super(HostState, self).__init__()
         self._session = session
         self._stats = {}
-        self._pci_device_filter = pci_whitelist.get_pci_devices_filter()
         self.update_status()
 
     def _get_passthrough_devices(self):
@@ -155,10 +153,9 @@ class HostState(object):
 
         We use a plugin to get the output of the lspci command runs on dom0.
         From this list we will extract pci devices that are using the pciback
-        kernel driver. Then we compare this list to the pci whitelist to get
-        a new list of pci devices that can be used for pci passthrough.
+        kernel driver.
 
-        :returns: a list of pci devices available for pci passthrough.
+        :returns: a list of pci devices on the node
         """
         def _compile_hex(pattern):
             """Return a compiled regular expression pattern into which we have
@@ -217,9 +214,7 @@ class HostState(object):
         for dev_string_info in pci_list:
             if "Driver:\tpciback" in dev_string_info:
                 new_dev = _parse_pci_device_string(dev_string_info)
-
-                if self._pci_device_filter.device_assignable(new_dev):
-                    passthrough_devices.append(new_dev)
+                passthrough_devices.append(new_dev)
 
         return passthrough_devices
 
@@ -248,6 +243,9 @@ class HostState(object):
             data["disk_available"] = total - used
             data["supported_instances"] = to_supported_instances(
                 data.get("host_capabilities")
+            )
+            data["cpu_model"] = to_cpu_model(
+                data.get("host_cpu_info")
             )
             host_memory = data.get('host_memory', None)
             if host_memory:
@@ -295,6 +293,59 @@ def to_supported_instances(host_capabilities):
                         capability)
 
     return result
+
+
+def to_cpu_model(host_cpu_info):
+    # The XenAPI driver returns data in the format
+    #
+    # {"physical_features": "0098e3fd-bfebfbff-00000001-28100800",
+    #  "modelname": "Intel(R) Xeon(R) CPU           X3430  @ 2.40GHz",
+    #  "vendor": "GenuineIntel",
+    #  "features": "0098e3fd-bfebfbff-00000001-28100800",
+    #  "family": 6,
+    #  "maskable": "full",
+    #  "cpu_count": 4,
+    #  "socket_count": "1",
+    #  "flags": "fpu de tsc msr pae mce cx8 apic sep mtrr mca cmov
+    #            pat clflush acpi mmx fxsr sse sse2 ss ht nx
+    #            constant_tsc nonstop_tsc aperfmperf pni vmx est
+    #            ssse3 sse4_1 sse4_2 popcnt hypervisor ida
+    #            tpr_shadow vnmi flexpriority ept vpid",
+    #  "stepping": 5,
+    #  "model": 30,
+    #  "features_after_reboot": "0098e3fd-bfebfbff-00000001-28100800",
+    #  "speed": "2394.086"}
+
+    if host_cpu_info is None:
+        return None
+
+    cpu_info = dict()
+    # TODO(berrange) the data we're putting in model is not
+    # exactly comparable to what libvirt puts in model. The
+    # libvirt model names are a well defined short string
+    # which is really an aliass for a particular set of
+    # feature flags. The Xen model names are raw printable
+    # strings from the kernel with no specific semantics
+    cpu_info["model"] = host_cpu_info["modelname"]
+    cpu_info["vendor"] = host_cpu_info["vendor"]
+    # TODO(berrange) perhaps we could fill in 'arch' field too
+    # by looking at 'host_capabilities' for the Xen host ?
+
+    topology = dict()
+    topology["sockets"] = int(host_cpu_info["socket_count"])
+    topology["cores"] = (int(host_cpu_info["cpu_count"]) /
+                         int(host_cpu_info["socket_count"]))
+    # TODO(berrange): if 'ht' is present in the 'flags' list
+    # is it possible to infer that the 'cpu_count' is in fact
+    # sockets * cores * threads ? Unclear if 'ht' would remain
+    # visible when threads are disabled in BIOS ?
+    topology["threads"] = 1
+
+    cpu_info["topology"] = topology
+
+    cpu_info["features"] = host_cpu_info["flags"].split(" ")
+
+    return cpu_info
 
 
 def call_xenhost(session, method, arg_dict):

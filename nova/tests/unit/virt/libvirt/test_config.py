@@ -901,6 +901,35 @@ class LibvirtConfigGuestFilesysTest(LibvirtConfigBaseTest):
               <target dir="/mnt"/>
             </filesystem>""")
 
+    def test_config_block(self):
+        obj = config.LibvirtConfigGuestFilesys()
+        obj.source_type = "block"
+        obj.source_dev = "/dev/sdb"
+        obj.target_dir = "/mnt"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <filesystem type="block">
+              <source dev="/dev/sdb"/>
+              <target dir="/mnt"/>
+            </filesystem>""")
+
+    def test_config_file(self):
+        obj = config.LibvirtConfigGuestFilesys()
+        obj.source_type = "file"
+        obj.source_file = "/data/myimage.qcow2"
+        obj.driver_type = "nbd"
+        obj.driver_format = "qcow2"
+        obj.target_dir = "/mnt"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <filesystem type="file">
+              <driver format="qcow2" type="nbd"/>
+              <source file="/data/myimage.qcow2"/>
+              <target dir="/mnt"/>
+            </filesystem>""")
+
 
 class LibvirtConfigGuestInputTest(LibvirtConfigBaseTest):
 
@@ -1269,6 +1298,35 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
             </interface>""")
 
 
+class LibvirtConfigGuestFeatureTest(LibvirtConfigBaseTest):
+
+    def test_feature_hyperv_relaxed(self):
+
+        obj = config.LibvirtConfigGuestFeatureHyperV()
+        obj.relaxed = True
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+          <hyperv>
+            <relaxed state="on"/>
+          </hyperv>""")
+
+    def test_feature_hyperv_all(self):
+
+        obj = config.LibvirtConfigGuestFeatureHyperV()
+        obj.relaxed = True
+        obj.vapic = True
+        obj.spinlocks = True
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+          <hyperv>
+            <relaxed state="on"/>
+            <vapic state="on"/>
+            <spinlocks state="on" retries="4095"/>
+          </hyperv>""")
+
+
 class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
 
     def test_config_lxc(self):
@@ -1410,9 +1468,11 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.os_loader = '/usr/lib/xen/boot/hvmloader'
         obj.os_root = "root=xvda"
         obj.os_cmdline = "console=xvc0"
-        obj.pae = True
-        obj.acpi = True
-        obj.apic = True
+        obj.features = [
+            config.LibvirtConfigGuestFeatureACPI(),
+            config.LibvirtConfigGuestFeatureAPIC(),
+            config.LibvirtConfigGuestFeaturePAE(),
+        ]
 
         disk = config.LibvirtConfigGuestDisk()
         disk.source_type = "file"
@@ -1508,9 +1568,11 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.os_type = "linux"
         obj.os_boot_dev = ["hd", "cdrom", "fd"]
         obj.os_smbios = config.LibvirtConfigGuestSMBIOS()
-        obj.pae = True
-        obj.acpi = True
-        obj.apic = True
+        obj.features = [
+            config.LibvirtConfigGuestFeatureACPI(),
+            config.LibvirtConfigGuestFeatureAPIC(),
+            config.LibvirtConfigGuestFeaturePAE(),
+        ]
 
         obj.sysinfo = config.LibvirtConfigGuestSysinfo()
         obj.sysinfo.bios_vendor = "Acme"
@@ -1941,6 +2003,7 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.product_id, 0x10bd)
         self.assertEqual(obj.vendor, "Intel Inc.")
         self.assertEqual(obj.vendor_id, 0x8086)
+        self.assertIsNone(obj.numa_node)
         self.assertIsInstance(obj.fun_capability[0],
                               config.LibvirtConfigNodeDevicePciSubFunctionCap)
 
@@ -1958,6 +2021,7 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
               <function>5</function>
               <product id="0x10bd">Intel 10 Gigabit Ethernet</product>
               <vendor id="0x8086">Intel Inc.</vendor>
+              <numa node='0'/>
               <capability type="virt_functions">
                <address domain="0000" bus="0x0a" slot="0x1" function="0x1"/>
                <address domain="0001" bus="0x0a" slot="0x02" function="0x03"/>
@@ -1977,6 +2041,7 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.product_id, 0x10bd)
         self.assertEqual(obj.vendor, "Intel Inc.")
         self.assertEqual(obj.vendor_id, 0x8086)
+        self.assertEqual(0, obj.numa_node)
         self.assertIsInstance(obj.fun_capability[0],
                               config.LibvirtConfigNodeDevicePciSubFunctionCap)
 
@@ -2397,5 +2462,77 @@ class LibvirtConfigMemoryBalloonTest(LibvirtConfigBaseTest):
         <memballoon model='fake_virtio'>
             <stats period='11'/>
         </memballoon>"""
+
+        self.assertXmlEqual(expected_xml, xml)
+
+    def test_config_memory_balloon_no_period(self):
+        balloon = config.LibvirtConfigMemoryBalloon()
+        balloon.model = 'fake_virtio'
+
+        xml = balloon.to_xml()
+        expected_xml = """
+        <memballoon model='fake_virtio' />"""
+
+        self.assertXmlEqual(expected_xml, xml)
+
+
+class LibvirtConfigSecretTest(LibvirtConfigBaseTest):
+
+    def test_config_secret_volume(self):
+        secret = config.LibvirtConfigSecret()
+        secret.ephemeral = True
+        secret.private = True
+        secret.description = 'sample desc'
+        secret.uuid = 'c7a5fdbd-edaf-9455-926a-d65c16db1809'
+        secret.usage_type = 'volume'
+        secret.usage_id = 'sample_volume'
+
+        xml = secret.to_xml()
+        expected_xml = """
+        <secret ephemeral="yes" private="yes">
+          <description>sample desc</description>
+          <uuid>c7a5fdbd-edaf-9455-926a-d65c16db1809</uuid>
+          <usage type="volume">
+            <volume>sample_volume</volume>
+          </usage>
+        </secret>"""
+
+        self.assertXmlEqual(expected_xml, xml)
+
+    def test_config_secret_ceph(self):
+        secret = config.LibvirtConfigSecret()
+        secret.ephemeral = True
+        secret.private = True
+        secret.description = 'sample desc'
+        secret.usage_type = 'ceph'
+        secret.usage_id = 'sample_name'
+
+        xml = secret.to_xml()
+        expected_xml = """
+        <secret ephemeral="yes" private="yes">
+          <description>sample desc</description>
+          <usage type="ceph">
+            <name>sample_name</name>
+          </usage>
+        </secret>"""
+
+        self.assertXmlEqual(expected_xml, xml)
+
+    def test_config_secret_iscsi(self):
+        secret = config.LibvirtConfigSecret()
+        secret.ephemeral = True
+        secret.private = True
+        secret.description = 'sample desc'
+        secret.usage_type = 'iscsi'
+        secret.usage_id = 'sample_target'
+
+        xml = secret.to_xml()
+        expected_xml = """
+        <secret ephemeral="yes" private="yes">
+          <description>sample desc</description>
+          <usage type="iscsi">
+            <target>sample_target</target>
+          </usage>
+        </secret>"""
 
         self.assertXmlEqual(expected_xml, xml)

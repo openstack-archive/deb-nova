@@ -33,6 +33,7 @@ from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova import objects
 from nova.objects import fields
+from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import test
 from nova.tests.unit import fake_instance
@@ -66,6 +67,16 @@ class NetworkPolicyTestCase(test.TestCase):
         policy.enforce(self.context, 'network:get_all', target)
         self.mox.ReplayAll()
         api.check_policy(self.context, 'get_all')
+
+    def test_skip_policy(self):
+        policy.reset()
+        rules = {'network:get_all': common_policy.parse_rule('!')}
+        policy.set_rules(common_policy.Rules(rules))
+        api = network.API()
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          api.get_all, self.context)
+        api = network.API(skip_policy_check=True)
+        api.get_all(self.context)
 
 
 class ApiTestCase(test.TestCase):
@@ -511,6 +522,24 @@ class ApiTestCase(test.TestCase):
                 self.context, mock.sentinel.floating))
         mock_get_by_floating.assert_called_once_with(self.context,
                                                      mock.sentinel.floating)
+
+    @mock.patch('nova.network.api.API.migrate_instance_start')
+    def test_cleanup_instance_network_on_host(self, fake_migrate_start):
+        instance = fake_instance.fake_instance_obj(self.context)
+        self.network_api.cleanup_instance_network_on_host(
+            self.context, instance, 'fake_compute_source')
+        fake_migrate_start.assert_called_once_with(
+            self.context, instance,
+            {'source_compute': 'fake_compute_source', 'dest_compute': None})
+
+    @mock.patch('nova.network.api.API.migrate_instance_finish')
+    def test_setup_instance_network_on_host(self, fake_migrate_finish):
+        instance = fake_instance.fake_instance_obj(self.context)
+        self.network_api.setup_instance_network_on_host(
+            self.context, instance, 'fake_compute_source')
+        fake_migrate_finish.assert_called_once_with(
+            self.context, instance,
+            {'source_compute': None, 'dest_compute': 'fake_compute_source'})
 
 
 @mock.patch('nova.network.api.API')

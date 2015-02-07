@@ -26,6 +26,7 @@ from nova.i18n import _, _LE
 from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
 from nova.servicegroup import api
+from nova.servicegroup.drivers import base
 
 
 CONF = cfg.CONF
@@ -36,7 +37,7 @@ CONF.import_opt('memcached_servers', 'nova.openstack.common.memorycache')
 LOG = logging.getLogger(__name__)
 
 
-class MemcachedDriver(api.ServiceGroupDriver):
+class MemcachedDriver(base.Driver):
 
     def __init__(self, *args, **kwargs):
         test = kwargs.get('test')
@@ -104,7 +105,7 @@ class MemcachedDriver(api.ServiceGroupDriver):
                 LOG.error(_LE('Recovered model server connection!'))
 
         # TODO(vish): this should probably only catch connection errors
-        except Exception:  # pylint: disable=W0702
+        except Exception:
             if not getattr(service, 'model_disconnected', False):
                 service.model_disconnected = True
                 LOG.exception(_LE('model server went away'))

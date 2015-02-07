@@ -1,4 +1,4 @@
-# Copyright 2014 Red Hat, Inc.
+# Copyright 2015 Red Hat, Inc.
 # Copyright 2013 Hewlett-Packard Development Company, L.P.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -79,9 +79,12 @@ FAKE_CLIENT_WRAPPER = FakeClientWrapper()
 @mock.patch.object(cw, 'IronicClientWrapper', lambda *_: FAKE_CLIENT_WRAPPER)
 class IronicDriverTestCase(test.NoDBTestCase):
 
+    @mock.patch.object(cw, 'IronicClientWrapper',
+                       lambda *_: FAKE_CLIENT_WRAPPER)
     def setUp(self):
         super(IronicDriverTestCase, self).setUp()
         self.flags(**IRONIC_FLAGS)
+
         self.driver = ironic_driver.IronicDriver(None)
         self.driver.virtapi = fake.FakeVirtAPI()
         self.ctx = nova_context.get_admin_context()
@@ -198,6 +201,19 @@ class IronicDriverTestCase(test.NoDBTestCase):
                                           properties=props)
 
         result = self.driver._node_resource(node)
+
+        wantkeys = ["hypervisor_hostname", "hypervisor_type",
+                    "hypervisor_version", "cpu_info",
+                    "vcpus", "vcpus_used",
+                    "memory_mb", "memory_mb_used",
+                    "local_gb", "local_gb_used",
+                    "disk_available_least",
+                    "supported_instances",
+                    "stats"]
+        wantkeys.sort()
+        gotkeys = result.keys()
+        gotkeys.sort()
+        self.assertEqual(wantkeys, gotkeys)
         self.assertEqual(props['cpus'], result['vcpus'])
         self.assertEqual(props['cpus'], result['vcpus_used'])
         self.assertEqual(props['memory_mb'], result['memory_mb'])
@@ -568,14 +584,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_node.get.assert_called_once_with(node_uuid)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_fg_bid.assert_called_once_with(self.ctx,
-                                            instance['instance_type_id'])
+                                            instance.instance_type_id)
         mock_adf.assert_called_once_with(node, instance, None, fake_flavor)
         mock_pvifs.assert_called_once_with(node, instance, None)
         mock_sf.assert_called_once_with(instance, None)
         mock_node.set_provision_state.assert_called_once_with(node_uuid,
                                                               'active')
 
-        self.assertIsNone(instance['default_ephemeral_device'])
+        self.assertIsNone(instance.default_ephemeral_device)
         self.assertFalse(mock_save.called)
 
         mock_looping.assert_called_once_with(mock_wait_active,
@@ -663,12 +679,22 @@ class IronicDriverTestCase(test.NoDBTestCase):
     @mock.patch.object(objects.Flavor, 'get_by_id')
     @mock.patch.object(FAKE_CLIENT.node, 'update')
     def test__cleanup_deploy_without_flavor(self, mock_update, mock_flavor):
+        self._get_by_id_reads_deleted = False
+
+        def side_effect(context, id):
+            self._get_by_id_reads_deleted = context._read_deleted == 'yes'
+
+        mock_flavor.side_effect = side_effect
         mock_flavor.return_value = ironic_utils.get_test_flavor(extra_specs={})
         node = ironic_utils.get_test_node(driver='fake',
                                           instance_uuid=self.instance_uuid)
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    node=node.uuid)
         self.driver._cleanup_deploy(self.ctx, node, instance, None)
+
+        self.assertTrue(self._get_by_id_reads_deleted,
+                        'Flavor.get_by_id was not called with '
+                        'read_deleted set in the context')
         expected_patch = [{'path': '/instance_uuid', 'op': 'remove'}]
         mock_update.assert_called_once_with(node.uuid, expected_patch)
 
@@ -702,7 +728,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
                           self.ctx, instance, image_meta, [], None)
         mock_node.get.assert_called_once_with(node_uuid)
         mock_node.validate.assert_called_once_with(node_uuid)
-        mock_flavor.assert_called_with(mock.ANY, instance['instance_type_id'])
+        mock_flavor.assert_called_with(mock.ANY, instance.instance_type_id)
 
     @mock.patch.object(FAKE_CLIENT, 'node')
     @mock.patch.object(objects.Flavor, 'get_by_id')
@@ -731,7 +757,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_node.get.assert_called_once_with(node_uuid)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_flavor.assert_called_once_with(self.ctx,
-                                            instance['instance_type_id'])
+                                            instance.instance_type_id)
         mock_cleanup_deploy.assert_called_with(self.ctx, node, instance, None,
                                                flavor=flavor)
 
@@ -760,7 +786,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_node.get.assert_called_once_with(node_uuid)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_flavor.assert_called_once_with(self.ctx,
-                                            instance['instance_type_id'])
+                                            instance.instance_type_id)
         mock_cleanup_deploy.assert_called_once_with(self.ctx, node,
                                                     instance, None,
                                                     flavor=flavor)
@@ -790,7 +816,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_node.get.assert_called_once_with(node_uuid)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_flavor.assert_called_once_with(self.ctx,
-                                            instance['instance_type_id'])
+                                            instance.instance_type_id)
         mock_cleanup_deploy.assert_called_once_with(self.ctx, node,
                                                     instance, None,
                                                     flavor=flavor)
@@ -847,9 +873,9 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         self.driver.spawn(self.ctx, instance, image_meta, [], None)
         mock_flavor.assert_called_once_with(self.ctx,
-                                            instance['instance_type_id'])
+                                            instance.instance_type_id)
         self.assertTrue(mock_save.called)
-        self.assertEqual('/dev/sda1', instance['default_ephemeral_device'])
+        self.assertEqual('/dev/sda1', instance.default_ephemeral_device)
 
     @mock.patch.object(FAKE_CLIENT, 'node')
     @mock.patch.object(ironic_driver.IronicDriver, '_cleanup_deploy')

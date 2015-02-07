@@ -15,7 +15,9 @@
 
 import abc
 import contextlib
+import functools
 import os
+import shutil
 
 from oslo.config import cfg
 from oslo.serialization import jsonutils
@@ -166,6 +168,33 @@ class Image(object):
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in tune_items:
                     setattr(info, scope[1], value)
+        return info
+
+    def libvirt_fs_info(self, target, driver_type=None):
+        """Get `LibvirtConfigGuestFilesys` filled for this image.
+
+        :target: target directory inside a container.
+        :driver_type: filesystem driver type, can be loop
+                      nbd or ploop.
+        """
+        info = vconfig.LibvirtConfigGuestFilesys()
+        info.target_dir = target
+
+        if self.is_block_dev:
+            info.source_type = "block"
+            info.source_dev = self.path
+        else:
+            info.source_type = "file"
+            info.source_file = self.path
+            info.driver_format = self.driver_format
+            if driver_type:
+                info.driver_type = driver_type
+            else:
+                if self.driver_format == "raw":
+                    info.driver_type = "loop"
+                else:
+                    info.driver_type = "nbd"
+
         return info
 
     def check_image_exists(self):
@@ -341,6 +370,10 @@ class Image(object):
         raise exception.ImageUnacceptable(image_id=image_id_or_uri,
                                           reason=reason)
 
+    def _get_lock_name(self, base):
+        """Get an image's name of a base file."""
+        return os.path.split(base)[-1]
+
 
 class Raw(Image):
     def __init__(self, instance=None, disk_name=None, path=None):
@@ -383,7 +416,7 @@ class Raw(Image):
             self.driver_format = self.resolve_driver_format()
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        filename = os.path.split(base)[-1]
+        filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
@@ -428,7 +461,7 @@ class Qcow2(Image):
         self.resolve_driver_format()
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
-        filename = os.path.split(base)[-1]
+        filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_qcow2_image(base, target, size):
@@ -539,7 +572,7 @@ class Lvm(Image):
                                   CONF.ephemeral_storage_encryption.key_size,
                                   key)
 
-        filename = os.path.split(base)[-1]
+        filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def create_lvm_image(base, size):
@@ -734,6 +767,64 @@ class Rbd(Image):
                                           reason=reason)
 
 
+class Ploop(Image):
+    def __init__(self, instance=None, disk_name=None, path=None):
+        super(Ploop, self).__init__("file", "ploop", is_block_dev=False)
+
+        self.path = (path or
+                     os.path.join(libvirt_utils.get_instance_path(instance),
+                                  disk_name))
+        self.resolve_driver_format()
+
+    def create_image(self, prepare_template, base, size, *args, **kwargs):
+        filename = os.path.split(base)[-1]
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
+        def create_ploop_image(base, target, size):
+            image_path = os.path.join(target, "root.hds")
+            libvirt_utils.copy_image(base, image_path)
+            utils.execute('ploop', 'restore-descriptor', '-f', self.pcs_format,
+                          target, image_path)
+            if size:
+                dd_path = os.path.join(self.path, "DiskDescriptor.xml")
+                utils.execute('ploop', 'grow', '-s', '%dK' % (size >> 10),
+                              dd_path, run_as_root=True)
+
+        if not os.path.exists(self.path):
+            if CONF.force_raw_images:
+                self.pcs_format = "raw"
+            else:
+                image_meta = IMAGE_API.get(kwargs["context"],
+                                           kwargs["image_id"])
+                format = image_meta.get("disk_format")
+                if format == "ploop":
+                    self.pcs_format = "expanded"
+                elif format == "raw":
+                    self.pcs_format = "raw"
+                else:
+                    reason = _("PCS doesn't support images in %s format."
+                                " You should either set force_raw_images=True"
+                                " in config or upload an image in ploop"
+                                " or raw format.") % format
+                    raise exception.ImageUnacceptable(
+                                        image_id=kwargs["image_id"],
+                                        reason=reason)
+
+        if not os.path.exists(base):
+            prepare_template(target=base, max_size=size, *args, **kwargs)
+        self.verify_base_size(base, size)
+
+        if os.path.exists(self.path):
+            return
+
+        fileutils.ensure_tree(self.path)
+
+        remove_func = functools.partial(fileutils.delete_if_exists,
+                                        remove=shutil.rmtree)
+        with fileutils.remove_path_on_error(self.path, remove=remove_func):
+            create_ploop_image(base, self.path, size)
+
+
 class Backend(object):
     def __init__(self, use_cow):
         self.BACKEND = {
@@ -741,6 +832,7 @@ class Backend(object):
             'qcow2': Qcow2,
             'lvm': Lvm,
             'rbd': Rbd,
+            'ploop': Ploop,
             'default': Qcow2 if use_cow else Raw
         }
 

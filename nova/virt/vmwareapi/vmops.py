@@ -57,8 +57,19 @@ from nova.virt.vmwareapi import vif as vmwarevif
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 
+vmops_opts = [
+    cfg.StrOpt('cache_prefix',
+               help='The prefix for Where cached images are stored. This is '
+                    'NOT the full path - just a folder prefix. '
+                    'This should only be used when a datastore cache should '
+                    'be shared between compute nodes. Note: this should only '
+                    'be used when the compute nodes have a shared file '
+                    'system.'),
+    ]
 
 CONF = cfg.CONF
+CONF.register_opts(vmops_opts, 'vmware')
+
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('remove_unused_base_images', 'nova.virt.imagecache')
 CONF.import_opt('vnc_enabled', 'nova.vnc')
@@ -151,13 +162,7 @@ class VMwareVMOps(object):
         self._root_resource_pool = vm_util.get_res_pool_ref(self._session,
                                                             self._cluster)
         self._datastore_regex = datastore_regex
-        # Ensure that the base folder is unique per compute node
-        if CONF.remove_unused_base_images:
-            self._base_folder = '%s%s' % (CONF.my_ip,
-                                          CONF.image_cache_subdirectory_name)
-        else:
-            # Aging disable ensures backward compatibility
-            self._base_folder = CONF.image_cache_subdirectory_name
+        self._base_folder = self._get_base_folder()
         self._tmp_folder = 'vmware_temp'
         self._rescue_suffix = '-rescue'
         self._migrate_suffix = '-orig'
@@ -165,6 +170,20 @@ class VMwareVMOps(object):
         self._datastore_browser_mapping = {}
         self._imagecache = imagecache.ImageCacheManager(self._session,
                                                         self._base_folder)
+
+    def _get_base_folder(self):
+        # Enable more than one compute node to run on the same host
+        if CONF.vmware.cache_prefix:
+            base_folder = '%s%s' % (CONF.vmware.cache_prefix,
+                                    CONF.image_cache_subdirectory_name)
+        # Ensure that the base folder is unique per compute node
+        elif CONF.remove_unused_base_images:
+            base_folder = '%s%s' % (CONF.my_ip,
+                                    CONF.image_cache_subdirectory_name)
+        else:
+            # Aging disable ensures backward compatibility
+            base_folder = CONF.image_cache_subdirectory_name
+        return base_folder
 
     def _extend_virtual_disk(self, instance, requested_size, name, dc_ref):
         service_content = self._session.vim.service_content
@@ -292,6 +311,7 @@ class VMwareVMOps(object):
             context,
             vi.instance,
             session._host,
+            session._port,
             vi.dc_info.name,
             vi.datastore.name,
             image_ds_loc.rel_path,
@@ -631,6 +651,7 @@ class VMwareVMOps(object):
                     images.upload_iso_to_datastore(
                         tmp_file, instance,
                         host=self._session._host,
+                        port=self._session._port,
                         data_center_name=dc_name,
                         datastore_name=data_store_name,
                         cookies=cookies,
@@ -692,6 +713,37 @@ class VMwareVMOps(object):
         self._session._wait_for_task(delete_snapshot_task)
         LOG.debug("Deleted Snapshot of the VM instance", instance=instance)
 
+    def _create_linked_clone_from_snapshot(self, instance,
+                                           vm_ref, snapshot_ref, dc_info):
+        """Create linked clone VM to be deployed to same ds as source VM
+        """
+        client_factory = self._session.vim.client.factory
+        rel_spec = vm_util.relocate_vm_spec(
+                client_factory,
+                datastore=None,
+                host=None,
+                disk_move_type="createNewChildDiskBacking")
+        clone_spec = vm_util.clone_vm_spec(client_factory, rel_spec,
+                power_on=False, snapshot=snapshot_ref, template=True)
+        vm_name = "%s_%s" % (constants.SNAPSHOT_VM_PREFIX,
+                             uuidutils.generate_uuid())
+
+        LOG.debug("Creating linked-clone VM from snapshot", instance=instance)
+        vm_clone_task = self._session._call_method(
+                                self._session.vim,
+                                "CloneVM_Task",
+                                vm_ref,
+                                folder=dc_info.vmFolder,
+                                name=vm_name,
+                                spec=clone_spec)
+        self._session._wait_for_task(vm_clone_task)
+        LOG.info(_LI("Created linked-clone VM from snapshot"),
+                 instance=instance)
+        task_info = self._session._call_method(vim_util,
+                                               "get_dynamic_property",
+                                               vm_clone_task, "Task", "info")
+        return task_info.result
+
     def snapshot(self, context, instance, image_id, update_task_state):
         """Create snapshot from a running VM instance.
 
@@ -702,125 +754,61 @@ class VMwareVMOps(object):
            chain.
         2. Create the snapshot. A new vmdk is created which the VM points to
            now. The earlier vmdk becomes read-only.
-        3. Call CopyVirtualDisk which coalesces the disk chain to form a single
-           vmdk, rather a .vmdk metadata file and a -flat.vmdk disk data file.
-        4. Now upload the -flat.vmdk file to the image store.
-        5. Delete the coalesced .vmdk and -flat.vmdk created.
+        3. Creates a linked clone VM from the snapshot
+        4. Exports the disk in the link clone VM as a streamOptimized disk.
+        5. Delete the linked clone VM
+        6. Deletes the snapshot in original instance.
         """
         vm_ref = vm_util.get_vm_ref(self._session, instance)
-        service_content = self._session.vim.service_content
 
         def _get_vm_and_vmdk_attribs():
-            # Get the vmdk file name that the VM is pointing to
-            hw_devices = self._session._call_method(vim_util,
-                        "get_dynamic_property", vm_ref,
-                        "VirtualMachine", "config.hardware.device")
-            (vmdk_file_path_before_snapshot, adapter_type,
-             disk_type) = vm_util.get_vmdk_path_and_adapter_type(
-                                        hw_devices, uuid=instance.uuid)
-            if not vmdk_file_path_before_snapshot:
+            # Get the vmdk info that the VM is pointing to
+            vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
+                                              instance.uuid)
+            if not vmdk.path:
                 LOG.debug("No root disk defined. Unable to snapshot.")
                 raise error_util.NoRootDiskDefined()
 
-            datastore_name = ds_util.DatastorePath.parse(
-                    vmdk_file_path_before_snapshot).datastore
-            os_type = self._session._call_method(vim_util,
-                        "get_dynamic_property", vm_ref,
-                        "VirtualMachine", "summary.config.guestId")
-            return (vmdk_file_path_before_snapshot, adapter_type, disk_type,
-                    datastore_name, os_type)
+            lst_properties = ["datastore", "summary.config.guestId"]
+            props = self._session._call_method(vim_util,
+                                               "get_object_properties",
+                                               None, vm_ref, "VirtualMachine",
+                                               lst_properties)
+            query = vm_util.get_values_from_object_properties(self._session,
+                                                              props)
+            os_type = query['summary.config.guestId']
+            datastores = query['datastore']
+            return (vmdk, datastores, os_type)
 
-        (vmdk_file_path_before_snapshot, adapter_type, disk_type,
-         datastore_name, os_type) = _get_vm_and_vmdk_attribs()
-
-        snapshot = self._create_vm_snapshot(instance, vm_ref)
-        update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD)
-
-        def _check_if_tmp_folder_exists():
-            # Copy the contents of the VM that were there just before the
-            # snapshot was taken
-            ds_ref_ret = self._session._call_method(
-                vim_util, "get_dynamic_property", vm_ref, "VirtualMachine",
-                "datastore")
-            if ds_ref_ret is None:
-                raise exception.DatastoreNotFound()
-            ds_ref = ds_ref_ret.ManagedObjectReference[0]
-            self.check_temp_folder(datastore_name, ds_ref)
-            return ds_ref
-
-        ds_ref = _check_if_tmp_folder_exists()
-
-        # Generate a random vmdk file name to which the coalesced vmdk content
-        # will be copied to. A random name is chosen so that we don't have
-        # name clashes.
-        random_name = uuidutils.generate_uuid()
-        dest_vmdk_file_path = ds_util.DatastorePath(
-                datastore_name, self._tmp_folder, "%s.vmdk" % random_name)
-        dest_vmdk_data_file_path = ds_util.DatastorePath(
-                datastore_name, self._tmp_folder, "%s-flat.vmdk" % random_name)
+        vmdk, datastores, os_type = _get_vm_and_vmdk_attribs()
+        ds_ref = datastores.ManagedObjectReference[0]
         dc_info = self.get_datacenter_ref_and_name(ds_ref)
 
-        def _copy_vmdk_content():
-            # Consolidate the snapshotted disk to a temporary vmdk.
-            LOG.debug('Copying snapshotted disk %s.',
-                      vmdk_file_path_before_snapshot,
-                      instance=instance)
-            copy_disk_task = self._session._call_method(
-                self._session.vim,
-                "CopyVirtualDisk_Task",
-                service_content.virtualDiskManager,
-                sourceName=vmdk_file_path_before_snapshot,
-                sourceDatacenter=dc_info.ref,
-                destName=str(dest_vmdk_file_path),
-                destDatacenter=dc_info.ref,
-                force=False)
-            self._session._wait_for_task(copy_disk_task)
-            LOG.debug('Copied snapshotted disk %s.',
-                      vmdk_file_path_before_snapshot,
-                      instance=instance)
+        update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD)
 
-        _copy_vmdk_content()
-        self._delete_vm_snapshot(instance, vm_ref, snapshot)
-
-        cookies = self._session.vim.client.options.transport.cookiejar
-
-        def _upload_vmdk_to_image_repository():
-            # Upload the contents of -flat.vmdk file which has the disk data.
-            LOG.debug("Uploading image %s", image_id,
-                      instance=instance)
-            images.upload_image(
-                context,
-                image_id,
-                instance,
-                os_type=os_type,
-                disk_type=constants.DEFAULT_DISK_TYPE,
-                adapter_type=adapter_type,
-                image_version=1,
-                host=self._session._host,
-                data_center_name=dc_info.name,
-                datastore_name=datastore_name,
-                cookies=cookies,
-                file_path="%s/%s-flat.vmdk" % (self._tmp_folder, random_name))
-            LOG.debug("Uploaded image %s", image_id,
-                      instance=instance)
+        # TODO(vui): convert to creating plain vm clone and uploading from it
+        # instead of using live vm snapshot.
+        snapshot_ref = self._create_vm_snapshot(instance, vm_ref)
 
         update_task_state(task_state=task_states.IMAGE_UPLOADING,
                           expected_state=task_states.IMAGE_PENDING_UPLOAD)
-        _upload_vmdk_to_image_repository()
+        snapshot_vm_ref = None
 
-        def _clean_temp_data():
-            """Delete temporary vmdk files generated in image handling
-            operations.
-            """
-            # The data file is the one occupying space, and likelier to see
-            # deletion problems, so prioritize its deletion first. In the
-            # unlikely event that its deletion fails, the small descriptor file
-            # is retained too by design since it makes little sense to remove
-            # it when the data disk it refers to still lingers.
-            for f in dest_vmdk_data_file_path, dest_vmdk_file_path:
-                self._delete_datastore_file(f, dc_info.ref)
-
-        _clean_temp_data()
+        try:
+            # Create a temporary VM (linked clone from snapshot), then export
+            # the VM's root disk to glance via HttpNfc API
+            snapshot_vm_ref = self._create_linked_clone_from_snapshot(
+                instance, vm_ref, snapshot_ref, dc_info)
+            images.upload_image_stream_optimized(
+                context, image_id, instance, self._session, vm=snapshot_vm_ref,
+                vmdk_size=vmdk.capacity_in_bytes)
+        finally:
+            if snapshot_vm_ref:
+                vm_util.destroy_vm(self._session, instance, snapshot_vm_ref)
+            # Deleting the snapshot after destroying the temporary VM created
+            # based on it allows the instance vm's disks to be consolidated.
+            # TODO(vui) Add handling for when vmdk volume is attached.
+            self._delete_vm_snapshot(instance, vm_ref, snapshot_ref)
 
     def reboot(self, instance, network_info):
         """Reboot a VM instance."""
@@ -1019,7 +1007,7 @@ class VMwareVMOps(object):
         """
         vm_ref = vm_util.get_vm_ref(self._session, instance)
 
-        self.power_off(instance)
+        vm_util.power_off_instance(self._session, instance, vm_ref)
         instance_name = instance.uuid + self._rescue_suffix
         self.spawn(context, instance, image_meta,
                    None, None, network_info,
@@ -1027,17 +1015,14 @@ class VMwareVMOps(object):
                    power_on=False)
 
         # Attach vmdk to the rescue VM
-        hardware_devices = self._session._call_method(vim_util,
-                        "get_dynamic_property", vm_ref,
-                        "VirtualMachine", "config.hardware.device")
-        (vmdk_path, adapter_type,
-         disk_type) = vm_util.get_vmdk_path_and_adapter_type(
-                hardware_devices, uuid=instance.uuid)
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref, instance.uuid)
         rescue_vm_ref = vm_util.get_vm_ref_from_name(self._session,
                                                      instance_name)
-        self._volumeops.attach_disk_to_vm(
-                                rescue_vm_ref, instance,
-                                adapter_type, disk_type, vmdk_path)
+        self._volumeops.attach_disk_to_vm(rescue_vm_ref,
+                                          instance,
+                                          vmdk.adapter_type,
+                                          vmdk.disk_type,
+                                          vmdk.path)
         vm_util.power_on_instance(self._session, instance,
                                   vm_ref=rescue_vm_ref)
 
@@ -1045,13 +1030,7 @@ class VMwareVMOps(object):
         """Unrescue the specified instance."""
         # Get the original vmdk_path
         vm_ref = vm_util.get_vm_ref(self._session, instance)
-        hardware_devices = self._session._call_method(vim_util,
-                        "get_dynamic_property", vm_ref,
-                        "VirtualMachine", "config.hardware.device")
-        (vmdk_path, adapter_type,
-         disk_type) = vm_util.get_vmdk_path_and_adapter_type(
-                hardware_devices, uuid=instance.uuid)
-
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref, instance.uuid)
         instance_name = instance.uuid + self._rescue_suffix
         # detach the original instance disk from the rescue disk
         vm_rescue_ref = vm_util.get_vm_ref_from_name(self._session,
@@ -1059,7 +1038,7 @@ class VMwareVMOps(object):
         hardware_devices = self._session._call_method(vim_util,
                         "get_dynamic_property", vm_rescue_ref,
                         "VirtualMachine", "config.hardware.device")
-        device = vm_util.get_vmdk_volume_disk(hardware_devices, path=vmdk_path)
+        device = vm_util.get_vmdk_volume_disk(hardware_devices, path=vmdk.path)
         vm_util.power_off_instance(self._session, instance, vm_rescue_ref)
         self._volumeops.detach_disk_from_vm(vm_rescue_ref, instance, device)
         self._destroy_instance(instance, instance_name=instance_name)
@@ -1075,9 +1054,6 @@ class VMwareVMOps(object):
 
     def power_on(self, instance):
         vm_util.power_on_instance(self._session, instance)
-
-    def _get_orig_vm_name_label(self, instance):
-        return instance.uuid + '-orig'
 
     def _update_instance_progress(self, context, instance, step, total_steps):
         """Update instance progress percent to reflect current step number
@@ -1120,7 +1096,7 @@ class VMwareVMOps(object):
         host_ref = self._get_host_ref_from_name(dest)
 
         # 1. Power off the instance
-        self.power_off(instance)
+        vm_util.power_off_instance(self._session, instance, vm_ref)
         self._update_instance_progress(context, instance,
                                        step=1,
                                        total_steps=RESIZE_TOTAL_STEPS)
@@ -1191,8 +1167,9 @@ class VMwareVMOps(object):
             old_root_gb = instance.system_metadata['old_instance_type_root_gb']
             if instance['root_gb'] > int(old_root_gb):
                 root_disk_in_kb = instance['root_gb'] * units.Mi
-                vmdk_path = vm_util.get_vmdk_path(self._session, vm_ref,
-                                                  instance)
+                vmdk_info = vm_util.get_vmdk_info(self._session, vm_ref,
+                                                  instance.uuid)
+                vmdk_path = vmdk_info.path
                 data_store_ref = ds_util.get_datastore(self._session,
                     self._cluster, datastore_regex=self._datastore_regex).ref
                 dc_info = self.get_datacenter_ref_and_name(data_store_ref)
@@ -1289,7 +1266,7 @@ class VMwareVMOps(object):
         """Return data about VM diagnostics."""
         data = self._get_diagnostics(instance)
         # Add a namespace to all of the diagnostsics
-        return dict([('vmware:' + k, v) for k, v in data.items()])
+        return {'vmware:' + k: v for k, v in data.items()}
 
     def get_instance_diagnostics(self, instance):
         """Return data about VM diagnostics."""
@@ -1436,15 +1413,6 @@ class VMwareVMOps(object):
         """Check that the temp folder exists."""
         self._create_folder_if_missing(ds_name, ds_ref, self._tmp_folder)
 
-    def _check_if_folder_file_exists(self, ds_browser, ds_ref, ds_name,
-                                     folder_name, file_name):
-        # Ensure that the cache folder exists
-        self.check_cache_folder(ds_name, ds_ref)
-        # Check if the file exists or not.
-        folder_ds_path = ds_util.DatastorePath(ds_name, folder_name)
-        return ds_util.file_exists(
-                self._session, ds_browser, folder_ds_path, file_name)
-
     def inject_network_info(self, instance, network_info):
         """inject network info for specified instance."""
         # Set the machine.id parameter of the instance to inject
@@ -1481,7 +1449,8 @@ class VMwareVMOps(object):
                     elif prop.name == "runtime.connectionState":
                         conn_state = prop.val
                 # Ignoring the orphaned or inaccessible VMs
-                if conn_state not in ["orphaned", "inaccessible"]:
+                if (conn_state not in ["orphaned", "inaccessible"] and
+                    uuidutils.is_uuid_like(vm_name)):
                     lst_vm_names.append(vm_name)
             if token:
                 retrieve_result = self._session._call_method(vim_util,

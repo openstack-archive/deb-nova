@@ -44,6 +44,35 @@ class NovaBase(models.SoftDeleteMixin,
                models.ModelBase):
     metadata = None
 
+    def __copy__(self):
+        """Implement a safe copy.copy().
+
+        SQLAlchemy-mapped objects travel with an object
+        called an InstanceState, which is pegged to that object
+        specifically and tracks everything about that object.  It's
+        critical within all attribute operations, including gets
+        and deferred loading.   This object definitely cannot be
+        shared among two instances, and must be handled.
+
+        The copy routine here makes use of session.merge() which
+        already essentially implements a "copy" style of operation,
+        which produces a new instance with a new InstanceState and copies
+        all the data along mapped attributes without using any SQL.
+
+        The mode we are using here has the caveat that the given object
+        must be "clean", e.g. that it has no database-loaded state
+        that has been updated and not flushed.   This is a good thing,
+        as creating a copy of an object including non-flushed, pending
+        database state is probably not a good idea; neither represents
+        what the actual row looks like, and only one should be flushed.
+
+        """
+        session = orm.Session()
+
+        copy = session.merge(self, load=False)
+        session.expunge(copy)
+        return copy
+
     def save(self, session=None):
         from nova.db.sqlalchemy import api
 
@@ -166,7 +195,8 @@ class Instance(BASE, NovaBase):
     __tablename__ = 'instances'
     __table_args__ = (
         Index('uuid', 'uuid', unique=True),
-        Index('project_id', 'project_id'),
+        Index('instances_project_id_deleted_idx',
+              'project_id', 'deleted'),
         Index('instances_reservation_id_idx',
               'reservation_id'),
         Index('instances_terminated_at_launched_at_idx',
@@ -333,6 +363,7 @@ class InstanceExtra(BASE, NovaBase):
                            nullable=False)
     numa_topology = orm.deferred(Column(Text))
     pci_requests = orm.deferred(Column(Text))
+    flavor = orm.deferred(Column(Text))
     instance = orm.relationship(Instance,
                             backref=orm.backref('extra',
                                                 uselist=False),
@@ -830,7 +861,7 @@ class VirtualInterface(BASE, NovaBase):
     __table_args__ = (
         schema.UniqueConstraint("address", "deleted",
                         name="uniq_virtual_interfaces0address0deleted"),
-        Index('network_id', 'network_id'),
+        Index('virtual_interfaces_network_id_idx', 'network_id'),
         Index('virtual_interfaces_instance_uuid_fkey', 'instance_uuid'),
     )
     id = Column(Integer, primary_key=True, nullable=False)
@@ -931,7 +962,7 @@ class DNSDomain(BASE, NovaBase):
     """Represents a DNS domain with availability zone or project info."""
     __tablename__ = 'dns_domains'
     __table_args__ = (
-        Index('project_id', 'project_id'),
+        Index('dns_domains_project_id_idx', 'project_id'),
         Index('dns_domains_domain_deleted_idx', 'domain', 'deleted'),
     )
     deleted = Column(Boolean, default=False)
@@ -1132,7 +1163,7 @@ class Aggregate(BASE, NovaBase):
 
     @property
     def metadetails(self):
-        return dict([(m.key, m.value) for m in self._metadata])
+        return {m.key: m.value for m in self._metadata}
 
     @property
     def availability_zone(self):
@@ -1413,6 +1444,9 @@ class PciDevice(BASE, NovaBase):
     extra_info = Column(Text)
 
     instance_uuid = Column(String(36))
+
+    numa_node = Column(Integer, nullable=True)
+
     instance = orm.relationship(Instance, backref="pci_devices",
                             foreign_keys=instance_uuid,
                             primaryjoin='and_('

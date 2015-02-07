@@ -141,16 +141,37 @@ class ComputeRpcAPITestCase(test.TestCase):
         self._test_compute_api('change_instance_metadata', 'cast',
                 instance=self.fake_instance_obj, diff={}, version='3.7')
 
-    def test_check_can_live_migrate_destination(self):
+    @mock.patch('nova.compute.rpcapi.ComputeAPI._warn_buggy_live_migrations')
+    def test_check_can_live_migrate_destination(self, mock_warn):
         self._test_compute_api('check_can_live_migrate_destination', 'call',
                 instance=self.fake_instance_obj,
                 destination='dest', block_migration=True,
                 disk_over_commit=True, version='3.32')
+        self.assertFalse(mock_warn.called)
 
-    def test_check_can_live_migrate_source(self):
+    @mock.patch('nova.compute.rpcapi.ComputeAPI._warn_buggy_live_migrations')
+    def test_check_can_live_migrate_destination_old_warning(self, mock_warn):
+        self.flags(compute='3.0', group='upgrade_levels')
+        self._test_compute_api('check_can_live_migrate_destination', 'call',
+                instance=self.fake_instance_obj,
+                destination='dest', block_migration=True,
+                disk_over_commit=True, version='3.0')
+        mock_warn.assert_called_once_with()
+
+    @mock.patch('nova.compute.rpcapi.ComputeAPI._warn_buggy_live_migrations')
+    def test_check_can_live_migrate_source(self, mock_warn):
         self._test_compute_api('check_can_live_migrate_source', 'call',
                 instance=self.fake_instance_obj,
                 dest_check_data={"test": "data"}, version='3.32')
+        self.assertFalse(mock_warn.called)
+
+    @mock.patch('nova.compute.rpcapi.ComputeAPI._warn_buggy_live_migrations')
+    def test_check_can_live_migrate_source_old_warning(self, mock_warn):
+        self.flags(compute='3.0', group='upgrade_levels')
+        self._test_compute_api('check_can_live_migrate_source', 'call',
+                instance=self.fake_instance_obj,
+                dest_check_data={"test": "data"}, version='3.0')
+        mock_warn.assert_called_once_with()
 
     def test_check_instance_shared_storage(self):
         self._test_compute_api('check_instance_shared_storage', 'call',
@@ -281,13 +302,22 @@ class ComputeRpcAPITestCase(test.TestCase):
                 migrate_data=None, version='3.19')
 
     def test_prep_resize(self):
+        self.flags(compute='3.0', group='upgrade_levels')
         self._test_compute_api('prep_resize', 'cast',
                 instance=self.fake_instance_obj, instance_type='fake_type',
                 image='fake_image', host='host',
                 reservations=list('fake_res'),
                 request_spec='fake_spec',
                 filter_properties={'fakeprop': 'fakeval'},
-                node='node')
+                node='node', version='3.0')
+        self.flags(compute='3.38', group='upgrade_levels')
+        self._test_compute_api('prep_resize', 'cast',
+                instance=self.fake_instance_obj, instance_type='fake_type',
+                image='fake_image', host='host',
+                reservations=list('fake_res'),
+                request_spec='fake_spec',
+                filter_properties={'fakeprop': 'fakeval'},
+                node='node', clean_shutdown=True, version='3.38')
 
     def test_reboot_instance(self):
         self.maxDiff = None
@@ -379,10 +409,21 @@ class ComputeRpcAPITestCase(test.TestCase):
                 instance=self.fake_instance_obj, migration={'id': 'fake_id'},
                 host='host', reservations=list('fake_res'))
 
-    def test_rollback_live_migration_at_destination(self):
+    @mock.patch('nova.compute.rpcapi.ComputeAPI._warn_buggy_live_migrations')
+    def test_rollback_live_migration_at_destination(self, mock_warn):
         self._test_compute_api('rollback_live_migration_at_destination',
                 'cast', instance=self.fake_instance_obj, host='host',
                 destroy_disks=True, migrate_data=None, version='3.32')
+        self.assertFalse(mock_warn.called)
+
+    @mock.patch('nova.compute.rpcapi.ComputeAPI._warn_buggy_live_migrations')
+    def test_rollback_live_migration_at_destination_old_warning(self,
+                                                                mock_warn):
+        self.flags(compute='3.0', group='upgrade_levels')
+        self._test_compute_api('rollback_live_migration_at_destination',
+                'cast', instance=self.fake_instance_obj, host='host',
+                version='3.0')
+        mock_warn.assert_called_once_with(None)
 
     def test_run_instance(self):
         self._test_compute_api('run_instance', 'cast',

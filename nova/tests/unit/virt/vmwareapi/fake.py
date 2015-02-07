@@ -20,14 +20,12 @@ A fake VMware VI API implementation.
 """
 
 import collections
-import pprint
 
 from oslo.serialization import jsonutils
 from oslo.utils import units
 from oslo.vmware import exceptions as vexc
 
 from nova import exception
-from nova.i18n import _
 from nova.openstack.common import log as logging
 from nova.openstack.common import uuidutils
 from nova.virt.vmwareapi import constants
@@ -44,12 +42,6 @@ _array_types = {}
 _vim_map = {}
 
 LOG = logging.getLogger(__name__)
-
-
-def log_db_contents(msg=None):
-    """Log DB Contents."""
-    LOG.debug("%(text)s: _db_content => %(content)s",
-              {'text': msg or "", 'content': pprint.pformat(_db_content)})
 
 
 def reset():
@@ -264,7 +256,7 @@ class ManagedObject(object):
         for elem in self.propSet:
             if elem.name == attr:
                 return elem.val
-        msg = _("Property %(attr)s not set for the managed object %(name)s")
+        msg = "Property %(attr)s not set for the managed object %(name)s"
         raise exception.NovaException(msg % {'attr': attr,
                                              'name': self.__class__.__name__})
 
@@ -274,8 +266,8 @@ class ManagedObject(object):
         return prefix + "-" + str(self.__class__._counter)
 
     def __repr__(self):
-        return jsonutils.dumps(dict([(elem.name, elem.val)
-                                for elem in self.propSet]))
+        return jsonutils.dumps({elem.name: elem.val
+                                for elem in self.propSet})
 
 
 class DataObject(object):
@@ -523,6 +515,8 @@ class VirtualMachine(ManagedObject):
             disk_backing.fileName = filename
             disk_backing.key = -101
             disk.backing = disk_backing
+            disk.capacityInBytes = 1024
+            disk.capacityInKB = 1
 
             controller = VirtualLsiLogicController()
             controller.key = controller_key
@@ -1062,8 +1056,8 @@ def fake_upload_image(context, image, instance, **kwargs):
     pass
 
 
-def fake_fetch_image(context, instance, host, dc_name, ds_name, file_path,
-                     cookies=None):
+def fake_fetch_image(context, instance, host, port, dc_name, ds_name,
+                     file_path, cookies=None):
     """Fakes the fetch of an image."""
     ds_file_path = "[" + ds_name + "] " + file_path
     _add_file(ds_file_path)
@@ -1072,10 +1066,10 @@ def fake_fetch_image(context, instance, host, dc_name, ds_name, file_path,
 def _get_vm_mdo(vm_ref):
     """Gets the Virtual Machine with the ref from the db."""
     if _db_content.get("VirtualMachine", None) is None:
-            raise exception.NotFound(_("There is no VM registered"))
+            raise exception.NotFound("There is no VM registered")
     if vm_ref not in _db_content.get("VirtualMachine"):
-        raise exception.NotFound(_("Virtual Machine with ref %s is not "
-                        "there") % vm_ref)
+        raise exception.NotFound("Virtual Machine with ref %s is not "
+                                 "there" % vm_ref)
     return _db_content.get("VirtualMachine")[vm_ref]
 
 
@@ -1221,9 +1215,8 @@ class FakeVim(object):
         if (self._session is None or self._session not in
                  _db_content['session']):
             LOG.debug("Session is faulty")
-            raise vexc.VimFaultException(
-                               [vexc.NOT_AUTHENTICATED],
-                               _("Session Invalid"))
+            raise vexc.VimFaultException([vexc.NOT_AUTHENTICATED],
+                                         "Session Invalid")
 
     def _session_is_active(self, *args, **kwargs):
         try:
@@ -1333,7 +1326,7 @@ class FakeVim(object):
              source_vm_mdo.get("config.hardware.device").VirtualDevice,
          "instanceUuid": source_vm_mdo.get("summary.config.instanceUuid")}
 
-        if clone_spec.config is not None:
+        if hasattr(clone_spec, 'config'):
             # Impose the config changes specified in the config property
             if (hasattr(clone_spec.config, 'instanceUuid') and
                clone_spec.config.instanceUuid is not None):
@@ -1354,6 +1347,8 @@ class FakeVim(object):
         vm_ref = args[0]
         _get_vm_mdo(vm_ref)
         del _db_content["VirtualMachine"][vm_ref]
+        task_mdo = create_task(method, "success")
+        return task_mdo.obj
 
     def _search_ds(self, method, *args, **kwargs):
         """Searches the datastore for a file."""
@@ -1429,11 +1424,11 @@ class FakeVim(object):
     def _set_power_state(self, method, vm_ref, pwr_state="poweredOn"):
         """Sets power state for the VM."""
         if _db_content.get("VirtualMachine", None) is None:
-            raise exception.NotFound(_("No Virtual Machine has been "
-                                       "registered yet"))
+            raise exception.NotFound("No Virtual Machine has been "
+                                     "registered yet")
         if vm_ref not in _db_content.get("VirtualMachine"):
-            raise exception.NotFound(_("Virtual Machine with ref %s is not "
-                                       "there") % vm_ref)
+            raise exception.NotFound("Virtual Machine with ref %s is not "
+                                     "there" % vm_ref)
         vm_mdo = _db_content.get("VirtualMachine").get(vm_ref)
         vm_mdo.set("runtime.powerState", pwr_state)
         task_mdo = create_task(method, "success")

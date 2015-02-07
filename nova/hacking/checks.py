@@ -28,7 +28,7 @@ Guidelines for writing new hacking checks
  - Keep the test method code in the source file ordered based
    on the N3xx value.
  - List the new rule in the top level HACKING.rst file
- - Add test cases for each new rule to nova/tests/test_hacking.py
+ - Add test cases for each new rule to nova/tests/unit/test_hacking.py
 
 """
 
@@ -50,10 +50,31 @@ asse_trueinst_re = re.compile(
 asse_equal_type_re = re.compile(
                        r"(.)*assertEqual\(type\((\w|\.|\'|\"|\[|\])+\), "
                        "(\w|\.|\'|\"|\[|\])+\)")
+asse_equal_in_end_with_true_or_false_re = re.compile(r"assertEqual\("
+                    r"(\w|[][.'\"])+ in (\w|[][.'\", ])+, (True|False)\)")
+asse_equal_in_start_with_true_or_false_re = re.compile(r"assertEqual\("
+                    r"(True|False), (\w|[][.'\"])+ in (\w|[][.'\", ])+\)")
 asse_equal_end_with_none_re = re.compile(
                            r"assertEqual\(.*?,\s+None\)$")
 asse_equal_start_with_none_re = re.compile(
                            r"assertEqual\(None,")
+# NOTE(snikitin): Next two regexes weren't united to one for more readability.
+#                 asse_true_false_with_in_or_not_in regex checks
+#                 assertTrue/False(A in B) cases where B argument has no spaces
+#                 asse_true_false_with_in_or_not_in_spaces regex checks cases
+#                 where B argument has spaces and starts/ends with [, ', ".
+#                 For example: [1, 2, 3], "some string", 'another string'.
+#                 We have to separate these regexes to escape a false positives
+#                 results. B argument should have spaces only if it starts
+#                 with [, ", '. Otherwise checking of string
+#                 "assertFalse(A in B and C in D)" will be false positives.
+#                 In this case B argument is "B and C in D".
+asse_true_false_with_in_or_not_in = re.compile(r"assert(True|False)\("
+                    r"(\w|[][.'\"])+( not)? in (\w|[][.'\",])+(, .*)?\)")
+asse_true_false_with_in_or_not_in_spaces = re.compile(r"assert(True|False)"
+                    r"\((\w|[][.'\"])+( not)? in [\[|'|\"](\w|[][.'\", ])+"
+                    r"[\[|'|\"](, .*)?\)")
+asse_raises_regexp = re.compile(r"assertRaisesRegexp\(")
 conf_attribute_set_re = re.compile(r"CONF\.[a-z0-9_.]+\s*=\s*\w")
 log_translation = re.compile(
     r"(.)*LOG\.(audit|error|critical)\(\s*('|\")")
@@ -71,9 +92,17 @@ translated_log = re.compile(
 mutable_default_args = re.compile(r"^\s*def .+\((.+=\{\}|.+=\[\])")
 string_translation = re.compile(r"[^_]*_\(\s*('|\")")
 underscore_import_check = re.compile(r"(.)*import _(.)*")
+import_translation_for_log_or_exception = re.compile(
+    r"(.)*(from\snova.i18n\simport)\s_")
 # We need this for cases where they have created their own _ function.
 custom_underscore_check = re.compile(r"(.)*_\s*=\s*(.)*")
 api_version_re = re.compile(r"@.*api_version")
+dict_constructor_with_list_copy_re = re.compile(r".*\bdict\((\[)?(\(|\[)")
+decorator_re = re.compile(r"@.*")
+
+# TODO(dims): When other oslo libraries switch over non-namespace'd
+# imports, we need to add them to the regexp below.
+oslo_namespace_imports = re.compile(r"from[\s]*oslo[.](concurrency)")
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -230,16 +259,6 @@ def no_vi_headers(physical_line, line_number, lines):
             return 0, "N314: Don't put vi configuration in source files"
 
 
-def no_author_tags(physical_line):
-    for regex in author_tag_re:
-        if regex.match(physical_line):
-            physical_line = physical_line.lower()
-            pos = physical_line.find('moduleauthor')
-            if pos < 0:
-                pos = physical_line.find('author')
-            return pos, "N315: Don't use author tags"
-
-
 def assert_true_instance(logical_line):
     """Check for assertTrue(isinstance(a, b)) sentences
 
@@ -287,6 +306,16 @@ def no_translate_debug_logs(logical_line, filename):
         yield(0, "N319 Don't translate debug level logs")
 
 
+def no_import_translation_in_tests(logical_line, filename):
+    """Check for 'from nova.i18n import _'
+    N337
+    """
+    if 'nova/tests/' in filename:
+        res = import_translation_for_log_or_exception.match(logical_line)
+        if res:
+            yield(0, "N337 Don't import translation in tests")
+
+
 def no_setting_conf_directly_in_tests(logical_line, filename):
     """Check for setting CONF.* attributes directly in tests
 
@@ -322,9 +351,6 @@ def validate_log_translations(logical_line, physical_line, filename):
         yield (0, msg)
     msg = "N330: LOG.warning messages require translations `_LW()`!"
     if log_translation_LW.match(logical_line):
-        yield (0, msg)
-    msg = "N331: Use LOG.warning due to compatibility with py3"
-    if log_warn.match(logical_line):
         yield (0, msg)
     msg = "N321: Log messages require translations!"
     if log_translation.match(logical_line):
@@ -379,10 +405,12 @@ def use_jsonutils(logical_line, filename):
                 yield (pos, msg % {'fun': f[:-1]})
 
 
-def check_api_version_decorator(logical_line, blank_before, filename):
+def check_api_version_decorator(logical_line, previous_logical, blank_before,
+                                filename):
     msg = ("N332: the api_version decorator must be the first decorator"
            " on a method.")
-    if blank_before == 0 and re.match(api_version_re, logical_line):
+    if blank_before == 0 and re.match(api_version_re, logical_line) \
+           and re.match(decorator_re, previous_logical):
         yield(0, msg)
 
 
@@ -445,6 +473,62 @@ class CheckForTransAdd(BaseASTChecker):
         super(CheckForTransAdd, self).generic_visit(node)
 
 
+def check_oslo_namespace_imports(logical_line, blank_before, filename):
+    if re.match(oslo_namespace_imports, logical_line):
+        msg = ("N333: '%s' must be used instead of '%s'.") % (
+               logical_line.replace('oslo.', 'oslo_'),
+               logical_line)
+        yield(0, msg)
+
+
+def assert_true_or_false_with_in(logical_line):
+    """Check for assertTrue/False(A in B), assertTrue/False(A not in B),
+    assertTrue/False(A in B, message) or assertTrue/False(A not in B, message)
+    sentences.
+
+    N334
+    """
+    res = (asse_true_false_with_in_or_not_in.search(logical_line) or
+           asse_true_false_with_in_or_not_in_spaces.search(logical_line))
+    if res:
+        yield (0, "N334: Use assertIn/NotIn(A, B) rather than "
+                  "assertTrue/False(A in/not in B) when checking collection "
+                  "contents.")
+
+
+def assert_raises_regexp(logical_line):
+    """Check for usage of deprecated assertRaisesRegexp
+
+    N335
+    """
+    res = asse_raises_regexp.search(logical_line)
+    if res:
+        yield (0, "N335: assertRaisesRegex must be used instead "
+                  "of assertRaisesRegexp")
+
+
+def dict_constructor_with_list_copy(logical_line):
+    msg = ("N336: Must use a dict comprehension instead of a dict constructor"
+           " with a sequence of key-value pairs."
+           )
+    if dict_constructor_with_list_copy_re.match(logical_line):
+        yield (0, msg)
+
+
+def assert_equal_in(logical_line):
+    """Check for assertEqual(A in B, True), assertEqual(True, A in B),
+    assertEqual(A in B, False) or assertEqual(False, A in B) sentences
+
+    N338
+    """
+    res = (asse_equal_in_start_with_true_or_false_re.search(logical_line) or
+           asse_equal_in_end_with_true_or_false_re.search(logical_line))
+    if res:
+        yield (0, "N338: Use assertIn/NotIn(A, B) rather than "
+                  "assertEqual(A in B, True/False) when checking collection "
+                  "contents.")
+
+
 def factory(register):
     register(import_no_db_in_virt)
     register(no_db_session_in_public_api)
@@ -453,10 +537,11 @@ def factory(register):
     register(import_no_virt_driver_config_deps)
     register(capital_cfg_help)
     register(no_vi_headers)
-    register(no_author_tags)
+    register(no_import_translation_in_tests)
     register(assert_true_instance)
     register(assert_equal_type)
     register(assert_equal_none)
+    register(assert_raises_regexp)
     register(no_translate_debug_logs)
     register(no_setting_conf_directly_in_tests)
     register(validate_log_translations)
@@ -466,3 +551,7 @@ def factory(register):
     register(check_api_version_decorator)
     register(CheckForStrUnicodeExc)
     register(CheckForTransAdd)
+    register(check_oslo_namespace_imports)
+    register(assert_true_or_false_with_in)
+    register(dict_constructor_with_list_copy)
+    register(assert_equal_in)

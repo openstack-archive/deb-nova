@@ -14,7 +14,6 @@
 
 import datetime
 
-from lxml import etree
 from oslo.config import cfg
 from oslo.serialization import jsonutils
 import webob
@@ -99,7 +98,6 @@ CONF = cfg.CONF
 
 class AvailabilityZoneApiTestV21(test.NoDBTestCase):
     availability_zone = az_v21
-    url = '/v2/fake/os-availability-zone'
 
     def setUp(self):
         super(AvailabilityZoneApiTestV21, self).setUp()
@@ -108,31 +106,27 @@ class AvailabilityZoneApiTestV21(test.NoDBTestCase):
         self.stubs.Set(availability_zones, 'set_availability_zones',
                        fake_set_availability_zones)
         self.stubs.Set(servicegroup.API, 'service_is_up', fake_service_is_up)
-
-    def _get_wsgi_instance(self):
-        return fakes.wsgi_app_v21(init_only=('os-availability-zone',
-                                             'servers'))
+        self.controller = self.availability_zone.AvailabilityZoneController()
 
     def test_filtered_availability_zones(self):
-        az = self.availability_zone.AvailabilityZoneController()
         zones = ['zone1', 'internal']
         expected = [{'zoneName': 'zone1',
                     'zoneState': {'available': True},
                      "hosts": None}]
-        result = az._get_filtered_availability_zones(zones, True)
+        result = self.controller._get_filtered_availability_zones(zones, True)
         self.assertEqual(result, expected)
 
         expected = [{'zoneName': 'zone1',
                     'zoneState': {'available': False},
                      "hosts": None}]
-        result = az._get_filtered_availability_zones(zones, False)
+        result = self.controller._get_filtered_availability_zones(zones,
+                                                                  False)
         self.assertEqual(result, expected)
 
     def test_availability_zone_index(self):
-        req = webob.Request.blank(self.url)
-        resp = req.get_response(self._get_wsgi_instance())
-        self.assertEqual(resp.status_int, 200)
-        resp_dict = jsonutils.loads(resp.body)
+        req = webob.Request.blank('')
+        req.environ['nova.context'] = context.get_admin_context()
+        resp_dict = self.controller.index(req)
 
         self.assertIn('availabilityZoneInfo', resp_dict)
         zones = resp_dict['availabilityZoneInfo']
@@ -175,13 +169,9 @@ class AvailabilityZoneApiTestV21(test.NoDBTestCase):
             self.assertEqual(zone['zoneName'], name)
             self.assertEqual(zone['zoneState'], status)
 
-        availabilityZone = self.availability_zone.AvailabilityZoneController()
-
-        req_url = self.url + '/detail'
-        req = webob.Request.blank(req_url)
-        req.method = 'GET'
+        req = webob.Request.blank('')
         req.environ['nova.context'] = context.get_admin_context()
-        resp_dict = availabilityZone.detail(req)
+        resp_dict = self.controller.detail(req)
 
         self.assertIn('availabilityZoneInfo', resp_dict)
         zones = resp_dict['availabilityZoneInfo']
@@ -241,13 +231,10 @@ class AvailabilityZoneApiTestV21(test.NoDBTestCase):
                              'zoneName': 'nova'}]}
         self.stubs.Set(availability_zones, 'get_availability_zones',
                        fake_get_availability_zones)
-        availabilityZone = self.availability_zone.AvailabilityZoneController()
 
-        req_url = self.url + '/detail'
-        req = webob.Request.blank(req_url)
-        req.method = 'GET'
+        req = webob.Request.blank('')
         req.environ['nova.context'] = context.get_admin_context()
-        resp_dict = availabilityZone.detail(req)
+        resp_dict = self.controller.detail(req)
 
         self.assertThat(resp_dict,
                         matchers.DictMatches(expected_response))
@@ -255,9 +242,6 @@ class AvailabilityZoneApiTestV21(test.NoDBTestCase):
 
 class AvailabilityZoneApiTestV2(AvailabilityZoneApiTestV21):
     availability_zone = az_v2
-
-    def _get_wsgi_instance(self):
-        return fakes.wsgi_app()
 
 
 class ServersControllerCreateTestV21(test.TestCase):
@@ -451,62 +435,3 @@ class ServersControllerCreateTestV2(ServersControllerCreateTestV21):
         # NOTE: v2.0 API does not check this bad request case.
         # So we skip this test for v2.0 API.
         pass
-
-
-class AvailabilityZoneSerializerTest(test.NoDBTestCase):
-    def test_availability_zone_index_detail_serializer(self):
-        def _verify_zone(zone_dict, tree):
-            self.assertEqual(tree.tag, 'availabilityZone')
-            self.assertEqual(zone_dict['zoneName'], tree.get('name'))
-            self.assertEqual(str(zone_dict['zoneState']['available']),
-                             tree[0].get('available'))
-
-            for _idx, host_child in enumerate(tree[1]):
-                self.assertIn(host_child.get('name'), zone_dict['hosts'])
-                svcs = zone_dict['hosts'][host_child.get('name')]
-                for _idx, svc_child in enumerate(host_child[0]):
-                    self.assertIn(svc_child.get('name'), svcs)
-                    svc = svcs[svc_child.get('name')]
-                    self.assertEqual(len(svc_child), 1)
-
-                    self.assertEqual(str(svc['available']),
-                                     svc_child[0].get('available'))
-                    self.assertEqual(str(svc['active']),
-                                     svc_child[0].get('active'))
-                    self.assertEqual(str(svc['updated_at']),
-                                     svc_child[0].get('updated_at'))
-
-        serializer = az_v2.AvailabilityZonesTemplate()
-        raw_availability_zones = \
-            [{'zoneName': 'zone-1',
-              'zoneState': {'available': True},
-              'hosts': {'fake_host-1': {
-                            'nova-compute': {'active': True, 'available': True,
-                                'updated_at':
-                                    datetime.datetime(
-                                        2012, 12, 26, 14, 45, 25)}}}},
-             {'zoneName': 'internal',
-              'zoneState': {'available': True},
-              'hosts': {'fake_host-1': {
-                            'nova-sched': {'active': True, 'available': True,
-                                'updated_at':
-                                    datetime.datetime(
-                                        2012, 12, 26, 14, 45, 25)}},
-                        'fake_host-2': {
-                            'nova-network': {'active': True,
-                                             'available': False,
-                                             'updated_at':
-                                    datetime.datetime(
-                                        2012, 12, 26, 14, 45, 24)}}}},
-             {'zoneName': 'zone-2',
-              'zoneState': {'available': False},
-              'hosts': None}]
-
-        text = serializer.serialize(
-                  dict(availabilityZoneInfo=raw_availability_zones))
-        tree = etree.fromstring(text)
-
-        self.assertEqual('availabilityZones', tree.tag)
-        self.assertEqual(len(raw_availability_zones), len(tree))
-        for idx, child in enumerate(tree):
-            _verify_zone(raw_availability_zones[idx], child)

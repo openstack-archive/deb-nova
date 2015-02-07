@@ -106,18 +106,6 @@ class HackingTestCase(test.NoDBTestCase):
             "Test end string for vi",
             15, lines))
 
-    def test_no_author_tags(self):
-        self.assertIsInstance(checks.no_author_tags("# author: jogo"), tuple)
-        self.assertIsInstance(checks.no_author_tags("# @author: jogo"), tuple)
-        self.assertIsInstance(checks.no_author_tags("# @Author: jogo"), tuple)
-        self.assertIsInstance(checks.no_author_tags("# Author: jogo"), tuple)
-        self.assertIsInstance(checks.no_author_tags(".. moduleauthor:: jogo"),
-                              tuple)
-        self.assertIsNone(checks.no_author_tags("# authorization of this"))
-        self.assertEqual(2, checks.no_author_tags("# author: jogo")[0])
-        self.assertEqual(2, checks.no_author_tags("# Author: jogo")[0])
-        self.assertEqual(3, checks.no_author_tags(".. moduleauthor:: jogo")[0])
-
     def test_assert_true_instance(self):
         self.assertEqual(len(list(checks.assert_true_instance(
             "self.assertTrue(isinstance(e, "
@@ -133,6 +121,43 @@ class HackingTestCase(test.NoDBTestCase):
         self.assertEqual(
             len(list(checks.assert_equal_type("self.assertTrue()"))), 0)
 
+    def test_assert_equal_in(self):
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(a in b, True)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual('str' in 'string', True)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(any(a==1 for a in b), True)"))), 0)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(True, a in b)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(True, 'str' in 'string')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(True, any(a==1 for a in b))"))), 0)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(a in b, False)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual('str' in 'string', False)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(any(a==1 for a in b), False)"))), 0)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(False, a in b)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(False, 'str' in 'string')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_equal_in(
+            "self.assertEqual(False, any(a==1 for a in b))"))), 0)
+
     def test_assert_equal_none(self):
         self.assertEqual(len(list(checks.assert_equal_none(
             "self.assertEqual(A, None)"))), 1)
@@ -142,6 +167,54 @@ class HackingTestCase(test.NoDBTestCase):
 
         self.assertEqual(
             len(list(checks.assert_equal_none("self.assertIsNone()"))), 0)
+
+    def test_assert_true_or_false_with_in_or_not_in(self):
+        self.assertEqual(len(list(checks.assert_equal_none(
+            "self.assertEqual(A, None)"))), 1)
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A in B)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertFalse(A in B)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A not in B)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertFalse(A not in B)"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A in B, 'some message')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertFalse(A in B, 'some message')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A not in B, 'some message')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertFalse(A not in B, 'some message')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A in 'some string with spaces')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A in 'some string with spaces')"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A in ['1', '2', '3'])"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(A in [1, 2, 3])"))), 1)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(any(A > 5 for A in B))"))), 0)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertTrue(any(A > 5 for A in B), 'some message')"))), 0)
+
+        self.assertEqual(len(list(checks.assert_true_or_false_with_in(
+            "self.assertFalse(some in list1 and some2 in list2)"))), 0)
 
     def test_no_translate_debug_logs(self):
         self.assertEqual(len(list(checks.no_translate_debug_logs(
@@ -202,11 +275,6 @@ class HackingTestCase(test.NoDBTestCase):
                 self.assertEqual(0,
                     len(list(
                         checks.validate_log_translations(ok, ok, 'f'))))
-
-    def test_log_translations_warning_instead_warn(self):
-        warn = "LOG.warn('qwe')"
-        self.assertEqual(
-            1, len(list(checks.validate_log_translations(warn, warn, 'f'))))
 
     def test_no_mutable_default_args(self):
         self.assertEqual(1, len(list(checks.no_mutable_default_args(
@@ -291,6 +359,9 @@ class HackingTestCase(test.NoDBTestCase):
                          self._run_check(code, checker, filename)]
         self.assertEqual(expected_errors or [], actual_errors)
 
+    def _assert_has_no_errors(self, code, checker, filename=None):
+        self._assert_has_errors(code, checker, filename=filename)
+
     def test_str_unicode_exception(self):
 
         checker = checks.CheckForStrUnicodeExc
@@ -313,8 +384,7 @@ class HackingTestCase(test.NoDBTestCase):
                        p = e
                    return p
                """
-        errors = []
-        self._assert_has_errors(code, checker, expected_errors=errors)
+        self._assert_has_no_errors(code, checker)
 
         code = """
                def f(a, b):
@@ -367,6 +437,32 @@ class HackingTestCase(test.NoDBTestCase):
         self._assert_has_errors(code, checks.check_api_version_decorator,
                                 expected_errors=[(2, 0, "N332")])
 
+    def test_oslo_namespace_imports_check(self):
+        code = """
+               from oslo.concurrency import processutils
+               """
+        self._assert_has_errors(code, checks.check_oslo_namespace_imports,
+                                expected_errors=[(1, 0, "N333")])
+
+    def test_oslo_assert_raises_regexp(self):
+        code = """
+               self.assertRaisesRegexp(ValueError,
+                                       "invalid literal for.*XYZ'$",
+                                       int,
+                                       'XYZ')
+               """
+        self._assert_has_errors(code, checks.assert_raises_regexp,
+                                expected_errors=[(1, 0, "N335")])
+
+    def test_api_version_decorator_check_no_errors(self):
+        code = """
+               class ControllerClass():
+                   @wsgi.api_version("2.5")
+                   def my_method():
+                       pass
+               """
+        self._assert_has_no_errors(code, checks.check_api_version_decorator)
+
     def test_trans_add(self):
 
         checker = checks.CheckForTransAdd
@@ -400,5 +496,32 @@ class HackingTestCase(test.NoDBTestCase):
                    msg = 'test' + 'add me'
                    return msg
                """
-        errors = []
-        self._assert_has_errors(code, checker, expected_errors=errors)
+        self._assert_has_no_errors(code, checker)
+
+    def test_dict_constructor_with_list_copy(self):
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            "    dict([(i, connect_info[i])"))))
+
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            "    attrs = dict([(k, _from_json(v))"))))
+
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            "        type_names = dict((value, key) for key, value in"))))
+
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            "   dict((value, key) for key, value in"))))
+
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            "foo(param=dict((k, v) for k, v in bar.items()))"))))
+
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            " dict([[i,i] for i in range(3)])"))))
+
+        self.assertEqual(1, len(list(checks.dict_constructor_with_list_copy(
+            "  dd = dict([i,i] for i in range(3))"))))
+
+        self.assertEqual(0, len(list(checks.dict_constructor_with_list_copy(
+            "        create_kwargs = dict(snapshot=snapshot,"))))
+
+        self.assertEqual(0, len(list(checks.dict_constructor_with_list_copy(
+            "      self._render_dict(xml, data_el, data.__dict__)"))))

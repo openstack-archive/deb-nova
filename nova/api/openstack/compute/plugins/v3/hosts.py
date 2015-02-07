@@ -24,6 +24,7 @@ from nova.api import validation
 from nova import compute
 from nova import exception
 from nova.i18n import _
+from nova import objects
 from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
@@ -72,8 +73,8 @@ class HostController(wsgi.Controller):
         |     'service': 'scheduler',
         |     'zone': 'internal'},
         |    {'host_name': 'vol1.host.com',
-        |     'service': 'volume'},
-        |     'zone': 'internal']}
+        |     'service': 'volume',
+        |     'zone': 'internal'}]}
 
         """
         context = req.environ['nova.context']
@@ -264,7 +265,9 @@ class HostController(wsgi.Controller):
         authorize(context)
         host_name = id
         try:
-            service = self.api.service_get_by_compute_host(context, host_name)
+            compute_node = (
+                objects.ComputeNode.get_first_node_by_host_for_old_compat(
+                    context, host_name))
         except exception.ComputeHostNotFound as e:
             raise webob.exc.HTTPNotFound(explanation=e.format_message())
         except exception.AdminRequired:
@@ -273,7 +276,6 @@ class HostController(wsgi.Controller):
             # be removed
             msg = _("Describe-resource is admin only functionality")
             raise webob.exc.HTTPForbidden(explanation=msg)
-        compute_node = service['compute_node']
         instances = self.api.instance_get_all_by_host(context, host_name)
         resources = [self._get_total_resources(host_name, compute_node)]
         resources.append(self._get_used_now_resources(host_name,
@@ -295,7 +297,7 @@ class Hosts(extensions.V3APIExtensionBase):
     version = 1
 
     def get_resources(self):
-        resources = [extensions.ResourceExtension('os-hosts',
+        resources = [extensions.ResourceExtension(ALIAS,
                 HostController(),
                 member_actions={"startup": "GET", "shutdown": "GET",
                         "reboot": "GET"})]

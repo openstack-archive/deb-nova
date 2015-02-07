@@ -401,11 +401,14 @@ def _get_cpu_topology_constraints(flavor, image_meta):
                                     threads=maxthreads))
 
 
-def _get_possible_cpu_topologies(vcpus, maxtopology, allow_threads):
+def _get_possible_cpu_topologies(vcpus, maxtopology,
+                                 allow_threads, specified_threads):
     """Get a list of possible topologies for a vCPU count
     :param vcpus: total number of CPUs for guest instance
     :param maxtopology: nova.objects.VirtCPUTopology for upper limits
     :param allow_threads: if the hypervisor supports CPU threads
+    :param specified_threads: if there is a specific request for threads we
+                              should attempt to honour
 
     Given a total desired vCPU count and constraints on the
     maximum number of sockets, cores and threads, return a
@@ -426,12 +429,21 @@ def _get_possible_cpu_topologies(vcpus, maxtopology, allow_threads):
     maxthreads = min(vcpus, maxtopology.threads)
 
     if not allow_threads:
+        # NOTE (ndipanov): If we don't support threads - it doesn't matter that
+        # they are specified by the NUMA logic.
+        specified_threads = None
         maxthreads = 1
 
     LOG.debug("Build topologies for %(vcpus)d vcpu(s) "
               "%(maxsockets)d:%(maxcores)d:%(maxthreads)d",
               {"vcpus": vcpus, "maxsockets": maxsockets,
                "maxcores": maxcores, "maxthreads": maxthreads})
+
+    def _get_topology_for_vcpus(vcpus, sockets, cores, threads):
+        if threads * cores * sockets == vcpus:
+            return objects.VirtCPUTopology(sockets=sockets,
+                                           cores=cores,
+                                           threads=threads)
 
     # Figure out all possible topologies that match
     # the required vcpus count and satisfy the declared
@@ -442,12 +454,15 @@ def _get_possible_cpu_topologies(vcpus, maxtopology, allow_threads):
     possible = []
     for s in range(1, maxsockets + 1):
         for c in range(1, maxcores + 1):
-            for t in range(1, maxthreads + 1):
-                if t * c * s == vcpus:
-                    o = objects.VirtCPUTopology(sockets=s, cores=c,
-                                                threads=t)
-
+            if specified_threads:
+                o = _get_topology_for_vcpus(vcpus, s, c, specified_threads)
+                if o is not None:
                     possible.append(o)
+            else:
+                for t in range(1, maxthreads + 1):
+                    o = _get_topology_for_vcpus(vcpus, s, c, t)
+                    if o is not None:
+                        possible.append(o)
 
     # We want to
     #  - Minimize threads (ie larger sockets * cores is best)
@@ -501,12 +516,28 @@ def _sort_possible_cpu_topologies(possible, wanttopology):
     return desired
 
 
-def _get_desirable_cpu_topologies(flavor, image_meta, allow_threads=True):
+def _threads_requested_by_user(flavor, image_meta):
+    keys = ("cpu_threads", "cpu_maxthreads")
+    if any(flavor.extra_specs.get("hw:%s" % key) for key in keys):
+        return True
+
+    if any(image_meta.get("properties", {}).get("hw_%s" % key)
+           for key in keys):
+        return True
+
+    return False
+
+
+def _get_desirable_cpu_topologies(flavor, image_meta, allow_threads=True,
+                                  numa_topology=None):
     """Get desired CPU topologies according to settings
 
     :param flavor: Flavor object to query extra specs from
     :param image_meta: ImageMeta object to query properties from
     :param allow_threads: if the hypervisor supports CPU threads
+    :param numa_topology: InstanceNUMATopology object that may contain
+                          additional topology constraints (such as threading
+                          information) that we should consider
 
     Look at the properties set in the flavor extra specs and
     the image metadata and build up a list of all possible
@@ -522,20 +553,39 @@ def _get_desirable_cpu_topologies(flavor, image_meta, allow_threads=True):
 
     preferred, maximum = _get_cpu_topology_constraints(flavor, image_meta)
 
+    specified_threads = None
+    if numa_topology:
+        min_requested_threads = None
+        cell_topologies = [cell.cpu_topology for cell in numa_topology.cells
+                           if cell.cpu_topology]
+        if cell_topologies:
+            min_requested_threads = min(
+                    topo.threads for topo in cell_topologies)
+        if min_requested_threads:
+            if _threads_requested_by_user(flavor, image_meta):
+                min_requested_threads = min(preferred.threads,
+                                            min_requested_threads)
+            specified_threads = max(1, min_requested_threads)
+
     possible = _get_possible_cpu_topologies(flavor.vcpus,
                                             maximum,
-                                            allow_threads)
+                                            allow_threads,
+                                            specified_threads)
     desired = _sort_possible_cpu_topologies(possible, preferred)
 
     return desired
 
 
-def get_best_cpu_topology(flavor, image_meta, allow_threads=True):
+def get_best_cpu_topology(flavor, image_meta, allow_threads=True,
+                          numa_topology=None):
     """Get best CPU topology according to settings
 
     :param flavor: Flavor object to query extra specs from
     :param image_meta: ImageMeta object to query properties from
     :param allow_threads: if the hypervisor supports CPU threads
+    :param numa_topology: InstanceNUMATopology object that may contain
+                          additional topology constraints (such as threading
+                          information) that we should consider
 
     Look at the properties set in the flavor extra specs and
     the image metadata and build up a list of all possible
@@ -545,7 +595,8 @@ def get_best_cpu_topology(flavor, image_meta, allow_threads=True):
     :returns: a nova.objects.VirtCPUTopology instance for best topology
     """
 
-    return _get_desirable_cpu_topologies(flavor, image_meta, allow_threads)[0]
+    return _get_desirable_cpu_topologies(flavor, image_meta,
+                                         allow_threads, numa_topology)[0]
 
 
 class VirtNUMATopologyCell(object):
@@ -657,6 +708,109 @@ def _numa_cell_supports_pagesize_request(host_cell, inst_cell):
         return verify_pagesizes(host_cell, inst_cell, [inst_cell.pagesize])
 
 
+def _pack_instance_onto_cores(available_siblings, instance_cell, host_cell_id):
+    """Pack an instance onto a set of siblings
+
+    :param available_siblings: list of sets of CPU id's - available
+                               siblings per core
+    :param instance_cell: An instance of objects.InstanceNUMACell describing
+                          the pinning requirements of the instance
+
+    :returns: An instance of objects.InstanceNUMACell containing the pinning
+              information, and potentially a new topology to be exposed to the
+              instance. None if there is no valid way to satisfy the sibling
+              requirements for the instance.
+
+    This method will calculate the pinning for the given instance and it's
+    topology, making sure that hyperthreads of the instance match up with
+    those of the host when the pinning takes effect.
+    """
+
+    # We build up a data structure 'can_pack' that answers the question:
+    # 'Given the number of threads I want to pack, give me a list of all
+    # the available sibling sets that can accommodate it'
+    can_pack = collections.defaultdict(list)
+    for sib in available_siblings:
+        for threads_no in range(1, len(sib) + 1):
+            can_pack[threads_no].append(sib)
+
+    def _can_pack_instance_cell(instance_cell, threads_per_core, cores_list):
+        """Determines if instance cell can fit an avail set of cores."""
+
+        if threads_per_core * len(cores_list) < len(instance_cell):
+            return False
+        if instance_cell.siblings:
+            return instance_cell.cpu_topology.threads <= threads_per_core
+        else:
+            return len(instance_cell) % threads_per_core == 0
+
+    # We iterate over the can_pack dict in descending order of cores that
+    # can be packed - an attempt to get even distribution over time
+    for cores_per_sib, sib_list in sorted(
+            (t for t in can_pack.items()), reverse=True):
+        if _can_pack_instance_cell(instance_cell,
+                                   cores_per_sib, sib_list):
+            sliced_sibs = map(lambda s: list(s)[:cores_per_sib], sib_list)
+            if instance_cell.siblings:
+                pinning = zip(itertools.chain(*instance_cell.siblings),
+                              itertools.chain(*sliced_sibs))
+            else:
+                pinning = zip(sorted(instance_cell.cpuset),
+                              itertools.chain(*sliced_sibs))
+
+            topology = (instance_cell.cpu_topology or
+                        objects.VirtCPUTopology(sockets=1,
+                                                cores=len(sliced_sibs),
+                                                threads=cores_per_sib))
+            instance_cell.pin_vcpus(*pinning)
+            instance_cell.cpu_topology = topology
+            instance_cell.id = host_cell_id
+            return instance_cell
+
+
+def _numa_fit_instance_cell_with_pinning(host_cell, instance_cell):
+    """Figure out if cells can be pinned to a host cell and return details
+
+    :param host_cell: objects.NUMACell instance - the host cell that
+                      the isntance should be pinned to
+    :param instance_cell: objects.InstanceNUMACell instance without any
+                          pinning information
+
+    :returns: objects.InstanceNUMACell instance with pinning information,
+              or None if instance cannot be pinned to the given host
+    """
+    if (host_cell.avail_cpus < len(instance_cell.cpuset) or
+        host_cell.avail_memory < instance_cell.memory):
+        # If we do not have enough CPUs available or not enough memory
+        # on the host cell, we quit early (no oversubscription).
+        return
+
+    if host_cell.siblings:
+        # Instance requires hyperthreading in it's topology
+        if instance_cell.cpu_topology and instance_cell.siblings:
+            return _pack_instance_onto_cores(host_cell.free_siblings,
+                                             instance_cell, host_cell.id)
+
+        else:
+            # Try to pack the instance cell in one core
+            largest_free_sibling_set = sorted(
+                host_cell.free_siblings, key=len)[-1]
+            if (len(instance_cell.cpuset) <=
+                    len(largest_free_sibling_set)):
+                return _pack_instance_onto_cores(
+                    [largest_free_sibling_set], instance_cell, host_cell.id)
+
+            # We can't to pack it onto one core so try with avail siblings
+            else:
+                return _pack_instance_onto_cores(
+                    host_cell.free_siblings, instance_cell, host_cell.id)
+    else:
+        # Straightforward to pin to available cpus when there is no
+        # hyperthreading on the host
+        return _pack_instance_onto_cores(
+            [host_cell.free_cpus], instance_cell, host_cell.id)
+
+
 def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
     """Check if a instance cell can fit and set it's cell id
 
@@ -676,7 +830,15 @@ def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
             len(instance_cell.cpuset) > len(host_cell.cpuset)):
         return None
 
-    if limit_cell:
+    if instance_cell.cpu_pinning_requested:
+        new_instance_cell = _numa_fit_instance_cell_with_pinning(
+            host_cell, instance_cell)
+        if not new_instance_cell:
+            return
+        new_instance_cell.pagesize = instance_cell.pagesize
+        instance_cell = new_instance_cell
+
+    elif limit_cell:
         memory_usage = host_cell.memory_usage + instance_cell.memory
         cpu_usage = host_cell.cpu_usage + len(instance_cell.cpuset)
         if (memory_usage > limit_cell.memory_limit or
@@ -690,9 +852,9 @@ def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
         if not pagesize:
             return
 
-    return objects.InstanceNUMACell(
-        id=host_cell.id, cpuset=instance_cell.cpuset,
-        memory=instance_cell.memory, pagesize=pagesize)
+    instance_cell.id = host_cell.id
+    instance_cell.pagesize = pagesize
+    return instance_cell
 
 
 class VirtNUMATopology(object):
@@ -739,8 +901,15 @@ class VirtNUMATopology(object):
 
 
 def _numa_get_flavor_or_image_prop(flavor, image_meta, propname):
+    """Return the value of propname from flavor or image
+
+    :param flavor: a Flavor object or dict of instance type information
+    :param image_meta: a dict of image information
+
+    :returns: a value or None
+    """
     flavor_val = flavor.get('extra_specs', {}).get("hw:" + propname)
-    image_val = image_meta.get("hw_" + propname)
+    image_val = (image_meta or {}).get("properties", {}).get("hw_" + propname)
 
     if flavor_val is not None:
         if image_val is not None:
@@ -881,6 +1050,37 @@ def _numa_get_constraints_auto(nodes, flavor, image_meta):
     return objects.InstanceNUMATopology(cells=cells)
 
 
+def _add_cpu_pinning_constraint(flavor, image_meta, numa_topology):
+    flavor_pinning = flavor.get('extra_specs', {}).get("hw:cpu_policy")
+    image_pinning = image_meta.get('properties', {}).get("hw_cpu_policy")
+    if flavor_pinning == "dedicated":
+        requested = True
+    elif flavor_pinning == "shared":
+        if image_pinning == "dedicated":
+            raise exception.ImageCPUPinningForbidden()
+        requested = False
+    else:
+        requested = image_pinning == "dedicated"
+
+    if not requested:
+        return numa_topology
+
+    if numa_topology:
+        # NOTE(ndipanov) Setting the cpu_pinning attribute to a non-None value
+        # means CPU pinning was requested
+        for cell in numa_topology.cells:
+            cell.cpu_pinning = {}
+        return numa_topology
+    else:
+        single_cell = objects.InstanceNUMACell(
+                id=0,
+                cpuset=set(range(flavor['vcpus'])),
+                memory=flavor['memory_mb'],
+                cpu_pinning={})
+        numa_topology = objects.InstanceNUMATopology(cells=[single_cell])
+        return numa_topology
+
+
 # TODO(sahid): Move numa related to hardward/numa.py
 def numa_get_constraints(flavor, image_meta):
     """Return topology related to input request
@@ -895,7 +1095,7 @@ def numa_get_constraints(flavor, image_meta):
     pagesize = _numa_get_pagesize_constraints(
         flavor, image_meta)
 
-    topology = None
+    numa_topology = None
     if nodes or pagesize:
         nodes = nodes and int(nodes) or 1
         # We'll pick what path to go down based on whether
@@ -905,16 +1105,16 @@ def numa_get_constraints(flavor, image_meta):
             flavor, image_meta, "numa_cpus.0") is None
 
         if auto:
-            topology = _numa_get_constraints_auto(
+            numa_topology = _numa_get_constraints_auto(
                 nodes, flavor, image_meta)
         else:
-            topology = _numa_get_constraints_manual(
+            numa_topology = _numa_get_constraints_manual(
                 nodes, flavor, image_meta)
 
         # We currently support same pagesize for all cells.
-        [setattr(c, 'pagesize', pagesize) for c in topology.cells]
+        [setattr(c, 'pagesize', pagesize) for c in numa_topology.cells]
 
-    return topology
+    return _add_cpu_pinning_constraint(flavor, image_meta, numa_topology)
 
 
 class VirtNUMALimitTopology(VirtNUMATopology):
@@ -926,12 +1126,15 @@ class VirtNUMALimitTopology(VirtNUMATopology):
 
 
 def numa_fit_instance_to_host(
-        host_topology, instance_topology, limits_topology=None):
+        host_topology, instance_topology, limits_topology=None,
+        pci_requests=None, pci_stats=None):
     """Fit the instance topology onto the host topology given the limits
 
     :param host_topology: objects.NUMATopology object to fit an instance on
     :param instance_topology: objects.InstanceNUMATopology to be fitted
     :param limits_topology: VirtNUMALimitTopology that defines limits
+    :param pci_requests: instance pci_requests
+    :param pci_stats: pci_stats for the host
 
     Given a host and instance topology and optionally limits - this method
     will attempt to fit instance cells onto all permutations of host cells
@@ -963,7 +1166,12 @@ def numa_fit_instance_to_host(
                     break
                 cells.append(got_cell)
             if len(cells) == len(host_cell_perm):
-                return objects.InstanceNUMATopology(cells=cells)
+                if not pci_requests:
+                    return objects.InstanceNUMATopology(cells=cells)
+                elif ((pci_stats is not None) and
+                    pci_stats.support_requests(pci_requests,
+                                                     cells)):
+                    return objects.InstanceNUMATopology(cells=cells)
 
 
 def _numa_pagesize_usage_from_cell(hostcell, instancecell, sign):
@@ -1003,7 +1211,12 @@ def numa_usage_from_instances(host, instances, free=False):
     for hostcell in host.cells:
         memory_usage = hostcell.memory_usage
         cpu_usage = hostcell.cpu_usage
-        mempages = hostcell.mempages
+
+        newcell = objects.NUMACell(
+            id=hostcell.id, cpuset=hostcell.cpuset, memory=hostcell.memory,
+            cpu_usage=0, memory_usage=0,
+            pinned_cpus=hostcell.pinned_cpus, siblings=hostcell.siblings)
+
         for instance in instances:
             for instancecell in instance.cells:
                 if instancecell.id == hostcell.id:
@@ -1011,15 +1224,19 @@ def numa_usage_from_instances(host, instances, free=False):
                             memory_usage + sign * instancecell.memory)
                     cpu_usage = cpu_usage + sign * len(instancecell.cpuset)
                     if instancecell.pagesize and instancecell.pagesize > 0:
-                        mempages = _numa_pagesize_usage_from_cell(
+                        newcell.mempages = _numa_pagesize_usage_from_cell(
                             hostcell, instancecell, sign)
+                    if instance.cpu_pinning_requested:
+                        pinned_cpus = set(instancecell.cpu_pinning.values())
+                        if free:
+                            newcell.unpin_cpus(pinned_cpus)
+                        else:
+                            newcell.pin_cpus(pinned_cpus)
 
-        cell = objects.NUMACell(
-            id=hostcell.id, cpuset=hostcell.cpuset, memory=hostcell.memory,
-            cpu_usage=max(0, cpu_usage), memory_usage=max(0, memory_usage),
-            mempages=mempages)
+            newcell.cpu_usage = max(0, cpu_usage)
+            newcell.memory_usage = max(0, memory_usage)
 
-        cells.append(cell)
+        cells.append(newcell)
 
     return objects.NUMATopology(cells=cells)
 

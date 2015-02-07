@@ -77,10 +77,32 @@ utils_opts = [
     cfg.StrOpt('tempdir',
                help='Explicitly specify the temporary working directory'),
 ]
+
+""" This group is for very specific reasons.
+
+If you're:
+- Working around an issue in a system tool (e.g. libvirt or qemu) where the fix
+  is in flight/discussed in that community.
+- The tool can be/is fixed in some distributions and rather than patch the code
+  those distributions can trivially set a config option to get the "correct"
+  behavior.
+This is a good place for your workaround.
+
+Please use with care!
+Document the BugID that your workaround is paired with."""
+
+workarounds_opts = [
+    cfg.BoolOpt('disable_rootwrap',
+                default=False,
+                help='This option allows a fallback to sudo for performance '
+                     'reasons. For example see '
+                     'https://bugs.launchpad.net/nova/+bug/1415106'),
+    ]
 CONF = cfg.CONF
 CONF.register_opts(monkey_patch_opts)
 CONF.register_opts(utils_opts)
 CONF.import_opt('network_api_class', 'nova.network')
+CONF.register_opts(workarounds_opts, group='workarounds')
 
 LOG = logging.getLogger(__name__)
 
@@ -154,7 +176,11 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
 
 
 def _get_root_helper():
-    return 'sudo nova-rootwrap %s' % CONF.rootwrap_config
+    if CONF.workarounds.disable_rootwrap:
+        cmd = 'sudo'
+    else:
+        cmd = 'sudo nova-rootwrap %s' % CONF.rootwrap_config
+    return cmd
 
 
 def execute(*cmd, **kwargs):
@@ -322,60 +348,6 @@ def generate_password(length=None, symbolgroups=DEFAULT_PASSWORD_SYMBOLS):
     return ''.join(password)
 
 
-def get_my_ipv4_address():
-    """Run ip route/addr commands to figure out the best ipv4
-    """
-    LOCALHOST = '127.0.0.1'
-    try:
-        out = execute('ip', '-f', 'inet', '-o', 'route', 'show')
-
-        # Find the default route
-        regex_default = ('default\s*via\s*'
-                         '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})'
-                         '\s*dev\s*(\w*)\s*')
-        default_routes = re.findall(regex_default, out[0])
-        if not default_routes:
-            return LOCALHOST
-        gateway, iface = default_routes[0]
-
-        # Find the right subnet for the gateway/interface for
-        # the default route
-        route = ('(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\/(\d{1,2})'
-              '\s*dev\s*(\w*)\s*')
-        for match in re.finditer(route, out[0]):
-            subnet = netaddr.IPNetwork(match.group(1) + "/" + match.group(2))
-            if (match.group(3) == iface and
-                    netaddr.IPAddress(gateway) in subnet):
-                try:
-                    return _get_ipv4_address_for_interface(iface)
-                except exception.NovaException:
-                    pass
-    except Exception as ex:
-        LOG.error(_LE("Couldn't get IPv4 : %(ex)s"), {'ex': ex})
-    return LOCALHOST
-
-
-def _get_ipv4_address_for_interface(iface):
-    """Run ip addr show for an interface and grab its ipv4 addresses
-    """
-    try:
-        out = execute('ip', '-f', 'inet', '-o', 'addr', 'show', iface)
-        regexp_address = re.compile('inet\s*'
-                                    '(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})')
-        address = [m.group(1) for m in regexp_address.finditer(out[0])
-                   if m.group(1) != '127.0.0.1']
-        if address:
-            return address[0]
-        else:
-            msg = _('IPv4 address is not found.: %s') % out[0]
-            raise exception.NovaException(msg)
-    except Exception as ex:
-        msg = _("Couldn't get IPv4 of %(interface)s"
-                " : %(ex)s") % {'interface': iface, 'ex': ex}
-        LOG.error(msg)
-        raise exception.NovaException(msg)
-
-
 def get_my_linklocal(interface):
     try:
         if_str = execute('ip', '-f', 'inet6', '-o', 'addr', 'show', interface)
@@ -490,25 +462,6 @@ def is_int_like(val):
         return str(int(val)) == str(val)
     except Exception:
         return False
-
-
-def is_valid_ipv4(address):
-    """Verify that address represents a valid IPv4 address."""
-    try:
-        return netaddr.valid_ipv4(address)
-    except (ValueError, netaddr.AddrFormatError):
-        return False
-
-
-def is_valid_ipv6(address):
-    try:
-        return netaddr.valid_ipv6(address)
-    except (ValueError, netaddr.AddrFormatError):
-        return False
-
-
-def is_valid_ip_address(address):
-    return is_valid_ipv4(address) or is_valid_ipv6(address)
 
 
 def is_valid_ipv6_cidr(address):
@@ -1136,8 +1089,7 @@ def get_image_from_system_metadata(system_meta):
                 continue
             properties[key] = value
 
-    if properties:
-        image_meta['properties'] = properties
+    image_meta['properties'] = properties
 
     return image_meta
 
@@ -1162,3 +1114,101 @@ else:
         for x, y in zip(first, second):
             result |= ord(x) ^ ord(y)
         return result == 0
+
+
+def filter_and_format_resource_metadata(resource_type, resource_list,
+        search_filts, metadata_type=None):
+    """Get all metadata for a list of resources after filtering.
+
+    Search_filts is a list of dictionaries, where the values in the dictionary
+    can be string or regex string, or a list of strings/regex strings.
+
+    Let's call a dict a 'filter block' and an item in the dict
+    a 'filter'. A tag is returned if it matches ALL the filters in
+    a filter block. If more than one values are specified for a
+    filter, a tag is returned if it matches ATLEAST ONE value of the filter. If
+    more than one filter blocks are specified, the tag should match ALL the
+    filter blocks.
+
+    For example:
+
+        search_filts = [{'key': ['key1', 'key2'], 'value': 'val1'},
+                        {'value': 'val2'}]
+
+    The filter translates to 'match any tag for which':
+        ((key=key1 AND value=val1) OR (key=key2 AND value=val1)) AND
+            (value=val2)
+
+    This example filter will never match a tag.
+
+        :param resource_type: The resource type as a string, e.g. 'instance'
+        :param resource_list: List of resource objects
+        :param search_filts: Filters to filter metadata to be returned. Can be
+            dict (e.g. {'key': 'env', 'value': 'prod'}, or a list of dicts
+            (e.g. [{'key': 'env'}, {'value': 'beta'}]. Note that the values
+            of the dict can be regular expressions.
+        :param metadata_type: Provided to search for a specific metadata type
+            (e.g. 'system_metadata')
+
+        :returns: List of dicts where each dict is of the form {'key':
+            'somekey', 'value': 'somevalue', 'instance_id':
+            'some-instance-uuid-aaa'} if resource_type is 'instance'.
+    """
+
+    if isinstance(search_filts, dict):
+        search_filts = [search_filts]
+
+    def _get_id(resource):
+        if resource_type == 'instance':
+            return resource.get('uuid')
+
+    def _match_any(pattern_list, string):
+        if isinstance(pattern_list, str):
+            pattern_list = [pattern_list]
+        return any([re.match(pattern, string)
+                    for pattern in pattern_list])
+
+    def _filter_metadata(resource, search_filt, input_metadata):
+        ids = search_filt.get('resource_id', [])
+        keys_filter = search_filt.get('key', [])
+        values_filter = search_filt.get('value', [])
+        output_metadata = {}
+
+        if ids and _get_id(resource) not in ids:
+            return {}
+
+        for k, v in six.iteritems(input_metadata):
+            # Both keys and value defined -- AND
+            if (keys_filter and values_filter and
+               not _match_any(keys_filter, k) and
+               not _match_any(values_filter, v)):
+                continue
+            # Only keys or value is defined
+            elif ((keys_filter and not _match_any(keys_filter, k)) or
+                  (values_filter and not _match_any(values_filter, v))):
+                continue
+
+            output_metadata[k] = v
+        return output_metadata
+
+    formatted_metadata_list = []
+    for res in resource_list:
+
+        if resource_type == 'instance':
+            # NOTE(rushiagr): metadata_type should be 'metadata' or
+            # 'system_metadata' if resource_type is instance. Defaulting to
+            # 'metadata' if not specified.
+            if metadata_type is None:
+                metadata_type = 'metadata'
+            metadata = res.get(metadata_type, {})
+
+        for filt in search_filts:
+            # By chaining the input to the output, the filters are
+            # ANDed together
+            metadata = _filter_metadata(res, filt, metadata)
+
+        for (k, v) in metadata.items():
+            formatted_metadata_list.append({'key': k, 'value': v,
+                             '%s_id' % resource_type: _get_id(res)})
+
+    return formatted_metadata_list

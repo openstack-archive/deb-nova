@@ -35,6 +35,7 @@ from oslo.utils import timeutils
 import six
 from sqlalchemy import Column
 from sqlalchemy.dialects import sqlite
+from sqlalchemy import inspect
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy.orm import query
@@ -43,6 +44,8 @@ from sqlalchemy import Table
 
 from nova import block_device
 from nova.compute import arch
+from nova.compute import flavors
+from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import db
@@ -51,6 +54,8 @@ from nova.db.sqlalchemy import models
 from nova.db.sqlalchemy import types as col_types
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
+from nova import objects
+from nova.objects import base as obj_base
 from nova.openstack.common import uuidutils
 from nova import quota
 from nova import test
@@ -634,27 +639,6 @@ class AggregateDBApiTestCase(test.TestCase):
         r2 = db.aggregate_metadata_get_by_host(ctxt, 'foo3.openstack.org',
                                                key='good')
         self.assertNotIn('good', r2)
-
-    def test_aggregate_host_get_by_metadata_key(self):
-        ctxt = context.get_admin_context()
-        values2 = {'name': 'fake_aggregate12'}
-        values3 = {'name': 'fake_aggregate23'}
-        a2_hosts = ['foo1.openstack.org', 'foo2.openstack.org']
-        a2_metadata = {'good': 'value12', 'bad': 'badvalue12'}
-        a3_hosts = ['foo2.openstack.org', 'foo3.openstack.org']
-        a3_metadata = {'good': 'value23', 'bad': 'badvalue23'}
-        _create_aggregate_with_hosts(context=ctxt)
-        _create_aggregate_with_hosts(context=ctxt, values=values2,
-                hosts=a2_hosts, metadata=a2_metadata)
-        _create_aggregate_with_hosts(context=ctxt, values=values3,
-                hosts=a3_hosts, metadata=a3_metadata)
-        r1 = db.aggregate_host_get_by_metadata_key(ctxt, key='good')
-        self.assertEqual({
-            'foo1.openstack.org': set(['value12']),
-            'foo2.openstack.org': set(['value12', 'value23']),
-            'foo3.openstack.org': set(['value23']),
-        }, r1)
-        self.assertNotIn('fake_key1', r1)
 
     def test_aggregate_get_by_host_not_found(self):
         ctxt = context.get_admin_context()
@@ -1261,8 +1245,8 @@ class ModelsObjectComparatorMixin(object):
     def _dict_from_object(self, obj, ignored_keys):
         if ignored_keys is None:
             ignored_keys = []
-        return dict([(k, v) for k, v in obj.iteritems()
-                                if k not in ignored_keys])
+        return {k: v for k, v in obj.iteritems()
+                if k not in ignored_keys}
 
     def _assertEqualObjects(self, obj1, obj2, ignored_keys=None):
         obj1 = self._dict_from_object(obj1, ignored_keys)
@@ -2435,6 +2419,37 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
             self.ctxt, instance['uuid'], {'metadata': {'mk1': 'mv3'}})
         meta = utils.metadata_to_dict(new_ref['metadata'])
         self.assertEqual(meta, {'mk1': 'mv3'})
+
+    def test_instance_update_and_get_original_no_conflict_on_session(self):
+        session = get_session()
+        # patch get_session so that we may inspect it outside of the
+        # method; once enginefacade is implemented, this can be simplified
+        with mock.patch("nova.db.sqlalchemy.api.get_session", lambda: session):
+            instance = self.create_instance_with_args()
+            (old_ref, new_ref) = db.instance_update_and_get_original(
+                self.ctxt, instance['uuid'], {'metadata': {'mk1': 'mv3'}})
+
+        # test some regular persisted fields
+        self.assertEqual(old_ref.uuid, new_ref.uuid)
+        self.assertEqual(old_ref.project_id, new_ref.project_id)
+
+        # after a copy operation, we can assert:
+
+        # 1. the two states have their own InstanceState
+        old_insp = inspect(old_ref)
+        new_insp = inspect(new_ref)
+        self.assertNotEqual(old_insp, new_insp)
+
+        # 2. only one of the objects is still in our Session
+        self.assertIs(new_insp.session, session)
+        self.assertIsNone(old_insp.session)
+
+        # 3. The "new" object remains persistent and ready
+        # for updates
+        self.assertTrue(new_insp.persistent)
+
+        # 4. the "old" object is detached from this Session.
+        self.assertTrue(old_insp.detached)
 
     def test_instance_update_unique_name(self):
         context1 = context.RequestContext('user1', 'p1')
@@ -3968,6 +3983,55 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
         self.assertEqual(fixed_ip['instance_uuid'], instance_uuid)
 
+    def test_fixed_ip_associate_pool_succeeds_fip_ref_network_id_is_none(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+
+        self.create_fixed_ip(network_id=None)
+        fixed_ip = db.fixed_ip_associate_pool(self.ctxt,
+                                              network['id'], instance_uuid)
+        self.assertEqual(instance_uuid, fixed_ip['instance_uuid'])
+        self.assertEqual(network['id'], fixed_ip['network_id'])
+
+    def test_fixed_ip_associate_pool_succeeds_retry(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+
+        address = self.create_fixed_ip(network_id=network['id'])
+
+        def fake_first():
+            if mock_first.call_count == 1:
+                return {'network_id': network['id'], 'address': 'invalid',
+                        'instance_uuid': None, 'host': None, 'id': 1}
+            else:
+                return {'network_id': network['id'], 'address': address,
+                        'instance_uuid': None, 'host': None, 'id': 1}
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            db.fixed_ip_associate_pool(self.ctxt, network['id'], instance_uuid)
+            self.assertEqual(2, mock_first.call_count)
+
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
+        self.assertEqual(instance_uuid, fixed_ip['instance_uuid'])
+
+    def test_fixed_ip_associate_pool_retry_limit_exceeded(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+
+        self.create_fixed_ip(network_id=network['id'])
+
+        def fake_first():
+            return {'network_id': network['id'], 'address': 'invalid',
+                    'instance_uuid': None, 'host': None, 'id': 1}
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            self.assertRaises(exception.FixedIpAssociateFailed,
+                              db.fixed_ip_associate_pool, self.ctxt,
+                              network['id'], instance_uuid)
+            self.assertEqual(5, mock_first.call_count)
+
     def test_fixed_ip_create_same_address(self):
         address = '192.168.1.5'
         params = {'address': address}
@@ -5068,19 +5132,29 @@ class BlockDeviceMappingTestCase(test.TestCase):
         bdm1 = dict(values)
         bdm1['device_name'] = None
         db.block_device_mapping_update_or_create(self.ctxt, bdm1, legacy=False)
-        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
-        self.assertEqual(len(bdm_real), 2)
-        bdm_real = bdm_real[1]
-        self.assertIsNone(bdm_real['device_name'])
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        with_device_name = [b for b in bdms if b['device_name'] is not None]
+        without_device_name = [b for b in bdms if b['device_name'] is None]
+        self.assertEqual(len(with_device_name), 1,
+                         'expected 1 bdm with device_name, found %d' %
+                         len(with_device_name))
+        self.assertEqual(len(without_device_name), 1,
+                         'expected 1 bdm without device_name, found %d' %
+                         len(without_device_name))
 
         # check create multiple devices without device_name
         bdm2 = dict(values)
         bdm2['device_name'] = None
         db.block_device_mapping_update_or_create(self.ctxt, bdm2, legacy=False)
-        bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
-        self.assertEqual(len(bdm_real), 3)
-        bdm_real = bdm_real[2]
-        self.assertIsNone(bdm_real['device_name'])
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
+        with_device_name = [b for b in bdms if b['device_name'] is not None]
+        without_device_name = [b for b in bdms if b['device_name'] is None]
+        self.assertEqual(len(with_device_name), 1,
+                         'expected 1 bdm with device_name, found %d' %
+                         len(with_device_name))
+        self.assertEqual(len(without_device_name), 2,
+                         'expected 2 bdms without device_name, found %d' %
+                         len(without_device_name))
 
     def test_block_device_mapping_update_or_create_multiple_ephemeral(self):
         uuid = self.instance['uuid']
@@ -6343,6 +6417,35 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertRaises(exception.ComputeHostNotFound,
                           db.compute_node_get_all_by_host, self.ctxt, 'wrong')
 
+    def test_compute_nodes_get_by_service_id_one_result(self):
+        expected = [self.item]
+        result = db.compute_nodes_get_by_service_id(
+            self.ctxt, self.service['id'])
+
+        self._assertEqualListsOfObjects(expected, result,
+                                        ignored_keys=['stats'])
+
+    def test_compute_nodes_get_by_service_id_multiple_results(self):
+        # Create another node on top of the same service
+        compute_node_same_host = self.compute_node_dict.copy()
+        compute_node_same_host['stats'] = jsonutils.dumps(self.stats)
+        compute_node_same_host['hypervisor_hostname'] = 'node_2'
+
+        node = db.compute_node_create(self.ctxt, compute_node_same_host)
+
+        expected = [self.item, node]
+        result = sorted(db.compute_nodes_get_by_service_id(
+                        self.ctxt, self.service['id']),
+                        key=lambda n: n['hypervisor_hostname'])
+
+        self._assertEqualListsOfObjects(expected, result,
+                                        ignored_keys=['stats'])
+
+    def test_compute_nodes_get_by_service_id_not_found(self):
+        self.assertRaises(exception.ServiceNotFound,
+                          db.compute_nodes_get_by_service_id, self.ctxt,
+                          'fake')
+
     def test_compute_node_get_by_host_and_nodename(self):
         # Create another node on top of the same service
         compute_node_same_host = self.compute_node_dict.copy()
@@ -6422,6 +6525,25 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         stats = db.compute_node_statistics(self.ctxt)
         self.assertEqual(stats.pop('count'), 0)
 
+    def test_compute_node_statistics_with_old_service_id(self):
+        # NOTE(sbauza): This test is only for checking backwards compatibility
+        # with old versions of compute_nodes not providing host column.
+        # This test could be removed once we are sure that all compute nodes
+        # are populating the host field thanks to the ResourceTracker
+
+        service2 = self.service_dict.copy()
+        service2['host'] = 'host2'
+        db_service2 = db.service_create(self.ctxt, service2)
+        compute_node_old_host = self.compute_node_dict.copy()
+        compute_node_old_host['stats'] = jsonutils.dumps(self.stats)
+        compute_node_old_host['hypervisor_hostname'] = 'node_2'
+        compute_node_old_host['service_id'] = db_service2['id']
+        compute_node_old_host.pop('host')
+
+        db.compute_node_create(self.ctxt, compute_node_old_host)
+        stats = db.compute_node_statistics(self.ctxt)
+        self.assertEqual(2, stats.pop('count'))
+
     def test_compute_node_not_found(self):
         self.assertRaises(exception.ComputeHostNotFound, db.compute_node_get,
                           self.ctxt, 100500)
@@ -6499,8 +6621,8 @@ class CertificateTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'project_id': 'project',
             'file_name': 'filename'
         }
-        return [dict((k, v + str(x)) for k, v in base_values.iteritems())
-                      for x in xrange(1, 4)]
+        return [{k: v + str(x) for k, v in base_values.iteritems()}
+                for x in xrange(1, 4)]
 
     def _certificates_create(self):
         return [db.certificate_create(self.ctxt, cert)
@@ -6556,11 +6678,11 @@ class ConsoleTestCase(test.TestCase, ModelsObjectComparatorMixin):
                          for val in pools_data]
         instance_uuid = uuidutils.generate_uuid()
         db.instance_create(self.ctxt, {'uuid': instance_uuid})
-        self.console_data = [dict([('instance_name', 'name' + str(x)),
-                                  ('instance_uuid', instance_uuid),
-                                  ('password', 'pass' + str(x)),
-                                  ('port', 7878 + x),
-                                  ('pool_id', self.console_pools[x]['id'])])
+        self.console_data = [{'instance_name': 'name' + str(x),
+                              'instance_uuid': instance_uuid,
+                              'password': 'pass' + str(x),
+                              'port': 7878 + x,
+                              'pool_id': self.console_pools[x]['id']}
                              for x in xrange(len(pools_data))]
         self.consoles = [db.console_create(self.ctxt, val)
                          for val in self.console_data]
@@ -6665,8 +6787,8 @@ class CellTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def _create_cells(self):
         test_values = []
         for x in xrange(1, 4):
-            modified_val = dict([(k, self._cell_value_modify(v, x))
-                        for k, v in self._get_cell_base_values().iteritems()])
+            modified_val = {k: self._cell_value_modify(v, x)
+                        for k, v in self._get_cell_base_values().iteritems()}
             db.cell_create(self.ctxt, modified_val)
             test_values.append(modified_val)
         return test_values
@@ -6710,8 +6832,8 @@ class CellTestCase(test.TestCase, ModelsObjectComparatorMixin):
         new_cells = self._create_cells()
         cells = db.cell_get_all(self.ctxt)
         self.assertEqual(len(new_cells), len(cells))
-        cells_byname = dict([(newcell['name'],
-                              newcell) for newcell in new_cells])
+        cells_byname = {newcell['name']: newcell
+                        for newcell in new_cells}
         for cell in cells:
             self._assertEqualObjects(cell, cells_byname[cell['name']],
                                      self._ignored_keys)
@@ -6851,13 +6973,6 @@ class DnsdomainTestCase(test.TestCase):
         self.assertEqual(domain['project_id'], self.project)
         self.assertEqual(domain['scope'], 'public')
 
-    def test_dnsdomain_list(self):
-        d_list = ['test.domain.one', 'test.domain.two']
-        db.dnsdomain_register_for_zone(self.ctxt, d_list[0], self.testzone)
-        db.dnsdomain_register_for_project(self.ctxt, d_list[1], self.project)
-        db_list = db.dnsdomain_list(self.ctxt)
-        self.assertEqual(sorted(d_list), sorted(db_list))
-
     def test_dnsdomain_unregister(self):
         db.dnsdomain_register_for_zone(self.ctxt, self.domain, self.testzone)
         db.dnsdomain_unregister(self.ctxt, self.domain)
@@ -6983,7 +7098,6 @@ class Ec2TestCase(test.TestCase):
             except exception.NotFound as exc:
                 self.assertIn(six.text_type(value), six.text_type(exc))
 
-        check_exc_format(db.get_ec2_instance_id_by_uuid, 'fake')
         check_exc_format(db.get_instance_uuid_by_ec2_id, 123456)
         check_exc_format(db.ec2_snapshot_get_by_ec2_id, 123456)
         check_exc_format(db.ec2_snapshot_get_by_uuid, 'fake')
@@ -7053,25 +7167,164 @@ class Ec2TestCase(test.TestCase):
                           db.ec2_instance_get_by_uuid,
                           self.ctxt, 12345)
 
-    def test_get_ec2_instance_id_by_uuid(self):
-        inst = db.ec2_instance_create(self.ctxt, 'fake-uuid')
-        inst_id = db.get_ec2_instance_id_by_uuid(self.ctxt, 'fake-uuid')
-        self.assertEqual(inst['id'], inst_id)
-
     def test_get_instance_uuid_by_ec2_id(self):
         inst = db.ec2_instance_create(self.ctxt, 'fake-uuid')
         inst_uuid = db.get_instance_uuid_by_ec2_id(self.ctxt, inst['id'])
         self.assertEqual(inst_uuid, 'fake-uuid')
 
-    def test_get_ec2_instance_id_by_uuid_not_found(self):
-        self.assertRaises(exception.InstanceNotFound,
-                          db.get_ec2_instance_id_by_uuid,
-                          self.ctxt, 'uuid-not-present')
-
     def test_get_instance_uuid_by_ec2_id_not_found(self):
         self.assertRaises(exception.InstanceNotFound,
                           db.get_instance_uuid_by_ec2_id,
                           self.ctxt, 100500)
+
+
+class FlavorMigrationTestCase(test.TestCase):
+    def test_augment_flavor_to_migrate_no_extra_specs(self):
+        flavor = objects.Flavor()
+        db_flavor = {
+            'extra_specs': {'foo': 'bar'}}
+        sqlalchemy_api._augment_flavor_to_migrate(flavor, db_flavor)
+        self.assertTrue(flavor.obj_attr_is_set('extra_specs'))
+        self.assertEqual(db_flavor['extra_specs'], flavor.extra_specs)
+
+    def test_augment_flavor_to_migrate_extra_specs_merge(self):
+        flavor = objects.Flavor()
+        flavor.extra_specs = {'foo': '1', 'bar': '2'}
+        db_flavor = {
+            'extra_specs': {'bar': '3', 'baz': '4'}
+        }
+        sqlalchemy_api._augment_flavor_to_migrate(flavor, db_flavor)
+        self.assertEqual({'foo': '1', 'bar': '2', 'baz': '4'},
+                         flavor.extra_specs)
+
+    @mock.patch('nova.db.sqlalchemy.api._augment_flavor_to_migrate')
+    def test_augment_flavors_to_migrate(self, mock_augment):
+        instance = objects.Instance()
+        instance.flavor = objects.Flavor(flavorid='foo')
+        instance.old_flavor = None
+        instance.new_flavor = None
+        sqlalchemy_api._augment_flavors_to_migrate(instance,
+                                                   {'foo': 'bar'})
+        mock_augment.assert_called_once_with(instance.flavor, 'bar')
+
+    @mock.patch('nova.db.sqlalchemy.api._augment_flavor_to_migrate')
+    @mock.patch('nova.db.sqlalchemy.api.flavor_get_by_flavor_id')
+    def test_augment_flavors_to_migrate_uses_cache(self, mock_get,
+                                                   mock_augment):
+        instance = objects.Instance(context=context.get_admin_context())
+        instance.flavor = objects.Flavor(flavorid='foo')
+        instance.old_flavor = objects.Flavor(flavorid='foo')
+        instance.new_flavor = objects.Flavor(flavorid='bar')
+
+        flavor_cache = {'bar': 'bar_flavor'}
+        mock_get.return_value = 'foo_flavor'
+
+        sqlalchemy_api._augment_flavors_to_migrate(instance, flavor_cache)
+        self.assertIn('foo', flavor_cache)
+        self.assertEqual('foo_flavor', flavor_cache['foo'])
+        mock_get.assert_called_once_with(instance._context, 'foo', 'yes')
+
+    def test_migrate_flavor(self):
+        ctxt = context.get_admin_context()
+        flavor = flavors.get_default_flavor()
+        sysmeta = flavors.save_flavor_info({}, flavor)
+        db.flavor_extra_specs_update_or_create(ctxt, flavor.flavorid,
+                                               {'new_spec': 'foo'})
+
+        values = {'uuid': str(stdlib_uuid.uuid4()),
+                  'system_metadata': sysmeta,
+                  'extra': {'flavor': 'foobar'},
+                  }
+        db.instance_create(ctxt, values)
+
+        values = {'uuid': str(stdlib_uuid.uuid4()),
+                  'system_metadata': sysmeta,
+                  'extra': {'flavor': None},
+                  }
+        instance = db.instance_create(ctxt, values)
+
+        match, done = db.migrate_flavor_data(ctxt, None, {})
+        self.assertEqual(1, match)
+        self.assertEqual(1, done)
+        extra = db.instance_extra_get_by_instance_uuid(ctxt, instance['uuid'],
+                                                       columns=['flavor'])
+        flavorinfo = jsonutils.loads(extra.flavor)
+        self.assertIsNone(flavorinfo['old'])
+        self.assertIsNone(flavorinfo['new'])
+        curflavor = obj_base.NovaObject.obj_from_primitive(flavorinfo['cur'])
+        self.assertEqual(flavor.flavorid, curflavor.flavorid)
+
+    def test_migrate_flavor_honors_limit(self):
+        ctxt = context.get_admin_context()
+        flavor = flavors.get_default_flavor()
+        sysmeta = flavors.save_flavor_info({}, flavor)
+        db.flavor_extra_specs_update_or_create(ctxt, flavor.flavorid,
+                                               {'new_spec': 'foo'})
+
+        for i in (1, 2, 3, 4, 5):
+            values = {'uuid': str(stdlib_uuid.uuid4()),
+                      'system_metadata': sysmeta,
+                      'extra': {'flavor': 'foobar'},
+                      }
+            db.instance_create(ctxt, values)
+
+            values = {'uuid': str(stdlib_uuid.uuid4()),
+                      'system_metadata': sysmeta,
+                      'extra': {'flavor': None},
+                      }
+            db.instance_create(ctxt, values)
+
+        match, done = db.migrate_flavor_data(ctxt, 2, {})
+        self.assertEqual(2, match)
+        self.assertEqual(2, done)
+
+        match, done = db.migrate_flavor_data(ctxt, 1, {})
+        self.assertEqual(1, match)
+        self.assertEqual(1, done)
+
+        match, done = db.migrate_flavor_data(ctxt, None, {})
+        self.assertEqual(2, match)
+        self.assertEqual(2, done)
+
+        match, done = db.migrate_flavor_data(ctxt, None, {})
+        self.assertEqual(0, match)
+        self.assertEqual(0, done)
+
+    def test_migrate_flavor_honors_states(self):
+        ctxt = context.get_admin_context()
+        flavor = flavors.get_default_flavor()
+        sysmeta = flavors.save_flavor_info({}, flavor)
+        values = {'uuid': str(stdlib_uuid.uuid4()),
+                  'system_metadata': sysmeta,
+                  'extra': {'flavor': None},
+        }
+        db.instance_create(ctxt, values)
+        values = {'uuid': str(stdlib_uuid.uuid4()),
+                  'task_state': task_states.SPAWNING,
+                  'system_metadata': sysmeta,
+                  'extra': {'flavor': None},
+        }
+        db.instance_create(ctxt, values)
+        values = {'uuid': str(stdlib_uuid.uuid4()),
+                  'vm_state': vm_states.RESCUED,
+                  'system_metadata': sysmeta,
+                  'extra': {'flavor': None},
+        }
+        db.instance_create(ctxt, values)
+        values = {'uuid': str(stdlib_uuid.uuid4()),
+                  'vm_state': vm_states.RESIZED,
+                  'system_metadata': sysmeta,
+                  'extra': {'flavor': None},
+        }
+        db.instance_create(ctxt, values)
+
+        match, done = db.migrate_flavor_data(ctxt, None, {})
+        self.assertEqual(4, match)
+        self.assertEqual(1, done)
+
+        match, done = db.migrate_flavor_data(ctxt, None, {})
+        self.assertEqual(3, match)
+        self.assertEqual(0, done)
 
 
 class ArchiveTestCase(test.TestCase):
@@ -7702,6 +7955,7 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'address': '0000:0f:08.7',
                 'vendor_id': '8086',
                 'product_id': '1520',
+                'numa_node': 1,
                 'dev_type': 'type-VF',
                 'dev_id': 'pci_0000:0f:08.7',
                 'extra_info': None,
@@ -7714,6 +7968,7 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'address': '0000:0f:03.7',
                 'vendor_id': '8083',
                 'product_id': '1523',
+                'numa_node': 0,
                 'dev_type': 'type-VF',
                 'dev_id': 'pci_0000:0f:08.7',
                 'extra_info': None,

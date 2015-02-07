@@ -15,6 +15,7 @@
 """Nova common internal object model"""
 
 import collections
+import contextlib
 import copy
 import datetime
 import functools
@@ -38,7 +39,7 @@ from nova import utils
 LOG = logging.getLogger('object')
 
 
-class NotSpecifiedSentinel:
+class NotSpecifiedSentinel(object):
     pass
 
 
@@ -511,7 +512,7 @@ class NovaObject(object):
         This is optional for subclasses, but is presented here in the base
         class for consistency among those that do.
         """
-        raise NotImplementedError('Cannot save anything in the base class')
+        raise NotImplementedError(_('Cannot save anything in the base class'))
 
     def obj_what_changed(self):
         """Returns a set of fields that have been modified."""
@@ -640,6 +641,29 @@ class NovaPersistentObject(object):
         'deleted': fields.BooleanField(default=False),
         }
 
+    @contextlib.contextmanager
+    def obj_as_admin(self):
+        """Context manager to make an object call as an admin.
+
+        This temporarily modifies the context embedded in an object to
+        be elevated() and restores it after the call completes. Example
+        usage:
+
+           with obj.obj_as_admin():
+               obj.save()
+
+        """
+        if self._context is None:
+            raise exception.OrphanedObjectError(method='obj_as_admin',
+                                                objtype=self.obj_name())
+
+        original_context = self._context
+        self._context = self._context.elevated()
+        try:
+            yield
+        finally:
+            self._context = original_context
+
 
 class ObjectListBase(object):
     """Mixin class for lists of objects.
@@ -756,14 +780,16 @@ class NovaObjectSerializer(messaging.NoOpSerializer):
         """
         iterable = values.__class__
         if issubclass(iterable, dict):
-            return iterable(**dict((k, action_fn(context, v))
-                            for k, v in six.iteritems(values)))
+            return iterable(**{k: action_fn(context, v)
+                            for k, v in six.iteritems(values)})
         else:
-            # NOTE(danms): A set can't have an unhashable value inside, such as
-            # a dict. Convert sets to tuples, which is fine, since we can't
-            # send them over RPC anyway.
+            # NOTE(danms, gibi) A set can't have an unhashable value inside,
+            # such as a dict. Convert the set to list, which is fine, since we
+            # can't send them over RPC anyway. We convert it to list as this
+            # way there will be no semantic change between the fake rpc driver
+            # used in functional test and a normal rpc driver.
             if iterable == set:
-                iterable = tuple
+                iterable = list
             return iterable([action_fn(context, value) for value in values])
 
     def serialize_entity(self, context, entity):
@@ -794,8 +820,9 @@ def obj_to_primitive(obj):
         return [obj_to_primitive(x) for x in obj]
     elif isinstance(obj, NovaObject):
         result = {}
-        for key, value in obj.iteritems():
-            result[key] = obj_to_primitive(value)
+        for key in obj.obj_fields:
+            if obj.obj_attr_is_set(key) or key in obj.obj_extra_fields:
+                result[key] = obj_to_primitive(getattr(obj, key))
         return result
     elif isinstance(obj, netaddr.IPAddress):
         return str(obj)

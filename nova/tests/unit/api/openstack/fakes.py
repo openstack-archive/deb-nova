@@ -17,6 +17,7 @@ import datetime
 import uuid
 
 from oslo.serialization import jsonutils
+from oslo.utils import netutils
 from oslo.utils import timeutils
 import routes
 import six
@@ -176,7 +177,7 @@ def stub_out_instance_quota(stubs, allowed, quota, resource='instances'):
 def stub_out_networking(stubs):
     def get_my_ip():
         return '127.0.0.1'
-    stubs.Set(nova.netconf, '_get_my_ip', get_my_ip)
+    stubs.Set(netutils, 'get_my_ipv4', get_my_ip)
 
 
 def stub_out_compute_api_snapshot(stubs):
@@ -217,7 +218,10 @@ def stub_out_nw_api(stubs, cls=None, private=None, publics=None):
     if not publics:
         publics = ['1.2.3.4']
 
-    class Fake:
+    class Fake(object):
+        def __init__(self, skip_policy_check=False):
+            pass
+
         def get_instance_nw_info(*args, **kwargs):
             pass
 
@@ -263,10 +267,11 @@ class HTTPRequest(os_wsgi.Request):
     def blank(*args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
+        version = kwargs.pop('version', os_wsgi.DEFAULT_API_VERSION)
         out = os_wsgi.Request.blank(*args, **kwargs)
         out.environ['nova.context'] = FakeRequestContext('fake_user', 'fake',
                 is_admin=use_admin_context)
-        out.api_version_request = api_version.APIVersionRequest("2.1")
+        out.api_version_request = api_version.APIVersionRequest(version)
         return out
 
 
@@ -276,8 +281,9 @@ class HTTPRequestV3(os_wsgi.Request):
     def blank(*args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v3'
         use_admin_context = kwargs.pop('use_admin_context', False)
+        version = kwargs.pop('version', os_wsgi.DEFAULT_API_VERSION)
         out = os_wsgi.Request.blank(*args, **kwargs)
-        out.api_version_request = api_version.APIVersionRequest("2.1")
+        out.api_version_request = api_version.APIVersionRequest(version)
         out.environ['nova.context'] = FakeRequestContext('fake_user', 'fake',
                 is_admin=use_admin_context)
         return out
@@ -433,7 +439,8 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
                   launched_at=timeutils.utcnow(),
                   terminated_at=timeutils.utcnow(),
                   availability_zone='', locked_by=None, cleaned=False,
-                  memory_mb=0, vcpus=0, root_gb=0, ephemeral_gb=0):
+                  memory_mb=0, vcpus=0, root_gb=0, ephemeral_gb=0,
+                  instance_type=None):
     if user_id is None:
         user_id = 'fake_user'
     if project_id is None:
@@ -469,6 +476,15 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         server_name = "reservation_%s" % (reservation_id, )
 
     info_cache = create_info_cache(nw_cache)
+
+    if instance_type is not None:
+        flavorinfo = jsonutils.dumps({
+            'cur': instance_type.obj_to_primitive(),
+            'old': None,
+            'new': None,
+        })
+    else:
+        flavorinfo = None
 
     instance = {
         "id": int(id),
@@ -529,6 +545,10 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "cell_name": "",
         "architecture": "",
         "os_type": "",
+        "extra": {"numa_topology": None,
+                  "pci_requests": None,
+                  "flavor": flavorinfo,
+              },
         "cleaned": cleaned}
 
     instance.update(info_cache)

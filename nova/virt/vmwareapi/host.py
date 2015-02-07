@@ -29,9 +29,11 @@ from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
 
 
-def _get_ds_capacity_and_freespace(session, cluster=None):
+def _get_ds_capacity_and_freespace(session, cluster=None,
+                                   datastore_regex=None):
     try:
-        ds = ds_util.get_datastore(session, cluster)
+        ds = ds_util.get_datastore(session, cluster,
+                                   datastore_regex)
         return ds.capacity, ds.freespace
     except exception.DatastoreNotFound:
         return 0, 0
@@ -41,11 +43,12 @@ class VCState(object):
     """Manages information about the VC host this compute
     node is running on.
     """
-    def __init__(self, session, host_name, cluster):
+    def __init__(self, session, host_name, cluster, datastore_regex):
         super(VCState, self).__init__()
         self._session = session
         self._host_name = host_name
         self._cluster = cluster
+        self._datastore_regex = datastore_regex
         self._stats = {}
         self.update_status()
 
@@ -60,17 +63,13 @@ class VCState(object):
     def update_status(self):
         """Update the current state of the cluster."""
         capacity, freespace = _get_ds_capacity_and_freespace(self._session,
-                                                             self._cluster)
+            self._cluster, self._datastore_regex)
 
         # Get cpu, memory stats from the cluster
         stats = vm_util.get_stats_from_cluster(self._session, self._cluster)
         about_info = self._session._call_method(vim_util, "get_about_info")
         data = {}
-        data["vcpus"] = stats['cpu']['vcpus']
-        data["cpu_info"] = {"vendor": stats['cpu']['vendor'],
-                            "model": stats['cpu']['model'],
-                            "topology": {"cores": stats['cpu']['cores'],
-                                         "threads": stats['cpu']['vcpus']}}
+        data["vcpus"] = stats['vcpus']
         data["disk_total"] = capacity / units.Gi
         data["disk_available"] = freespace / units.Gi
         data["disk_used"] = data["disk_total"] - data["disk_available"]

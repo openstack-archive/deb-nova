@@ -32,8 +32,8 @@ fake_tag2 = {
 fake_tag_list = [fake_tag1, fake_tag2]
 
 
-def _get_tag(resource_id, tag_name):
-    t = tag.Tag()
+def _get_tag(resource_id, tag_name, context=None):
+    t = tag.Tag(context=context)
     t.resource_id = resource_id
     t.tag = tag_name
     return t
@@ -43,8 +43,8 @@ class _TestTagObject(object):
     @mock.patch('nova.db.instance_tag_add')
     def test_create(self, tag_add):
         tag_add.return_value = fake_tag1
-        tag_obj = _get_tag(RESOURCE_ID, TAG_NAME1)
-        tag_obj.create(self.context)
+        tag_obj = _get_tag(RESOURCE_ID, TAG_NAME1, context=self.context)
+        tag_obj.create()
 
         tag_add.assert_called_once_with(self.context, RESOURCE_ID, TAG_NAME1)
         self.compare_obj(tag_obj, fake_tag1)
@@ -72,8 +72,8 @@ class _TestTagList(object):
 
         for obj, fake in zip(tag_list_obj, tag_list):
             self.assertIsInstance(obj, tag.Tag)
-            self.assertEqual(obj['tag'], fake['tag'])
-            self.assertEqual(obj['resource_id'], fake['resource_id'])
+            self.assertEqual(obj.tag, fake['tag'])
+            self.assertEqual(obj.resource_id, fake['resource_id'])
 
     @mock.patch('nova.db.instance_tag_get_by_instance_uuid')
     def test_get_by_resource_id(self, get_by_inst):

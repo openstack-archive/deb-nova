@@ -13,13 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
-from oslo.serialization import jsonutils
 import webob
 
 from nova.api.openstack.compute.contrib import virtual_interfaces as vi20
 from nova.api.openstack.compute.plugins.v3 import virtual_interfaces as vi21
-from nova.api.openstack import wsgi
 from nova import compute
 from nova.compute import api as compute_api
 from nova import context
@@ -53,36 +50,18 @@ class ServerVirtualInterfaceTestV21(test.NoDBTestCase):
 
     def setUp(self):
         super(ServerVirtualInterfaceTestV21, self).setUp()
-        self.flags(
-            osapi_compute_extension=[
-                'nova.api.openstack.compute.contrib.select_extensions'],
-            osapi_compute_ext_list=['Virtual_interfaces'])
         self.stubs.Set(compute.api.API, "get",
                        compute_api_get)
         self.stubs.Set(network.api.API, "get_vifs_by_instance",
                        get_vifs_by_instance)
-        self.app = self._get_app()
         self._set_controller()
 
     def _set_controller(self):
         self.controller = vi21.ServerVirtualInterfaceController()
 
-    def _get_app(self):
-        return fakes.wsgi_app_v21(init_only=('os-virtual-interfaces',
-                                            'servers'))
-
-    def _get_response(self, req):
-        return req.get_response(self.app)
-
-    def _get_url(self):
-        return '/v2/fake/servers/abcd/os-virtual-interfaces'
-
     def test_get_virtual_interfaces_list(self):
-        url = self._get_url()
-        req = webob.Request.blank(url)
-        res = self._get_response(req)
-        self.assertEqual(res.status_int, 200)
-        res_dict = jsonutils.loads(res.body)
+        req = fakes.HTTPRequest.blank('')
+        res_dict = self.controller.index(req, 'fake_uuid')
         response = {'virtual_interfaces': [
                         {'id': '00000000-0000-0000-0000-00000000000000000',
                          'mac_address': '00-00-00-00-00-00'},
@@ -111,41 +90,3 @@ class ServerVirtualInterfaceTestV20(ServerVirtualInterfaceTestV21):
 
     def _set_controller(self):
         self.controller = vi20.ServerVirtualInterfaceController()
-
-    def _get_app(self):
-        return fakes.wsgi_app(init_only=('os-virtual-interfaces',))
-
-
-class ServerVirtualInterfaceSerializerTestV20(test.NoDBTestCase):
-    def setUp(self):
-        super(ServerVirtualInterfaceSerializerTestV20, self).setUp()
-        self.namespace = wsgi.XMLNS_V11
-        self.serializer = vi20.VirtualInterfaceTemplate()
-
-    def _tag(self, elem):
-        tagname = elem.tag
-        self.assertEqual(tagname[0], '{')
-        tmp = tagname.partition('}')
-        namespace = tmp[0][1:]
-        self.assertEqual(namespace, self.namespace)
-        return tmp[2]
-
-    def test_serializer(self):
-        raw_vifs = [dict(
-                id='uuid1',
-                mac_address='aa:bb:cc:dd:ee:ff'),
-                    dict(
-                id='uuid2',
-                mac_address='bb:aa:dd:cc:ff:ee')]
-        vifs = dict(virtual_interfaces=raw_vifs)
-        text = self.serializer.serialize(vifs)
-
-        tree = etree.fromstring(text)
-
-        self.assertEqual('virtual_interfaces', self._tag(tree))
-        self.assertEqual(len(raw_vifs), len(tree))
-        for idx, child in enumerate(tree):
-            self.assertEqual('virtual_interface', self._tag(child))
-            self.assertEqual(raw_vifs[idx]['id'], child.get('id'))
-            self.assertEqual(raw_vifs[idx]['mac_address'],
-                             child.get('mac_address'))

@@ -16,12 +16,10 @@
 import os
 import re
 
-from lxml import etree
 from oslo.serialization import jsonutils
 from oslo.utils import importutils
 import six
 
-from nova.i18n import _
 from nova import test
 from nova.tests.functional import integrated_helpers
 
@@ -36,42 +34,16 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     extension_name = None
 
     def _pretty_data(self, data):
-        if self.ctype == 'json':
-            data = jsonutils.dumps(jsonutils.loads(data), sort_keys=True,
-                    indent=4)
-
-        else:
-            if data is None:
-                # Likely from missing XML file.
-                return ""
-            xml = etree.XML(data)
-            data = etree.tostring(xml, encoding="UTF-8",
-                    xml_declaration=True, pretty_print=True)
+        data = jsonutils.dumps(jsonutils.loads(data), sort_keys=True,
+                indent=4)
         return '\n'.join(line.rstrip() for line in data.split('\n')).strip()
 
     def _objectify(self, data):
         if not data:
             return {}
-        if self.ctype == 'json':
-            # NOTE(vish): allow non-quoted replacements to survive json
-            data = re.sub(r'([^"])%\((.+)\)s([^"])', r'\1"%(int:\2)s"\3', data)
-            return jsonutils.loads(data)
-        else:
-            def to_dict(node):
-                ret = {}
-                if node.items():
-                    ret.update(dict(node.items()))
-                if node.text:
-                    ret['__content__'] = node.text
-                if node.tag:
-                    ret['__tag__'] = node.tag
-                if node.nsmap:
-                    ret['__nsmap__'] = node.nsmap
-                for element in node:
-                    ret.setdefault(node.tag, [])
-                    ret[node.tag].append(to_dict(element))
-                return ret
-            return to_dict(etree.fromstring(data))
+        # NOTE(vish): allow non-quoted replacements to survive json
+        data = re.sub(r'([^"])%\((.+)\)s([^"])', r'\1"%(int:\2)s"\3', data)
+        return jsonutils.loads(data)
 
     @classmethod
     def _get_sample_path(cls, name, dirname, suffix=''):
@@ -113,7 +85,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         matched_value = None
         if isinstance(expected, dict):
             if not isinstance(result, dict):
-                raise NoMatch(_('%(result_str)s: %(result)s is not a dict.')
+                raise NoMatch('%(result_str)s: %(result)s is not a dict.'
                         % {'result_str': result_str, 'result': result})
             ex_keys = sorted(expected.keys())
             res_keys = sorted(result.keys())
@@ -127,9 +99,9 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                     if key not in ex_keys:
                         res_delta.append(key)
                 raise NoMatch(
-                        _('Dictionary key mismatch:\n'
+                        'Dictionary key mismatch:\n'
                         'Extra key(s) in template:\n%(ex_delta)s\n'
-                        'Extra key(s) in %(result_str)s:\n%(res_delta)s\n') %
+                        'Extra key(s) in %(result_str)s:\n%(res_delta)s\n' %
                         {'ex_delta': ex_delta, 'result_str': result_str,
                            'res_delta': res_delta})
             for key in ex_keys:
@@ -139,7 +111,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         elif isinstance(expected, list):
             if not isinstance(result, list):
                 raise NoMatch(
-                        _('%(result_str)s: %(result)s is not a list.') %
+                        '%(result_str)s: %(result)s is not a list.' %
                         {'result_str': result_str, 'result': result})
 
             expected = expected[:]
@@ -159,12 +131,12 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
 
             error = []
             if expected:
-                error.append(_('Extra list items in template:'))
+                error.append('Extra list items in template:')
                 error.extend([repr(o) for o in expected])
 
             if extra:
-                error.append(_('Extra list items in %(result_str)s:') %
-                        {'result_str': result_str})
+                error.append('Extra list items in %(result_str)s:' %
+                             {'result_str': result_str})
                 error.extend([repr(o) for o in extra])
 
             if error:
@@ -184,8 +156,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             match = re.match(expected, result)
             if not match:
                 raise NoMatch(
-                    _('Values do not match:\n'
-                    'Template: %(expected)s\n%(result_str)s: %(result)s') %
+                    'Values do not match:\n'
+                    'Template: %(expected)s\n%(result_str)s: %(result)s' %
                     {'expected': expected, 'result_str': result_str,
                         'result': result})
             try:
@@ -201,11 +173,11 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                     result = result.strip()
             if expected != result:
                 raise NoMatch(
-                        _('Values do not match:\n'
+                        'Values do not match:\n'
                         'Template: %(expected)s\n%(result_str)s: '
-                        '%(result)s') % {'expected': expected,
-                                         'result_str': result_str,
-                                         'result': result})
+                        '%(result)s' % {'expected': expected,
+                                        'result_str': result_str,
+                                        'result': result})
         return matched_value
 
     def generalize_subs(self, subs, vanilla_regexes):

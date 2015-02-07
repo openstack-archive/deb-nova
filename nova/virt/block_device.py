@@ -46,7 +46,7 @@ def update_db(method):
     @functools.wraps(method)
     def wrapped(obj, context, *args, **kwargs):
         ret_val = method(obj, context, *args, **kwargs)
-        obj.save(context)
+        obj.save()
         return ret_val
     return wrapped
 
@@ -96,8 +96,7 @@ class DriverBlockDevice(dict):
         if self._bdm_obj.no_device:
             raise _NotTransformable()
 
-        self.update(dict((field, None)
-                    for field in self._fields))
+        self.update({field: None for field in self._fields})
         self._transform()
 
     def __getattr__(self, name):
@@ -122,7 +121,7 @@ class DriverBlockDevice(dict):
         Basic method will just drop the fields that are not in
         _legacy_fields set. Override this in subclass if needed.
         """
-        return dict((key, self.get(key)) for key in self._legacy_fields)
+        return {key: self.get(key) for key in self._legacy_fields}
 
     def attach(self, **kwargs):
         """Make the device available to be used by VMs.
@@ -132,14 +131,10 @@ class DriverBlockDevice(dict):
         """
         raise NotImplementedError()
 
-    def save(self, context=None):
+    def save(self):
         for attr_name, key_name in self._update_on_save.iteritems():
             setattr(self._bdm_obj, attr_name, self[key_name or attr_name])
-
-        if context:
-            self._bdm_obj.save(context)
-        else:
-            self._bdm_obj.save()
+        self._bdm_obj.save()
 
 
 class DriverSwapBlockDevice(DriverBlockDevice):
@@ -205,8 +200,8 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
             raise _InvalidType
 
         self.update(
-            dict((k, v) for k, v in self._bdm_obj.iteritems()
-                 if k in self._new_fields | set(['delete_on_termination']))
+            {k: v for k, v in self._bdm_obj.iteritems()
+             if k in self._new_fields | set(['delete_on_termination'])}
         )
         self['mount_device'] = self._bdm_obj.device_name
         try:
@@ -252,7 +247,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
                         context, connection_info, instance,
                         self['mount_device'], disk_bus=self['disk_bus'],
                         device_type=self['device_type'], encryption=encryption)
-            except Exception:  # pylint: disable=W0702
+            except Exception:
                 with excutils.save_and_reraise_exception():
                     LOG.exception(_LE("Driver failed to attach volume "
                                       "%(volume_id)s at %(mountpoint)s"),
@@ -286,7 +281,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
         self._preserve_multipath_id(connection_info)
         self['connection_info'] = connection_info
 
-    def save(self, context=None):
+    def save(self):
         # NOTE(ndipanov): we might want to generalize this by adding it to the
         # _update_on_save and adding a transformation function.
         try:
@@ -294,7 +289,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
                     self.get('connection_info'))
         except TypeError:
             pass
-        super(DriverVolumeBlockDevice, self).save(context)
+        super(DriverVolumeBlockDevice, self).save()
 
 
 class DriverSnapshotBlockDevice(DriverVolumeBlockDevice):

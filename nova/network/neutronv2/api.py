@@ -196,8 +196,8 @@ def get_client(context, admin=False):
 class API(base_api.NetworkAPI):
     """API for interacting with the neutron 2.x API."""
 
-    def __init__(self):
-        super(API, self).__init__()
+    def __init__(self, skip_policy_check=False):
+        super(API, self).__init__(skip_policy_check=skip_policy_check)
         self.last_neutron_extension_sync = None
         self.extensions = {}
 
@@ -257,7 +257,8 @@ class API(base_api.NetworkAPI):
         """
         try:
             if fixed_ip:
-                port_req_body['port']['fixed_ips'] = [{'ip_address': fixed_ip}]
+                port_req_body['port']['fixed_ips'] = [
+                    {'ip_address': str(fixed_ip)}]
             port_req_body['port']['network_id'] = network_id
             port_req_body['port']['admin_state_up'] = True
             port_req_body['port']['tenant_id'] = instance['project_id']
@@ -307,7 +308,7 @@ class API(base_api.NetworkAPI):
                 # Perform this check here rather than in validate_networks to
                 # ensure the check is performed every time
                 # allocate_for_instance is invoked
-                if net.get('router:external'):
+                if net.get('router:external') and not net.get('shared'):
                     raise exception.ExternalNetworkAttachForbidden(
                         network_uuid=net['id'])
 
@@ -367,7 +368,10 @@ class API(base_api.NetworkAPI):
         if requested_networks:
             for request in requested_networks:
                 if request.port_id:
-                    port = neutron.show_port(request.port_id)['port']
+                    try:
+                        port = neutron.show_port(request.port_id)['port']
+                    except neutron_client_exc.PortNotFoundClient:
+                        raise exception.PortNotFound(port_id=request.port_id)
                     if port.get('device_id'):
                         raise exception.PortInUse(port_id=request.port_id)
                     if hypervisor_macs is not None:
@@ -390,8 +394,16 @@ class API(base_api.NetworkAPI):
         nets = self._get_available_networks(context, instance.project_id,
                                             net_ids, neutron=neutron)
         if not nets:
-            LOG.debug("No network configured", instance=instance)
-            return network_model.NetworkInfo([])
+            # NOTE(chaochin): If user specifies a network id and the network
+            # can not be found, raise NetworkNotFound error.
+            if requested_networks:
+                for request in requested_networks:
+                    if not request.port_id and request.network_id:
+                        raise exception.NetworkNotFound(
+                            network_id=request.network_id)
+            else:
+                LOG.debug("No network configured", instance=instance)
+                return network_model.NetworkInfo([])
 
         # if this function is directly called without a requested_network param
         # or if it is indirectly called through allocate_port_for_instance()
@@ -509,8 +521,8 @@ class API(base_api.NetworkAPI):
                                 port_req_body['port']['binding:host_id'] = None
                             port_client.update_port(port_id, port_req_body)
                         except Exception:
-                            msg = _LE("Failed to update port %s")
-                            LOG.exception(msg, port_id)
+                            LOG.exception(_LE("Failed to update port %s"),
+                                          port_id)
 
                     self._delete_ports(neutron, instance, created_port_ids)
 
@@ -537,8 +549,7 @@ class API(base_api.NetworkAPI):
             extensions_list = neutron.list_extensions()['extensions']
             self.last_neutron_extension_sync = time.time()
             self.extensions.clear()
-            self.extensions = dict((ext['name'], ext)
-                                   for ext in extensions_list)
+            self.extensions = {ext['name']: ext for ext in extensions_list}
 
     def _has_port_binding_extension(self, context, refresh_cache=False,
                                     neutron=None):
@@ -689,7 +700,7 @@ class API(base_api.NetworkAPI):
         # NOTE(danms): This is an inner method intended to be called
         # by other code that updates instance nwinfo. It *must* be
         # called with the refresh_cache-%(instance_uuid) lock held!
-        LOG.debug('get_instance_nw_info()', instance=instance)
+        LOG.debug('_get_instance_nw_info()', instance=instance)
         nw_info = self._build_network_info_model(context, instance, networks,
                                                  port_ids, admin_client)
         return network_model.NetworkInfo.hydrate(nw_info)
@@ -848,8 +859,7 @@ class API(base_api.NetworkAPI):
         Return the number of instances than can be successfully allocated
         with the requested network configuration.
         """
-        LOG.debug('validate_networks() for %s',
-                  requested_networks)
+        LOG.debug('validate_networks() for %s', requested_networks)
 
         neutron = get_client(context)
         ports_needed_per_instance = 0
@@ -962,6 +972,12 @@ class API(base_api.NetworkAPI):
                 return num_instances
             else:
                 free_ports = quotas.get('port') - len(ports)
+                if free_ports < 0:
+                    msg = (_("The number of defined ports: %(ports)d"
+                                      "is over the limit: %(quota)d"),
+                                      {'ports': len(ports),
+                                       'quota': quotas.get('port')})
+                    raise exception.PortLimitExceeded(msg)
                 ports_needed = ports_needed_per_instance * num_instances
                 if free_ports >= ports_needed:
                     return num_instances
@@ -1036,9 +1052,14 @@ class API(base_api.NetworkAPI):
         """Get all networks for client."""
         client = get_client(context)
         networks = client.list_networks().get('networks')
+        network_objs = []
         for network in networks:
-            network['label'] = network['name']
-        return networks
+            network_objs.append(objects.Network(context=context,
+                                                name=network['name'],
+                                                label=network['name'],
+                                                uuid=network['id']))
+        return objects.NetworkList(context=context,
+                                   objects=network_objs)
 
     def get(self, context, network_uuid):
         """Get specific network for client."""
@@ -1047,8 +1068,11 @@ class API(base_api.NetworkAPI):
             network = client.show_network(network_uuid).get('network') or {}
         except neutron_client_exc.NetworkNotFoundClient:
             raise exception.NetworkNotFound(network_id=network_uuid)
-        network['label'] = network['name']
-        return network
+        net_obj = objects.Network(context=context,
+                                  name=network['name'],
+                                  label=network['name'],
+                                  uuid=network['id'])
+        return net_obj
 
     def delete(self, context, network_uuid):
         """Delete a network for client."""
@@ -1092,12 +1116,12 @@ class API(base_api.NetworkAPI):
 
     def _setup_pools_dict(self, client):
         pools = self._get_floating_ip_pools(client)
-        return dict([(i['id'], i) for i in pools])
+        return {i['id']: i for i in pools}
 
     def _setup_ports_dict(self, client, project_id=None):
         search_opts = {'tenant_id': project_id} if project_id else {}
         ports = client.list_ports(**search_opts)['ports']
-        return dict([(p['id'], p) for p in ports])
+        return {p['id']: p for p in ports}
 
     def get_floating_ip(self, context, id):
         """Return floating ip object given the floating ip id."""
@@ -1145,6 +1169,9 @@ class API(base_api.NetworkAPI):
         if fip['port_id']:
             instance_uuid = port_dict[fip['port_id']]['device_id']
             result['instance'] = {'uuid': instance_uuid}
+            # TODO(mriedem): remove this workaround once the get_floating_ip*
+            # API methods are converted to use nova objects.
+            result['fixed_ip']['instance_uuid'] = instance_uuid
         else:
             result['instance'] = None
         return result
@@ -1300,22 +1327,8 @@ class API(base_api.NetworkAPI):
 
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
-        if not self._has_port_binding_extension(context, refresh_cache=True):
-            return
-        neutron = get_client(context, admin=True)
-        search_opts = {'device_id': instance['uuid'],
-                       'tenant_id': instance['project_id']}
-        data = neutron.list_ports(**search_opts)
-        ports = data['ports']
-        for p in ports:
-            port_req_body = {'port': {'binding:host_id':
-                                      migration['dest_compute']}}
-            try:
-                neutron.update_port(p['id'], port_req_body)
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    msg = _LE("Unable to update host of port %s")
-                    LOG.exception(msg, p['id'])
+        self._update_port_binding_for_instance(context, instance,
+                                               migration['dest_compute'])
 
     def add_network_to_project(self, context, project_id, network_uuid=None):
         """Force add a network to the project."""
@@ -1369,10 +1382,9 @@ class API(base_api.NetworkAPI):
             bridge = "brq" + port['network_id']
             should_create_bridge = True
         elif vif_type == network_model.VIF_TYPE_DVS:
-            if network_name is None:
-                bridge = port['network_id']
-            else:
-                bridge = '%s-%s' % (network_name, port['network_id'])
+            # The name of the DVS port group will contain the neutron
+            # network id
+            bridge = port['network_id']
 
         # Prune the bridge name if necessary. For the DVS this is not done
         # as the bridge is a '<network-name>-<network-UUID>'.
@@ -1555,6 +1567,31 @@ class API(base_api.NetworkAPI):
     def create_public_dns_domain(self, context, domain, project=None):
         """Create a private DNS domain with optional nova project."""
         raise NotImplementedError()
+
+    def setup_instance_network_on_host(self, context, instance, host):
+        """Setup network for specified instance on host."""
+        self._update_port_binding_for_instance(context, instance, host)
+
+    def cleanup_instance_network_on_host(self, context, instance, host):
+        """Cleanup network for specified instance on host."""
+        pass
+
+    def _update_port_binding_for_instance(self, context, instance, host):
+        if not self._has_port_binding_extension(context, refresh_cache=True):
+            return
+        neutron = get_client(context, admin=True)
+        search_opts = {'device_id': instance['uuid'],
+                       'tenant_id': instance['project_id']}
+        data = neutron.list_ports(**search_opts)
+        ports = data['ports']
+        for p in ports:
+            try:
+                neutron.update_port(p['id'],
+                                    {'port': {'binding:host_id': host}})
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(_LE("Unable to update host of port %s"),
+                                  p['id'])
 
 
 def _ensure_requested_network_ordering(accessor, unordered, preferred):

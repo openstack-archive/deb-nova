@@ -73,7 +73,7 @@ class MyObj(base.NovaPersistentObject, base.NovaObject,
 
     @base.remotable_classmethod
     def query(cls, context):
-        obj = cls(foo=1, bar='bar')
+        obj = cls(context=context, foo=1, bar='bar')
         obj.obj_reset_changes()
         return obj
 
@@ -208,7 +208,7 @@ class TestMetaclass(test.TestCase):
 class TestObjToPrimitive(test.TestCase):
 
     def test_obj_to_primitive_list(self):
-        class MyObjElement(base.NovaObject, base.NovaObjectDictCompat):
+        class MyObjElement(base.NovaObject):
             fields = {'foo': fields.IntegerField()}
 
             def __init__(self, foo):
@@ -239,7 +239,7 @@ class TestObjToPrimitive(test.TestCase):
                          base.obj_to_primitive(mylist))
 
     def test_obj_to_primitive_with_ip_addr(self):
-        class TestObject(base.NovaObject, base.NovaObjectDictCompat):
+        class TestObject(base.NovaObject):
             fields = {'addr': fields.IPAddressField(),
                       'cidr': fields.IPNetworkField()}
 
@@ -291,7 +291,7 @@ def compare_obj(test, obj, db_obj, subs=None, allow_missing=None,
     for key in obj.fields:
         if key in allow_missing and not obj.obj_attr_is_set(key):
             continue
-        obj_val = obj[key]
+        obj_val = getattr(obj, key)
         db_key = subs.get(key, key)
         db_val = db_obj[db_key]
         if isinstance(obj_val, datetime.datetime):
@@ -513,7 +513,7 @@ class _TestObject(object):
         class Foo(base.NovaObject):
             fields = {'foobar': fields.Field(fields.Integer())}
         obj = Foo()
-        with self.assertRaisesRegexp(NotImplementedError, ".*foobar.*"):
+        with self.assertRaisesRegex(NotImplementedError, ".*foobar.*"):
             obj.foobar
 
     def test_loaded_in_primitive(self):
@@ -588,7 +588,7 @@ class _TestObject(object):
         obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
-        obj.save(self.context)
+        obj.save()
         self.assertEqual(obj.obj_what_changed(), set([]))
         self.assertEqual(obj.foo, 123)
         self.assertRemotes()
@@ -597,7 +597,7 @@ class _TestObject(object):
         obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
-        obj.refresh(self.context)
+        obj.refresh()
         self.assertEqual(obj.obj_what_changed(), set([]))
         self.assertEqual(obj.foo, 321)
         self.assertEqual(obj.bar, 'refreshed')
@@ -706,6 +706,27 @@ class _TestObject(object):
                          len(TestSubclassedObject.fields))
         self.assertEqual(set(myobj_fields) | set(myobj3_fields),
                          set(TestSubclassedObject.fields.keys()))
+
+    def test_obj_as_admin(self):
+        obj = MyObj(context=self.context)
+
+        def fake(*args, **kwargs):
+            self.assertTrue(obj._context.is_admin)
+
+        with mock.patch.object(obj, 'obj_reset_changes') as mock_fn:
+            mock_fn.side_effect = fake
+            with obj.obj_as_admin():
+                obj.save()
+            self.assertTrue(mock_fn.called)
+
+        self.assertFalse(obj._context.is_admin)
+
+    def test_obj_as_admin_orphaned(self):
+        def testme():
+            obj = MyObj()
+            with obj.obj_as_admin():
+                pass
+        self.assertRaises(exception.OrphanedObjectError, testme)
 
     def test_get_changes(self):
         obj = MyObj()
@@ -992,6 +1013,10 @@ class TestObjectSerializer(_BaseTestCase):
         for thing in (1, 'foo', [1, 2], {'foo': 'bar'}):
             self.assertEqual(thing, ser.deserialize_entity(None, thing))
 
+    def test_serialize_set_to_list(self):
+        ser = base.NovaObjectSerializer()
+        self.assertEqual([1, 2], ser.serialize_entity(None, set([1, 2])))
+
     def _test_deserialize_entity_newer(self, obj_version, backported_to,
                                        my_version='1.6'):
         ser = base.NovaObjectSerializer()
@@ -1094,23 +1119,23 @@ object_data = {
     'AggregateList': '1.2-4b02a285b8612bfb86a96ff80052fb0a',
     'BandwidthUsage': '1.2-a9d7c2ba54995e48ce38688c51c9416d',
     'BandwidthUsageList': '1.2-5b564cbfd5ae6e106443c086938e7602',
-    'BlockDeviceMapping': '1.5-9968ffe513e7672484b0f528b034cd0f',
-    'BlockDeviceMappingList': '1.6-ee2ed2eb3f3f2f54d573ccea0ff2eeaa',
-    'ComputeNode': '1.9-d59bebd3176d86f0f7ea02086732a0d4',
-    'ComputeNodeList': '1.9-4fdeaf7dce98f5736f0ed239c9265c65',
+    'BlockDeviceMapping': '1.7-c53f09c7f969e0222d9f6d67a950a08e',
+    'BlockDeviceMappingList': '1.8-15ab98892f8fd26faa49f45f3cffaef0',
+    'ComputeNode': '1.10-70202a38b858977837b313d94475a26b',
+    'ComputeNodeList': '1.10-4ae1f844c247029fbcdb5fdccbe9e619',
     'DNSDomain': '1.0-5bdc288d7c3b723ce86ede998fd5c9ba',
     'DNSDomainList': '1.0-cfb3e7e82be661501c31099523154db4',
     'EC2InstanceMapping': '1.0-627baaf4b12c9067200979bdc4558a99',
     'EC2SnapshotMapping': '1.0-26cf315be1f8abab4289d4147671c836',
     'EC2VolumeMapping': '1.0-2f8c3bf077c65a425294ec2b361c9143',
-    'FixedIP': '1.7-2472964d39e50da67202109eb85cd173',
-    'FixedIPList': '1.7-125de790b58cfb8c84ffc8c34db4a81e',
+    'FixedIP': '1.8-2472964d39e50da67202109eb85cd173',
+    'FixedIPList': '1.8-6cfaa5b6dd27e9eb8fcf8462dea06077',
     'Flavor': '1.1-096cfd023c35d07542cf732fb29b45e4',
     'FlavorList': '1.1-a3d5551267cb8f62ff38ded125900721',
     'FloatingIP': '1.6-27eb68b7c9c620dd5f0561b5a3be0e82',
     'FloatingIPList': '1.7-f376f63ed99243f9d90841b7f6732bbf',
     'HVSpec': '1.0-c4d8377cc4fe519930e60c1d8265a142',
-    'Instance': '1.17-972cae223db35e88bb184bdf8c197229',
+    'Instance': '1.18-7827a9e9846a75f3038bd556e6f530d3',
     'InstanceAction': '1.1-6b1d0a6dbd522b5a83c20757ec659663',
     'InstanceActionEvent': '1.1-42dbdba74bd06e0619ca75cd3397cd1b',
     'InstanceActionEventList': '1.0-1d5cc958171d6ce07383c2ad6208318e',
@@ -1121,7 +1146,7 @@ object_data = {
     'InstanceGroup': '1.9-95ece99f092e8f4f88327cdbb44162c9',
     'InstanceGroupList': '1.6-c6b78f3c9d9080d33c08667e80589817',
     'InstanceInfoCache': '1.5-ef64b604498bfa505a8c93747a9d8b2f',
-    'InstanceList': '1.13-179093360c48747a41694cc2f326d75d',
+    'InstanceList': '1.14-fe7f3266de1475454b939dee36a2ebcc',
     'InstanceNUMACell': '1.2-5d2dfa36e9ecca9b63f24bf3bc958ea4',
     'InstanceNUMATopology': '1.1-86b95d263c4c68411d44c6741b8d2bb0',
     'InstancePCIRequest': '1.1-e082d174f4643e5756ba098c47c1510f',
@@ -1139,8 +1164,8 @@ object_data = {
     'NUMACell': '1.2-cb9c3b08cc1c418d021492f788d04173',
     'NUMAPagesTopology': '1.0-97d93f70a68625b5f29ff63a40a4f612',
     'NUMATopology': '1.2-790f6bdff85bf6e5677f409f3a4f1c6a',
-    'PciDevice': '1.2-29e35c3199f3b98ce66e5d1212612818',
-    'PciDeviceList': '1.1-2896df4f5b06579e5f35adba5fcae9db',
+    'PciDevice': '1.3-e059641df10e85d464672c5183a9473b',
+    'PciDeviceList': '1.1-38cbe2d3c23b9e46f7a74b486abcad85',
     'PciDevicePool': '1.0-d6ed1abe611c9947345a44155abe6f11',
     'PciDevicePoolList': '1.0-d31e08e0ff620a4df7cc2014b6c50da8',
     'Quotas': '1.2-36098cf2143e6535873c3fa3d6fe56f7',
@@ -1150,10 +1175,8 @@ object_data = {
     'SecurityGroupList': '1.0-528e6448adfeeb78921ebeda499ab72f',
     'SecurityGroupRule': '1.1-a9175baf7664439af1a16c2010b55576',
     'SecurityGroupRuleList': '1.1-667fca3a9928f23d2d10e61962c55f3c',
-    'Service': '1.7-82bbfd46a744a9c89bc44b47a1b81683',
-    'ServiceList': '1.5-f137850fbd69933a69a03eae572b05f0',
-    'Service': '1.8-82bbfd46a744a9c89bc44b47a1b81683',
-    'ServiceList': '1.6-f8bd332b71ff1c3a86b88b6070072fd4',
+    'Service': '1.9-82bbfd46a744a9c89bc44b47a1b81683',
+    'ServiceList': '1.7-b856301eb7714839248e189bf4886168',
     'Tag': '1.0-a11531f4e4e3166eef6243d6d58a18bd',
     'TagList': '1.0-e89bf8c8055f1f1d654fb44f0abf1f53',
     'TestSubclassedObject': '1.6-87177ccbefd7a740a9e261f958e15b00',
@@ -1164,23 +1187,24 @@ object_data = {
 
 
 object_relationships = {
-    'BlockDeviceMapping': {'Instance': '1.17'},
+    'BlockDeviceMapping': {'Instance': '1.18'},
     'ComputeNode': {'PciDevicePoolList': '1.0'},
-    'FixedIP': {'Instance': '1.17', 'Network': '1.2',
+    'FixedIP': {'Instance': '1.18', 'Network': '1.2',
                 'VirtualInterface': '1.0',
                 'FloatingIPList': '1.7'},
-    'FloatingIP': {'FixedIP': '1.7'},
+    'FloatingIP': {'FixedIP': '1.8'},
     'Instance': {'InstanceFault': '1.2',
                  'InstanceInfoCache': '1.5',
                  'InstanceNUMATopology': '1.1',
                  'PciDeviceList': '1.1',
                  'TagList': '1.0',
                  'SecurityGroupList': '1.0',
+                 'Flavor': '1.1',
                  'InstancePCIRequests': '1.1'},
     'InstanceNUMACell': {'VirtCPUTopology': '1.0'},
     'MyObj': {'MyOwnedObject': '1.0'},
     'SecurityGroupRule': {'SecurityGroup': '1.1'},
-    'Service': {'ComputeNode': '1.9'},
+    'Service': {'ComputeNode': '1.10'},
     'TestSubclassedObject': {'MyOwnedObject': '1.0'}
 }
 

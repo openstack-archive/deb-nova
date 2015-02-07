@@ -15,6 +15,7 @@
 #    under the License.
 
 import base64
+import collections
 import contextlib
 import copy
 import datetime
@@ -50,7 +51,6 @@ from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
-from nova.i18n import _
 from nova.image import glance
 from nova.network import manager
 from nova.network.neutronv2 import api as neutron_api
@@ -230,6 +230,24 @@ class ServersControllerTest(ControllerTest):
         requested_networks = [{'uuid': network, 'port': port}]
         res = self.controller._get_requested_networks(requested_networks)
         self.assertEqual([(None, None, port, None)], res.as_tuples())
+
+    def test_requested_networks_with_duplicate_networks(self):
+        # duplicate networks are allowed only for nova neutron v2.0
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        requested_networks = [{'uuid': network}, {'uuid': network}]
+        self.assertRaises(
+            webob.exc.HTTPBadRequest,
+            self.controller._get_requested_networks,
+            requested_networks)
+
+    def test_requested_networks_with_neutronv2_and_duplicate_networks(self):
+        # duplicate networks are allowed only for nova neutron v2.0
+        self.flags(network_api_class='nova.network.neutronv2.api.API')
+        network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+        requested_networks = [{'uuid': network}, {'uuid': network}]
+        res = self.controller._get_requested_networks(requested_networks)
+        self.assertEqual([(network, None, None, None),
+                          (network, None, None, None)], res.as_tuples())
 
     def test_requested_networks_neutronv2_enabled_conflict_on_fixed_ip(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
@@ -483,6 +501,11 @@ class ServersControllerTest(ControllerTest):
             },
         }
         self.assertThat(res_dict, matchers.DictMatches(expected))
+        # Make sure we kept the addresses in order
+        self.assertIsInstance(res_dict['addresses'], collections.OrderedDict)
+        labels = [vif['network']['label'] for vif in nw_cache]
+        for index, label in enumerate(res_dict['addresses'].keys()):
+            self.assertEqual(label, labels[index])
 
     def test_get_server_addresses_nonexistent_network(self):
         url = '/v3/servers/%s/ips/network_0' % FAKE_UUID
@@ -734,27 +757,6 @@ class ServersControllerTest(ControllerTest):
                        fake_get_all)
 
         req = fakes.HTTPRequestV3.blank('/servers?tenant_id=newfake')
-        servers = self.controller.index(req)['servers']
-        self.assertEqual(len(servers), 1)
-
-    def test_tenant_id_filter_implies_all_tenants(self):
-        def fake_get_all(context, filters=None, limit=None, marker=None,
-                         columns_to_join=None, use_slave=False,
-                         expected_attrs=None, sort_keys=None, sort_dirs=None):
-            self.assertNotEqual(filters, None)
-            # The project_id assertion checks that the project_id
-            # filter is set to that specified in the request url and
-            # not that of the context, verifying that the all_tenants
-            # flag was enabled
-            self.assertEqual(filters['project_id'], 'newfake')
-            self.assertFalse(filters.get('tenant_id'))
-            return [fakes.stub_instance(100)]
-
-        self.stubs.Set(db, 'instance_get_all_by_filters_sort',
-                       fake_get_all)
-
-        req = fakes.HTTPRequestV3.blank('/servers?tenant_id=newfake',
-                                      use_admin_context=True)
         servers = self.controller.index(req)['servers']
         self.assertEqual(len(servers), 1)
 
@@ -1685,31 +1687,27 @@ class ServersControllerUpdateTest(ControllerTest):
         self.assertRaises(exception.ValidationError, self.controller.update,
                           req, FAKE_UUID, body=body)
 
-    def test_update_server_admin_password_ignored(self):
+    def test_update_server_admin_password_extra_arg(self):
         inst_dict = dict(name='server_test', admin_password='bacon')
         body = dict(server=inst_dict)
-
-        def server_update(context, id, params):
-            filtered_dict = {
-                'display_name': 'server_test',
-            }
-            self.assertEqual(params, filtered_dict)
-            filtered_dict['uuid'] = id
-            return filtered_dict
-
-        self.stubs.Set(db, 'instance_update', server_update)
-        # FIXME (comstud)
-        #        self.stubs.Set(db, 'instance_get',
-        #                return_server_with_attributes(name='server_test'))
 
         req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
         req.method = 'PUT'
         req.content_type = "application/json"
         req.body = jsonutils.dumps(body)
-        res_dict = self.controller.update(req, FAKE_UUID, body=body)
+        self.assertRaises(exception.ValidationError, self.controller.update,
+                          req, FAKE_UUID, body=body)
 
-        self.assertEqual(res_dict['server']['id'], FAKE_UUID)
-        self.assertEqual(res_dict['server']['name'], 'server_test')
+    def test_update_server_host_id(self):
+        inst_dict = dict(host_id='123')
+        body = dict(server=inst_dict)
+
+        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = "application/json"
+        req.body = jsonutils.dumps(body)
+        self.assertRaises(exception.ValidationError, self.controller.update,
+                          req, FAKE_UUID, body=body)
 
     def test_update_server_not_found(self):
         def fake_get(*args, **kwargs):
@@ -1783,7 +1781,7 @@ class ServerStatusTest(test.TestCase):
         req = fakes.HTTPRequestV3.blank('/servers/1234/action')
         self.assertRaises(exception.PolicyNotAuthorized,
                 self.controller._action_reboot, req, '1234',
-                {'reboot': {'type': 'HARD'}})
+                body={'reboot': {'type': 'HARD'}})
 
     def test_rebuild(self):
         response = self._get_with_state(vm_states.ACTIVE,
@@ -1885,8 +1883,6 @@ class ServersControllerCreateTest(test.TestCase):
                 "task_state": "",
                 "vm_state": "",
                 "root_device_name": inst.get('root_device_name', 'vda'),
-                "extra": {"pci_requests": None,
-                          "numa_topology": None},
             })
 
             self.instance_cache_by_id[instance['id']] = instance
@@ -2319,6 +2315,31 @@ class ServersControllerCreateTest(test.TestCase):
         self._check_admin_password_missing(server)
         self.assertEqual(FAKE_UUID, server['id'])
 
+    @mock.patch('nova.virt.hardware.numa_get_constraints')
+    def _test_create_instance_numa_topology_wrong(self, exc,
+                                                  numa_constraints_mock):
+        numa_constraints_mock.side_effect = exc(**{'name': None,
+                                                   'cpunum': 0,
+                                                   'cpumax': 0,
+                                                   'cpuset': None,
+                                                   'memsize': 0,
+                                                   'memtotal': 0})
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['imageRef'] = image_href
+        self.req.body = jsonutils.dumps(self.body)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, self.req, body=self.body)
+
+    def test_create_instance_numa_topology_wrong(self):
+        for exc in [exception.ImageNUMATopologyIncomplete,
+                    exception.ImageNUMATopologyForbidden,
+                    exception.ImageNUMATopologyAsymmetric,
+                    exception.ImageNUMATopologyCPUOutOfRange,
+                    exception.ImageNUMATopologyCPUDuplicates,
+                    exception.ImageNUMATopologyCPUsUnassigned,
+                    exception.ImageNUMATopologyMemoryOutOfRange]:
+            self._test_create_instance_numa_topology_wrong(exc)
+
     def test_create_instance_too_much_metadata(self):
         self.flags(quota_metadata_items=1)
         image_href = 'http://localhost/v2/images/%s' % self.image_uuid
@@ -2500,18 +2521,18 @@ class ServersControllerCreateTest(test.TestCase):
             self.assertEqual(e.explanation, expected_msg)
 
     def test_create_instance_above_quota_instances(self):
-        msg = _('Quota exceeded for instances: Requested 1, but'
-                ' already used 10 of 10 instances')
+        msg = ('Quota exceeded for instances: Requested 1, but'
+               ' already used 10 of 10 instances')
         self._do_test_create_instance_above_quota('instances', 0, 10, msg)
 
     def test_create_instance_above_quota_ram(self):
-        msg = _('Quota exceeded for ram: Requested 4096, but'
-                ' already used 8192 of 10240 ram')
+        msg = ('Quota exceeded for ram: Requested 4096, but'
+               ' already used 8192 of 10240 ram')
         self._do_test_create_instance_above_quota('ram', 2048, 10 * 1024, msg)
 
     def test_create_instance_above_quota_cores(self):
-        msg = _('Quota exceeded for cores: Requested 2, but'
-                ' already used 9 of 10 cores')
+        msg = ('Quota exceeded for cores: Requested 2, but'
+               ' already used 9 of 10 cores')
         self._do_test_create_instance_above_quota('cores', 1, 10, msg)
 
     def test_create_instance_above_quota_server_group_members(self):
@@ -2608,9 +2629,9 @@ class ServersControllerCreateTest(test.TestCase):
         self.body['server']['max_count'] = 2
 
         def fake_create(*args, **kwargs):
-            msg = _("Unable to launch multiple instances with"
-                    " a single configured port ID. Please launch your"
-                    " instance one by one with different ports.")
+            msg = ("Unable to launch multiple instances with"
+                   " a single configured port ID. Please launch your"
+                   " instance one by one with different ports.")
             raise exception.MultiplePortsNotApplicable(reason=msg)
 
         self.stubs.Set(compute_api.API, 'create', fake_create)

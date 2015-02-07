@@ -21,9 +21,10 @@ from oslo import messaging
 from oslo.serialization import jsonutils
 
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LW
 from nova import objects
 from nova.objects import base as objects_base
+from nova.openstack.common import log as logging
 from nova import rpc
 
 rpcapi_opts = [
@@ -41,6 +42,8 @@ rpcapi_cap_opt = cfg.StrOpt('compute',
              'set this option to "icehouse-compat" before beginning the live '
              'upgrade procedure.')
 CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
+
+LOG = logging.getLogger(__name__)
 
 
 def _compute_host(host, instance):
@@ -278,6 +281,7 @@ class ComputeAPI(object):
         * 3.36 - Make build_and_run_instance() send a Flavor object
         * 3.37 - Add clean_shutdown to stop, resize, rescue, shelve, and
                  shelve_offload
+        * 3.38 - Add clean_shutdown to prep_resize
     '''
 
     VERSION_ALIASES = {
@@ -298,13 +302,6 @@ class ComputeAPI(object):
         return rpc.get_client(target,
                               version_cap=version_cap,
                               serializer=serializer)
-
-    def _check_live_migration_api_version(self, server):
-        # NOTE(angdraug): live migration involving a compute host running Nova
-        # API older than v3.32 as either source or destination can cause
-        # instance disks to be deleted from shared storage
-        if not self.client.can_send_version('3.32'):
-            raise exception.LiveMigrationWithOldNovaNotSafe(server=server)
 
     def add_aggregate_host(self, ctxt, aggregate, host_param, host,
                            slave_info=None):
@@ -355,19 +352,52 @@ class ComputeAPI(object):
         cctxt.cast(ctxt, 'change_instance_metadata',
                    instance=instance, diff=diff)
 
+    def _warn_buggy_live_migrations(self, data=None):
+        # NOTE(danms): We know that libvirt live migration with shared block
+        # storage was buggy (potential loss of data) before version 3.32.
+        # Since we need to support live migration with older clients, we need
+        # to warn the operator of this possibility. The logic below tries to
+        # decide if a warning should be emitted, assuming the positive if
+        # not sure. This can be removed when we bump to RPC API version 4.0.
+        if data:
+            if data.get('is_shared_block_storage') is not False:
+                # Shared block storage, or unknown
+                should_warn = True
+            else:
+                # Specifically not shared block storage
+                should_warn = False
+        else:
+            # Unknown, so warn to be safe
+            should_warn = True
+
+        if should_warn:
+            LOG.warning(_LW('Live migration with clients before RPC version '
+                            '3.32 is known to be buggy with shared block '
+                            'storage. See '
+                            'https://bugs.launchpad.net/nova/+bug/1250751 for '
+                            'more information!'))
+
     def check_can_live_migrate_destination(self, ctxt, instance, destination,
                                            block_migration, disk_over_commit):
-        self._check_live_migration_api_version(destination)
-        cctxt = self.client.prepare(server=destination, version='3.32')
+        if self.client.can_send_version('3.32'):
+            version = '3.32'
+        else:
+            version = '3.0'
+            self._warn_buggy_live_migrations()
+        cctxt = self.client.prepare(server=destination, version=version)
         return cctxt.call(ctxt, 'check_can_live_migrate_destination',
                           instance=instance,
                           block_migration=block_migration,
                           disk_over_commit=disk_over_commit)
 
     def check_can_live_migrate_source(self, ctxt, instance, dest_check_data):
+        if self.client.can_send_version('3.32'):
+            version = '3.32'
+        else:
+            version = '3.0'
+            self._warn_buggy_live_migrations()
         source = _compute_host(None, instance)
-        self._check_live_migration_api_version(source)
-        cctxt = self.client.prepare(server=source, version='3.32')
+        cctxt = self.client.prepare(server=source, version=version)
         return cctxt.call(ctxt, 'check_can_live_migrate_source',
                           instance=instance,
                           dest_check_data=dest_check_data)
@@ -561,18 +591,24 @@ class ComputeAPI(object):
 
     def prep_resize(self, ctxt, image, instance, instance_type, host,
                     reservations=None, request_spec=None,
-                    filter_properties=None, node=None):
-        version = '3.0'
+                    filter_properties=None, node=None,
+                    clean_shutdown=True):
         instance_type_p = jsonutils.to_primitive(instance_type)
         image_p = jsonutils.to_primitive(image)
+        msg_args = {'instance': instance,
+                    'instance_type': instance_type_p,
+                    'image': image_p,
+                    'reservations': reservations,
+                    'request_spec': request_spec,
+                    'filter_properties': filter_properties,
+                    'node': node,
+                    'clean_shutdown': clean_shutdown}
+        version = '3.38'
+        if not self.client.can_send_version(version):
+            del msg_args['clean_shutdown']
+            version = '3.0'
         cctxt = self.client.prepare(server=host, version=version)
-        cctxt.cast(ctxt, 'prep_resize',
-                   instance=instance,
-                   instance_type=instance_type_p,
-                   image=image_p, reservations=reservations,
-                   request_spec=request_spec,
-                   filter_properties=filter_properties,
-                   node=node)
+        cctxt.cast(ctxt, 'prep_resize', **msg_args)
 
     def reboot_instance(self, ctxt, instance, block_device_info,
                         reboot_type):
@@ -696,11 +732,18 @@ class ComputeAPI(object):
     def rollback_live_migration_at_destination(self, ctxt, instance, host,
                                                destroy_disks=True,
                                                migrate_data=None):
-        self._check_live_migration_api_version(host)
-        cctxt = self.client.prepare(server=host, version='3.32')
+        if self.client.can_send_version('3.32'):
+            version = '3.32'
+            extra = {'destroy_disks': destroy_disks,
+                     'migrate_data': migrate_data,
+                 }
+        else:
+            version = '3.0'
+            extra = {}
+            self._warn_buggy_live_migrations(migrate_data)
+        cctxt = self.client.prepare(server=host, version=version)
         cctxt.cast(ctxt, 'rollback_live_migration_at_destination',
-                   instance=instance,
-                   destroy_disks=destroy_disks, migrate_data=migrate_data)
+                   instance=instance, **extra)
 
     # NOTE(alaski): Remove this method when the scheduler rpc interface is
     # bumped to 4.x as the only callers of this method will be removed.

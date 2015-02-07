@@ -351,7 +351,7 @@ class XenAPIDriver(driver.ComputeDriver):
 
         # we only care about VMs that correspond to a nova-managed
         # instance:
-        imap = dict([(inst['name'], inst['uuid']) for inst in instances])
+        imap = {inst['name']: inst['uuid'] for inst in instances}
         bwcounters = []
 
         # get a dictionary of instance names.  values are dictionaries
@@ -453,9 +453,7 @@ class XenAPIDriver(driver.ComputeDriver):
                'hypervisor_type': 'xen',
                'hypervisor_version': hyper_ver,
                'hypervisor_hostname': host_stats['host_hostname'],
-               # Todo(bobba) cpu_info may be in a format not supported by
-               # arch_filter.py - see libvirt/driver.py get_cpu_info
-               'cpu_info': jsonutils.dumps(host_stats['host_cpu_info']),
+               'cpu_info': jsonutils.dumps(host_stats['cpu_model']),
                'disk_available_least': total_disk_gb - allocated_disk_gb,
                'supported_instances': jsonutils.dumps(
                    host_stats['supported_instances']),
@@ -646,9 +644,9 @@ class XenAPIDriver(driver.ComputeDriver):
         """Sets the compute host's ability to accept new instances."""
         return self._host.set_host_enabled(enabled)
 
-    def get_host_uptime(self, host):
+    def get_host_uptime(self):
         """Returns the result of calling "uptime" on the target host."""
-        return self._host.get_host_uptime(host)
+        return self._host.get_host_uptime()
 
     def host_maintenance_mode(self, host, mode):
         """Start/Stop host maintenance window. On start, it triggers

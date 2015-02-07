@@ -44,6 +44,7 @@ from nova.openstack.common import uuidutils
 from nova import policy
 from nova import utils
 
+ALIAS = 'servers'
 
 CONF = cfg.CONF
 CONF.import_opt('enable_instance_password',
@@ -317,15 +318,21 @@ class ServersController(wsgi.Controller):
         # disabled. Note that the tenant_id parameter is filtered out
         # by remove_invalid_options above unless the requestor is an
         # admin.
-        if 'tenant_id' in search_opts and 'all_tenants' not in search_opts:
+
+        # TODO(gmann): 'all_tenants' flag should not be required while
+        # searching with 'tenant_id'. Ref bug# 1185290
+        # +microversions to achieve above mentioned behavior by
+        # uncommenting below code.
+
+        # if 'tenant_id' in search_opts and 'all_tenants' not in search_opts:
             # We do not need to add the all_tenants flag if the tenant
             # id associated with the token is the tenant id
             # specified. This is done so a request that does not need
             # the all_tenants flag does not fail because of lack of
             # policy permission for compute:get_all_tenants when it
             # doesn't actually need it.
-            if context.project_id != search_opts.get('tenant_id'):
-                search_opts['all_tenants'] = 1
+            # if context.project_id != search_opts.get('tenant_id'):
+            #    search_opts['all_tenants'] = 1
 
         # If all tenants is passed with 0 or false as the value
         # then remove it from the search options. Nothing passed as
@@ -376,7 +383,8 @@ class ServersController(wsgi.Controller):
         """Utility function for looking up an instance by uuid."""
         instance = common.get_instance(self.compute_api, context,
                                        instance_uuid, want_objects=True,
-                                       expected_attrs=['pci_devices'])
+                                       expected_attrs=['pci_devices',
+                                                       'flavor'])
         req.cache_db_instance(instance)
         return instance
 
@@ -427,7 +435,8 @@ class ServersController(wsgi.Controller):
                                 "(%s)") % request.network_id
                         raise exc.HTTPBadRequest(explanation=msg)
 
-                if (request.network_id and
+                # duplicate networks are allowed only for neutron v2.0
+                if (not utils.is_neutron() and request.network_id and
                         request.network_id in network_uuids):
                     expl = (_("Duplicate networks"
                               " (%s) are not allowed") %
@@ -466,7 +475,8 @@ class ServersController(wsgi.Controller):
         context = req.environ['nova.context']
         instance = common.get_instance(self.compute_api, context, id,
                                        want_objects=True,
-                                       expected_attrs=['pci_devices'])
+                                       expected_attrs=['pci_devices',
+                                                       'flavor'])
         req.cache_db_instance(instance)
         return self._view_builder.show(req, instance)
 
@@ -541,13 +551,13 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPForbidden(
                 explanation=error.format_message(),
                 headers={'Retry-After': 0})
-        except exception.ImageNotFound as error:
+        except exception.ImageNotFound:
             msg = _("Can not find requested image")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.FlavorNotFound as error:
+        except exception.FlavorNotFound:
             msg = _("Invalid flavorRef provided.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.KeypairNotFound as error:
+        except exception.KeypairNotFound:
             msg = _("Invalid key_name provided.")
             raise exc.HTTPBadRequest(explanation=msg)
         except exception.ConfigDriveInvalidValue:
@@ -585,7 +595,14 @@ class ServersController(wsgi.Controller):
                 exception.InvalidBDMBootSequence,
                 exception.InvalidBDMLocalsLimit,
                 exception.InvalidBDMVolumeNotBootable,
-                exception.AutoDiskConfigDisabledByImage) as error:
+                exception.AutoDiskConfigDisabledByImage,
+                exception.ImageNUMATopologyIncomplete,
+                exception.ImageNUMATopologyForbidden,
+                exception.ImageNUMATopologyAsymmetric,
+                exception.ImageNUMATopologyCPUOutOfRange,
+                exception.ImageNUMATopologyCPUDuplicates,
+                exception.ImageNUMATopologyCPUsUnassigned,
+                exception.ImageNUMATopologyMemoryOutOfRange) as error:
             raise exc.HTTPBadRequest(explanation=error.format_message())
         except (exception.PortInUse,
                 exception.InstanceExists,
@@ -696,12 +713,6 @@ class ServersController(wsgi.Controller):
         if 'name' in body['server']:
             update_dict['display_name'] = body['server']['name']
 
-        # TODO(oomichi): The following host_id validation code can be removed
-        # when setting "'additionalProperties': False" in base_update schema.
-        if 'host_id' in body['server']:
-            msg = _("host_id cannot be updated.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
         if list(self.update_extension_manager):
             self.update_extension_manager.map(self._update_extension_point,
                                               body['server'], update_dict)
@@ -762,25 +773,12 @@ class ServersController(wsgi.Controller):
                     'revertResize', id)
 
     @wsgi.response(202)
-    @extensions.expected_errors((400, 404, 409))
+    @extensions.expected_errors((404, 409))
     @wsgi.action('reboot')
+    @validation.schema(schema_servers.reboot)
     def _action_reboot(self, req, id, body):
-        if 'reboot' in body and 'type' in body['reboot']:
-            if not isinstance(body['reboot']['type'], six.string_types):
-                msg = _("Argument 'type' for reboot must be a string")
-                LOG.error(msg)
-                raise exc.HTTPBadRequest(explanation=msg)
-            valid_reboot_types = ['HARD', 'SOFT']
-            reboot_type = body['reboot']['type'].upper()
-            if not valid_reboot_types.count(reboot_type):
-                msg = _("Argument 'type' for reboot is not HARD or SOFT")
-                LOG.error(msg)
-                raise exc.HTTPBadRequest(explanation=msg)
-        else:
-            msg = _("Missing argument 'type' for reboot")
-            LOG.error(msg)
-            raise exc.HTTPBadRequest(explanation=msg)
 
+        reboot_type = body['reboot']['type'].upper()
         context = req.environ['nova.context']
         instance = self._get_server(context, req, id)
 
@@ -976,25 +974,16 @@ class ServersController(wsgi.Controller):
     @extensions.expected_errors((400, 403, 404, 409))
     @wsgi.action('createImage')
     @common.check_snapshots_enabled
+    @validation.schema(schema_servers.create_image)
     def _action_create_image(self, req, id, body):
         """Snapshot a server instance."""
         context = req.environ['nova.context']
-        entity = body.get("createImage", {})
 
-        image_name = entity.get("name")
-
-        if not image_name:
-            msg = _("createImage entity requires name attribute")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        props = {}
+        entity = body["createImage"]
+        image_name = entity["name"]
         metadata = entity.get('metadata', {})
+
         common.check_img_metadata_properties_quota(context, metadata)
-        try:
-            props.update(metadata)
-        except ValueError:
-            msg = _("Invalid metadata")
-            raise exc.HTTPBadRequest(explanation=msg)
 
         instance = self._get_server(context, req, id)
 
@@ -1018,12 +1007,13 @@ class ServersController(wsgi.Controller):
                                                        instance,
                                                        image_meta,
                                                        image_name,
-                                                       extra_properties=props)
+                                                       extra_properties=
+                                                       metadata)
             else:
                 image = self.compute_api.snapshot(context,
                                                   instance,
                                                   image_name,
-                                                  extra_properties=props)
+                                                  extra_properties=metadata)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                         'createImage', id)
@@ -1070,8 +1060,10 @@ class ServersController(wsgi.Controller):
         LOG.debug('start instance', instance=instance)
         try:
             self.compute_api.start(context, instance)
-        except (exception.InstanceNotReady, exception.InstanceIsLocked,
-                exception.InstanceInvalidState) as e:
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                'start', id)
+        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
 
     @wsgi.response(202)
@@ -1085,8 +1077,10 @@ class ServersController(wsgi.Controller):
         LOG.debug('stop instance', instance=instance)
         try:
             self.compute_api.stop(context, instance)
-        except (exception.InstanceNotReady, exception.InstanceIsLocked,
-                exception.InstanceInvalidState) as e:
+        except exception.InstanceInvalidState as state_error:
+            common.raise_http_conflict_for_instance_invalid_state(state_error,
+                'stop', id)
+        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
             raise webob.exc.HTTPConflict(explanation=e.format_message())
 
 
@@ -1108,7 +1102,7 @@ class Servers(extensions.V3APIExtensionBase):
     """Servers."""
 
     name = "Servers"
-    alias = "servers"
+    alias = ALIAS
     version = 1
 
     def get_resources(self):
@@ -1116,7 +1110,7 @@ class Servers(extensions.V3APIExtensionBase):
         collection_actions = {'detail': 'GET'}
         resources = [
             extensions.ResourceExtension(
-                'servers',
+                ALIAS,
                 ServersController(extension_info=self.extension_info),
                 member_name='server', collection_actions=collection_actions,
                 member_actions=member_actions)]

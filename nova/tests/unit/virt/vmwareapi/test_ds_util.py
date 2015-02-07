@@ -21,7 +21,6 @@ from oslo.vmware import exceptions as vexc
 from testtools import matchers
 
 from nova import exception
-from nova.i18n import _
 from nova import test
 from nova.tests.unit.virt.vmwareapi import fake
 from nova.virt.vmwareapi import ds_util
@@ -57,6 +56,32 @@ class DsUtilTestCase(test.NoDBTestCase):
                                 ds_path, 'fake-dc-ref')
             _wait_for_task.assert_has_calls([
                    mock.call('fake_delete_task')])
+
+    def test_file_copy(self):
+        def fake_call_method(module, method, *args, **kwargs):
+            self.assertEqual('CopyDatastoreFile_Task', method)
+            src_name = kwargs.get('sourceName')
+            self.assertEqual('[ds] fake/path/src_file', src_name)
+            src_dc_ref = kwargs.get('sourceDatacenter')
+            self.assertEqual('fake-src-dc-ref', src_dc_ref)
+            dst_name = kwargs.get('destinationName')
+            self.assertEqual('[ds] fake/path/dst_file', dst_name)
+            dst_dc_ref = kwargs.get('destinationDatacenter')
+            self.assertEqual('fake-dst-dc-ref', dst_dc_ref)
+            return 'fake_copy_task'
+
+        with contextlib.nested(
+            mock.patch.object(self.session, '_wait_for_task'),
+            mock.patch.object(self.session, '_call_method',
+                              fake_call_method)
+        ) as (_wait_for_task, _call_method):
+            src_ds_path = ds_util.DatastorePath('ds', 'fake/path', 'src_file')
+            dst_ds_path = ds_util.DatastorePath('ds', 'fake/path', 'dst_file')
+            ds_util.file_copy(self.session,
+                              str(src_ds_path), 'fake-src-dc-ref',
+                              str(dst_ds_path), 'fake-dst-dc-ref')
+            _wait_for_task.assert_has_calls([
+                   mock.call('fake_copy_task')])
 
     def test_file_move(self):
         def fake_call_method(module, method, *args, **kwargs):
@@ -105,6 +130,35 @@ class DsUtilTestCase(test.NoDBTestCase):
                               'fake-dc-ref', '[ds] tmp/src', '[ds] base/dst')
             _wait_for_task.assert_has_calls([
                    mock.call('fake_move_task')])
+
+    def test_disk_copy(self):
+        with contextlib.nested(
+            mock.patch.object(self.session, '_wait_for_task'),
+            mock.patch.object(self.session, '_call_method',
+                              return_value=mock.sentinel.cm)
+        ) as (_wait_for_task, _call_method):
+            ds_util.disk_copy(self.session, mock.sentinel.dc_ref,
+                              mock.sentinel.source_ds, mock.sentinel.dest_ds)
+            _wait_for_task.assert_called_once_with(mock.sentinel.cm)
+            _call_method.assert_called_once_with(
+                    mock.ANY, 'CopyVirtualDisk_Task', 'VirtualDiskManager',
+                    sourceName='sentinel.source_ds',
+                    destDatacenter=mock.sentinel.dc_ref,
+                    sourceDatacenter=mock.sentinel.dc_ref, force=False,
+                    destName='sentinel.dest_ds')
+
+    def test_disk_delete(self):
+        with contextlib.nested(
+            mock.patch.object(self.session, '_wait_for_task'),
+            mock.patch.object(self.session, '_call_method',
+                              return_value=mock.sentinel.cm)
+        ) as (_wait_for_task, _call_method):
+            ds_util.disk_delete(self.session,
+                                'fake-dc-ref', '[ds] tmp/disk.vmdk')
+            _wait_for_task.assert_called_once_with(mock.sentinel.cm)
+            _call_method.assert_called_once_with(
+                    mock.ANY, 'DeleteVirtualDisk_Task', 'VirtualDiskManager',
+                    datacenter='fake-dc-ref', name='[ds] tmp/disk.vmdk')
 
     def test_mkdir(self):
         def fake_call_method(module, method, *args, **kwargs):
@@ -288,7 +342,7 @@ class DsUtilTestCase(test.NoDBTestCase):
         # Test with a regex that has no match
         # Checks if code raises DatastoreNotFound with a specific message
         datastore_invalid_regex = re.compile("unknown-ds")
-        exp_message = (_("Datastore regex %s did not match any datastores")
+        exp_message = ("Datastore regex %s did not match any datastores"
                        % datastore_invalid_regex.pattern)
         fake_objects = fake.FakeRetrieveResult()
         fake_objects.add_object(fake.Datastore("fake-ds0"))

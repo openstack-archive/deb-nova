@@ -101,7 +101,7 @@ compute_opts = [
                help='Kernel image that indicates not to use a kernel, but to '
                     'use a raw disk image instead'),
     cfg.StrOpt('multi_instance_display_name_template',
-               default='%(name)s-%(uuid)s',
+               default='%(name)s-%(count)d',
                help='When creating multiple instances with a single request '
                     'using the os-multiple-create API extension, this '
                     'template will be used to build the display name for '
@@ -222,7 +222,8 @@ def policy_decorator(scope):
     def outer(func):
         @functools.wraps(func)
         def wrapped(self, context, target, *args, **kwargs):
-            check_policy(context, func.__name__, target, scope)
+            if not self.skip_policy_check:
+                check_policy(context, func.__name__, target, scope)
             return func(self, context, target, *args, **kwargs)
         return wrapped
     return outer
@@ -254,7 +255,7 @@ def _diff_dict(orig, new):
     element, giving the updated value.
     """
     # Figure out what keys went away
-    result = dict((k, ['-']) for k in set(orig.keys()) - set(new.keys()))
+    result = {k: ['-'] for k in set(orig.keys()) - set(new.keys())}
     # Compute the updates
     for key, value in new.items():
         if key not in orig or value != orig[key]:
@@ -266,12 +267,15 @@ class API(base.Base):
     """API for interacting with the compute manager."""
 
     def __init__(self, image_api=None, network_api=None, volume_api=None,
-                 security_group_api=None, **kwargs):
+                 security_group_api=None, skip_policy_check=False, **kwargs):
+        self.skip_policy_check = skip_policy_check
         self.image_api = image_api or image.API()
-        self.network_api = network_api or network.API()
+        self.network_api = network_api or network.API(
+            skip_policy_check=skip_policy_check)
         self.volume_api = volume_api or volume.API()
         self.security_group_api = (security_group_api or
-            openstack_driver.get_openstack_security_group_driver())
+            openstack_driver.get_openstack_security_group_driver(
+                skip_policy_check=skip_policy_check))
         self.consoleauth_rpcapi = consoleauth_rpcapi.ConsoleAuthAPI()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self._compute_task_api = None
@@ -358,9 +362,9 @@ class API(base.Base):
                 raise exception.OnsetFileContentLimitExceeded()
 
     def _get_headroom(self, quotas, usages, deltas):
-        headroom = dict((res, quotas[res] -
-                         (usages[res]['in_use'] + usages[res]['reserved']))
-                        for res in quotas.keys())
+        headroom = {res: quotas[res] -
+                         (usages[res]['in_use'] + usages[res]['reserved'])
+                    for res in quotas.keys()}
         # If quota_cores is unlimited [-1]:
         # - set cores headroom based on instances headroom:
         if quotas.get('cores') == -1:
@@ -818,7 +822,7 @@ class API(base.Base):
 
         config_drive = self._check_config_drive(config_drive)
 
-        if key_data is None and key_name:
+        if key_data is None and key_name is not None:
             key_pair = objects.KeyPair.get_by_name(context,
                                                    context.user_id,
                                                    key_name)
@@ -829,10 +833,9 @@ class API(base.Base):
                     boot_meta.get('properties', {})))
 
         numa_topology = hardware.numa_get_constraints(
-                instance_type, boot_meta.get('properties', {}))
+                instance_type, boot_meta)
 
-        system_metadata = flavors.save_flavor_info(
-            dict(), instance_type)
+        system_metadata = {}
 
         # PCI requests come from two sources: instance flavor and
         # requested_networks. The first call in below returns an
@@ -1321,6 +1324,9 @@ class API(base.Base):
         info_cache.instance_uuid = instance.uuid
         info_cache.network_info = network_model.NetworkInfo()
         instance.info_cache = info_cache
+        instance.flavor = instance_type
+        instance.old_flavor = None
+        instance.new_flavor = None
         if CONF.ephemeral_storage_encryption.enabled:
             instance.ephemeral_key_uuid = self.key_manager.create_key(
                 context,
@@ -1398,7 +1404,8 @@ class API(base.Base):
         target = {'project_id': context.project_id,
                   'user_id': context.user_id,
                   'availability_zone': availability_zone}
-        check_policy(context, 'create', target)
+        if not self.skip_policy_check:
+            check_policy(context, 'create', target)
 
         if requested_networks and len(requested_networks):
             check_policy(context, 'create:attach_network', target)
@@ -1944,7 +1951,8 @@ class API(base.Base):
         except exception.InvalidID:
             raise exception.InstanceNotFound(instance_id=instance_id)
 
-        check_policy(context, 'get', instance)
+        if not self.skip_policy_check:
+            check_policy(context, 'get', instance)
 
         if not want_objects:
             instance = obj_base.obj_to_primitive(instance)
@@ -1974,7 +1982,8 @@ class API(base.Base):
             'user_id': context.user_id,
         }
 
-        check_policy(context, "get_all", target)
+        if not self.skip_policy_check:
+            check_policy(context, "get_all", target)
 
         if search_opts is None:
             search_opts = {}
@@ -2537,7 +2546,7 @@ class API(base.Base):
     @check_instance_lock
     @check_instance_cell
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED])
-    def resize(self, context, instance, flavor_id=None,
+    def resize(self, context, instance, flavor_id=None, clean_shutdown=True,
                **extra_instance_updates):
         """Resize (ie, migrate) a running instance.
 
@@ -2638,7 +2647,8 @@ class API(base.Base):
         self.compute_task_api.resize_instance(context, instance,
                 extra_instance_updates, scheduler_hint=scheduler_hint,
                 flavor=new_instance_type,
-                reservations=quotas.reservations or [])
+                reservations=quotas.reservations or [],
+                clean_shutdown=clean_shutdown)
 
     @wrap_check_policy
     @check_instance_lock
@@ -3059,7 +3069,7 @@ class API(base.Base):
                     context, instance=instance,
                     old_volume_id=old_volume['id'],
                     new_volume_id=new_volume['id'])
-        except Exception:  # pylint: disable=W0702
+        except Exception:
             with excutils.save_and_reraise_exception():
                 self.volume_api.roll_detaching(context, old_volume['id'])
                 self.volume_api.unreserve_volume(context, new_volume['id'])
@@ -3102,35 +3112,6 @@ class API(base.Base):
 
     def _get_all_instance_metadata(self, context, search_filts, metadata_type):
         """Get all metadata."""
-
-        def _match_any(pattern_list, string):
-            return any([re.match(pattern, string)
-                        for pattern in pattern_list])
-
-        def _filter_metadata(instance, search_filt, input_metadata):
-            uuids = search_filt.get('resource_id', [])
-            keys_filter = search_filt.get('key', [])
-            values_filter = search_filt.get('value', [])
-            output_metadata = {}
-
-            if uuids and instance.get('uuid') not in uuids:
-                return {}
-
-            for (k, v) in input_metadata.iteritems():
-                # Both keys and value defined -- AND
-                if ((keys_filter and values_filter) and
-                   not _match_any(keys_filter, k) and
-                   not _match_any(values_filter, v)):
-                    continue
-                # Only keys or value is defined
-                elif ((keys_filter and not _match_any(keys_filter, k)) or
-                      (values_filter and not _match_any(values_filter, v))):
-                    continue
-
-                output_metadata[k] = v
-            return output_metadata
-
-        formatted_metadata_list = []
         instances = self._get_instances_by_filters(context, filters={},
                                                    sort_keys=['created_at'],
                                                    sort_dirs=['desc'])
@@ -3138,21 +3119,13 @@ class API(base.Base):
             try:
                 check_policy(context, 'get_all_instance_%s' % metadata_type,
                              instance)
-                metadata = instance.get(metadata_type, {})
-                for filt in search_filts:
-                    # By chaining the input to the output, the filters are
-                    # ANDed together
-                    metadata = _filter_metadata(instance, filt, metadata)
-
-                for (k, v) in metadata.iteritems():
-                    formatted_metadata_list.append({'key': k, 'value': v,
-                                     'instance_id': instance.get('uuid')})
             except exception.PolicyNotAuthorized:
                 # failed policy check - not allowed to
                 # read this metadata
                 continue
 
-        return formatted_metadata_list
+        return utils.filter_and_format_resource_metadata('instance', instances,
+                search_filts, metadata_type)
 
     @wrap_check_policy
     @check_instance_lock
@@ -3441,9 +3414,13 @@ class HostAPI(base.Base):
         service.save()
         return service
 
+    def _service_delete(self, context, service_id):
+        """Performs the actual Service deletion operation."""
+        objects.Service.get_by_id(context, service_id).destroy()
+
     def service_delete(self, context, service_id):
         """Deletes the specified service."""
-        objects.Service.get_by_id(context, service_id).destroy()
+        self._service_delete(context, service_id)
 
     def instance_get_all_by_host(self, context, host_name):
         """Return all instances on the given host."""
@@ -3803,8 +3780,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
     # The nova security group api does not use a uuid for the id.
     id_is_uuid = False
 
-    def __init__(self, **kwargs):
+    def __init__(self, skip_policy_check=False, **kwargs):
         super(SecurityGroupAPI, self).__init__(**kwargs)
+        self.skip_policy_check = skip_policy_check
         self.security_group_rpcapi = compute_rpcapi.SecurityGroupAPI()
 
     def validate_property(self, value, property, allowed):

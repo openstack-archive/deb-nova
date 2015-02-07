@@ -35,8 +35,10 @@ from nova import exception
 from nova.i18n import _, _LI, _LW
 from nova import objects
 from nova.objects import base as obj_base
+from nova.objects import instance as instance_obj
 from nova.openstack.common import log as logging
 from nova.pci import manager as pci_manager
+from nova.pci import whitelist as pci_whitelist
 from nova import rpc
 from nova.scheduler import client as scheduler_client
 from nova import utils
@@ -73,6 +75,7 @@ class ResourceTracker(object):
         self.host = host
         self.driver = driver
         self.pci_tracker = None
+        self.pci_filter = pci_whitelist.get_pci_devices_filter()
         self.nodename = nodename
         self.compute_node = None
         self.stats = importutils.import_object(CONF.compute_stats_class)
@@ -171,7 +174,7 @@ class ResourceTracker(object):
                   "MB", {'flavor': instance_type['memory_mb'],
                           'overhead': overhead['memory_mb']})
 
-        instance_ref = obj_base.obj_to_primitive(instance)
+        instance_ref = instance_obj.compat_instance(instance)
         claim = claims.ResizeClaim(context, instance_ref, instance_type,
                                    image_meta, self, self.compute_node,
                                    overhead=overhead, limits=limits)
@@ -320,6 +323,13 @@ class ResourceTracker(object):
             return
         resources['host_ip'] = CONF.my_ip
 
+        # We want the 'cpu_info' to be None from the POV of the
+        # virt driver, but the DB requires it to be non-null so
+        # just force it to empty string
+        if ("cpu_info" not in resources or
+            resources["cpu_info"] is None):
+            resources["cpu_info"] = ''
+
         # TODO(berrange): remove this once all virt drivers are updated
         # to report topology
         if "numa_topology" not in resources:
@@ -336,8 +346,17 @@ class ResourceTracker(object):
         if 'pci_passthrough_devices' in resources:
             if not self.pci_tracker:
                 self.pci_tracker = pci_manager.PciDevTracker()
-            self.pci_tracker.set_hvdevs(jsonutils.loads(resources.pop(
-                'pci_passthrough_devices')))
+
+            devs = []
+            for dev in jsonutils.loads(resources.pop(
+                'pci_passthrough_devices')):
+                if dev['dev_type'] == 'type-PF':
+                    continue
+
+                if self.pci_filter.device_assignable(dev):
+                    devs.append(dev)
+
+            self.pci_tracker.set_hvdevs(devs)
 
         # Grab all instances assigned to this node:
         instances = objects.InstanceList.get_by_host_and_node(
@@ -385,14 +404,11 @@ class ResourceTracker(object):
                 # no service record, disable resource
                 return
 
-            compute_node_refs = service['compute_node']
-            if compute_node_refs:
-                for cn in compute_node_refs:
-                    if cn.get('hypervisor_hostname') == self.nodename:
-                        self.compute_node = cn
-                        if self.pci_tracker:
-                            self.pci_tracker.set_compute_node_id(cn['id'])
-                        break
+            cn = self._get_compute_node(context)
+            if cn:
+                self.compute_node = cn
+                if self.pci_tracker:
+                    self.pci_tracker.set_compute_node_id(cn['id'])
 
         if not self.compute_node:
             # Need to create the ComputeNode record:
@@ -407,10 +423,30 @@ class ResourceTracker(object):
 
         else:
             # just update the record:
+
+            # TODO(sbauza): Juno compute nodes are missing the host field and
+            # the Juno ResourceTracker does not set this field, even if
+            # the ComputeNode object can show it.
+            # Unfortunately, as we're not yet using ComputeNode.save(), we need
+            # to add this field in the resources dict until the RT is using
+            # the ComputeNode.save() method for populating the table.
+            # tl;dr: To be removed once RT is using ComputeNode.save()
+            resources['host'] = self.host
+
             self._update(context, resources)
             LOG.info(_LI('Compute_service record updated for '
                          '%(host)s:%(node)s'),
                      {'host': self.host, 'node': self.nodename})
+
+    def _get_compute_node(self, context):
+        """Returns compute node for the host and nodename."""
+        try:
+            compute = objects.ComputeNode.get_by_host_and_nodename(
+                context, self.host, self.nodename)
+            return obj_base.obj_to_primitive(compute)
+        except exception.NotFound:
+            LOG.warning(_LW("No compute node record for %(host)s:%(node)s"),
+                        {'host': self.host, 'node': self.nodename})
 
     def _write_ext_resources(self, resources):
         resources['stats'] = {}
@@ -463,8 +499,8 @@ class ResourceTracker(object):
         else:
             LOG.debug("Hypervisor: VCPU information unavailable")
 
-        if 'pci_passthrough_devices' in resources and \
-                resources['pci_passthrough_devices']:
+        if ('pci_passthrough_devices' in resources and
+                resources['pci_passthrough_devices']):
             LOG.debug("Hypervisor: assignable PCI devices: %s" %
                 resources['pci_passthrough_devices'])
         else:
@@ -666,7 +702,8 @@ class ResourceTracker(object):
         is_deleted_instance = instance['vm_state'] == vm_states.DELETED
 
         if is_new_instance:
-            self.tracked_instances[uuid] = obj_base.obj_to_primitive(instance)
+            self.tracked_instances[uuid] = instance_obj.compat_instance(
+                instance)
             sign = 1
 
         if is_deleted_instance:
@@ -807,7 +844,9 @@ class ResourceTracker(object):
                   with updates
         """
         usage = {}
-        if isinstance(object_or_dict, (objects.Flavor, objects.Instance)):
+        if isinstance(object_or_dict, objects.Instance):
+            usage = instance_obj.compat_instance(object_or_dict)
+        elif isinstance(object_or_dict, objects.Flavor):
             usage = obj_base.obj_to_primitive(object_or_dict)
         else:
             usage.update(object_or_dict)

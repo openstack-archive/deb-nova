@@ -39,6 +39,7 @@ Background Concepts for Nova
 
    architecture
    aggregates
+   cells
    threading
    vmstates
    i18n
@@ -46,6 +47,7 @@ Background Concepts for Nova
    rpc
    hooks
    upgrade
+   policy_enforcement
 
 Development policies
 --------------------
@@ -55,6 +57,14 @@ Development policies
    kilo.blueprints
    policies
 
+Testing guides
+--------------
+
+.. toctree::
+    :maxdepth: 3
+
+    testing/libvirt-numa
+    testing/serial-console
 
 Other Resources
 ---------------

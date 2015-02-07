@@ -43,7 +43,8 @@ def wrap_check_policy(func):
     @functools.wraps(func)
     def wrapped(self, context, *args, **kwargs):
         action = func.__name__
-        check_policy(context, action)
+        if not self.skip_policy_check:
+            check_policy(context, action)
         return func(self, context, *args, **kwargs)
 
     return wrapped
@@ -102,6 +103,9 @@ class API(base_api.NetworkAPI):
 
     @wrap_check_policy
     def delete(self, context, network_uuid):
+        network = self.get(context, network_uuid)
+        if network.project_id is not None:
+            raise exception.NetworkInUse(network_id=network_uuid)
         return self.network_rpcapi.delete_network(context, network_uuid, None)
 
     @wrap_check_policy
@@ -539,3 +543,15 @@ class API(base_api.NetworkAPI):
             args['host'] = migration['dest_compute']
 
         self.network_rpcapi.migrate_instance_finish(context, **args)
+
+    def setup_instance_network_on_host(self, context, instance, host):
+        """Setup network for specified instance on host."""
+        self.migrate_instance_finish(context, instance,
+                                     {'source_compute': None,
+                                      'dest_compute': host})
+
+    def cleanup_instance_network_on_host(self, context, instance, host):
+        """Cleanup network for specified instance on host."""
+        self.migrate_instance_start(context, instance,
+                                    {'source_compute': host,
+                                     'dest_compute': None})

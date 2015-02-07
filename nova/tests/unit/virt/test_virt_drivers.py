@@ -315,8 +315,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
     @catch_notimplementederror
     def test_rescue(self):
+        image_meta = {}
         instance_ref, network_info = self._get_running_instance()
-        self.connection.rescue(self.ctxt, instance_ref, network_info, None, '')
+        self.connection.rescue(self.ctxt, instance_ref, network_info,
+                               image_meta, '')
 
     @catch_notimplementederror
     def test_unrescue_unrescued_instance(self):
@@ -325,8 +327,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
     @catch_notimplementederror
     def test_unrescue_rescued_instance(self):
+        image_meta = {}
         instance_ref, network_info = self._get_running_instance()
-        self.connection.rescue(self.ctxt, instance_ref, network_info, None, '')
+        self.connection.rescue(self.ctxt, instance_ref, network_info,
+                               image_meta, '')
         self.connection.unrescue(instance_ref, network_info)
 
     @catch_notimplementederror
@@ -664,7 +668,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
     @catch_notimplementederror
     def test_get_host_uptime(self):
-        self.connection.get_host_uptime('a useless argument?')
+        self.connection.get_host_uptime()
 
     @catch_notimplementederror
     def test_host_power_action_reboot(self):
@@ -840,7 +844,7 @@ class LibvirtConnTestCase(_VirtDriverTestCase, test.TestCase):
                                return_value=service_mock):
             self.connection._set_host_enabled(True)
             self.assertFalse(service_mock.disabled)
-            self.assertEqual(service_mock.disabled_reason, 'None')
+            self.assertIsNone(service_mock.disabled_reason)
 
     def test_set_host_enabled_when_manually_disabled(self):
         self.mox.UnsetStubs()

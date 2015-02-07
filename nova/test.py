@@ -26,21 +26,19 @@ eventlet.monkey_patch(os=False)
 
 import copy
 import inspect
-import mock
 import logging
+import mock
 import os
 
 import fixtures
 from oslo.config import cfg
 from oslo.config import fixture as config_fixture
-from oslo.messaging import conffixture as messaging_conffixture
 from oslo.utils import timeutils
 from oslo_concurrency import lockutils
 from oslotest import moxstubout
 import six
 import testtools
 
-from nova.api.openstack import wsgi
 from nova import context
 from nova import db
 from nova.network import manager as network_manager
@@ -48,7 +46,6 @@ from nova import objects
 from nova.objects import base as objects_base
 from nova.openstack.common.fixture import logging as log_fixture
 from nova.openstack.common import log as nova_logging
-from nova import rpc
 from nova.tests import fixtures as nova_fixtures
 from nova.tests.unit import conf_fixture
 from nova.tests.unit import policy_fixture
@@ -152,12 +149,6 @@ class skipIf(object):
                             'classes')
 
 
-class skipXmlTest(skipIf):
-    def __init__(self, reason):
-        super(skipXmlTest, self).__init__(wsgi.DISABLE_XML_V2_API,
-                                          reason)
-
-
 def _patch_mock_to_raise_for_invalid_assert_calls():
     def raise_for_invalid_assert_calls(wrapped):
         def wrapper(_self, name):
@@ -208,10 +199,6 @@ class TestCase(testtools.TestCase):
 
         self.useFixture(nova_fixtures.StandardLogging())
 
-        rpc.add_extra_exmods('nova.test')
-        self.addCleanup(rpc.clear_extra_exmods)
-        self.addCleanup(rpc.cleanup)
-
         # NOTE(sdague): because of the way we were using the lock
         # wrapper we eneded up with a lot of tests that started
         # relying on global external locking being set up for them. We
@@ -231,15 +218,14 @@ class TestCase(testtools.TestCase):
                                 group='oslo_concurrency')
 
         self.useFixture(conf_fixture.ConfFixture(CONF))
-
-        self.messaging_conf = messaging_conffixture.ConfFixture(CONF)
-        self.messaging_conf.transport_driver = 'fake'
-        self.useFixture(self.messaging_conf)
-
-        rpc.init(CONF)
+        self.useFixture(nova_fixtures.RPCFixture('nova.test'))
 
         if self.USES_DB:
             self.useFixture(nova_fixtures.Database())
+
+        # NOTE(blk-u): WarningsFixture must be after the Database fixture
+        # because sqlalchemy-migrate messes with the warnings filters.
+        self.useFixture(nova_fixtures.WarningsFixture())
 
         # NOTE(danms): Make sure to reset us back to non-remote objects
         # for each test to avoid interactions. Also, backup the object

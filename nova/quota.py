@@ -46,8 +46,8 @@ quota_opts = [
                help='Number of floating IPs allowed per project'),
     cfg.IntOpt('quota_fixed_ips',
                default=-1,
-               help=('Number of fixed IPs allowed per project (this should be '
-                     'at least the number of instances allowed)')),
+               help='Number of fixed IPs allowed per project (this should be '
+                    'at least the number of instances allowed)'),
     cfg.IntOpt('quota_metadata_items',
                default=128,
                help='Number of metadata items allowed per instance'),
@@ -229,8 +229,12 @@ class DbQuotaDriver(object):
         :param user_quotas: Quotas dictionary for the specified project
                             and user.
         """
-        user_quotas = user_quotas or db.quota_get_all_by_project_and_user(
-            context, project_id, user_id)
+        if user_quotas:
+            user_quotas = user_quotas.copy()
+        else:
+            user_quotas = db.quota_get_all_by_project_and_user(context,
+                                                               project_id,
+                                                               user_id)
         # Use the project quota for default user quota.
         proj_quotas = project_quotas or db.quota_get_all_by_project(
             context, project_id)
@@ -372,8 +376,8 @@ class DbQuotaDriver(object):
         else:
             sync_filt = lambda x: not hasattr(x, 'sync')
         desired = set(keys)
-        sub_resources = dict((k, v) for k, v in resources.items()
-                             if k in desired and sync_filt(v))
+        sub_resources = {k: v for k, v in resources.items()
+                        if k in desired and sync_filt(v)}
 
         # Make sure we accounted for all of them...
         if len(keys) != len(sub_resources):
@@ -394,7 +398,7 @@ class DbQuotaDriver(object):
                                              usages=False,
                                              project_quotas=project_quotas)
 
-        return dict((k, v['limit']) for k, v in quotas.items())
+        return {k: v['limit'] for k, v in quotas.items()}
 
     def limit_check(self, context, resources, values, project_id=None,
                     user_id=None):

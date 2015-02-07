@@ -16,6 +16,7 @@
 import tempfile
 
 import fixtures
+import mock
 from oslo_concurrency import processutils
 
 from nova import test
@@ -54,12 +55,18 @@ class APITestCase(test.NoDBTestCase):
 
         def fake_returns_true(*args, **kwargs):
             return True
+
+        def fake_returns_nothing(*args, **kwargs):
+            return ''
         self.useFixture(fixtures.MonkeyPatch(
                 'nova.virt.disk.mount.nbd.NbdMount.get_dev',
                 fake_returns_true))
         self.useFixture(fixtures.MonkeyPatch(
                 'nova.virt.disk.mount.nbd.NbdMount.map_dev',
                 fake_returns_true))
+        self.useFixture(fixtures.MonkeyPatch(
+                'nova.virt.disk.vfs.localfs.VFSLocalFS.get_image_fs',
+                fake_returns_nothing))
 
         # Force the use of localfs, which is what was used during the failure
         # reported in the bug
@@ -71,7 +78,7 @@ class APITestCase(test.NoDBTestCase):
 
         imgfile = tempfile.NamedTemporaryFile()
         self.addCleanup(imgfile.close)
-        self.assertFalse(api.is_image_partitionless(imgfile, use_cow=True))
+        self.assertFalse(api.is_image_extendable(imgfile, use_cow=True))
 
     def test_resize2fs_success(self):
         imgfile = tempfile.NamedTemporaryFile()
@@ -116,7 +123,7 @@ class APITestCase(test.NoDBTestCase):
 
         self.mox.StubOutWithMock(api, 'can_resize_image')
         self.mox.StubOutWithMock(utils, 'execute')
-        self.mox.StubOutWithMock(api, 'is_image_partitionless')
+        self.mox.StubOutWithMock(api, 'is_image_extendable')
         self.mox.StubOutWithMock(mounter, 'get_dev')
         self.mox.StubOutWithMock(mounter, 'unget_dev')
         self.mox.StubOutWithMock(api, 'resize2fs')
@@ -125,7 +132,7 @@ class APITestCase(test.NoDBTestCase):
 
         api.can_resize_image(imgfile, imgsize).AndReturn(True)
         utils.execute('qemu-img', 'resize', imgfile, imgsize)
-        api.is_image_partitionless(imgfile, use_cow).AndReturn(True)
+        api.is_image_extendable(imgfile, use_cow).AndReturn(True)
         mount.Mount.instance_for_format(
             imgfile, None, None, 'qcow2').AndReturn(mounter)
         mounter.get_dev().AndReturn(True)
@@ -142,13 +149,51 @@ class APITestCase(test.NoDBTestCase):
 
         self.mox.StubOutWithMock(api, 'can_resize_image')
         self.mox.StubOutWithMock(utils, 'execute')
-        self.mox.StubOutWithMock(api, 'is_image_partitionless')
+        self.mox.StubOutWithMock(api, 'is_image_extendable')
         self.mox.StubOutWithMock(api, 'resize2fs')
 
         api.can_resize_image(imgfile, imgsize).AndReturn(True)
         utils.execute('qemu-img', 'resize', imgfile, imgsize)
-        api.is_image_partitionless(imgfile, use_cow).AndReturn(True)
+        api.is_image_extendable(imgfile, use_cow).AndReturn(True)
         api.resize2fs(imgfile, run_as_root=False, check_exit_code=[0])
 
         self.mox.ReplayAll()
         api.extend(imgfile, imgsize, use_cow=use_cow)
+
+    HASH_VFAT = utils.get_hash_str(api.FS_FORMAT_VFAT)[:7]
+    HASH_EXT4 = utils.get_hash_str(api.FS_FORMAT_EXT4)[:7]
+    HASH_NTFS = utils.get_hash_str(api.FS_FORMAT_NTFS)[:7]
+
+    def test_get_file_extension_for_os_type(self):
+        self.assertEqual(self.HASH_VFAT,
+                         api.get_file_extension_for_os_type(None, None))
+        self.assertEqual(self.HASH_EXT4,
+                         api.get_file_extension_for_os_type('linux', None))
+        self.assertEqual(self.HASH_NTFS,
+                         api.get_file_extension_for_os_type(
+                             'windows', None))
+
+    def test_get_file_extension_for_os_type_with_overrides(self):
+        with mock.patch('nova.virt.disk.api._DEFAULT_MKFS_COMMAND',
+                        'custom mkfs command'):
+            self.assertEqual("a74d253",
+                             api.get_file_extension_for_os_type(
+                                 'linux', None))
+            self.assertEqual("a74d253",
+                             api.get_file_extension_for_os_type(
+                                 'windows', None))
+            self.assertEqual("a74d253",
+                             api.get_file_extension_for_os_type('osx', None))
+
+        with mock.patch.dict(api._MKFS_COMMAND,
+                             {'osx': 'custom mkfs command'}, clear=True):
+            self.assertEqual(self.HASH_VFAT,
+                             api.get_file_extension_for_os_type(None, None))
+            self.assertEqual(self.HASH_EXT4,
+                             api.get_file_extension_for_os_type('linux', None))
+            self.assertEqual(self.HASH_NTFS,
+                             api.get_file_extension_for_os_type(
+                                 'windows', None))
+            self.assertEqual("a74d253",
+                             api.get_file_extension_for_os_type(
+                                 'osx', None))

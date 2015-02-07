@@ -19,13 +19,13 @@ import contextlib
 
 import mock
 from oslo.utils import units
+from oslo.vmware import rw_handles
 
 from nova import exception
 from nova import test
 import nova.tests.unit.image.fake
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import images
-from nova.virt.vmwareapi import read_write_util
 
 
 class VMwareImagesTestCase(test.NoDBTestCase):
@@ -38,6 +38,7 @@ class VMwareImagesTestCase(test.NoDBTestCase):
         file_path = 'fake_file'
         ds_name = 'ds1'
         host = mock.MagicMock()
+        port = 7443
         context = mock.MagicMock()
 
         image_data = {
@@ -55,14 +56,14 @@ class VMwareImagesTestCase(test.NoDBTestCase):
         def fake_read_handle(read_iter):
             return read_file_handle
 
-        def fake_write_handle(host, dc_name, ds_name, cookies,
+        def fake_write_handle(host, port, dc_name, ds_name, cookies,
                               file_path, file_size):
             return write_file_handle
 
         with contextlib.nested(
-             mock.patch.object(read_write_util, 'GlanceFileRead',
+             mock.patch.object(rw_handles, 'ImageReadHandle',
                                side_effect=fake_read_handle),
-             mock.patch.object(read_write_util, 'VMwareHTTPWriteFile',
+             mock.patch.object(rw_handles, 'FileWriteHandle',
                                side_effect=fake_write_handle),
              mock.patch.object(images, 'start_transfer'),
              mock.patch.object(images.IMAGE_API, 'get',
@@ -72,11 +73,11 @@ class VMwareImagesTestCase(test.NoDBTestCase):
         ) as (glance_read, http_write, start_transfer, image_show,
                 image_download):
             images.fetch_image(context, instance,
-                               host, dc_name,
+                               host, port, dc_name,
                                ds_name, file_path)
 
         glance_read.assert_called_once_with(read_iter)
-        http_write.assert_called_once_with(host, dc_name, ds_name, None,
+        http_write.assert_called_once_with(host, port, dc_name, ds_name, None,
                                            file_path, image_data['size'])
         start_transfer.assert_called_once_with(
                 context, read_file_handle,

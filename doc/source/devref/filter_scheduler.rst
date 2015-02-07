@@ -61,9 +61,10 @@ There are some standard filter classes to use (:mod:`nova.scheduler.filters`):
   * s<= (less than or equal to as a string)
   * s< (less than as a string)
   * <in> (substring)
+  * <all-in> (all elements contained in collection)
   * <or> (find one of these)
 
-  Examples are: ">= 5", "s== 2.1.0", "<in> gcc", and "<or> fpu <or> gpu"
+  Examples are: ">= 5", "s== 2.1.0", "<in> gcc", "<all-in> aes mmx", and "<or> fpu <or> gpu"
 
 * |AggregateInstanceExtraSpecsFilter| - checks that the aggregate metadata
   satisfies any extra specifications associated with the instance type (that
@@ -245,7 +246,9 @@ and at the same time with free disk space greater or equal than 200 GB.
 
 Many filters use data from ``scheduler_hints``, that is defined in the moment of
 creation of the new server for the user. The only exception for this rule is
-|JsonFilter|, that takes data in some strange difficult to understand way.
+|JsonFilter|, that takes data from the schedulers ``HostState`` data structure
+directly. Variable naming, such as the ``$free_ram_mb`` example above, should
+be based on those attributes.
 
 The |RetryFilter| filters hosts that have already been attempted for scheduling.
 It only passes hosts that have not been previously attempted.

@@ -36,21 +36,32 @@ from eventlet import greenio
 from eventlet import greenthread
 from eventlet import patcher
 from eventlet import tpool
-from eventlet import util as eventlet_util
+from oslo.config import cfg
+from oslo.utils import excutils
 
+from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LE
+from nova.i18n import _LI
 from nova.i18n import _LW
 from nova.openstack.common import log as logging
+from nova import rpc
 from nova import utils
 from nova.virt import event as virtevent
+from nova.virt.libvirt import config as vconfig
 
 libvirt = None
 
 LOG = logging.getLogger(__name__)
 
+native_socket = patcher.original('socket')
 native_threading = patcher.original("threading")
 native_Queue = patcher.original("Queue")
+
+CONF = cfg.CONF
+CONF.import_opt('host', 'nova.netconf')
+CONF.import_opt('my_ip', 'nova.netconf')
 
 
 class Host(object):
@@ -67,6 +78,9 @@ class Host(object):
         self._read_only = read_only
         self._conn_event_handler = conn_event_handler
         self._lifecycle_event_handler = lifecycle_event_handler
+        self._skip_list_all_domains = False
+        self._caps = None
+        self._hostname = None
 
         self._wrapped_conn = None
         self._wrapped_conn_lock = threading.Lock()
@@ -294,12 +308,10 @@ class Host(object):
         except (ImportError, NotImplementedError):
             # This is Windows compatibility -- use a socket instead
             #  of a pipe because pipes don't really exist on Windows.
-            sock = eventlet_util.__original_socket__(socket.AF_INET,
-                                                     socket.SOCK_STREAM)
+            sock = native_socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.bind(('localhost', 0))
             sock.listen(50)
-            csock = eventlet_util.__original_socket__(socket.AF_INET,
-                                                      socket.SOCK_STREAM)
+            csock = native_socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             csock.connect(('localhost', sock.getsockname()[1]))
             nsock, addr = sock.accept()
             self._event_notify_send = nsock.makefile('wb', 0)
@@ -374,7 +386,7 @@ class Host(object):
 
         return wrapped_conn
 
-    def get_connection(self):
+    def _get_connection(self):
         # multiple concurrent connections are protected by _wrapped_conn_lock
         with self._wrapped_conn_lock:
             wrapped_conn = self._wrapped_conn
@@ -382,6 +394,28 @@ class Host(object):
                 wrapped_conn = self._get_new_connection()
 
         return wrapped_conn
+
+    def get_connection(self):
+        """Returns a connection to the hypervisor
+
+        This method should be used to create and return a well
+        configured connection to the hypervisor.
+
+        :returns: a libvirt.virConnect object
+        """
+        try:
+            conn = self._get_connection()
+        except libvirt.libvirtError as ex:
+            LOG.exception(_LE("Connection to libvirt failed: %s"), ex)
+            payload = dict(ip=CONF.my_ip,
+                           method='_connect',
+                           reason=ex)
+            rpc.get_notifier('compute').error(nova_context.get_admin_context(),
+                                              'compute.libvirt.error',
+                                              payload)
+            raise exception.HypervisorUnavailable(host=CONF.host)
+
+        return conn
 
     @staticmethod
     def _libvirt_error_handler(context, err):
@@ -418,3 +452,268 @@ class Host(object):
             return True
         except Exception:
             return False
+
+    def get_domain(self, instance):
+        """Retrieve libvirt domain object for an instance.
+
+        :param instance: an nova.objects.Instance object
+
+        Attempt to lookup the libvirt domain objects
+        corresponding to the Nova instance, based on
+        its name. If not found it will raise an
+        exception.InstanceNotFound exception. On other
+        errors, it will raise a exception.NovaException
+        exception.
+
+        :returns: a libvirt.Domain object
+        """
+        return self._get_domain_by_name(instance.name)
+
+    def _get_domain_by_id(self, instance_id):
+        """Retrieve libvirt domain object given an instance id.
+
+        All libvirt error handling should be handled in this method and
+        relevant nova exceptions should be raised in response.
+
+        """
+        try:
+            conn = self.get_connection()
+            return conn.lookupByID(instance_id)
+        except libvirt.libvirtError as ex:
+            error_code = ex.get_error_code()
+            if error_code == libvirt.VIR_ERR_NO_DOMAIN:
+                raise exception.InstanceNotFound(instance_id=instance_id)
+
+            msg = (_("Error from libvirt while looking up %(instance_id)s: "
+                     "[Error Code %(error_code)s] %(ex)s")
+                   % {'instance_id': instance_id,
+                      'error_code': error_code,
+                      'ex': ex})
+            raise exception.NovaException(msg)
+
+    def _get_domain_by_name(self, instance_name):
+        """Retrieve libvirt domain object given an instance name.
+
+        All libvirt error handling should be handled in this method and
+        relevant nova exceptions should be raised in response.
+
+        """
+        try:
+            conn = self.get_connection()
+            return conn.lookupByName(instance_name)
+        except libvirt.libvirtError as ex:
+            error_code = ex.get_error_code()
+            if error_code == libvirt.VIR_ERR_NO_DOMAIN:
+                raise exception.InstanceNotFound(instance_id=instance_name)
+
+            msg = (_('Error from libvirt while looking up %(instance_name)s: '
+                     '[Error Code %(error_code)s] %(ex)s') %
+                   {'instance_name': instance_name,
+                    'error_code': error_code,
+                    'ex': ex})
+            raise exception.NovaException(msg)
+
+    def _list_instance_domains_fast(self, only_running=True):
+        # The modern (>= 0.9.13) fast way - 1 single API call for all domains
+        flags = libvirt.VIR_CONNECT_LIST_DOMAINS_ACTIVE
+        if not only_running:
+            flags = flags | libvirt.VIR_CONNECT_LIST_DOMAINS_INACTIVE
+        return self.get_connection().listAllDomains(flags)
+
+    def _list_instance_domains_slow(self, only_running=True):
+        # The legacy (< 0.9.13) slow way - O(n) API call for n domains
+        uuids = []
+        doms = []
+        # Redundant numOfDomains check is for libvirt bz #836647
+        if self.get_connection().numOfDomains() > 0:
+            for id in self.get_connection().listDomainsID():
+                try:
+                    dom = self._get_domain_by_id(id)
+                    doms.append(dom)
+                    uuids.append(dom.UUIDString())
+                except exception.InstanceNotFound:
+                    continue
+
+        if only_running:
+            return doms
+
+        for name in self.get_connection().listDefinedDomains():
+            try:
+                dom = self._get_domain_by_name(name)
+                if dom.UUIDString() not in uuids:
+                    doms.append(dom)
+            except exception.InstanceNotFound:
+                continue
+
+        return doms
+
+    def list_instance_domains(self, only_running=True, only_guests=True):
+        """Get a list of libvirt.Domain objects for nova instances
+
+        :param only_running: True to only return running instances
+        :param only_guests: True to filter out any host domain (eg Dom-0)
+
+        Query libvirt to a get a list of all libvirt.Domain objects
+        that correspond to nova instances. If the only_running parameter
+        is true this list will only include active domains, otherwise
+        inactive domains will be included too. If the only_guests parameter
+        is true the list will have any "host" domain (aka Xen Domain-0)
+        filtered out.
+
+        :returns: list of libvirt.Domain objects
+        """
+
+        if not self._skip_list_all_domains:
+            try:
+                alldoms = self._list_instance_domains_fast(only_running)
+            except (libvirt.libvirtError, AttributeError) as ex:
+                LOG.info(_LI("Unable to use bulk domain list APIs, "
+                             "falling back to slow code path: %(ex)s"),
+                         {'ex': ex})
+                self._skip_list_all_domains = True
+
+        if self._skip_list_all_domains:
+            # Old libvirt, or a libvirt driver which doesn't
+            # implement the new API
+            alldoms = self._list_instance_domains_slow(only_running)
+
+        doms = []
+        for dom in alldoms:
+            if only_guests and dom.ID() == 0:
+                continue
+            doms.append(dom)
+
+        return doms
+
+    def get_capabilities(self):
+        """Returns the host capabilities information
+
+        Returns an instance of config.LibvirtConfigCaps representing
+        the capabilities of the host.
+
+        Note: The result is cached in the member attribute _caps.
+
+        :returns: a config.LibvirtConfigCaps object
+        """
+        if not self._caps:
+            xmlstr = self.get_connection().getCapabilities()
+            self._caps = vconfig.LibvirtConfigCaps()
+            self._caps.parse_str(xmlstr)
+            if hasattr(libvirt, 'VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES'):
+                try:
+                    features = self.get_connection().baselineCPU(
+                        [self._caps.host.cpu.to_xml()],
+                        libvirt.VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES)
+                    # FIXME(wangpan): the return value of baselineCPU should be
+                    #                 None or xml string, but libvirt has a bug
+                    #                 of it from 1.1.2 which is fixed in 1.2.0,
+                    #                 this -1 checking should be removed later.
+                    if features and features != -1:
+                        cpu = vconfig.LibvirtConfigCPU()
+                        cpu.parse_str(features)
+                        self._caps.host.cpu.features = cpu.features
+                except libvirt.libvirtError as ex:
+                    error_code = ex.get_error_code()
+                    if error_code == libvirt.VIR_ERR_NO_SUPPORT:
+                        LOG.warn(_LW("URI %(uri)s does not support full set"
+                                     " of host capabilities: " "%(error)s"),
+                                     {'uri': self._uri, 'error': ex})
+                    else:
+                        raise
+        return self._caps
+
+    def get_driver_type(self):
+        """Get hypervisor type.
+
+        :returns: hypervisor type (ex. qemu)
+
+        """
+
+        return self.get_connection().getType()
+
+    def get_version(self):
+        """Get hypervisor version.
+
+        :returns: hypervisor version (ex. 12003)
+
+        """
+
+        return self.get_connection().getVersion()
+
+    def get_hostname(self):
+        """Returns the hostname of the hypervisor."""
+        hostname = self.get_connection().getHostname()
+        if self._hostname is None:
+            self._hostname = hostname
+        elif hostname != self._hostname:
+            LOG.error(_LE('Hostname has changed from %(old)s '
+                          'to %(new)s. A restart is required to take effect.'),
+                          {'old': self._hostname,
+                           'new': hostname})
+        return self._hostname
+
+    def find_secret(self, usage_type, usage_id):
+        """Find a secret.
+
+        usage_type: one of 'iscsi', 'ceph', 'rbd' or 'volume'
+        usage_id: name of resource in secret
+        """
+        if usage_type == 'iscsi':
+            usage_type_const = libvirt.VIR_SECRET_USAGE_TYPE_ISCSI
+        elif usage_type in ('rbd', 'ceph'):
+            usage_type_const = libvirt.VIR_SECRET_USAGE_TYPE_CEPH
+        elif usage_type == 'volume':
+            usage_type_const = libvirt.VIR_SECRET_USAGE_TYPE_VOLUME
+        else:
+            msg = _("Invalid usage_type: %s")
+            raise exception.NovaException(msg % usage_type)
+
+        try:
+            conn = self.get_connection()
+            return conn.secretLookupByUsage(usage_type_const, usage_id)
+        except libvirt.libvirtError as e:
+            if e.get_error_code() == libvirt.VIR_ERR_NO_SECRET:
+                return None
+
+    def create_secret(self, usage_type, usage_id, password=None):
+        """Create a secret.
+
+        usage_type: one of 'iscsi', 'ceph', 'rbd' or 'volume'
+                           'rbd' will be converted to 'ceph'.
+        usage_id: name of resource in secret
+        """
+        secret_conf = vconfig.LibvirtConfigSecret()
+        secret_conf.ephemeral = False
+        secret_conf.private = False
+        secret_conf.usage_id = usage_id
+        if usage_type in ('rbd', 'ceph'):
+            secret_conf.usage_type = 'ceph'
+        elif usage_type == 'iscsi':
+            secret_conf.usage_type = 'iscsi'
+        elif usage_type == 'volume':
+            secret_conf.usage_type = 'volume'
+        else:
+            msg = _("Invalid usage_type: %s")
+            raise exception.NovaException(msg % usage_type)
+
+        xml = secret_conf.to_xml()
+        try:
+            LOG.debug('Secret XML: %s' % xml)
+            conn = self.get_connection()
+            secret = conn.secretDefineXML(xml)
+            if password is not None:
+                secret.setValue(password)
+            return secret
+        except libvirt.libvirtError:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE('Error defining a secret with XML: %s') % xml)
+
+    def delete_secret(self, usage_type, usage_id):
+        """Delete a secret.
+
+        usage_type: one of 'iscsi', 'ceph', 'rbd' or 'volume'
+        usage_id: name of resource in secret
+        """
+        secret = self.find_secret(usage_type, usage_id)
+        if secret is not None:
+            secret.undefine()

@@ -40,7 +40,7 @@ from nova.virt.vmwareapi import vm_util
 from nova.virt.vmwareapi import vmops
 
 
-class DsPathMatcher:
+class DsPathMatcher(object):
     def __init__(self, expected_ds_path_str):
         self.expected_ds_path_str = expected_ds_path_str
 
@@ -173,45 +173,28 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         ops._create_folder_if_missing(ds_name, ds_ref, 'folder')
         mock_mkdir.assert_called_with(ops._session, path, dc)
 
-    @mock.patch.object(ds_util, 'file_exists', return_value=True)
-    def test_check_if_folder_file_exists_with_existing(self,
-                                                       mock_exists):
-        ops = vmops.VMwareVMOps(mock.Mock(), mock.Mock(), mock.Mock())
-        ops._create_folder_if_missing = mock.Mock()
-        mock_ds_ref = mock.Mock()
-        ops._check_if_folder_file_exists(mock.Mock(), mock_ds_ref, "datastore",
-                                         "folder", "some_file")
-        ops._create_folder_if_missing.assert_called_once_with('datastore',
-                                                              mock_ds_ref,
-                                                              'vmware_base')
-
-    @mock.patch.object(ds_util, 'file_exists', return_value=False)
-    def test_check_if_folder_file_exists_no_existing(self, mock_exists):
-        ops = vmops.VMwareVMOps(mock.Mock(), mock.Mock(), mock.Mock())
-        ops._create_folder_if_missing = mock.Mock()
-        mock_ds_ref = mock.Mock()
-        ops._check_if_folder_file_exists(mock.Mock(), mock_ds_ref, "datastore",
-                                         "folder", "some_file")
-        ops._create_folder_if_missing.assert_called_once_with('datastore',
-                                                              mock_ds_ref,
-                                                              'vmware_base')
-
     def test_get_valid_vms_from_retrieve_result(self):
         ops = vmops.VMwareVMOps(mock.Mock(), mock.Mock(), mock.Mock())
         fake_objects = vmwareapi_fake.FakeRetrieveResult()
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine())
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine())
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine())
+        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
+            name=uuidutils.generate_uuid()))
+        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
+            name=uuidutils.generate_uuid()))
+        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
+            name=uuidutils.generate_uuid()))
         vms = ops._get_valid_vms_from_retrieve_result(fake_objects)
         self.assertEqual(3, len(vms))
 
     def test_get_valid_vms_from_retrieve_result_with_invalid(self):
         ops = vmops.VMwareVMOps(mock.Mock(), mock.Mock(), mock.Mock())
         fake_objects = vmwareapi_fake.FakeRetrieveResult()
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine())
-        invalid_vm1 = vmwareapi_fake.VirtualMachine()
+        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
+            name=uuidutils.generate_uuid()))
+        invalid_vm1 = vmwareapi_fake.VirtualMachine(
+            name=uuidutils.generate_uuid())
         invalid_vm1.set('runtime.connectionState', 'orphaned')
-        invalid_vm2 = vmwareapi_fake.VirtualMachine()
+        invalid_vm2 = vmwareapi_fake.VirtualMachine(
+            name=uuidutils.generate_uuid())
         invalid_vm2.set('runtime.connectionState', 'inaccessible')
         fake_objects.add_object(invalid_vm1)
         fake_objects.add_object(invalid_vm2)
@@ -376,9 +359,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         vm_rescue_ref = mock.Mock()
         vm_ref = mock.Mock()
 
-        args_list = [(vm_ref, 'VirtualMachine',
-                      'config.hardware.device'),
-                     (vm_rescue_ref, 'VirtualMachine',
+        args_list = [(vm_rescue_ref, 'VirtualMachine',
                       'config.hardware.device')]
 
         def fake_call_method(module, method, *args, **kwargs):
@@ -386,11 +367,13 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             self.assertEqual('get_dynamic_property', method)
             self.assertEqual(expected_args, args)
 
-        path = mock.Mock()
-        path_and_type = (path, mock.Mock(), mock.Mock())
+        vmdk = vm_util.VmdkInfo(mock.sentinel.PATH,
+                                mock.sentinel.ADAPTER_TYPE,
+                                mock.sentinel.DISK_TYPE,
+                                mock.sentinel.CAPACITY)
         with contextlib.nested(
-                mock.patch.object(vm_util, 'get_vmdk_path_and_adapter_type',
-                                  return_value=path_and_type),
+                mock.patch.object(vm_util, 'get_vmdk_info',
+                                  return_value=vmdk),
                 mock.patch.object(vm_util, 'get_vmdk_volume_disk'),
                 mock.patch.object(vm_util, 'power_on_instance'),
                 mock.patch.object(vm_util, 'get_vm_ref', return_value=vm_ref),
@@ -400,14 +383,15 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                   fake_call_method),
                 mock.patch.object(vm_util, 'power_off_instance'),
                 mock.patch.object(self._vmops, '_destroy_instance'),
-        ) as (_get_vmdk_path_and_adapter_type, _get_vmdk_volume_disk,
+        ) as (_get_vmdk_info, _get_vmdk_volume_disk,
               _power_on_instance, _get_vm_ref, _get_vm_ref_from_name,
               _call_method, _power_off, _destroy_instance):
             self._vmops.unrescue(self._instance, power_on=power_on)
 
-            _get_vmdk_path_and_adapter_type.assert_called_once_with(
-                None, uuid='fake_uuid')
-            _get_vmdk_volume_disk.assert_called_once_with(None, path=path)
+            _get_vmdk_info.assert_called_once_with(self._session,
+                                                   vm_ref, 'fake_uuid')
+            _get_vmdk_volume_disk.assert_called_once_with(
+                None, path=mock.sentinel.PATH)
             if power_on:
                 _power_on_instance.assert_called_once_with(self._session,
                                                            self._instance,
@@ -897,6 +881,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                         self._context,
                         self._instance,
                         self._session._host,
+                        self._session._port,
                         self._dc_info.name,
                         self._ds.name,
                         upload_file_name,
@@ -1297,6 +1282,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 self._context,
                 vi.instance,
                 self._session._host,
+                self._session._port,
                 self._dc_info.name,
                 self._ds.name,
                 image_ds_loc.rel_path,
@@ -1469,3 +1455,20 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                    pbm_default_policy='default-policy', group='vmware')
         extra_specs = self._vmops._get_extra_specs(flavor)
         self.assertEqual('flavor-policy', extra_specs.storage_policy)
+
+    def test_get_base_folder_not_set(self):
+        self.flags(image_cache_subdirectory_name='vmware_base')
+        base_folder = self._vmops._get_base_folder()
+        self.assertEqual('vmware_base', base_folder)
+
+    def test_get_base_folder_host_ip(self):
+        self.flags(my_ip='7.7.7.7',
+                   image_cache_subdirectory_name='_base')
+        base_folder = self._vmops._get_base_folder()
+        self.assertEqual('7.7.7.7_base', base_folder)
+
+    def test_get_base_folder_cache_prefix(self):
+        self.flags(cache_prefix='my_prefix', group='vmware')
+        self.flags(image_cache_subdirectory_name='_base')
+        base_folder = self._vmops._get_base_folder()
+        self.assertEqual('my_prefix_base', base_folder)

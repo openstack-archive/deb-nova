@@ -751,7 +751,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
 
     def service_delete(self, message, service_id):
         """Deletes the specified service."""
-        self.host_api.service_delete(message.ctxt, service_id)
+        self.host_api._service_delete(message.ctxt, service_id)
 
     def proxy_rpc_to_manager(self, message, host_name, rpc_message,
                              topic, timeout):
@@ -894,10 +894,11 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         self._call_compute_api_with_obj(message.ctxt, instance, 'unpause')
 
     def resize_instance(self, message, instance, flavor,
-                        extra_instance_updates):
+                        extra_instance_updates, clean_shutdown=True):
         """Resize an instance via compute_api.resize()."""
         self._call_compute_api_with_obj(message.ctxt, instance, 'resize',
                                         flavor_id=flavor['flavorid'],
+                                        clean_shutdown=clean_shutdown,
                                         **extra_instance_updates)
 
     def live_migrate_instance(self, message, instance, block_migration,
@@ -1765,12 +1766,14 @@ class MessageRunner(object):
         self._instance_action(ctxt, instance, 'unpause_instance')
 
     def resize_instance(self, ctxt, instance, flavor,
-                       extra_instance_updates):
+                       extra_instance_updates,
+                       clean_shutdown=True):
         """Resize an instance in its cell."""
         extra_kwargs = dict(flavor=flavor,
                             extra_instance_updates=extra_instance_updates)
         self._instance_action(ctxt, instance, 'resize_instance',
-                              extra_kwargs=extra_kwargs)
+                              extra_kwargs=extra_kwargs,
+                              clean_shutdown=clean_shutdown)
 
     def live_migrate_instance(self, ctxt, instance, block_migration,
                               disk_over_commit, host_name):

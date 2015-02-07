@@ -461,7 +461,9 @@ class UsageInfoTestCase(test.TestCase):
     def test_notify_usage_exists(self):
         # Ensure 'exists' notification generates appropriate usage data.
         instance_id = self._create_instance()
-        instance = objects.Instance.get_by_id(self.context, instance_id)
+        instance = objects.Instance.get_by_id(self.context, instance_id,
+                                              expected_attrs=[
+                                                  'system_metadata'])
         # Set some system metadata
         sys_metadata = {'image_md_key1': 'val1',
                         'image_md_key2': 'val2',
@@ -487,8 +489,8 @@ class UsageInfoTestCase(test.TestCase):
                      'state', 'state_description',
                      'bandwidth', 'audit_period_beginning',
                      'audit_period_ending', 'image_meta'):
-            self.assertTrue(attr in payload,
-                            msg="Key %s not in payload" % attr)
+            self.assertIn(attr, payload,
+                          "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'],
                 {'md_key1': 'val1', 'md_key2': 'val2'})
         image_ref_url = "%s/images/1" % glance.generate_glance_url()
@@ -528,8 +530,7 @@ class UsageInfoTestCase(test.TestCase):
                      'state', 'state_description',
                      'bandwidth', 'audit_period_beginning',
                      'audit_period_ending', 'image_meta'):
-            self.assertTrue(attr in payload,
-                            msg="Key %s not in payload" % attr)
+            self.assertIn(attr, payload, "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'],
                 {'md_key1': 'val1', 'md_key2': 'val2'})
         image_ref_url = "%s/images/1" % glance.generate_glance_url()
@@ -559,8 +560,7 @@ class UsageInfoTestCase(test.TestCase):
                      'state', 'state_description',
                      'bandwidth', 'audit_period_beginning',
                      'audit_period_ending', 'image_meta'):
-            self.assertTrue(attr in payload,
-                            msg="Key %s not in payload" % attr)
+            self.assertIn(attr, payload, "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'], {})
         image_ref_url = "%s/images/1" % glance.generate_glance_url()
         self.assertEqual(payload['image_ref_url'], image_ref_url)
@@ -595,8 +595,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEqual(str(payload['instance_flavor_id']), str(flavor_id))
         for attr in ('display_name', 'created_at', 'launched_at',
                      'state', 'state_description', 'image_meta'):
-            self.assertTrue(attr in payload,
-                            msg="Key %s not in payload" % attr)
+            self.assertIn(attr, payload, "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'],
                 {'md_key1': 'val1', 'md_key2': 'val2'})
         self.assertEqual(payload['image_name'], 'fake_name')
@@ -662,44 +661,51 @@ class ComputeGetImageMetadataTestCase(test.NoDBTestCase):
             'image_min_disk': 1,
             'image_disk_format': 'raw',
             'image_container_format': 'bare',
-            'instance_type_id': 0,
-            'instance_type_name': 'm1.fake',
-            'instance_type_memory_mb': 10,
-            'instance_type_vcpus': 1,
-            'instance_type_root_gb': 1,
-            'instance_type_ephemeral_gb': 1,
-            'instance_type_flavorid': '0',
-            'instance_type_swap': 1,
-            'instance_type_rxtx_factor': 0.0,
-            'instance_type_vcpu_weight': None,
         }
 
-        self.instance = fake_instance.fake_db_instance(
+        flavor = objects.Flavor(
+                 id=0,
+                 name='m1.fake',
+                 memory_mb=10,
+                 vcpus=1,
+                 root_gb=1,
+                 ephemeral_gb=1,
+                 flavorid='0',
+                 swap=1,
+                 rxtx_factor=0.0,
+                 vcpu_weight=None)
+
+        instance = fake_instance.fake_db_instance(
             memory_mb=0, root_gb=0,
             system_metadata=sys_meta)
-
-    @property
-    def instance_obj(self):
-        return objects.Instance._from_db_object(
-            self.ctx, objects.Instance(), self.instance,
+        self.instance_obj = objects.Instance._from_db_object(
+            self.ctx, objects.Instance(), instance,
             expected_attrs=instance_obj.INSTANCE_DEFAULT_FIELDS)
+        with mock.patch.object(self.instance_obj, 'save'):
+            self.instance_obj.set_flavor(flavor)
 
-    def test_get_image_meta(self):
+    @mock.patch('nova.objects.Flavor.get_by_flavor_id')
+    def test_get_image_meta(self, mock_get):
+        mock_get.return_value = objects.Flavor(extra_specs={})
         image_meta = compute_utils.get_image_metadata(
             self.ctx, self.mock_image_api, 'fake-image', self.instance_obj)
 
         self.image['properties'] = 'DONTCARE'
         self.assertThat(self.image, matchers.DictMatches(image_meta))
 
-    def test_get_image_meta_with_image_id_none(self):
+    @mock.patch('nova.objects.Flavor.get_by_flavor_id')
+    def test_get_image_meta_with_image_id_none(self, mock_flavor_get):
+        mock_flavor_get.return_value = objects.Flavor(extra_specs={})
         self.image['properties'] = {'fake_property': 'fake_value'}
+
+        inst = self.instance_obj
 
         with mock.patch.object(flavors,
                                "extract_flavor") as mock_extract_flavor:
             with mock.patch.object(utils, "get_system_metadata_from_image"
                                    ) as mock_get_sys_metadata:
                 image_meta = compute_utils.get_image_metadata(
-                    self.ctx, self.mock_image_api, None, self.instance_obj)
+                    self.ctx, self.mock_image_api, None, inst)
 
                 self.assertEqual(0, self.mock_image_api.get.call_count)
                 self.assertEqual(0, mock_extract_flavor.call_count)
@@ -744,12 +750,14 @@ class ComputeGetImageMetadataTestCase(test.NoDBTestCase):
             self._test_get_image_meta_exception(error)
 
     def test_get_image_meta_no_image_system_meta(self):
-        for k in self.instance['system_metadata'].keys():
+        for k in self.instance_obj.system_metadata.keys():
             if k.startswith('image_'):
-                del self.instance['system_metadata'][k]
+                del self.instance_obj.system_metadata[k]
 
-        image_meta = compute_utils.get_image_metadata(
-            self.ctx, self.mock_image_api, 'fake-image', self.instance_obj)
+        with mock.patch('nova.objects.Flavor.get_by_flavor_id') as get:
+            get.return_value = objects.Flavor(extra_specs={})
+            image_meta = compute_utils.get_image_metadata(
+                self.ctx, self.mock_image_api, 'fake-image', self.instance_obj)
 
         self.image['properties'] = 'DONTCARE'
         self.assertThat(self.image, matchers.DictMatches(image_meta))
@@ -758,12 +766,14 @@ class ComputeGetImageMetadataTestCase(test.NoDBTestCase):
         e = exception.ImageNotFound(image_id='fake-image')
         self.mock_image_api.get.side_effect = e
 
-        for k in self.instance['system_metadata'].keys():
+        for k in self.instance_obj.system_metadata.keys():
             if k.startswith('image_'):
-                del self.instance['system_metadata'][k]
+                del self.instance_obj.system_metadata[k]
 
-        image_meta = compute_utils.get_image_metadata(
-            self.ctx, self.mock_image_api, 'fake-image', self.instance_obj)
+        with mock.patch('nova.objects.Flavor.get_by_flavor_id') as get:
+            get.return_value = objects.Flavor(extra_specs={})
+            image_meta = compute_utils.get_image_metadata(
+                self.ctx, self.mock_image_api, 'fake-image', self.instance_obj)
 
         expected = {'properties': 'DONTCARE'}
         self.assertThat(expected, matchers.DictMatches(image_meta))

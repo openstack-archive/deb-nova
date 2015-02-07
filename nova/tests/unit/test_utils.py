@@ -36,92 +36,6 @@ from nova import utils
 CONF = cfg.CONF
 
 
-class GetMyIP4AddressTestCase(test.NoDBTestCase):
-    def test_get_my_ipv4_address_with_no_ipv4(self):
-        response = """172.16.0.0/16 via 172.16.251.13 dev tun1
-172.16.251.1 via 172.16.251.13 dev tun1
-172.16.251.13 dev tun1  proto kernel  scope link  src 172.16.251.14
-172.24.0.0/16 via 172.16.251.13 dev tun1
-192.168.122.0/24 dev virbr0  proto kernel  scope link  src 192.168.122.1"""
-
-        def fake_execute(*args, **kwargs):
-            return response, None
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-        address = utils.get_my_ipv4_address()
-        self.assertEqual(address, '127.0.0.1')
-
-    def test_get_my_ipv4_address_bad_process(self):
-        def fake_execute(*args, **kwargs):
-            raise processutils.ProcessExecutionError()
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-        address = utils.get_my_ipv4_address()
-        self.assertEqual(address, '127.0.0.1')
-
-    def test_get_my_ipv4_address_with_single_interface(self):
-        response_route = """default via 192.168.1.1 dev wlan0  proto static
-192.168.1.0/24 dev wlan0  proto kernel  scope link  src 192.168.1.137  metric 9
-"""
-        response_addr = """
-1: lo    inet 127.0.0.1/8 scope host lo
-3: wlan0    inet 192.168.1.137/24 brd 192.168.1.255 scope global wlan0
-"""
-
-        def fake_execute(*args, **kwargs):
-            if 'route' in args:
-                return response_route, None
-            return response_addr, None
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-        address = utils.get_my_ipv4_address()
-        self.assertEqual(address, '192.168.1.137')
-
-    def test_get_my_ipv4_address_with_multi_ipv4_on_single_interface(self):
-        response_route = """
-172.18.56.0/24 dev customer  proto kernel  scope link  src 172.18.56.22
-169.254.0.0/16 dev customer  scope link  metric 1031
-default via 172.18.56.1 dev customer
-"""
-        response_addr = (""
-"31: customer    inet 172.18.56.22/24 brd 172.18.56.255 scope global"
-" customer\n"
-"31: customer    inet 172.18.56.32/24 brd 172.18.56.255 scope global "
-"secondary customer")
-
-        def fake_execute(*args, **kwargs):
-            if 'route' in args:
-                return response_route, None
-            return response_addr, None
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-        address = utils.get_my_ipv4_address()
-        self.assertEqual(address, '172.18.56.22')
-
-    def test_get_my_ipv4_address_with_multiple_interfaces(self):
-        response_route = """
-169.1.9.0/24 dev eth1  proto kernel  scope link  src 169.1.9.10
-172.17.248.0/21 dev eth0  proto kernel  scope link  src 172.17.255.9
-169.254.0.0/16 dev eth0  scope link  metric 1002
-169.254.0.0/16 dev eth1  scope link  metric 1003
-default via 172.17.248.1 dev eth0  proto static
-"""
-        response_addr = """
-1: lo    inet 127.0.0.1/8 scope host lo
-2: eth0    inet 172.17.255.9/21 brd 172.17.255.255 scope global eth0
-3: eth1    inet 169.1.9.10/24 scope global eth1
-"""
-
-        def fake_execute(*args, **kwargs):
-            if 'route' in args:
-                return response_route, None
-            return response_addr, None
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-        address = utils.get_my_ipv4_address()
-        self.assertEqual(address, '172.17.255.9')
-
-
 class GenericUtilsTestCase(test.NoDBTestCase):
     def test_parse_server_string(self):
         result = utils.parse_server_string('::1')
@@ -240,24 +154,6 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertEqual('&lt;', utils.xhtml_escape('<'))
         self.assertEqual('&lt;foo&gt;', utils.xhtml_escape('<foo>'))
 
-    def test_is_valid_ipv4(self):
-        self.assertTrue(utils.is_valid_ipv4('127.0.0.1'))
-        self.assertFalse(utils.is_valid_ipv4('::1'))
-        self.assertFalse(utils.is_valid_ipv4('bacon'))
-        self.assertFalse(utils.is_valid_ipv4(""))
-        self.assertFalse(utils.is_valid_ipv4(10))
-
-    def test_is_valid_ipv6(self):
-        self.assertTrue(utils.is_valid_ipv6("::1"))
-        self.assertTrue(utils.is_valid_ipv6(
-                            "abcd:ef01:2345:6789:abcd:ef01:192.168.254.254"))
-        self.assertTrue(utils.is_valid_ipv6(
-                                    "0000:0000:0000:0000:0000:0000:0000:0001"))
-        self.assertFalse(utils.is_valid_ipv6("foo"))
-        self.assertFalse(utils.is_valid_ipv6("127.0.0.1"))
-        self.assertFalse(utils.is_valid_ipv6(""))
-        self.assertFalse(utils.is_valid_ipv6(10))
-
     def test_is_valid_ipv6_cidr(self):
         self.assertTrue(utils.is_valid_ipv6_cidr("2600::/64"))
         self.assertTrue(utils.is_valid_ipv6_cidr(
@@ -300,6 +196,17 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         value = hashlib.md5(base_str).hexdigest()
         self.assertEqual(
             value, utils.get_hash_str(base_str))
+
+    def test_use_rootwrap(self):
+        self.flags(disable_rootwrap=False, group='workarounds')
+        self.flags(rootwrap_config='foo')
+        cmd = utils._get_root_helper()
+        self.assertEqual('sudo nova-rootwrap foo', cmd)
+
+    def test_use_sudo(self):
+        self.flags(disable_rootwrap=True, group='workarounds')
+        cmd = utils._get_root_helper()
+        self.assertEqual('sudo', cmd)
 
 
 class MonkeyPatchTestCase(test.NoDBTestCase):
@@ -972,3 +879,76 @@ class ConstantTimeCompareTestCase(test.NoDBTestCase):
         self.assertTrue(utils.constant_time_compare("abcd1234", "abcd1234"))
         self.assertFalse(utils.constant_time_compare("abcd1234", "a"))
         self.assertFalse(utils.constant_time_compare("abcd1234", "ABCD234"))
+
+
+class ResourceFilterTestCase(test.NoDBTestCase):
+    def _assert_filtering(self, res_list, filts, expected_tags):
+        actual_tags = utils.filter_and_format_resource_metadata('instance',
+                res_list, filts, 'metadata')
+        self.assertEqual(expected_tags, actual_tags)
+
+    def test_filter_and_format_resource_metadata(self):
+        # Create some tags
+        # One overlapping pair, and one different key value pair
+        # i1 : foo=bar, bax=wibble
+        # i2 : foo=bar, baz=quux
+
+        # resources
+        i1 = {
+                'uuid': '1',
+                'metadata': {'foo': 'bar', 'bax': 'wibble'},
+            }
+        i2 = {
+                'uuid': '2',
+                'metadata': {'foo': 'bar', 'baz': 'quux'},
+            }
+
+        # Resources list
+        rl = [i1, i2]
+
+        # tags
+        i11 = {'instance_id': '1', 'key': 'foo', 'value': 'bar'}
+        i12 = {'instance_id': '1', 'key': 'bax', 'value': 'wibble'}
+        i21 = {'instance_id': '2', 'key': 'foo', 'value': 'bar'}
+        i22 = {'instance_id': '2', 'key': 'baz', 'value': 'quux'}
+
+        # No filter
+        self._assert_filtering(rl, [], [i11, i12, i21, i22])
+        self._assert_filtering(rl, {}, [i11, i12, i21, i22])
+
+        # Key search
+
+        # Both should have tags with key 'foo' and value 'bar'
+        self._assert_filtering(rl, {'key': 'foo', 'value': 'bar'}, [i11, i21])
+
+        # Both should have tags with key 'foo'
+        self._assert_filtering(rl, {'key': 'foo'}, [i11, i21])
+
+        # Only i2 should have tags with key 'baz' and value 'quux'
+        self._assert_filtering(rl, {'key': 'baz', 'value': 'quux'}, [i22])
+
+        # Only i2 should have tags with value 'quux'
+        self._assert_filtering(rl, {'value': 'quux'}, [i22])
+
+        # Empty list should be returned when no tags match
+        self._assert_filtering(rl, {'key': 'split', 'value': 'banana'}, [])
+
+        # Multiple values
+
+        # Only i2 should have tags with key 'baz' and values in the set
+        # ['quux', 'wibble']
+        self._assert_filtering(rl, {'key': 'baz', 'value': ['quux', 'wibble']},
+                [i22])
+
+        # But when specified as two different filters, no tags should be
+        # returned. This is because, the filter will mean "return tags which
+        # have (key=baz AND value=quux) AND (key=baz AND value=wibble)
+        self._assert_filtering(rl, [{'key': 'baz', 'value': 'quux'},
+            {'key': 'baz', 'value': 'wibble'}], [])
+
+        # Test for regex
+        self._assert_filtering(rl, {'value': '\\Aqu..*\\Z(?s)'}, [i22])
+
+        # Make sure bug #1365887 is fixed
+        i1['metadata']['key3'] = 'a'
+        self._assert_filtering(rl, {'value': 'banana'}, [])

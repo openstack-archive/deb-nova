@@ -28,6 +28,7 @@ from nova.compute import cells_api as compute_cells_api
 from nova.compute import delete_types
 from nova.compute import flavors
 from nova.compute import instance_actions
+from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_mode
@@ -38,7 +39,9 @@ from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import quotas as quotas_obj
+from nova.openstack.common import policy as common_policy
 from nova.openstack.common import uuidutils
+from nova import policy
 from nova import quota
 from nova import test
 from nova.tests.unit import fake_block_device
@@ -109,19 +112,12 @@ class _ComputeAPIUnitTestMixIn(object):
         if flavor is None:
             flavor = self._create_flavor()
 
-        def make_fake_sys_meta():
-            sys_meta = params.pop("system_metadata", {})
-            for key in flavors.system_metadata_flavor_props:
-                sys_meta['instance_type_%s' % key] = flavor[key]
-            return sys_meta
-
         now = timeutils.utcnow()
 
         instance = objects.Instance()
         instance.metadata = {}
         instance.metadata.update(params.pop('metadata', {}))
-        instance.system_metadata = make_fake_sys_meta()
-        instance.system_metadata.update(params.pop('system_metadata', {}))
+        instance.system_metadata = params.pop('system_metadata', {})
         instance._context = self.context
         instance.id = 1
         instance.uuid = uuidutils.generate_uuid()
@@ -148,6 +144,8 @@ class _ComputeAPIUnitTestMixIn(object):
         instance.launched_at = now
         instance.disable_terminate = False
         instance.info_cache = objects.InstanceInfoCache()
+        instance.flavor = flavor
+        instance.old_flavor = instance.new_flavor = None
 
         if params:
             instance.update(params)
@@ -164,8 +162,8 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(quota.QUOTAS, "reserve")
 
         quotas = {'instances': 1, 'cores': 1, 'ram': 1}
-        usages = dict((r, {'in_use': 1, 'reserved': 1}) for r in
-                    ['instances', 'cores', 'ram'])
+        usages = {r: {'in_use': 1, 'reserved': 1} for r in
+                  ['instances', 'cores', 'ram']}
         quota_exception = exception.OverQuota(quotas=quotas,
             usages=usages, overs=['instances'])
 
@@ -1379,7 +1377,8 @@ class _ComputeAPIUnitTestMixIn(object):
                      allow_mig_same_host=False,
                      project_id=None,
                      extra_kwargs=None,
-                     same_flavor=False):
+                     same_flavor=False,
+                     clean_shutdown=True):
         if extra_kwargs is None:
             extra_kwargs = {}
 
@@ -1400,13 +1399,12 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(self.compute_api.compute_task_api,
                                  'resize_instance')
 
-        current_flavor = flavors.extract_flavor(fake_inst)
+        current_flavor = fake_inst.get_flavor()
         if flavor_id_passed:
             new_flavor = self._create_flavor(id=200, flavorid='new-flavor-id',
                                 name='new_flavor', disabled=False)
             if same_flavor:
-                cur_flavor = flavors.extract_flavor(fake_inst)
-                new_flavor.id = cur_flavor.id
+                new_flavor.id = current_flavor.id
             flavors.get_flavor_by_flavor_id(
                     'new-flavor-id',
                     read_deleted='no').AndReturn(new_flavor)
@@ -1482,16 +1480,20 @@ class _ComputeAPIUnitTestMixIn(object):
                     self.context, fake_inst, extra_kwargs,
                     scheduler_hint=scheduler_hint,
                     flavor=mox.IsA(objects.Flavor),
-                    reservations=expected_reservations)
+                    reservations=expected_reservations,
+                    clean_shutdown=clean_shutdown)
 
         self.mox.ReplayAll()
 
         if flavor_id_passed:
             self.compute_api.resize(self.context, fake_inst,
                                     flavor_id='new-flavor-id',
+                                    clean_shutdown=clean_shutdown,
                                     **extra_kwargs)
         else:
-            self.compute_api.resize(self.context, fake_inst, **extra_kwargs)
+            self.compute_api.resize(self.context, fake_inst,
+                                    clean_shutdown=clean_shutdown,
+                                    **extra_kwargs)
 
     def _test_migrate(self, *args, **kwargs):
         self._test_resize(*args, flavor_id_passed=False, **kwargs)
@@ -1510,6 +1512,9 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def test_resize_different_project_id(self):
         self._test_resize(project_id='different')
+
+    def test_resize_forced_shutdown(self):
+        self._test_resize(clean_shutdown=False)
 
     def test_migrate(self):
         self._test_migrate()
@@ -2760,6 +2765,44 @@ class _ComputeAPIUnitTestMixIn(object):
                           self.compute_api._check_and_transform_bdm,
                               base_options, instance_type, image_meta, 1, 1,
                                   block_device_mapping, legacy_bdm)
+
+    @mock.patch.object(objects.Instance, 'save')
+    @mock.patch.object(objects.InstanceAction, 'action_start')
+    @mock.patch.object(compute_rpcapi.ComputeAPI, 'pause_instance')
+    @mock.patch.object(objects.Instance, 'get_by_uuid')
+    @mock.patch.object(compute_api.API, '_get_instances_by_filters',
+                       return_value=[])
+    @mock.patch.object(compute_api.API, '_create_instance')
+    def test_skip_policy_check(self, mock_create, mock_get_ins_by_filters,
+                               mock_get, mock_pause, mock_action, mock_save):
+        policy.reset()
+        rules = {'compute:pause': common_policy.parse_rule('!'),
+                 'compute:get': common_policy.parse_rule('!'),
+                 'compute:get_all': common_policy.parse_rule('!'),
+                 'compute:create': common_policy.parse_rule('!')}
+        policy.set_rules(common_policy.Rules(rules))
+        instance = self._create_instance_obj()
+        mock_get.return_value = instance
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.pause, self.context, instance)
+        api = compute_api.API(skip_policy_check=True)
+        api.pause(self.context, instance)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.get, self.context, instance.uuid)
+        api = compute_api.API(skip_policy_check=True)
+        api.get(self.context, instance.uuid)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.get_all, self.context)
+        api = compute_api.API(skip_policy_check=True)
+        api.get_all(self.context)
+
+        self.assertRaises(exception.PolicyNotAuthorized,
+                          self.compute_api.create, self.context, None, None)
+        api = compute_api.API(skip_policy_check=True)
+        api.create(self.context, None, None)
 
 
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):

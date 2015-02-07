@@ -36,15 +36,15 @@ CONF = cfg.CONF
 os_network_opts = [
     cfg.BoolOpt("enable_network_quota",
                 default=False,
-                help=('Enables or disables quota checking for tenant '
-                      'networks')),
+                help='Enables or disables quota checking for tenant '
+                     'networks'),
     cfg.StrOpt('use_neutron_default_nets',
                      default="False",
-                     help=('Control for checking for default networks')),
+                     help='Control for checking for default networks'),
     cfg.StrOpt('neutron_default_tenant_id',
                      default="default",
-                     help=('Default tenant id when creating neutron '
-                           'networks')),
+                     help='Default tenant id when creating neutron '
+                          'networks'),
     cfg.IntOpt('quota_networks',
                default=3,
                help='Number of private networks allowed per project'),
@@ -57,9 +57,12 @@ authorize = extensions.extension_authorizer('compute', 'os-tenant-networks')
 
 
 def network_dict(network):
-    return {"id": network.get("uuid") or network.get("id"),
-                        "cidr": str(network.get("cidr")),
-                        "label": network.get("label")}
+    # NOTE(danms): Here, network should be an object, which could have come
+    # from neutron and thus be missing most of the attributes. Providing a
+    # default to get() avoids trying to lazy-load missing attributes.
+    return {"id": network.get("uuid", None) or network.get("id", None),
+                        "cidr": str(network.get("cidr", None)),
+                        "label": network.get("label", None)}
 
 
 class NetworkController(object):
@@ -149,7 +152,7 @@ class NetworkController(object):
         network = body["network"]
         keys = ["cidr", "cidr_v6", "ipam", "vlan_start", "network_size",
                 "num_networks"]
-        kwargs = dict((k, network.get(k)) for k in keys)
+        kwargs = {k: network.get(k) for k in keys}
 
         label = network["label"]
 

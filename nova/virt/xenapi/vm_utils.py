@@ -98,7 +98,8 @@ xenapi_vm_utils_opts = [
                      'won\'t have to be rsynced'),
     cfg.IntOpt('num_vbd_unplug_retries',
                default=10,
-               help='Maximum number of retries to unplug VBD'),
+               help='Maximum number of retries to unplug VBD. if <=0, '
+                    'should try once and no retry'),
     cfg.StrOpt('torrent_images',
                default='none',
                help='Whether or not to download images via Bit Torrent '
@@ -379,7 +380,8 @@ def _should_retry_unplug_vbd(err):
 
 
 def unplug_vbd(session, vbd_ref, this_vm_ref):
-    max_attempts = CONF.xenserver.num_vbd_unplug_retries + 1
+    # make sure that perform at least once
+    max_attempts = max(0, CONF.xenserver.num_vbd_unplug_retries) + 1
     for num_attempt in xrange(1, max_attempts + 1):
         try:
             if num_attempt > 1:
@@ -2492,8 +2494,10 @@ def ensure_correct_host(session):
                           'specified by connection_url'))
 
 
-def import_all_migrated_disks(session, instance):
-    root_vdi = _import_migrated_root_disk(session, instance)
+def import_all_migrated_disks(session, instance, import_root=True):
+    root_vdi = None
+    if import_root:
+        root_vdi = _import_migrated_root_disk(session, instance)
     eph_vdis = _import_migrate_ephemeral_disks(session, instance)
     return {'root': root_vdi, 'ephemerals': eph_vdis}
 

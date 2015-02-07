@@ -19,7 +19,6 @@ import webob
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova.api.openstack import xmlutil
 from nova import exception
 from nova.i18n import _
 from nova import objects
@@ -28,44 +27,6 @@ from nova import objects
 soft_authorize = extensions.soft_extension_authorizer('compute',
                                                       'flavor_access')
 authorize = extensions.extension_authorizer('compute', 'flavor_access')
-
-
-def make_flavor(elem):
-    elem.set('{%s}is_public' % Flavor_access.namespace,
-             '%s:is_public' % Flavor_access.alias)
-
-
-def make_flavor_access(elem):
-    elem.set('flavor_id')
-    elem.set('tenant_id')
-
-
-class FlavorTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('flavor', selector='flavor')
-        make_flavor(root)
-        alias = Flavor_access.alias
-        namespace = Flavor_access.namespace
-        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})
-
-
-class FlavorsTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('flavors')
-        elem = xmlutil.SubTemplateElement(root, 'flavor', selector='flavors')
-        make_flavor(elem)
-        alias = Flavor_access.alias
-        namespace = Flavor_access.namespace
-        return xmlutil.SlaveTemplate(root, 1, nsmap={alias: namespace})
-
-
-class FlavorAccessTemplate(xmlutil.TemplateBuilder):
-    def construct(self):
-        root = xmlutil.TemplateElement('flavor_access')
-        elem = xmlutil.SubTemplateElement(root, 'access',
-                                          selector='flavor_access')
-        make_flavor_access(elem)
-        return xmlutil.MasterTemplate(root, 1)
 
 
 def _marshall_flavor_access(flavor):
@@ -83,7 +44,6 @@ class FlavorAccessController(object):
     def __init__(self):
         super(FlavorAccessController, self).__init__()
 
-    @wsgi.serializers(xml=FlavorAccessTemplate)
     def index(self, req, flavor_id):
         context = req.environ['nova.context']
         authorize(context)
@@ -110,15 +70,6 @@ class FlavorActionController(wsgi.Controller):
         if body is None or body == "":
             raise webob.exc.HTTPBadRequest(explanation=_("No request body"))
 
-    def _get_flavor_refs(self, context):
-        """Return a dictionary mapping flavorid to flavor_ref."""
-
-        flavors = objects.FlavorList.get_all(context)
-        rval = {}
-        for flavor in flavors:
-            rval[flavor.flavorid] = flavor
-        return rval
-
     def _extend_flavor(self, flavor_rval, flavor_ref):
         key = "%s:is_public" % (Flavor_access.alias)
         flavor_rval[key] = flavor_ref['is_public']
@@ -127,8 +78,6 @@ class FlavorActionController(wsgi.Controller):
     def show(self, req, resp_obj, id):
         context = req.environ['nova.context']
         if soft_authorize(context):
-            # Attach our slave template to the response object
-            resp_obj.attach(xml=FlavorTemplate())
             db_flavor = req.get_db_flavor(id)
 
             self._extend_flavor(resp_obj.obj['flavor'], db_flavor)
@@ -137,9 +86,6 @@ class FlavorActionController(wsgi.Controller):
     def detail(self, req, resp_obj):
         context = req.environ['nova.context']
         if soft_authorize(context):
-            # Attach our slave template to the response object
-            resp_obj.attach(xml=FlavorsTemplate())
-
             flavors = list(resp_obj.obj['flavors'])
             for flavor_rval in flavors:
                 db_flavor = req.get_db_flavor(flavor_rval['id'])
@@ -149,14 +95,10 @@ class FlavorActionController(wsgi.Controller):
     def create(self, req, body, resp_obj):
         context = req.environ['nova.context']
         if soft_authorize(context):
-            # Attach our slave template to the response object
-            resp_obj.attach(xml=FlavorTemplate())
-
             db_flavor = req.get_db_flavor(resp_obj.obj['flavor']['id'])
 
             self._extend_flavor(resp_obj.obj['flavor'], db_flavor)
 
-    @wsgi.serializers(xml=FlavorAccessTemplate)
     @wsgi.action("addTenantAccess")
     def _addTenantAccess(self, req, id, body):
         context = req.environ['nova.context']
@@ -180,7 +122,6 @@ class FlavorActionController(wsgi.Controller):
 
         return _marshall_flavor_access(flavor)
 
-    @wsgi.serializers(xml=FlavorAccessTemplate)
     @wsgi.action("removeTenantAccess")
     def _removeTenantAccess(self, req, id, body):
         context = req.environ['nova.context']

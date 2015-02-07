@@ -22,8 +22,6 @@ Nova Specific Commandments
 - [N313] capitalize help string
   Config parameter help strings should have a capitalized first letter
 - [N314] vim configuration should not be kept in source files.
-- [N315] We do not use @authors tags in source files. We have git to track
-  authorship.
 - [N316] Change assertTrue(isinstance(A, B)) by optimal assert like
   assertIsInstance(A, B).
 - [N317] Change assertEqual(type(A), B) by optimal assert like
@@ -39,12 +37,19 @@ Nova Specific Commandments
 - [N324] Ensure that jsonutils.%(fun)s must be used instead of json.%(fun)s
 - [N325] str() and unicode() cannot be used on an exception.  Remove use or use six.text_type()
 - [N326] Translated messages cannot be concatenated.  String should be included in translated message.
-- [N327] assert_called_once() is not a valid method
 - [N328] Validate that LOG.info messages use _LI.
 - [N329] Validate that LOG.exception messages use _LE.
 - [N330] Validate that LOG.warning messages use _LW.
-- [N331] Change LOG.warn on LOG.warning.
 - [N332] Check that the api_version decorator is the first decorator on a method
+- [N333] Check for oslo library imports use the non-namespaced packages
+- [N334] Change assertTrue/False(A in/not in B, message) to the more specific
+  assertIn/NotIn(A, B, message)
+- [N335] Check for usage of deprecated assertRaisesRegexp
+- [N336] Must use a dict comprehension instead of a dict constructor with a sequence of key-value pairs.
+- [N337] Don't import translation in tests
+- [N338] Change assertEqual(A in B, True), assertEqual(True, A in B),
+  assertEqual(A in B, False) or assertEqual(False, A in B) to the more specific
+  assertIn/NotIn(A, B)
 
 Creating Unit Tests
 -------------------
@@ -55,7 +60,7 @@ submitted bug fix does have a unit test, be sure to add a new one that fails
 without the patch and passes with the patch.
 
 For more information on creating unit tests and utilizing the testing
-infrastructure in OpenStack Nova, please read ``nova/tests/README.rst``.
+infrastructure in OpenStack Nova, please read ``nova/tests/unit/README.rst``.
 
 
 Running Tests

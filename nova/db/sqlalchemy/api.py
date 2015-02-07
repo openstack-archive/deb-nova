@@ -32,6 +32,7 @@ from oslo.db.sqlalchemy import session as db_session
 from oslo.db.sqlalchemy import utils as sqlalchemyutils
 from oslo.utils import excutils
 from oslo.utils import timeutils
+import retrying
 import six
 from sqlalchemy import and_
 from sqlalchemy import Boolean
@@ -494,10 +495,10 @@ def _compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
-def compute_node_get_by_service_id(context, service_id):
+def compute_nodes_get_by_service_id(context, service_id):
     result = model_query(context, models.ComputeNode, read_deleted='no').\
         filter_by(service_id=service_id).\
-        first()
+        all()
 
     if not result:
         raise exception.ServiceNotFound(service_id=service_id)
@@ -634,6 +635,12 @@ def compute_node_delete(context, compute_id):
 
 def compute_node_statistics(context):
     """Compute statistics over all compute nodes."""
+
+    # TODO(sbauza): Remove the service_id filter in a later release
+    # once we are sure that all compute nodes report the host field
+    _filter = or_(models.Service.host == models.ComputeNode.host,
+                  models.Service.id == models.ComputeNode.service_id)
+
     result = model_query(context,
                          models.ComputeNode, (
                              func.count(models.ComputeNode.id),
@@ -650,17 +657,15 @@ def compute_node_statistics(context):
                              func.sum(models.ComputeNode.disk_available_least),
                          ), read_deleted="no").\
                          filter(models.Service.disabled == false()).\
-                         filter(
-                            models.Service.id ==
-                            models.ComputeNode.service_id).\
+                         filter(_filter).\
                          first()
 
     # Build a dict of the info--making no assumptions about result
     fields = ('count', 'vcpus', 'memory_mb', 'local_gb', 'vcpus_used',
               'memory_mb_used', 'local_gb_used', 'free_ram_mb', 'free_disk_gb',
               'current_workload', 'running_vms', 'disk_available_least')
-    return dict((field, int(result[idx] or 0))
-                for idx, field in enumerate(fields))
+    return {field: int(result[idx] or 0)
+            for idx, field in enumerate(fields)}
 
 
 ###################
@@ -754,7 +759,7 @@ def floating_ip_bulk_create(context, ips, want_result=True):
     session = get_session()
     with session.begin():
         try:
-            tab = models.FloatingIp().__table__  # pylint: disable=E1101
+            tab = models.FloatingIp().__table__
             session.execute(tab.insert(), ips)
         except db_exc.DBDuplicateEntry as e:
             raise exception.FloatingIpExists(address=e.value)
@@ -1055,12 +1060,6 @@ def dnsdomain_unregister(context, fqdomain):
                  delete()
 
 
-@require_context
-def dnsdomain_list(context):
-    query = model_query(context, models.DNSDomain, read_deleted="no")
-    return [row.domain for row in query.all()]
-
-
 def dnsdomain_get_all(context):
     return model_query(context, models.DNSDomain, read_deleted="no").all()
 
@@ -1106,6 +1105,9 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
 
 
 @require_admin_context
+@_retry_on_deadlock
+@retrying.retry(stop_max_attempt_number=5, retry_on_exception=
+                lambda exc: isinstance(exc, exception.FixedIpAssociateFailed))
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
                             host=None):
     if instance_uuid and not uuidutils.is_uuid_like(instance_uuid):
@@ -1121,22 +1123,34 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
                                filter_by(reserved=False).\
                                filter_by(instance_uuid=None).\
                                filter_by(host=None).\
-                               with_lockmode('update').\
                                first()
-        # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
-        #             then this has concurrency issues
+
         if not fixed_ip_ref:
             raise exception.NoMoreFixedIps(net=network_id)
 
+        params = {}
         if fixed_ip_ref['network_id'] is None:
-            fixed_ip_ref['network'] = network_id
-
+            params['network_id'] = network_id
         if instance_uuid:
-            fixed_ip_ref['instance_uuid'] = instance_uuid
-
+            params['instance_uuid'] = instance_uuid
         if host:
-            fixed_ip_ref['host'] = host
-        session.add(fixed_ip_ref)
+            params['host'] = host
+
+        rows_updated = model_query(context, models.FixedIp, session=session,
+                                   read_deleted="no").\
+            filter_by(id=fixed_ip_ref['id']).\
+            filter_by(network_id=fixed_ip_ref['network_id']).\
+            filter_by(reserved=False).\
+            filter_by(instance_uuid=None).\
+            filter_by(host=None).\
+            filter_by(address=fixed_ip_ref['address']).\
+            update(params, synchronize_session='evaluate')
+
+        if not rows_updated:
+            LOG.debug('The row was updated in a concurrent transaction, '
+                      'we will fetch another row')
+            raise exception.FixedIpAssociateFailed(net=network_id)
+
     return fixed_ip_ref
 
 
@@ -1156,7 +1170,7 @@ def fixed_ip_bulk_create(context, ips):
     engine = get_engine()
     with engine.begin() as conn:
         try:
-            tab = models.FixedIp.__table__  # pylint: disable=E1101
+            tab = models.FixedIp.__table__
             conn.execute(tab.insert(), ips)
         except db_exc.DBDuplicateEntry as e:
             raise exception.FixedIpExists(address=e.value)
@@ -2326,29 +2340,6 @@ def instance_get_all_by_host_and_not_type(context, host, type_id=None):
                    filter(models.Instance.instance_type_id != type_id).all())
 
 
-# NOTE(jkoelker) This is only being left here for compat with floating
-#                ips. Currently the network_api doesn't return floaters
-#                in network_info. Once it starts return the model. This
-#                function and its call in compute/manager.py on 1829 can
-#                go away
-@require_context
-def instance_get_floating_address(context, instance_id):
-    instance = instance_get(context, instance_id)
-    fixed_ips = fixed_ip_get_by_instance(context, instance['uuid'])
-
-    if not fixed_ips:
-        return None
-
-    # NOTE(tr3buchet): this only gets the first fixed_ip
-    # won't find floating ips associated with other fixed_ips
-    floating_ips = floating_ip_get_by_fixed_address(context,
-                                                    fixed_ips[0]['address'])
-    if not floating_ips:
-        return None
-    # NOTE(vish): this just returns the first floating ip
-    return floating_ips[0]['address']
-
-
 @require_context
 def instance_floating_address_get_all(context, instance_uuid):
     if not uuidutils.is_uuid_like(instance_uuid):
@@ -2602,7 +2593,7 @@ def instance_extra_get_by_instance_uuid(context, instance_uuid,
     query = model_query(context, models.InstanceExtra).\
         filter_by(instance_uuid=instance_uuid)
     if columns is None:
-        columns = ['numa_topology', 'pci_requests']
+        columns = ['numa_topology', 'pci_requests', 'flavor']
     for column in columns:
         query = query.options(undefer(column))
     instance_extra = query.first()
@@ -2825,10 +2816,6 @@ def network_get_all_by_uuids(context, network_uuids, project_only):
             raise exception.NetworkNotFound(network_id=network_uuid)
 
     return result
-
-# NOTE(vish): pylint complains because of the long method name, but
-#             it fits with the names of the rest of the methods
-# pylint: disable=C0103
 
 
 @require_admin_context
@@ -3514,8 +3501,8 @@ def quota_reserve(context, resources, project_quotas, user_quotas, deltas,
             usages = project_usages
         else:
             usages = user_usages
-        usages = dict((k, dict(in_use=v['in_use'], reserved=v['reserved']))
-                      for k, v in usages.items())
+        usages = {k: dict(in_use=v['in_use'], reserved=v['reserved'])
+                  for k, v in usages.items()}
         LOG.debug('Raise OverQuota exception because: '
                   'project_quotas: %(project_quotas)s, '
                   'user_quotas: %(user_quotas)s, deltas: %(deltas)s, '
@@ -4536,8 +4523,8 @@ def _dict_with_extra_specs(inst_type_query):
 
     """
     inst_type_dict = dict(inst_type_query)
-    extra_specs = dict([(x['key'], x['value'])
-                        for x in inst_type_query['extra_specs']])
+    extra_specs = {x['key']: x['value']
+                   for x in inst_type_query['extra_specs']}
     inst_type_dict['extra_specs'] = extra_specs
     return inst_type_dict
 
@@ -4744,7 +4731,7 @@ def _flavor_extra_specs_get_query(context, flavor_id, session=None):
 @require_context
 def flavor_extra_specs_get(context, flavor_id):
     rows = _flavor_extra_specs_get_query(context, flavor_id).all()
-    return dict([(row['key'], row['value']) for row in rows])
+    return {row['key']: row['value'] for row in rows}
 
 
 @require_context
@@ -4868,7 +4855,7 @@ def _instance_metadata_get_query(context, instance_uuid, session=None):
 @require_context
 def instance_metadata_get(context, instance_uuid):
     rows = _instance_metadata_get_query(context, instance_uuid).all()
-    return dict((row['key'], row['value']) for row in rows)
+    return {row['key']: row['value'] for row in rows}
 
 
 @require_context
@@ -4934,7 +4921,7 @@ def _instance_system_metadata_get_query(context, instance_uuid, session=None):
 @require_context
 def instance_system_metadata_get(context, instance_uuid):
     rows = _instance_system_metadata_get_query(context, instance_uuid).all()
-    return dict((row['key'], row['value']) for row in rows)
+    return {row['key']: row['value'] for row in rows}
 
 
 @require_context
@@ -5355,15 +5342,6 @@ def aggregate_metadata_get_by_metadata_key(context, aggregate_id, key):
     return dict(metadata)
 
 
-def aggregate_host_get_by_metadata_key(context, key):
-    rows = aggregate_get_by_metadata_key(context, key)
-    metadata = collections.defaultdict(set)
-    for agg in rows:
-        for agghost in agg._hosts:
-            metadata[agghost.host].add(agg._metadata[0]['value'])
-    return dict(metadata)
-
-
 def aggregate_get_by_metadata_key(context, key):
     """Return rows that match metadata key.
 
@@ -5459,7 +5437,7 @@ def aggregate_metadata_get(context, aggregate_id):
                        models.AggregateMetadata).\
                        filter_by(aggregate_id=aggregate_id).all()
 
-    return dict([(r['key'], r['value']) for r in rows])
+    return {r['key']: r['value'] for r in rows}
 
 
 @require_aggregate_exists
@@ -5738,12 +5716,6 @@ def ec2_instance_get_by_uuid(context, instance_uuid):
 
 
 @require_context
-def get_ec2_instance_id_by_uuid(context, instance_id):
-    result = ec2_instance_get_by_uuid(context, instance_id)
-    return result['id']
-
-
-@require_context
 def ec2_instance_get_by_id(context, instance_id):
     result = _ec2_instance_get_query(context).\
                     filter_by(id=instance_id).\
@@ -5939,6 +5911,74 @@ def archive_deleted_rows(context, max_rows=None):
         if rows_archived >= max_rows:
             break
     return rows_archived
+
+
+def _augment_flavor_to_migrate(flavor_to_migrate, db_flavor):
+    """Make sure that extra_specs on the flavor to migrate is updated."""
+    if not flavor_to_migrate.obj_attr_is_set('extra_specs'):
+        flavor_to_migrate.extra_specs = {}
+    for key in db_flavor['extra_specs']:
+        if key not in flavor_to_migrate.extra_specs:
+            flavor_to_migrate.extra_specs[key] = db_flavor['extra_specs'][key]
+
+
+def _augment_flavors_to_migrate(instance, flavor_cache):
+    """Add extra_specs to instance flavors.
+
+    :param instance: Instance to be mined
+    :param flavor_cache:  Dict to persist flavors we look up from the DB
+    """
+
+    for flavorprop in ['flavor', 'old_flavor', 'new_flavor']:
+        flavor = getattr(instance, flavorprop)
+        if flavor is None:
+            continue
+        flavorid = flavor.flavorid
+        if flavorid not in flavor_cache:
+            flavor_cache[flavorid] = flavor_get_by_flavor_id(
+                instance._context, flavorid, 'yes')
+        _augment_flavor_to_migrate(flavor, flavor_cache[flavorid])
+
+
+@require_admin_context
+def migrate_flavor_data(context, max_count, flavor_cache):
+    # NOTE(danms): This is only ever run in nova-manage, and we need to avoid
+    # a circular import
+    from nova import objects
+
+    query = _instance_get_all_query(context, joins=['extra', 'extra.flavor']).\
+                join(models.Instance.extra).\
+                filter(models.InstanceExtra.flavor.is_(None))
+    if max_count is not None:
+        instances = query.limit(max_count)
+    else:
+        instances = query.all()
+
+    instances = _instances_fill_metadata(context, instances,
+                                         manual_joins=['system_metadata'])
+
+    count_all = 0
+    count_hit = 0
+    for db_instance in instances:
+        count_all += 1
+        instance = objects.Instance._from_db_object(
+            context, objects.Instance(), db_instance,
+            expected_attrs=['system_metadata', 'flavor'])
+        # NOTE(danms): Don't touch instances that are likely in the
+        # middle of some other operation. This is just a guess and not
+        # a lock. There is still a race here, although it's the same
+        # race as the normal code, since we use expected_task_state below.
+        if instance.task_state is not None:
+            continue
+        if instance.vm_state in [vm_states.RESCUED, vm_states.RESIZED]:
+            continue
+
+        _augment_flavors_to_migrate(instance, flavor_cache)
+        if instance.obj_what_changed():
+            instance.save(expected_task_state=[None])
+            count_hit += 1
+
+    return count_all, count_hit
 
 
 ####################

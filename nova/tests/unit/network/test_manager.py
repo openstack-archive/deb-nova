@@ -25,6 +25,7 @@ from oslo.config import cfg
 from oslo.db import exception as db_exc
 from oslo import messaging
 from oslo.utils import importutils
+from oslo.utils import netutils
 from oslo_concurrency import processutils
 import six
 
@@ -190,7 +191,7 @@ class FlatNetworkTestCase(test.TestCase):
         self.context = context.RequestContext('testuser', 'testproject',
                                               is_admin=False)
 
-    def test_get_instance_nw_info(self):
+    def test_get_instance_nw_info_fake(self):
         fake_get_instance_nw_info = fake_network.fake_get_instance_nw_info
 
         nw_info = fake_get_instance_nw_info(self.stubs, 0, 2)
@@ -451,6 +452,39 @@ class FlatNetworkTestCase(test.TestCase):
 
         self.network.validate_networks(self.context, requested_networks)
 
+    @mock.patch('nova.objects.fixed_ip.FixedIPList.get_by_instance_uuid')
+    def test_get_instance_nw_info(self, get):
+
+        def make_ip(index):
+            vif = objects.VirtualInterface(uuid=index, address=index)
+            network = objects.Network(uuid=index,
+                                      bridge=index,
+                                      label=index,
+                                      project_id=index,
+                                      injected=False,
+                                      netmask='255.255.255.0',
+                                      dns1=None,
+                                      dns2=None,
+                                      cidr_v6=None,
+                                      gateway_v6=None,
+                                      broadcast_v6=None,
+                                      netmask_v6=None,
+                                      rxtx_base=None,
+                                      gateway='192.168.%s.1' % index,
+                                      dhcp_server='192.168.%s.1' % index,
+                                      broadcast='192.168.%s.255' % index,
+                                      cidr='192.168.%s.0/24' % index)
+            return objects.FixedIP(virtual_interface=vif,
+                                   network=network,
+                                   floating_ips=objects.FloatingIPList(),
+                                   address='192.168.%s.2' % index)
+        objs = [make_ip(index) for index in ('3', '1', '2')]
+        get.return_value = objects.FixedIPList(objects=objs)
+        nw_info = self.network.get_instance_nw_info(self.context, None,
+                                                    None, None)
+        for i, vif in enumerate(nw_info):
+            self.assertEqual(vif['network']['bridge'], objs[i].network.bridge)
+
     @mock.patch('nova.objects.quotas.Quotas.reserve')
     def test_add_fixed_ip_instance_using_id_without_vpn(self, reserve):
         self.stubs.Set(self.network,
@@ -704,9 +738,10 @@ class FlatNetworkTestCase(test.TestCase):
         inst = objects.Instance()
         inst['uuid'] = 'nosuch'
         get_by_uuid.return_value = inst
+        usages = {'fixed_ips': {'in_use': 10, 'reserved': 1}}
         reserve.side_effect = exception.OverQuota(overs='testing',
                                                   quotas={'fixed_ips': 10},
-                                                  headroom={'fixed_ips': 0})
+                                                  usages=usages)
         util_method.return_value = ('foo', 'bar')
         self.assertRaises(exception.FixedIpLimitExceeded,
                           self.network.allocate_fixed_ip,
@@ -2711,7 +2746,7 @@ class AllocateTestCase(test.TestCase):
             project_id=project_id, macs=None)
         self.assertEqual(1, len(nw_info))
         fixed_ip = nw_info.fixed_ips()[0]['address']
-        self.assertTrue(utils.is_valid_ipv4(fixed_ip))
+        self.assertTrue(netutils.is_valid_ipv4(fixed_ip))
         self.network.deallocate_for_instance(self.context,
                 instance=inst)
 

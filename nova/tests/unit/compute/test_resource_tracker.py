@@ -29,6 +29,7 @@ from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import db
+from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
 from nova import rpc
@@ -91,19 +92,77 @@ class FakeVirtDriver(driver.ComputeDriver):
         self.memory_mb_used = 0
         self.local_gb_used = 0
         self.pci_support = pci_support
-        self.pci_devices = [{
-            'label': 'forza-napoli',
-            'dev_type': 'foo',
-            'compute_node_id': 1,
-            'address': '0000:00:00.1',
-            'product_id': 'p1',
-            'vendor_id': 'v1',
-            'status': 'available',
-            'extra_k1': 'v1'}] if self.pci_support else []
-        self.pci_stats = [{
-            'count': 1,
-            'vendor_id': 'v1',
-            'product_id': 'p1'}] if self.pci_support else []
+        self.pci_devices = [
+            {
+                'label': 'label_8086_0443',
+                'dev_type': 'type-VF',
+                'compute_node_id': 1,
+                'address': '0000:00:01.1',
+                'product_id': '0443',
+                'vendor_id': '8086',
+                'status': 'available',
+                'extra_k1': 'v1',
+                'numa_node': 1
+            },
+            {
+                'label': 'label_8086_0443',
+                'dev_type': 'type-VF',
+                'compute_node_id': 1,
+                'address': '0000:00:01.2',
+                'product_id': '0443',
+                'vendor_id': '8086',
+                'status': 'available',
+                'extra_k1': 'v1',
+                'numa_node': 1
+            },
+            {
+                'label': 'label_8086_0443',
+                'dev_type': 'type-PF',
+                'compute_node_id': 1,
+                'address': '0000:00:01.0',
+                'product_id': '0443',
+                'vendor_id': '8086',
+                'status': 'available',
+                'extra_k1': 'v1',
+                'numa_node': 1
+            },
+            {
+                'label': 'label_8086_0123',
+                'dev_type': 'type-PCI',
+                'compute_node_id': 1,
+                'address': '0000:00:01.0',
+                'product_id': '0123',
+                'vendor_id': '8086',
+                'status': 'available',
+                'extra_k1': 'v1',
+                'numa_node': 1
+            },
+            {
+                'label': 'label_8086_7891',
+                'dev_type': 'type-VF',
+                'compute_node_id': 1,
+                'address': '0000:00:01.0',
+                'product_id': '7891',
+                'vendor_id': '8086',
+                'status': 'available',
+                'extra_k1': 'v1',
+                'numa_node': None
+            },
+        ] if self.pci_support else []
+        self.pci_stats = [
+            {
+                'count': 2,
+                'vendor_id': '8086',
+                'product_id': '0443',
+                'numa_node': 1
+            },
+            {
+                'count': 1,
+                'vendor_id': '8086',
+                'product_id': '7891',
+                'numa_node': None
+            },
+        ] if self.pci_support else []
         if stats is not None:
             self.stats = stats
 
@@ -149,6 +208,9 @@ class BaseTestCase(test.TestCase):
 
         self.context = context.get_admin_context()
 
+        self.flags(pci_passthrough_whitelist=[
+            '{"vendor_id": "8086", "product_id": "0443"}',
+            '{"vendor_id": "8086", "product_id": "7891"}'])
         self.flags(use_local=True, group='conductor')
         self.conductor = self.start_service('conductor',
                                             manager=CONF.conductor.manager)
@@ -187,10 +249,17 @@ class BaseTestCase(test.TestCase):
             "running_vms": 0,
             "cpu_info": None,
             "numa_topology": None,
-            "stats": {
-                "num_instances": "1",
-            },
+            "stats": '{"num_instances": "1"}',
             "hypervisor_hostname": "fakenode",
+            'hypervisor_version': 1,
+            'hypervisor_type': 'fake-hyp',
+            'disk_available_least': None,
+            'host_ip': None,
+            'metrics': None,
+            'created_at': None,
+            'updated_at': None,
+            'deleted_at': None,
+            'deleted': False,
         }
         if values:
             compute.update(values)
@@ -206,6 +275,13 @@ class BaseTestCase(test.TestCase):
             "binary": "nova-compute",
             "topic": "compute",
             "compute_node": compute,
+            "report_count": 0,
+            'disabled': False,
+            'disabled_reason': None,
+            'created_at': None,
+            'updated_at': None,
+            'deleted_at': None,
+            'deleted': False,
         }
         return service
 
@@ -445,6 +521,8 @@ class MissingComputeNodeTestCase(BaseTestCase):
 
         self.stubs.Set(db, 'service_get_by_compute_host',
                 self._fake_service_get_by_compute_host)
+        self.stubs.Set(db, 'compute_node_get_by_host_and_nodename',
+                self._fake_compute_node_get_by_host_and_nodename)
         self.stubs.Set(db, 'compute_node_create',
                 self._fake_create_compute_node)
         self.tracker.scheduler_client.update_resource_stats = mock.Mock()
@@ -457,6 +535,10 @@ class MissingComputeNodeTestCase(BaseTestCase):
         # return a service with no joined compute
         service = self._create_service()
         return service
+
+    def _fake_compute_node_get_by_host_and_nodename(self, ctx, host, nodename):
+        # return no compute node
+        raise exception.ComputeHostNotFound(host=host)
 
     def test_create_compute_node(self):
         self.tracker.update_available_resource(self.context)
@@ -483,6 +565,8 @@ class BaseTrackerTestCase(BaseTestCase):
 
         self.stubs.Set(db, 'service_get_by_compute_host',
                 self._fake_service_get_by_compute_host)
+        self.stubs.Set(db, 'compute_node_get_by_host_and_nodename',
+                self._fake_compute_node_get_by_host_and_nodename)
         self.stubs.Set(db, 'compute_node_update',
                 self._fake_compute_node_update)
         self.stubs.Set(db, 'compute_node_delete',
@@ -503,6 +587,10 @@ class BaseTrackerTestCase(BaseTestCase):
         self.compute = self._create_compute_node()
         self.service = self._create_service(host, compute=self.compute)
         return self.service
+
+    def _fake_compute_node_get_by_host_and_nodename(self, ctx, host, nodename):
+        self.compute = self._create_compute_node()
+        return self.compute
 
     def _fake_compute_node_update(self, ctx, compute_node_id, values,
             prune_stats=False):
@@ -1147,7 +1235,7 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
 
         src_dict = {
             'memory_mb': 1, 'root_gb': 1, 'ephemeral_gb': 0, 'vcpus': 1}
-        dest_dict = dict((k, v + 1) for (k, v) in src_dict.iteritems())
+        dest_dict = {k: v + 1 for (k, v) in src_dict.iteritems()}
         src_type = self._fake_flavor_create(
                 id=10, name="srcflavor", **src_dict)
         dest_type = self._fake_flavor_create(

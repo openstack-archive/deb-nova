@@ -243,13 +243,20 @@ class HostState(object):
         # Track number of instances on host
         self.num_instances += 1
 
+        instance_numa_topology = hardware.instance_topology_from_instance(
+            instance)
+        instance_cells = None
+        if instance_numa_topology:
+            instance_cells = instance_numa_topology.cells
+
         pci_requests = instance.get('pci_requests')
         # NOTE(danms): Instance here is still a dict, which is converted from
         # an object. Thus, it has a .pci_requests field, which gets converted
         # to a primitive early on, and is thus a dict here. Convert this when
         # we get an object all the way to this path.
         if pci_requests and pci_requests['requests'] and self.pci_stats:
-            self.pci_stats.apply_requests(pci_requests.requests)
+            self.pci_stats.apply_requests(pci_requests.requests,
+                                          instance_cells)
 
         # Calculate the numa usage
         updated_numa_topology = hardware.get_host_numa_usage_from_instance(
@@ -283,8 +290,7 @@ class HostManager(object):
         self.filter_handler = filters.HostFilterHandler()
         filter_classes = self.filter_handler.get_matching_classes(
                 CONF.scheduler_available_filters)
-        self.filter_cls_map = dict(
-                (cls.__name__, cls) for cls in filter_classes)
+        self.filter_cls_map = {cls.__name__: cls for cls in filter_classes}
         self.filter_obj_map = {}
         self.weight_handler = weights.HostWeightHandler()
         weigher_classes = self.weight_handler.get_matching_classes(
@@ -372,7 +378,7 @@ class HostManager(object):
         if ignore_hosts or force_hosts or force_nodes:
             # NOTE(deva): we can't assume "host" is unique because
             #             one host may have many nodes.
-            name_to_cls_map = dict([((x.host, x.nodename), x) for x in hosts])
+            name_to_cls_map = {(x.host, x.nodename): x for x in hosts}
             if ignore_hosts:
                 _strip_ignore_hosts(name_to_cls_map, ignore_hosts)
                 if not name_to_cls_map:

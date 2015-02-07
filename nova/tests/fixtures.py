@@ -21,12 +21,15 @@ import gettext
 import logging
 import os
 import uuid
+import warnings
 
 import fixtures
 from oslo.config import cfg
+from oslo.messaging import conffixture as messaging_conffixture
 
 from nova.db import migration
 from nova.db.sqlalchemy import api as session
+from nova import rpc
 from nova import service
 
 _TRUE_VALUES = ('True', 'true', '1', 'yes')
@@ -217,3 +220,36 @@ class Database(fixtures.Fixture):
     def setUp(self):
         super(Database, self).setUp()
         self.reset()
+
+
+class RPCFixture(fixtures.Fixture):
+    def __init__(self, *exmods):
+        super(RPCFixture, self).__init__()
+        self.exmods = []
+        self.exmods.extend(exmods)
+
+    def setUp(self):
+        super(RPCFixture, self).setUp()
+        self.addCleanup(rpc.cleanup)
+        rpc.add_extra_exmods(*self.exmods)
+        self.addCleanup(rpc.clear_extra_exmods)
+        self.messaging_conf = messaging_conffixture.ConfFixture(CONF)
+        self.messaging_conf.transport_driver = 'fake'
+        self.useFixture(self.messaging_conf)
+        rpc.init(CONF)
+
+
+class WarningsFixture(fixtures.Fixture):
+    """Filters out warnings during test runs."""
+
+    def setUp(self):
+        super(WarningsFixture, self).setUp()
+        # NOTE(sdague): Make deprecation warnings only happen once. Otherwise
+        # this gets kind of crazy given the way that upstream python libs use
+        # this.
+        warnings.simplefilter("once", DeprecationWarning)
+        warnings.filterwarnings('ignore',
+                                message='With-statements now directly support'
+                                        ' multiple context managers')
+
+        self.addCleanup(warnings.resetwarnings)

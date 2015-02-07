@@ -20,13 +20,13 @@
 
 import errno
 import os
-import platform
 import re
 
 from lxml import etree
 from oslo.config import cfg
 from oslo_concurrency import processutils
 
+from nova.compute import arch
 from nova.i18n import _
 from nova.i18n import _LI
 from nova.i18n import _LW
@@ -223,13 +223,37 @@ def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
         else:
             # 4002000 == 4.2.0
             if hypervisor_version >= 4002000:
-                return 'qemu'
-            # 4000000 == 4.0.0
-            elif hypervisor_version > 4000000:
-                return "tap2"
-            else:
-                return "tap"
-
+                try:
+                    execute('xend', 'status',
+                            run_as_root=True, check_exit_code=True)
+                except OSError as exc:
+                    if exc.errno == errno.ENOENT:
+                        LOG.debug("xend is not found")
+                        # libvirt will try to use libxl toolstack
+                        return 'qemu'
+                    else:
+                        raise
+                except processutils.ProcessExecutionError as exc:
+                    LOG.debug("xend is not started")
+                    # libvirt will try to use libxl toolstack
+                    return 'qemu'
+            # libvirt will use xend/xm toolstack
+            try:
+                out, err = execute('tap-ctl', 'check', check_exit_code=False)
+                if out == 'ok\n':
+                    # 4000000 == 4.0.0
+                    if hypervisor_version > 4000000:
+                        return "tap2"
+                    else:
+                        return "tap"
+                else:
+                    LOG.info(_LI("tap-ctl check: %s"), out)
+            except OSError as exc:
+                if exc.errno == errno.ENOENT:
+                    LOG.debug("tap-ctl tool is not installed")
+                else:
+                    raise
+            return "file"
     elif CONF.libvirt.virt_type in ('kvm', 'qemu'):
         return "qemu"
     else:
@@ -488,6 +512,33 @@ def get_instance_path(instance, forceold=False, relative=False):
     return os.path.join(CONF.instances_path, instance['uuid'])
 
 
+def get_instance_path_at_destination(instance, migrate_data=None):
+    """Get the the instance path on destination node while live migration.
+
+    This method determines the directory name for instance storage on
+    destination node, while live migration.
+
+    :param instance: the instance we want a path for
+    :param migrate_data: if not None, it is a dict which holds data
+                         required for live migration without shared
+                         storage.
+
+    :returns: a path to store information about that instance
+    """
+    instance_relative_path = None
+    if migrate_data:
+        instance_relative_path = migrate_data.get('instance_relative_path')
+    # NOTE(mikal): this doesn't use libvirt_utils.get_instance_path
+    # because we are ensuring that the same instance directory name
+    # is used as was at the source
+    if instance_relative_path:
+        instance_dir = os.path.join(CONF.instances_path,
+                                    instance_relative_path)
+    else:
+        instance_dir = get_instance_path(instance)
+    return instance_dir
+
+
 def get_arch(image_meta):
     """Determine the architecture of the guest (or host).
 
@@ -501,11 +552,11 @@ def get_arch(image_meta):
     :returns: guest (or host) architecture
     """
     if image_meta:
-        arch = image_meta.get('properties', {}).get('architecture')
-        if arch is not None:
-            return arch
+        image_arch = image_meta.get('properties', {}).get('architecture')
+        if image_arch is not None:
+            return image_arch
 
-    return platform.processor()
+    return arch.from_host()
 
 
 def is_mounted(mount_path, source=None):

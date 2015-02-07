@@ -21,7 +21,7 @@ base_create = {
         'server': {
             'type': 'object',
             'properties': {
-                'name': parameter_types.name,
+                'name': parameter_types.hostname,
                 'imageRef': parameter_types.image_ref,
                 'flavorRef': parameter_types.flavor_ref,
                 'adminPass': parameter_types.admin_password,
@@ -31,13 +31,7 @@ base_create = {
                     'items': {
                         'type': 'object',
                         'properties': {
-                            'fixed_ip': {
-                                'type': ['string', 'null'],
-                                'oneOf': [
-                                    {'format': 'ipv4'},
-                                    {'format': 'ipv6'}
-                                ]
-                            },
+                            'fixed_ip': parameter_types.ip_address,
                             'port': {
                                 'type': ['string', 'null'],
                                 'format': 'uuid'
@@ -49,16 +43,11 @@ base_create = {
                 }
             },
             'required': ['name', 'flavorRef'],
-            # TODO(oomichi): After all extension schema patches are merged,
-            # this code should be enabled. If enabling before merger, API
-            # extension parameters would be considered as bad parameters.
-            # 'additionalProperties': False,
+            'additionalProperties': False,
         },
     },
     'required': ['server'],
-    # TODO(oomichi): Now v3 code will be used for v2.1 only and v2.1 needs
-    # to allow additionalProperties for some extensions.
-    # 'additionalProperties': False,
+    'additionalProperties': False,
 }
 
 base_update = {
@@ -67,11 +56,9 @@ base_update = {
         'server': {
             'type': 'object',
             'properties': {
-                'name': parameter_types.name,
+                'name': parameter_types.hostname,
             },
-            # TODO(oomichi): ditto, enable here after all extension schema
-            # patches are merged.
-            # 'additionalProperties': False,
+            'additionalProperties': False,
         },
     },
     'required': ['server'],
@@ -84,16 +71,14 @@ base_rebuild = {
         'rebuild': {
             'type': 'object',
             'properties': {
-                'name': parameter_types.name,
+                'name': parameter_types.hostname,
                 'imageRef': parameter_types.image_ref,
                 'adminPass': parameter_types.admin_password,
                 'metadata': parameter_types.metadata,
                 'preserve_ephemeral': parameter_types.boolean,
             },
             'required': ['imageRef'],
-            # TODO(oomichi): ditto, enable here after all extension schema
-            # patches are merged.
-            # 'additionalProperties': False,
+            'additionalProperties': False,
         },
     },
     'required': ['rebuild'],
@@ -109,11 +94,44 @@ base_resize = {
                 'flavorRef': parameter_types.flavor_ref,
             },
             'required': ['flavorRef'],
-            # TODO(gmann): enable here after all extension schema
-            # patches are merged.
-            # 'additionalProperties': False,
+            'additionalProperties': False,
         },
     },
     'required': ['resize'],
     'additionalProperties': False,
+}
+
+create_image = {
+    'type': 'object',
+    'properties': {
+        'createImage': {
+            'type': 'object',
+            'properties': {
+                'name': parameter_types.name,
+                'metadata': parameter_types.metadata
+            },
+            'required': ['name'],
+            'additionalProperties': False
+        }
+    },
+    'required': ['createImage'],
+    'additionalProperties': False
+}
+
+reboot = {
+    'type': 'object',
+    'properties': {
+        'reboot': {
+            'type': 'object',
+            'properties': {
+                'type': {
+                    'enum': ['HARD', 'Hard', 'hard', 'SOFT', 'Soft', 'soft']
+                }
+            },
+            'required': ['type'],
+            'additionalProperties': False
+        }
+    },
+    'required': ['reboot'],
+    'additionalProperties': False
 }

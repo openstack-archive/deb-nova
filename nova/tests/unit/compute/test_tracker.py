@@ -684,7 +684,8 @@ class TestSyncComputeNode(BaseTestCase):
         self.assertTrue(self.rt.disabled)
         self.assertIsNone(self.rt.compute_node)
 
-    def test_compute_node_created_on_empty(self):
+    @mock.patch('nova.objects.ComputeNode.get_by_host_and_nodename')
+    def test_compute_node_created_on_empty(self, get_mock):
         self._setup_rt()
 
         def fake_create_node(_ctx, resources):
@@ -698,6 +699,7 @@ class TestSyncComputeNode(BaseTestCase):
         service_mock = capi.service_get_by_compute_host
         service_obj = _SERVICE_FIXTURE
         service_mock.return_value = service_obj
+        get_mock.side_effect = exc.NotFound
 
         resources = {
             'host_ip': 'fake-ip',
@@ -743,6 +745,8 @@ class TestSyncComputeNode(BaseTestCase):
 
         self.assertFalse(self.rt.disabled)
         service_mock.assert_called_once_with(mock.sentinel.ctx, 'fake-host')
+        get_mock.assert_called_once_with(mock.sentinel.ctx, 'fake-host',
+                                         'fake-node')
         create_node_mock.assert_called_once_with(mock.sentinel.ctx,
                                                  expected_resources)
         # TODO(jaypipes): The update_resource_stats() scheduler method should
@@ -839,6 +843,10 @@ class TestSyncComputeNode(BaseTestCase):
         expected_resources = copy.deepcopy(resources)
         expected_resources['id'] = 1
         expected_resources['stats'] = '{}'
+
+        # TODO(sbauza): Remove this once RT is using ComputeNode.save() for
+        # updating the resources
+        expected_resources['host'] = 'fake-host'
 
         self.rt.ext_resources_handler.reset_resources(resources,
                                                       self.rt.driver)

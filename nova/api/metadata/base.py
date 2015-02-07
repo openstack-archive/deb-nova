@@ -27,6 +27,7 @@ from oslo.utils import timeutils
 
 from nova.api.ec2 import ec2utils
 from nova.api.metadata import password
+from nova import availability_zones as az
 from nova import block_device
 from nova import conductor
 from nova import context
@@ -42,8 +43,8 @@ metadata_opts = [
     cfg.StrOpt('config_drive_skip_versions',
                default=('1.0 2007-01-19 2007-03-01 2007-08-29 2007-10-10 '
                         '2007-12-15 2008-02-01 2008-09-01'),
-               help=('List of metadata versions to skip placing into the '
-                     'config drive')),
+               help='List of metadata versions to skip placing into the '
+                    'config drive'),
     cfg.StrOpt('vendordata_driver',
                default='nova.api.metadata.vendordata_json.JsonFileVendorData',
                help='Driver to use for vendor data'),
@@ -95,7 +96,7 @@ class InvalidMetadataPath(Exception):
     pass
 
 
-class InstanceMetadata():
+class InstanceMetadata(object):
     """Instance metadata."""
 
     def __init__(self, instance, address=None, content=None, extra_md=None,
@@ -112,15 +113,6 @@ class InstanceMetadata():
 
         ctxt = context.get_admin_context()
 
-        # NOTE(danms): This should be removed after bp:compute-manager-objects
-        if not isinstance(instance, obj_base.NovaObject):
-            expected = ['metadata', 'system_metadata']
-            if 'info_cache' in instance:
-                expected.append('info_cache')
-            instance = objects.Instance._from_db_object(
-                ctxt, objects.Instance(), instance,
-                expected_attrs=expected)
-
         # The default value of mimeType is set to MIME_TYPE_TEXT_PLAIN
         self.set_mimetype(MIME_TYPE_TEXT_PLAIN)
         self.instance = instance
@@ -131,16 +123,16 @@ class InstanceMetadata():
         else:
             capi = conductor.API()
 
-        self.availability_zone = ec2utils.get_availability_zone_by_host(
-                instance['host'], capi)
+        self.availability_zone = az.get_instance_availability_zone(ctxt,
+                                                                   instance)
 
         self.security_groups = objects.SecurityGroupList.get_by_instance(
             ctxt, instance)
 
         self.mappings = _format_instance_mapping(ctxt, instance)
 
-        if instance.get('user_data', None) is not None:
-            self.userdata_raw = base64.b64decode(instance['user_data'])
+        if instance.user_data is not None:
+            self.userdata_raw = base64.b64decode(instance.user_data)
         else:
             self.userdata_raw = None
 
@@ -154,7 +146,7 @@ class InstanceMetadata():
 
         self.password = password.extract_password(instance)
 
-        self.uuid = instance.get('uuid')
+        self.uuid = instance.uuid
 
         self.content = {}
         self.files = []

@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from lxml import etree
 import webob
 
 from nova.api.openstack.compute.contrib import quota_classes
@@ -21,7 +20,6 @@ from nova.api.openstack.compute import plugins
 from nova.api.openstack.compute.plugins.v3 import quota_classes \
        as quota_classes_v21
 from nova.api.openstack import extensions
-from nova.api.openstack import wsgi
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 
@@ -41,6 +39,8 @@ class QuotaClassSetsTestV21(test.TestCase):
 
     def setUp(self):
         super(QuotaClassSetsTestV21, self).setUp()
+        self.req_admin = fakes.HTTPRequest.blank('', use_admin_context=True)
+        self.req = fakes.HTTPRequest.blank('')
         self._setup()
 
     def _setup(self):
@@ -83,18 +83,13 @@ class QuotaClassSetsTestV21(test.TestCase):
         self.assertEqual(qs['key_pairs'], 100)
 
     def test_quotas_show_as_admin(self):
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class',
-            use_admin_context=True)
-        res_dict = self.controller.show(req, 'test_class')
+        res_dict = self.controller.show(self.req_admin, 'test_class')
 
         self.assertEqual(res_dict, quota_set('test_class'))
 
     def test_quotas_show_as_unauthorized_user(self):
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class')
         self.assertRaises(webob.exc.HTTPForbidden, self.controller.show,
-                          req, 'test_class')
+                          self.req, 'test_class')
 
     def test_quotas_update_as_admin(self):
         body = {'quota_class_set': {'instances': 50, 'cores': 50,
@@ -107,10 +102,7 @@ class QuotaClassSetsTestV21(test.TestCase):
                                     'security_group_rules': 20,
                                     'key_pairs': 100}}
 
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class',
-            use_admin_context=True)
-        res_dict = self.controller.update(req, 'test_class', body)
+        res_dict = self.controller.update(self.req_admin, 'test_class', body)
 
         self.assertEqual(res_dict, body)
 
@@ -125,41 +117,27 @@ class QuotaClassSetsTestV21(test.TestCase):
                                     'key_pairs': 100,
                                     }}
 
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class')
         self.assertRaises(webob.exc.HTTPForbidden, self.controller.update,
-                          req, 'test_class', body)
+                          self.req, 'test_class', body)
 
     def test_quotas_update_with_empty_body(self):
         body = {}
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class',
-            use_admin_context=True)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
-                          req, 'test_class', body)
+                          self.req_admin, 'test_class', body)
 
     def test_quotas_update_with_non_integer(self):
         body = {'quota_class_set': {'instances': "abc"}}
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class',
-            use_admin_context=True)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
-                          req, 'test_class', body)
+                          self.req_admin, 'test_class', body)
 
         body = {'quota_class_set': {'instances': 50.5}}
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class',
-            use_admin_context=True)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
-                          req, 'test_class', body)
+                          self.req_admin, 'test_class', body)
 
         body = {'quota_class_set': {
                 'instances': u'\u30aa\u30fc\u30d7\u30f3'}}
-        req = fakes.HTTPRequest.blank(
-            '/v2/fake4/os-quota-class-sets/test_class',
-            use_admin_context=True)
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.update,
-                          req, 'test_class', body)
+                          self.req_admin, 'test_class', body)
 
 
 class QuotaClassSetsTestV2(QuotaClassSetsTestV21):
@@ -168,69 +146,3 @@ class QuotaClassSetsTestV2(QuotaClassSetsTestV21):
         ext_mgr = extensions.ExtensionManager()
         ext_mgr.extensions = {}
         self.controller = quota_classes.QuotaClassSetsController(ext_mgr)
-
-
-class QuotaTemplateXMLSerializerTest(test.TestCase):
-    def setUp(self):
-        super(QuotaTemplateXMLSerializerTest, self).setUp()
-        self.serializer = quota_classes.QuotaClassTemplate()
-        self.deserializer = wsgi.XMLDeserializer()
-
-    def test_serializer(self):
-        exemplar = dict(quota_class_set=dict(
-                id='test_class',
-                metadata_items=10,
-                injected_file_path_bytes=255,
-                injected_file_content_bytes=20,
-                ram=50,
-                floating_ips=60,
-                fixed_ips=-1,
-                instances=70,
-                injected_files=80,
-                security_groups=10,
-                security_group_rules=20,
-                key_pairs=100,
-                cores=90))
-        text = self.serializer.serialize(exemplar)
-
-        tree = etree.fromstring(text)
-
-        self.assertEqual('quota_class_set', tree.tag)
-        self.assertEqual('test_class', tree.get('id'))
-        self.assertEqual(len(exemplar['quota_class_set']) - 1, len(tree))
-        for child in tree:
-            self.assertIn(child.tag, exemplar['quota_class_set'])
-            self.assertEqual(int(child.text),
-                             exemplar['quota_class_set'][child.tag])
-
-    def test_deserializer(self):
-        exemplar = dict(quota_class_set=dict(
-                metadata_items='10',
-                injected_file_content_bytes='20',
-                ram='50',
-                floating_ips='60',
-                fixed_ips='-1',
-                instances='70',
-                injected_files='80',
-                security_groups='10',
-                security_group_rules='20',
-                key_pairs='100',
-                cores='90'))
-        intext = ("<?xml version='1.0' encoding='UTF-8'?>\n"
-                  '<quota_class_set>'
-                  '<metadata_items>10</metadata_items>'
-                  '<injected_file_content_bytes>20'
-                  '</injected_file_content_bytes>'
-                  '<ram>50</ram>'
-                  '<floating_ips>60</floating_ips>'
-                  '<fixed_ips>-1</fixed_ips>'
-                  '<instances>70</instances>'
-                  '<injected_files>80</injected_files>'
-                  '<cores>90</cores>'
-                  '<security_groups>10</security_groups>'
-                  '<security_group_rules>20</security_group_rules>'
-                  '<key_pairs>100</key_pairs>'
-                  '</quota_class_set>')
-
-        result = self.deserializer.deserialize(intext)['body']
-        self.assertEqual(result, exemplar)

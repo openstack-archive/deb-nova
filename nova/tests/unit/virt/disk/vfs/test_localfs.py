@@ -12,6 +12,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import tempfile
+
+import mock
 from oslo.config import cfg
 from oslo_concurrency import processutils
 
@@ -383,3 +386,66 @@ class VirtDiskVFSLocalFSTest(test.NoDBTestCase):
                                     '/scratch/dir/some/file'),
                            'kwargs': {'run_as_root': True,
                                       'root_helper': root_helper}}])
+
+    @mock.patch.object(nova.utils, 'execute')
+    def test_get_format_fs(self, execute):
+        vfs = vfsimpl.VFSLocalFS("dummy.img")
+        vfs.setup = mock.MagicMock()
+        vfs.teardown = mock.MagicMock()
+
+        def fake_setup():
+            vfs.mount = mock.MagicMock()
+            vfs.mount.device = None
+            vfs.mount.get_dev.side_effect = fake_get_dev
+
+        def fake_teardown():
+            vfs.mount.device = None
+
+        def fake_get_dev():
+            vfs.mount.device = '/dev/xyz'
+            return True
+
+        vfs.setup.side_effect = fake_setup
+        vfs.teardown.side_effect = fake_teardown
+        execute.return_value = ('ext3\n', '')
+
+        vfs.setup()
+        self.assertEqual('ext3', vfs.get_image_fs())
+        vfs.teardown()
+        vfs.mount.get_dev.assert_called_once_with()
+        execute.assert_called_once_with('blkid', '-o',
+                                        'value', '-s',
+                                        'TYPE', '/dev/xyz',
+                                        run_as_root=True)
+
+    @mock.patch.object(tempfile, 'mkdtemp')
+    @mock.patch.object(nova.virt.disk.mount.nbd, 'NbdMount')
+    def test_setup_mount(self, NbdMount, mkdtemp):
+        vfs = vfsimpl.VFSLocalFS("img.qcow2", imgfmt='qcow2')
+
+        mounter = mock.MagicMock()
+        mkdtemp.return_value = 'tmp/'
+        NbdMount.return_value = mounter
+
+        vfs.setup()
+
+        self.assertTrue(mkdtemp.called)
+        NbdMount.assert_called_once_with(
+            'img.qcow2', 'tmp/', None)
+        mounter.do_mount.assert_called_once_with()
+
+    @mock.patch.object(tempfile, 'mkdtemp')
+    @mock.patch.object(nova.virt.disk.mount.nbd, 'NbdMount')
+    def test_setup_mount_false(self, NbdMount, mkdtemp):
+        vfs = vfsimpl.VFSLocalFS("img.qcow2", imgfmt='qcow2')
+
+        mounter = mock.MagicMock()
+        mkdtemp.return_value = 'tmp/'
+        NbdMount.return_value = mounter
+
+        vfs.setup(mount=False)
+
+        self.assertTrue(mkdtemp.called)
+        NbdMount.assert_called_once_with(
+            'img.qcow2', 'tmp/', None)
+        self.assertFalse(mounter.do_mount.called)

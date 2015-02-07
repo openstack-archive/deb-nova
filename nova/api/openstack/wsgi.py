@@ -18,9 +18,7 @@ import functools
 import inspect
 import math
 import time
-from xml.dom import minidom
 
-from lxml import etree
 from oslo.serialization import jsonutils
 from oslo.utils import strutils
 import six
@@ -28,7 +26,6 @@ import webob
 
 from nova.api.openstack import api_version_request as api_version
 from nova.api.openstack import versioned_method
-from nova.api.openstack import xmlutil
 from nova import exception
 from nova import i18n
 from nova.i18n import _
@@ -39,11 +36,6 @@ from nova import utils
 from nova import wsgi
 
 
-XMLNS_V10 = 'http://docs.rackspacecloud.com/servers/api/v1.0'
-XMLNS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
-
-XMLNS_ATOM = 'http://www.w3.org/2005/Atom'
-
 LOG = logging.getLogger(__name__)
 
 _SUPPORTED_CONTENT_TYPES = (
@@ -51,20 +43,9 @@ _SUPPORTED_CONTENT_TYPES = (
     'application/vnd.openstack.compute+json',
 )
 
-_SUPPORTED_XML_CONTENT_TYPES = (
-    'application/xml',
-    'application/vnd.openstack.compute+xml',
-)
-
 _MEDIA_TYPE_MAP = {
     'application/vnd.openstack.compute+json': 'json',
     'application/json': 'json',
-}
-
-_MEDIA_XML_TYPE_MAP = {
-    'application/vnd.openstack.compute+xml': 'xml',
-    'application/xml': 'xml',
-    'application/atom+xml': 'atom',
 }
 
 # These are typically automatically created by routes as either defaults
@@ -89,22 +70,17 @@ DEFAULT_API_VERSION = "2.1"
 # name of attribute to keep version method information
 VER_METHOD_ATTR = 'versioned_methods'
 
-
-# TODO(dims): Temporary, we already deprecated the v2 XML API in
-# Juno, we should remove this before Kilo
-DISABLE_XML_V2_API = True
+# Name of header used by clients to request a specific version
+# of the REST API
+API_VERSION_REQUEST_HEADER = 'X-OpenStack-Compute-API-Version'
 
 
 def get_supported_content_types():
-    if DISABLE_XML_V2_API:
-        return _SUPPORTED_CONTENT_TYPES
-    return _SUPPORTED_CONTENT_TYPES + _SUPPORTED_XML_CONTENT_TYPES
+    return _SUPPORTED_CONTENT_TYPES
 
 
 def get_media_map():
-    if DISABLE_XML_V2_API:
-        return _MEDIA_TYPE_MAP
-    return dict(_MEDIA_TYPE_MAP.items() + _MEDIA_XML_TYPE_MAP.items())
+    return dict(_MEDIA_TYPE_MAP.items())
 
 
 class Request(webob.Request):
@@ -237,8 +213,8 @@ class Request(webob.Request):
 
     def set_api_version_request(self):
         """Set API version request based on the request header information."""
-        if 'X-OpenStack-Compute-API-Version' in self.headers:
-            hdr_string = self.headers['X-OpenStack-Compute-API-Version']
+        if API_VERSION_REQUEST_HEADER in self.headers:
+            hdr_string = self.headers[API_VERSION_REQUEST_HEADER]
             # 'latest' is a special keyword which is equivalent to requesting
             # the maximum version of the API supported
             if hdr_string == 'latest':
@@ -298,107 +274,6 @@ class JSONDeserializer(TextDeserializer):
         return {'body': self._from_json(datastring)}
 
 
-class XMLDeserializer(TextDeserializer):
-
-    def __init__(self, metadata=None):
-        """:param metadata: information needed to deserialize xml into
-           a dictionary.
-        """
-        super(XMLDeserializer, self).__init__()
-        self.metadata = metadata or {}
-
-    def _from_xml(self, datastring):
-        plurals = set(self.metadata.get('plurals', {}))
-        node = xmlutil.safe_minidom_parse_string(datastring).childNodes[0]
-        return {node.nodeName: self._from_xml_node(node, plurals)}
-
-    def _from_xml_node(self, node, listnames):
-        """Convert a minidom node to a simple Python type.
-
-        :param listnames: list of XML node names whose subnodes should
-                          be considered list items.
-
-        """
-        if len(node.childNodes) == 1 and node.childNodes[0].nodeType == 3:
-            return node.childNodes[0].nodeValue
-        elif node.nodeName in listnames:
-            return [self._from_xml_node(n, listnames) for n in node.childNodes]
-        else:
-            result = dict()
-            for attr in node.attributes.keys():
-                if not attr.startswith("xmlns"):
-                    result[attr] = node.attributes[attr].nodeValue
-            for child in node.childNodes:
-                if child.nodeType != node.TEXT_NODE:
-                    result[child.nodeName] = self._from_xml_node(child,
-                                                                 listnames)
-            return result
-
-    def find_first_child_named_in_namespace(self, parent, namespace, name):
-        """Search a nodes children for the first child with a given name."""
-        for node in parent.childNodes:
-            if (node.localName == name and
-                node.namespaceURI and
-                    node.namespaceURI == namespace):
-                return node
-        return None
-
-    def find_first_child_named(self, parent, name):
-        """Search a nodes children for the first child with a given name."""
-        for node in parent.childNodes:
-            if node.localName == name:
-                return node
-        return None
-
-    def find_children_named(self, parent, name):
-        """Return all of a nodes children who have the given name."""
-        for node in parent.childNodes:
-            if node.localName == name:
-                yield node
-
-    def extract_text(self, node):
-        """Get the text field contained by the given node."""
-        ret_val = ""
-        for child in node.childNodes:
-            if child.nodeType == child.TEXT_NODE:
-                ret_val += child.nodeValue
-        return ret_val
-
-    def extract_elements(self, node):
-        """Get only Element type childs from node."""
-        elements = []
-        for child in node.childNodes:
-            if child.nodeType == child.ELEMENT_NODE:
-                elements.append(child)
-        return elements
-
-    def find_attribute_or_element(self, parent, name):
-        """Get an attribute value; fallback to an element if not found."""
-        if parent.hasAttribute(name):
-            return parent.getAttribute(name)
-
-        node = self.find_first_child_named(parent, name)
-        if node:
-            return self.extract_text(node)
-
-        return None
-
-    def default(self, datastring):
-        return {'body': self._from_xml(datastring)}
-
-
-class MetadataXMLDeserializer(XMLDeserializer):
-
-    def extract_metadata(self, metadata_node):
-        """Marshal the metadata attribute of a parsed request."""
-        metadata = {}
-        if metadata_node is not None:
-            for meta_node in self.find_children_named(metadata_node, "meta"):
-                key = meta_node.getAttribute("key")
-                metadata[key] = self.extract_text(meta_node)
-        return metadata
-
-
 class DictSerializer(ActionDispatcher):
     """Default request body serialization."""
 
@@ -414,76 +289,6 @@ class JSONDictSerializer(DictSerializer):
 
     def default(self, data):
         return jsonutils.dumps(data)
-
-
-class XMLDictSerializer(DictSerializer):
-
-    def __init__(self, metadata=None, xmlns=None):
-        """:param metadata: information needed to deserialize xml into
-           a dictionary.
-           :param xmlns: XML namespace to include with serialized xml
-        """
-        super(XMLDictSerializer, self).__init__()
-        self.metadata = metadata or {}
-        self.xmlns = xmlns
-
-    def default(self, data):
-        # We expect data to contain a single key which is the XML root.
-        root_key = data.keys()[0]
-        doc = minidom.Document()
-        node = self._to_xml_node(doc, self.metadata, root_key, data[root_key])
-
-        return self.to_xml_string(node)
-
-    def to_xml_string(self, node, has_atom=False):
-        self._add_xmlns(node, has_atom)
-        return node.toxml('UTF-8')
-
-    # NOTE (ameade): the has_atom should be removed after all of the
-    # xml serializers and view builders have been updated to the current
-    # spec that required all responses include the xmlns:atom, the has_atom
-    # flag is to prevent current tests from breaking
-    def _add_xmlns(self, node, has_atom=False):
-        if self.xmlns is not None:
-            node.setAttribute('xmlns', self.xmlns)
-        if has_atom:
-            node.setAttribute('xmlns:atom', "http://www.w3.org/2005/Atom")
-
-    def _to_xml_node(self, doc, metadata, nodename, data):
-        """Recursive method to convert data members to XML nodes."""
-        result = doc.createElement(nodename)
-
-        # TODO(bcwaldon): accomplish this without a type-check
-        if isinstance(data, list):
-            if nodename.endswith('s'):
-                singular = nodename[:-1]
-            else:
-                singular = 'item'
-            for item in data:
-                node = self._to_xml_node(doc, metadata, singular, item)
-                result.appendChild(node)
-        # TODO(bcwaldon): accomplish this without a type-check
-        elif isinstance(data, dict):
-            attrs = metadata.get('attributes', {}).get(nodename, {})
-            for k, v in data.items():
-                if k in attrs:
-                    result.setAttribute(k, str(v))
-                else:
-                    if k == "deleted":
-                        v = str(bool(v))
-                    node = self._to_xml_node(doc, metadata, k, v)
-                    result.appendChild(node)
-        else:
-            # Type is atom
-            if not isinstance(data, six.string_types):
-                data = six.text_type(data)
-            node = doc.createTextNode(data)
-            result.appendChild(node)
-        return result
-
-    def _to_xml(self, root):
-        """Convert the xml object to an xml string."""
-        return etree.tostring(root, encoding='UTF-8', xml_declaration=True)
 
 
 def serializers(**serializers):
@@ -684,15 +489,6 @@ def action_peek_json(body):
     return decoded.keys()[0]
 
 
-def action_peek_xml(body):
-    """Determine action to invoke."""
-
-    dom = xmlutil.safe_minidom_parse_string(body)
-    action_node = dom.childNodes[0]
-
-    return action_node.tagName
-
-
 class ResourceExceptionHandler(object):
     """Context manager to handle Resource exceptions.
 
@@ -715,11 +511,7 @@ class ResourceExceptionHandler(object):
             raise Fault(exception.ConvertedException(
                     code=ex_value.code,
                     explanation=ex_value.format_message()))
-
-        # Under python 2.6, TypeError's exception value is actually a string,
-        # so test # here via ex_type instead:
-        # http://bugs.python.org/issue7853
-        elif issubclass(ex_type, TypeError):
+        elif isinstance(ex_value, TypeError):
             exc_info = (ex_type, ex_value, ex_traceback)
             LOG.error(_LE('Exception handling resource: %s'), ex_value,
                       exc_info=exc_info)
@@ -767,16 +559,13 @@ class Resource(wsgi.Application):
 
         self.controller = controller
 
-        default_deserializers = dict(xml=XMLDeserializer,
-                                     json=JSONDeserializer)
+        default_deserializers = dict(json=JSONDeserializer)
         default_deserializers.update(deserializers)
 
         self.default_deserializers = default_deserializers
-        self.default_serializers = dict(xml=XMLDictSerializer,
-                                        json=JSONDictSerializer)
+        self.default_serializers = dict(json=JSONDictSerializer)
 
-        self.action_peek = dict(xml=action_peek_xml,
-                                json=action_peek_json)
+        self.action_peek = dict(json=action_peek_json)
         self.action_peek.update(action_peek or {})
 
         # Copy over the actions dictionary
@@ -1061,9 +850,9 @@ class Resource(wsgi.Application):
                 response.headers[hdr] = utils.utf8(str(val))
 
             if not request.api_version_request.is_null():
-                response.headers['X-OpenStack-Compute-API-Version'] = \
+                response.headers[API_VERSION_REQUEST_HEADER] = \
                     request.api_version_request.get_string()
-                response.headers['Vary'] = 'X-OpenStack-Compute-API-Version'
+                response.headers['Vary'] = API_VERSION_REQUEST_HEADER
 
         return response
 
@@ -1380,19 +1169,13 @@ class Fault(webob.exc.HTTPException):
                 fault_data[fault_name]['retryAfter'] = retry
 
         if not req.api_version_request.is_null():
-            self.wrapped_exc.headers['X-OpenStack-Compute-API-Version'] = \
+            self.wrapped_exc.headers[API_VERSION_REQUEST_HEADER] = \
                 req.api_version_request.get_string()
             self.wrapped_exc.headers['Vary'] = \
-              'X-OpenStack-Compute-API-Version'
-
-        # 'code' is an attribute on the fault tag itself
-        metadata = {'attributes': {fault_name: 'code'}}
-
-        xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
+              API_VERSION_REQUEST_HEADER
 
         content_type = req.best_match_content_type()
         serializer = {
-            'application/xml': xml_serializer,
             'application/json': JSONDictSerializer(),
         }[content_type]
 
@@ -1435,16 +1218,13 @@ class RateLimitFault(webob.exc.HTTPException):
         """
         user_locale = request.best_match_language()
         content_type = request.best_match_content_type()
-        metadata = {"attributes": {"overLimit": ["code", "retryAfter"]}}
 
         self.content['overLimit']['message'] = \
             i18n.translate(self.content['overLimit']['message'], user_locale)
         self.content['overLimit']['details'] = \
             i18n.translate(self.content['overLimit']['details'], user_locale)
 
-        xml_serializer = XMLDictSerializer(metadata, XMLNS_V11)
         serializer = {
-            'application/xml': xml_serializer,
             'application/json': JSONDictSerializer(),
         }[content_type]
 

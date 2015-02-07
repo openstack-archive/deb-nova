@@ -167,18 +167,19 @@ def compute_node_get(context, compute_id):
     return IMPL.compute_node_get(context, compute_id)
 
 
-def compute_node_get_by_service_id(context, service_id):
-    """Get a compute node by its associated service id.
+def compute_nodes_get_by_service_id(context, service_id):
+    """Get a list of compute nodes by their associated service id.
 
     :param context: The security context
     :param service_id: ID of the associated service
 
-    :returns: Dictionary-like object containing properties of the compute node,
-              including its corresponding service and statistics
+    :returns: List of dictionary-like objects, each containing properties of
+              the compute node, including its corresponding service and
+              statistics
 
     Raises ServiceNotFound if service with the given ID doesn't exist.
     """
-    return IMPL.compute_node_get_by_service_id(context, service_id)
+    return IMPL.compute_nodes_get_by_service_id(context, service_id)
 
 
 def compute_node_get_by_host_and_nodename(context, host, nodename):
@@ -414,11 +415,6 @@ def floating_ip_get_by_fixed_ip_id(context, fixed_ip_id):
 def floating_ip_update(context, address, values):
     """Update a floating ip by address or raise if it doesn't exist."""
     return IMPL.floating_ip_update(context, address, values)
-
-
-def dnsdomain_list(context):
-    """Get a list of all zones in our database, public and private."""
-    return IMPL.dnsdomain_list(context)
 
 
 def dnsdomain_get_all(context):
@@ -733,11 +729,6 @@ def instance_get_all_by_host_and_not_type(context, host, type_id=None):
     return IMPL.instance_get_all_by_host_and_not_type(context, host, type_id)
 
 
-def instance_get_floating_address(context, instance_id):
-    """Get the first floating ip address of an instance."""
-    return IMPL.instance_get_floating_address(context, instance_id)
-
-
 def instance_floating_address_get_all(context, instance_uuid):
     """Get all floating ip addresses of an instance."""
     return IMPL.instance_floating_address_get_all(context, instance_uuid)
@@ -844,23 +835,6 @@ def instance_group_get_all(context):
 def instance_group_get_all_by_project_id(context, project_id):
     """Get all groups for a specific project_id."""
     return IMPL.instance_group_get_all_by_project_id(context, project_id)
-
-
-def instance_group_metadata_add(context, group_uuid, metadata,
-                                set_delete=False):
-    """Add metadata to the group."""
-    return IMPL.instance_group_metadata_add(context, group_uuid, metadata,
-                                            set_delete)
-
-
-def instance_group_metadata_delete(context, group_uuid, key):
-    """Delete metadata from the group."""
-    return IMPL.instance_group_metadata_delete(context, group_uuid, key)
-
-
-def instance_group_metadata_get(context, group_uuid):
-    """Get the metadata from the group."""
-    return IMPL.instance_group_metadata_get(context, group_uuid)
 
 
 def instance_group_members_add(context, group_uuid, members,
@@ -1034,8 +1008,6 @@ def network_get_all_by_uuids(context, network_uuids,
     return IMPL.network_get_all_by_uuids(context, network_uuids,
                                          project_only=project_only)
 
-
-# pylint: disable=C0103
 
 def network_in_use_on_host(context, network_id, host=None):
     """Indicates if a network is currently in use on host."""
@@ -1788,16 +1760,6 @@ def aggregate_metadata_get_by_metadata_key(context, aggregate_id, key):
                                                         key)
 
 
-def aggregate_host_get_by_metadata_key(context, key):
-    """Get hosts with a specific metadata key metadata for all aggregates.
-
-    Returns a dictionary where each key is a hostname and each value is a set
-    of the key values
-    return value:  {machine: set( az1, az2 )}
-    """
-    return IMPL.aggregate_host_get_by_metadata_key(context, key)
-
-
 def aggregate_get_by_metadata_key(context, key):
     return IMPL.aggregate_get_by_metadata_key(context, key)
 
@@ -1908,11 +1870,6 @@ def action_event_get_by_id(context, action_id, event_id):
 ####################
 
 
-def get_ec2_instance_id_by_uuid(context, instance_id):
-    """Get ec2 id through uuid from instance_id_mappings table."""
-    return IMPL.get_ec2_instance_id_by_uuid(context, instance_id)
-
-
 def get_instance_uuid_by_ec2_id(context, ec2_id):
     """Get uuid through ec2 id from instance_id_mappings table."""
     return IMPL.get_instance_uuid_by_ec2_id(context, ec2_id)
@@ -1996,6 +1953,19 @@ def archive_deleted_rows_for_table(context, tablename, max_rows=None):
     """
     return IMPL.archive_deleted_rows_for_table(context, tablename,
                                                max_rows=max_rows)
+
+
+def migrate_flavor_data(context, max_count, flavor_cache):
+    """Migrate instance flavor data from system_metadata to instance_extra.
+
+    :param max_count: The maximum number of instances to consider in this
+                      run.
+    :param flavor_cache: A dict to persist flavor information in across
+                         calls (just pass an empty dict here)
+    :returns: number of instances needing migration, number of instances
+              migrated (both will always be less than max_count)
+    """
+    return IMPL.migrate_flavor_data(context, max_count, flavor_cache)
 
 
 ####################

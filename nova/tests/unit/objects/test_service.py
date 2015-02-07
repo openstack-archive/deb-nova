@@ -92,7 +92,7 @@ class _TestServiceObject(object):
 
     def test_with_compute_node(self):
         self.mox.StubOutWithMock(db, 'service_get')
-        self.mox.StubOutWithMock(db, 'compute_node_get_by_service_id')
+        self.mox.StubOutWithMock(db, 'compute_nodes_get_by_service_id')
         _fake_service = dict(
             fake_service, compute_node=[test_compute_node.fake_compute_node])
         db.service_get(self.context, 123).AndReturn(_fake_service)
@@ -110,9 +110,9 @@ class _TestServiceObject(object):
         db.service_create(self.context, {'host': 'fake-host'}).AndReturn(
             fake_service)
         self.mox.ReplayAll()
-        service_obj = service.Service()
+        service_obj = service.Service(context=self.context)
         service_obj.host = 'fake-host'
-        service_obj.create(self.context)
+        service_obj.create()
         self.assertEqual(fake_service['id'], service_obj.id)
 
     def test_recreate_fails(self):
@@ -120,9 +120,9 @@ class _TestServiceObject(object):
         db.service_create(self.context, {'host': 'fake-host'}).AndReturn(
             fake_service)
         self.mox.ReplayAll()
-        service_obj = service.Service()
+        service_obj = service.Service(context=self.context)
         service_obj.host = 'fake-host'
-        service_obj.create(self.context)
+        service_obj.create()
         self.assertRaises(exception.ObjectActionError, service_obj.create,
                           self.context)
 
@@ -131,16 +131,16 @@ class _TestServiceObject(object):
         db.service_update(self.context, 123, {'host': 'fake-host'}).AndReturn(
             fake_service)
         self.mox.ReplayAll()
-        service_obj = service.Service()
+        service_obj = service.Service(context=self.context)
         service_obj.id = 123
         service_obj.host = 'fake-host'
-        service_obj.save(self.context)
+        service_obj.save()
 
     @mock.patch.object(db, 'service_create',
                        return_value=fake_service)
     def test_set_id_failure(self, db_mock):
-        service_obj = service.Service()
-        service_obj.create(self.context)
+        service_obj = service.Service(context=self.context)
+        service_obj.create()
         self.assertRaises(exception.ReadOnlyFieldError, setattr,
                           service_obj, 'id', 124)
 
@@ -148,9 +148,9 @@ class _TestServiceObject(object):
         self.mox.StubOutWithMock(db, 'service_destroy')
         db.service_destroy(self.context, 123)
         self.mox.ReplayAll()
-        service_obj = service.Service()
+        service_obj = service.Service(context=self.context)
         service_obj.id = 123
-        service_obj.destroy(self.context)
+        service_obj.destroy()
 
     def test_destroy(self):
         # The test harness needs db.service_destroy to work,
@@ -194,10 +194,10 @@ class _TestServiceObject(object):
                                  'get_by_metadata_key')
         db.service_get_all(self.context, disabled=None).AndReturn(
             [dict(fake_service, topic='compute')])
-        agg = aggregate.Aggregate()
+        agg = aggregate.Aggregate(context=self.context)
         agg.name = 'foo'
         agg.metadata = {'availability_zone': 'test-az'}
-        agg.create(self.context)
+        agg.create()
         agg.hosts = [fake_service['host']]
         aggregate.AggregateList.get_by_metadata_key(self.context,
             'availability_zone', hosts=set(agg.hosts)).AndReturn([agg])
@@ -207,9 +207,9 @@ class _TestServiceObject(object):
         self.assertEqual('test-az', services[0].availability_zone)
 
     def test_compute_node(self):
-        self.mox.StubOutWithMock(db, 'compute_node_get_by_service_id')
-        db.compute_node_get_by_service_id(self.context, 123).AndReturn(
-            test_compute_node.fake_compute_node)
+        self.mox.StubOutWithMock(db, 'compute_nodes_get_by_service_id')
+        db.compute_nodes_get_by_service_id(self.context, 123).AndReturn(
+            [test_compute_node.fake_compute_node])
         self.mox.ReplayAll()
         service_obj = service.Service()
         service_obj._context = self.context
