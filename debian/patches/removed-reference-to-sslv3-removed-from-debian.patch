@@ -4,9 +4,11 @@ Author: Thomas Goirand <zigo@debian.org>
 Forwarded: no
 Last-Update: 2014-12-12
 
---- nova-2014.2.1.orig/nova/openstack/common/sslutils.py
-+++ nova-2014.2.1/nova/openstack/common/sslutils.py
-@@ -77,8 +77,7 @@ def wrap(sock):
+Index: nova/nova/openstack/common/sslutils.py
+===================================================================
+--- nova.orig/nova/openstack/common/sslutils.py	2015-02-08 15:44:57.000000000 +0100
++++ nova/nova/openstack/common/sslutils.py	2015-02-08 15:45:04.000000000 +0100
+@@ -83,8 +83,7 @@
  
  _SSL_PROTOCOLS = {
      "tlsv1": ssl.PROTOCOL_TLSv1,

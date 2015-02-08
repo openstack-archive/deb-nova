@@ -2,3 +2,4 @@ path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
 removed-reference-to-sslv3-removed-from-debian.patch
+do-not-use-namespaced-oslo.patch
