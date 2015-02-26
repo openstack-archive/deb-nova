@@ -397,7 +397,7 @@ Conflicts: nova-compute-kvm,
            nova-compute-qemu,
            nova-compute-uml,
            nova-compute-xen
-Description: OpenStack Compute - compute node (KVM)
+Description: OpenStack Compute - compute node (Ironic)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public
  and private cloud providers regardless of size, by being simple to implement
@@ -409,7 +409,7 @@ Description: OpenStack Compute - compute node (KVM)
  many different database backends (including SQLite, MySQL, and PostgreSQL),
  hypervisors (KVM, Xen), and user directory systems (LDAP, SQL).
  .
- This is a dependency package for compute nodes using KVM.
+ This is a dependency package for compute nodes using Ironic.
 
 #Package: nova-xcp-plugins
 #Architecture: all
