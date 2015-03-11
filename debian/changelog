@@ -1,3 +1,11 @@
+nova (2014.2.2-3) experimental; urgency=medium
+
+  * CVE-2015-0259: Websocket Hijacking Vulnerability in Nova VNC Server.
+    Applied upstream patch (Closes: #780250):
+    Websocket_Proxy_should_verify_Origin_header_juno.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 11 Mar 2015 09:43:56 +0100
+
 nova (2014.2.2-1) experimental; urgency=medium
 
   * New upstream point release.

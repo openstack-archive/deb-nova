@@ -2,3 +2,4 @@ path-to-the-xenhost.conf-fixup.patch
 install-missing-files.patch
 #fix-ubuntu-tests.patch
 removed-reference-to-sslv3-removed-from-debian.patch
+CVE-2015-0259_Websocket_Proxy_should_verify_Origin_header_juno.patch
