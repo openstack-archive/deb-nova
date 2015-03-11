@@ -24,3 +24,4 @@ CVE-2014-7230_CVE-2014-7231_Sync_process_utils_from_oslo.patch
 CVE-2014-3708_Fixes_DOS_issue_in_instance_list_ip_filter.patch
 CVE-2014-8333_Fix_VM_leak_when_deletion_of_VM_during_resizing.patch
 avoid_changing_UUID_when_redefining_nwfilters.patch
+CVE-2015-0259_Websocket_Proxy_should_verify_Origin_header_icehouse-debian.patch

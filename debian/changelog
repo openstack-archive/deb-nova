@@ -1,3 +1,12 @@
+nova (2014.1.3-11) unstable; urgency=medium
+
+  * CVE-2015-0259: Websocket Hijacking Vulnerability in Nova VNC Server. Done
+    a rebase of upstream patch, so that it can be applied on top of the
+    websockify 0.6 support patch. The resulting patch is a mix of the Icehouse
+    and Juno patch. (Closes: #780250).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 11 Mar 2015 09:19:42 +0100
+
 nova (2014.1.3-10) unstable; urgency=medium
 
   * Now calling read_neutron_config() in the postinst, for some reason, it was
