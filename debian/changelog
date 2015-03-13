@@ -1,3 +1,9 @@
+nova (2014.2.2-4) experimental; urgency=medium
+
+  * Using port 5000 for the keystone authtoken.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 13 Mar 2015 23:52:19 +0000
+
 nova (2014.2.2-3) experimental; urgency=medium
 
   * CVE-2015-0259: Websocket Hijacking Vulnerability in Nova VNC Server.
