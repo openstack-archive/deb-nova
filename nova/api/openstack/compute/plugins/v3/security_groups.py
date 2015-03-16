@@ -15,7 +15,8 @@
 #    under the License.
 
 """The security groups extension."""
-from oslo.serialization import jsonutils
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
 from webob import exc
 
 from nova.api.openstack import common
@@ -27,15 +28,14 @@ from nova import compute
 from nova import exception
 from nova.i18n import _
 from nova.network.security_group import openstack_driver
-from nova.openstack.common import log as logging
 from nova.virt import netutils
 
 
 LOG = logging.getLogger(__name__)
 ALIAS = 'os-security-groups'
 ATTRIBUTE_NAME = 'security_groups'
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
-softauth = extensions.soft_extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
+softauth = extensions.os_compute_soft_authorizer(ALIAS)
 
 
 def _authorize_context(req):
@@ -49,9 +49,10 @@ class SecurityGroupControllerBase(wsgi.Controller):
 
     def __init__(self):
         self.security_group_api = (
-            openstack_driver.get_openstack_security_group_driver())
+            openstack_driver.get_openstack_security_group_driver(
+                skip_policy_check=True))
         self.compute_api = compute.API(
-                                   security_group_api=self.security_group_api)
+            security_group_api=self.security_group_api, skip_policy_check=True)
 
     def _format_security_group_rule(self, context, rule, group_rule_data=None):
         """Return a secuity group rule in desired API response format.
@@ -335,9 +336,10 @@ class ServerSecurityGroupController(SecurityGroupControllerBase):
         self.security_group_api.ensure_default(context)
 
         try:
-            instance = self.compute_api.get(context, server_id)
+            instance = common.get_instance(self.compute_api, context,
+                                           server_id)
             groups = self.security_group_api.get_instance_security_groups(
-                context, instance['uuid'], True)
+                context, instance.uuid, True)
         except (exception.SecurityGroupNotFound,
                 exception.InstanceNotFound) as exp:
             msg = exp.format_message()
@@ -355,9 +357,10 @@ class SecurityGroupActionController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupActionController, self).__init__(*args, **kwargs)
         self.security_group_api = (
-            openstack_driver.get_openstack_security_group_driver())
+            openstack_driver.get_openstack_security_group_driver(
+                skip_policy_check=True))
         self.compute_api = compute.API(
-                                   security_group_api=self.security_group_api)
+            security_group_api=self.security_group_api, skip_policy_check=True)
 
     def _parse(self, body, action):
         try:
@@ -377,7 +380,7 @@ class SecurityGroupActionController(wsgi.Controller):
         return group_name
 
     def _invoke(self, method, context, id, group_name):
-        instance = self.compute_api.get(context, id)
+        instance = common.get_instance(self.compute_api, context, id)
         method(context, instance, group_name)
 
     @extensions.expected_errors((400, 404, 409))
@@ -424,9 +427,10 @@ class SecurityGroupActionController(wsgi.Controller):
 class SecurityGroupsOutputController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupsOutputController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
         self.security_group_api = (
-            openstack_driver.get_openstack_security_group_driver())
+            openstack_driver.get_openstack_security_group_driver(
+                skip_policy_check=True))
 
     def _extend_servers(self, req, servers):
         # TODO(arosen) this function should be refactored to reduce duplicate

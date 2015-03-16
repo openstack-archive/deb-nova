@@ -15,11 +15,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import excutils
-from oslo.utils import importutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_utils import excutils
+from oslo_utils import importutils
+from oslo_utils import uuidutils
 import six
 
 from nova import context
@@ -28,8 +30,6 @@ from nova import exception
 from nova.i18n import _LE, _LI, _LW
 from nova.network import rpcapi as network_rpcapi
 from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova import quota
 from nova import rpc
 from nova import servicegroup
@@ -436,8 +436,8 @@ class FloatingIP(object):
         if network.multi_host:
             instance = objects.Instance.get_by_uuid(
                 context, fixed_ip.instance_uuid)
-            service = objects.Service.get_by_host_and_topic(
-                context.elevated(), instance.host, CONF.network_topic)
+            service = objects.Service.get_by_host_and_binary(
+                context.elevated(), instance.host, 'nova-network')
             if service and self.servicegroup_api.service_is_up(service):
                 host = instance.host
             else:

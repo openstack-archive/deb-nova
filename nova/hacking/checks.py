@@ -83,9 +83,7 @@ log_translation_info = re.compile(
 log_translation_exception = re.compile(
     r"(.)*LOG\.(exception)\(\s*(_\(|'|\")")
 log_translation_LW = re.compile(
-    r"(.)*LOG\.(warning)\(\s*(_\(|'|\")")
-log_warn = re.compile(
-    r"(.)*LOG\.(warn)\(\s*('|\"|_)")
+    r"(.)*LOG\.(warning|warn)\(\s*(_\(|'|\")")
 translated_log = re.compile(
     r"(.)*LOG\.(audit|error|info|critical|exception)"
     "\(\s*_\(\s*('|\")")
@@ -102,7 +100,15 @@ decorator_re = re.compile(r"@.*")
 
 # TODO(dims): When other oslo libraries switch over non-namespace'd
 # imports, we need to add them to the regexp below.
-oslo_namespace_imports = re.compile(r"from[\s]*oslo[.](concurrency)")
+oslo_namespace_imports = re.compile(r"from[\s]*oslo[.]"
+                                    r"(concurrency|config|db|i18n|messaging|"
+                                    r"middleware|serialization|utils|vmware)")
+oslo_namespace_imports_2 = re.compile(r"from[\s]*oslo[\s]*import[\s]*"
+                                    r"(concurrency|config|db|i18n|messaging|"
+                                    r"middleware|serialization|utils|vmware)")
+oslo_namespace_imports_3 = re.compile(r"import[\s]*oslo\."
+                                    r"(concurrency|config|db|i18n|messaging|"
+                                    r"middleware|serialization|utils|vmware)")
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -336,10 +342,7 @@ def validate_log_translations(logical_line, physical_line, filename):
     # Translations are not required in the test directory
     # and the Xen utilities
     if ("nova/tests" in filename or
-        "plugins/xenserver/xenapi/etc/xapi.d" in filename or
-        # TODO(Mike_D):Needs to be remove with:
-        # I075ab2a522272f2082c292dfedc877abd8ebe328
-            "nova/virt/libvirt" in filename):
+                "plugins/xenserver/xenapi/etc/xapi.d" in filename):
         return
     if pep8.noqa(physical_line):
         return
@@ -349,7 +352,7 @@ def validate_log_translations(logical_line, physical_line, filename):
     msg = "N329: LOG.exception messages require translations `_LE()`!"
     if log_translation_exception.match(logical_line):
         yield (0, msg)
-    msg = "N330: LOG.warning messages require translations `_LW()`!"
+    msg = "N330: LOG.warning, LOG.warn messages require translations `_LW()`!"
     if log_translation_LW.match(logical_line):
         yield (0, msg)
     msg = "N321: Log messages require translations!"
@@ -478,6 +481,16 @@ def check_oslo_namespace_imports(logical_line, blank_before, filename):
         msg = ("N333: '%s' must be used instead of '%s'.") % (
                logical_line.replace('oslo.', 'oslo_'),
                logical_line)
+        yield(0, msg)
+    match = re.match(oslo_namespace_imports_2, logical_line)
+    if match:
+        msg = ("N333: 'module %s should not be imported "
+               "from oslo namespace.") % match.group(1)
+        yield(0, msg)
+    match = re.match(oslo_namespace_imports_3, logical_line)
+    if match:
+        msg = ("N333: 'module %s should not be imported "
+               "from oslo namespace.") % match.group(1)
         yield(0, msg)
 
 

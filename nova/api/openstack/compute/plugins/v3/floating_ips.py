@@ -15,6 +15,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_log import log as logging
+from oslo_utils import uuidutils
 import webob
 
 from nova.api.openstack import common
@@ -28,13 +30,11 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LW
 from nova import network
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 
 
 LOG = logging.getLogger(__name__)
 ALIAS = 'os-floating-ips'
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 def _translate_floating_ip_view(floating_ip):
@@ -70,8 +70,7 @@ def get_instance_by_floating_ip_addr(self, context, address):
         raise webob.exc.HTTPConflict(explanation=ex.format_message())
 
     if instance_id:
-        return common.get_instance(self.compute_api, context, instance_id,
-                                   want_objects=True)
+        return common.get_instance(self.compute_api, context, instance_id)
 
 
 def disassociate_floating_ip(self, context, instance, address):
@@ -88,8 +87,8 @@ class FloatingIPController(object):
     """The Floating IPs API controller for the OpenStack API."""
 
     def __init__(self):
-        self.compute_api = compute.API()
-        self.network_api = network.API()
+        self.compute_api = compute.API(skip_policy_check=True)
+        self.network_api = network.API(skip_policy_check=True)
         super(FloatingIPController, self).__init__()
 
     @extensions.expected_errors((400, 404))
@@ -178,8 +177,8 @@ class FloatingIPController(object):
 class FloatingIPActionController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(FloatingIPActionController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
-        self.network_api = network.API()
+        self.compute_api = compute.API(skip_policy_check=True)
+        self.network_api = network.API(skip_policy_check=True)
 
     @extensions.expected_errors((400, 403, 404))
     @wsgi.action('addFloatingIp')
@@ -191,8 +190,7 @@ class FloatingIPActionController(wsgi.Controller):
 
         address = body['addFloatingIp']['address']
 
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         cached_nwinfo = compute_utils.get_nw_info_for_instance(instance)
         if not cached_nwinfo:
             msg = _('No nw_info cache associated with instance')
@@ -270,8 +268,8 @@ class FloatingIPActionController(wsgi.Controller):
         if (instance and
             floating_ip.get('fixed_ip_id') and
             (uuidutils.is_uuid_like(id) and
-             [instance['uuid'] == id] or
-             [instance['id'] == id])[0]):
+             [instance.uuid == id] or
+             [instance.id == id])[0]):
             try:
                 disassociate_floating_ip(self, context, instance, address)
             except exception.FloatingIpNotAssociated:

@@ -20,16 +20,18 @@ Manage hosts in the current zone.
 import collections
 import UserDict
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+import iso8601
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 
 from nova.compute import task_states
 from nova.compute import vm_states
-from nova import db
+from nova import context as ctxt_mod
 from nova import exception
 from nova.i18n import _, _LI, _LW
-from nova.openstack.common import log as logging
+from nova import objects
 from nova.pci import stats as pci_stats
 from nova.scheduler import filters
 from nova.scheduler import weights
@@ -70,7 +72,8 @@ class ReadOnlyDict(UserDict.IterableUserDict):
     """A read-only dict."""
     def __init__(self, source=None):
         self.data = {}
-        self.update(source)
+        if source:
+            self.data.update(source)
 
     def __setitem__(self, key, item):
         raise TypeError()
@@ -87,15 +90,8 @@ class ReadOnlyDict(UserDict.IterableUserDict):
     def popitem(self):
         raise TypeError()
 
-    def update(self, source=None):
-        if source is None:
-            return
-        elif isinstance(source, UserDict.UserDict):
-            self.data = source.data
-        elif isinstance(source, type({})):
-            self.data = source
-        else:
-            raise TypeError()
+    def update(self):
+        raise TypeError()
 
 
 # Representation of a single metric value from a compute node.
@@ -123,6 +119,7 @@ class HostState(object):
         self.vcpus_total = 0
         self.vcpus_used = 0
         self.numa_topology = None
+        self.instance_numa_topology = None
 
         # Additional host information from the compute node stats:
         self.num_instances = 0
@@ -142,6 +139,9 @@ class HostState(object):
         # Generic metrics from compute nodes
         self.metrics = {}
 
+        # List of aggregates the host belongs to
+        self.aggregates = []
+
         self.updated = None
         if compute:
             self.update_from_compute_node(compute)
@@ -150,10 +150,11 @@ class HostState(object):
         self.service = ReadOnlyDict(service)
 
     def _update_metrics_from_compute_node(self, compute):
+        """Update metrics from a ComputeNode object."""
         # NOTE(llu): The 'or []' is to avoid json decode failure of None
         #            returned from compute.get, because DB schema allows
         #            NULL in the metrics column
-        metrics = compute.get('metrics', []) or []
+        metrics = compute.metrics or []
         if metrics:
             metrics = jsonutils.loads(metrics)
         for metric in metrics:
@@ -170,15 +171,15 @@ class HostState(object):
                 LOG.warning(_LW("Metric name unknown of %r"), item)
 
     def update_from_compute_node(self, compute):
-        """Update information about a host from its compute_node info."""
-        if (self.updated and compute['updated_at']
-                and self.updated > compute['updated_at']):
+        """Update information about a host from a ComputeNode object."""
+        if (self.updated and compute.updated_at
+                and self.updated > compute.updated_at):
             return
-        all_ram_mb = compute['memory_mb']
+        all_ram_mb = compute.memory_mb
 
         # Assume virtual size is all consumed by instances if use qcow2 disk.
-        free_gb = compute['free_disk_gb']
-        least_gb = compute.get('disk_available_least')
+        free_gb = compute.free_disk_gb
+        least_gb = compute.disk_available_least
         if least_gb is not None:
             if least_gb > free_gb:
                 # can occur when an instance in database is not on host
@@ -186,41 +187,44 @@ class HostState(object):
                                 "database expected "
                                 "(%(physical)sgb > %(database)sgb)"),
                             {'physical': least_gb, 'database': free_gb,
-                             'hostname': compute['hypervisor_hostname']})
+                             'hostname': compute.hypervisor_hostname})
             free_gb = min(least_gb, free_gb)
         free_disk_mb = free_gb * 1024
 
-        self.disk_mb_used = compute['local_gb_used'] * 1024
+        self.disk_mb_used = compute.local_gb_used * 1024
 
         # NOTE(jogo) free_ram_mb can be negative
-        self.free_ram_mb = compute['free_ram_mb']
+        self.free_ram_mb = compute.free_ram_mb
         self.total_usable_ram_mb = all_ram_mb
-        self.total_usable_disk_gb = compute['local_gb']
+        self.total_usable_disk_gb = compute.local_gb
         self.free_disk_mb = free_disk_mb
-        self.vcpus_total = compute['vcpus']
-        self.vcpus_used = compute['vcpus_used']
-        self.updated = compute['updated_at']
-        self.numa_topology = compute['numa_topology']
-        if 'pci_stats' in compute:
-            self.pci_stats = pci_stats.PciDeviceStats(compute['pci_stats'])
+        self.vcpus_total = compute.vcpus
+        self.vcpus_used = compute.vcpus_used
+        self.updated = compute.updated_at
+        self.numa_topology = compute.numa_topology
+        self.instance_numa_topology = None
+        if compute.pci_device_pools is not None:
+            self.pci_stats = pci_stats.PciDeviceStats(
+                compute.pci_device_pools)
         else:
             self.pci_stats = None
 
         # All virt drivers report host_ip
-        self.host_ip = compute['host_ip']
-        self.hypervisor_type = compute.get('hypervisor_type')
-        self.hypervisor_version = compute.get('hypervisor_version')
-        self.hypervisor_hostname = compute.get('hypervisor_hostname')
-        self.cpu_info = compute.get('cpu_info')
-        if compute.get('supported_instances'):
-            self.supported_instances = jsonutils.loads(
-                    compute.get('supported_instances'))
+        self.host_ip = compute.host_ip
+        self.hypervisor_type = compute.hypervisor_type
+        self.hypervisor_version = compute.hypervisor_version
+        self.hypervisor_hostname = compute.hypervisor_hostname
+        self.cpu_info = compute.cpu_info
+        if compute.supported_hv_specs:
+            self.supported_instances = [spec.to_list() for spec
+                                        in compute.supported_hv_specs]
+        else:
+            self.supported_instances = []
 
         # Don't store stats directly in host_state to make sure these don't
         # overwrite any values, or get overwritten themselves. Store in self so
         # filters can schedule with them.
-        stats = compute.get('stats', None) or '{}'
-        self.stats = jsonutils.loads(stats)
+        self.stats = compute.stats or {}
 
         # Track number of instances on host
         self.num_instances = int(self.stats.get('num_instances', 0))
@@ -238,7 +242,10 @@ class HostState(object):
         self.free_ram_mb -= ram_mb
         self.free_disk_mb -= disk_mb
         self.vcpus_used += vcpus
-        self.updated = timeutils.utcnow()
+
+        now = timeutils.utcnow()
+        # NOTE(sbauza): Objects are UTC tz-aware by default
+        self.updated = now.replace(tzinfo=iso8601.iso8601.Utc())
 
         # Track number of instances on host
         self.num_instances += 1
@@ -259,6 +266,7 @@ class HostState(object):
                                           instance_cells)
 
         # Calculate the numa usage
+        instance['numa_topology'] = self.instance_numa_topology
         updated_numa_topology = hardware.get_host_numa_usage_from_instance(
                 self, instance)
         self.numa_topology = updated_numa_topology
@@ -292,10 +300,54 @@ class HostManager(object):
                 CONF.scheduler_available_filters)
         self.filter_cls_map = {cls.__name__: cls for cls in filter_classes}
         self.filter_obj_map = {}
+        self.default_filters = self._choose_host_filters(
+                CONF.scheduler_default_filters)
         self.weight_handler = weights.HostWeightHandler()
         weigher_classes = self.weight_handler.get_matching_classes(
                 CONF.scheduler_weight_classes)
         self.weighers = [cls() for cls in weigher_classes]
+        # Dict of aggregates keyed by their ID
+        self.aggs_by_id = {}
+        # Dict of set of aggregate IDs keyed by the name of the host belonging
+        # to those aggregates
+        self.host_aggregates_map = collections.defaultdict(set)
+        self._init_aggregates()
+
+    def _init_aggregates(self):
+        elevated = ctxt_mod.get_admin_context()
+        aggs = objects.AggregateList.get_all(elevated)
+        for agg in aggs:
+            self.aggs_by_id[agg.id] = agg
+            for host in agg.hosts:
+                self.host_aggregates_map[host].add(agg.id)
+
+    def update_aggregates(self, aggregates):
+        """Updates internal HostManager information about aggregates."""
+        if isinstance(aggregates, (list, objects.AggregateList)):
+            for agg in aggregates:
+                self._update_aggregate(agg)
+        else:
+            self._update_aggregate(aggregates)
+
+    def _update_aggregate(self, aggregate):
+        self.aggs_by_id[aggregate.id] = aggregate
+        for host in aggregate.hosts:
+            self.host_aggregates_map[host].add(aggregate.id)
+        # Refreshing the mapping dict to remove all hosts that are no longer
+        # part of the aggregate
+        for host in self.host_aggregates_map:
+            if (aggregate.id in self.host_aggregates_map[host]
+                    and host not in aggregate.hosts):
+                self.host_aggregates_map[host].remove(aggregate.id)
+
+    def delete_aggregate(self, aggregate):
+        """Deletes internal HostManager information about a specific aggregate.
+        """
+        if aggregate.id in self.aggs_by_id:
+            del self.aggs_by_id[aggregate.id]
+        for host in aggregate.hosts:
+            if aggregate.id in self.host_aggregates_map[host]:
+                self.host_aggregates_map[host].remove(aggregate.id)
 
     def _choose_host_filters(self, filter_cls_names):
         """Since the caller may specify which filters to use we need
@@ -303,8 +355,6 @@ class HostManager(object):
         function checks the filter names against a predefined set
         of acceptable filters.
         """
-        if filter_cls_names is None:
-            filter_cls_names = CONF.scheduler_default_filters
         if not isinstance(filter_cls_names, (list, tuple)):
             filter_cls_names = [filter_cls_names]
 
@@ -336,7 +386,7 @@ class HostManager(object):
                         ignored_hosts.append(host)
             ignored_hosts_str = ', '.join(ignored_hosts)
             msg = _('Host filter ignoring hosts: %s')
-            LOG.audit(msg % ignored_hosts_str)
+            LOG.info(msg % ignored_hosts_str)
 
         def _match_forced_hosts(host_map, hosts_to_force):
             forced_hosts = []
@@ -352,7 +402,7 @@ class HostManager(object):
                 forced_hosts_str = ', '.join(hosts_to_force)
                 msg = _("No hosts matched due to not matching "
                         "'force_hosts' value of '%s'")
-            LOG.audit(msg % forced_hosts_str)
+            LOG.info(msg % forced_hosts_str)
 
         def _match_forced_nodes(host_map, nodes_to_force):
             forced_nodes = []
@@ -368,9 +418,12 @@ class HostManager(object):
                 forced_nodes_str = ', '.join(nodes_to_force)
                 msg = _("No nodes matched due to not matching "
                         "'force_nodes' value of '%s'")
-            LOG.audit(msg % forced_nodes_str)
+            LOG.info(msg % forced_nodes_str)
 
-        filters = self._choose_host_filters(filter_class_names)
+        if filter_class_names is None:
+            filters = self.default_filters
+        else:
+            filters = self._choose_host_filters(filter_class_names)
         ignore_hosts = filter_properties.get('ignore_hosts', [])
         force_hosts = filter_properties.get('force_hosts', [])
         force_nodes = filter_properties.get('force_nodes', [])
@@ -408,16 +461,22 @@ class HostManager(object):
         in HostState are pre-populated and adjusted based on data in the db.
         """
 
+        service_refs = {service.host: service
+                        for service in objects.ServiceList.get_by_binary(
+                            context, 'nova-compute')}
         # Get resource usage across the available compute nodes:
-        compute_nodes = db.compute_node_get_all(context)
+        compute_nodes = objects.ComputeNodeList.get_all(context)
         seen_nodes = set()
         for compute in compute_nodes:
-            service = compute['service']
+            service = service_refs.get(compute.host)
+
             if not service:
-                LOG.warning(_LW("No service for compute ID %s"), compute['id'])
+                LOG.warning(_LW(
+                    "No compute service record found for host %(host)s"),
+                    {'host': compute.host})
                 continue
-            host = service['host']
-            node = compute.get('hypervisor_hostname')
+            host = compute.host
+            node = compute.hypervisor_hostname
             state_key = (host, node)
             host_state = self.host_state_map.get(state_key)
             if host_state:
@@ -425,6 +484,12 @@ class HostManager(object):
             else:
                 host_state = self.host_state_cls(host, node, compute=compute)
                 self.host_state_map[state_key] = host_state
+            # We force to update the aggregates info each time a new request
+            # comes in, because some changes on the aggregates could have been
+            # happening after setting this field for the first time
+            host_state.aggregates = [self.aggs_by_id[agg_id] for agg_id in
+                                     self.host_aggregates_map[
+                                         host_state.host]]
             host_state.update_service(dict(service.iteritems()))
             seen_nodes.add(state_key)
 

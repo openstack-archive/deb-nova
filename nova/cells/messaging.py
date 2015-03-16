@@ -26,22 +26,24 @@ reached.
 
 The interface into this module is the MessageRunner class.
 """
+
 import sys
 import traceback
 
 from eventlet import queue
-from oslo.config import cfg
-from oslo import messaging
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import importutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import importutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import six
 
 from nova.cells import state as cells_state
 from nova.cells import utils as cells_utils
 from nova import compute
-from nova.compute import delete_types
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import vm_states
@@ -53,8 +55,6 @@ from nova.i18n import _, _LE, _LI, _LW
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import base as objects_base
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova import rpc
 from nova import utils
 
@@ -199,11 +199,10 @@ class _BaseMessage(object):
         try:
             resp_value = self.msg_runner._process_message_locally(self)
             failure = False
-        except Exception as exc:
+        except Exception:
             resp_value = sys.exc_info()
             failure = True
-            LOG.exception(_LE("Error processing message locally: %(exc)s"),
-                          {'exc': exc})
+            LOG.exception(_LE("Error processing message locally"))
         return Response(self.routing_path, resp_value, failure)
 
     def _setup_response_queue(self):
@@ -346,6 +345,11 @@ class _TargetedMessage(_BaseMessage):
                 target_cell = '%s%s%s' % (self.our_path_part,
                                           _PATH_CELL_SEP,
                                           target_cell.name)
+        # NOTE(alaski): This occurs when hosts are specified with no cells
+        # routing information.
+        if target_cell is None:
+            reason = _('No cell given in routing path.')
+            raise exception.CellRoutingInconsistency(reason=reason)
         self.target_cell = target_cell
         self.base_attrs_to_json.append('target_cell')
 
@@ -405,10 +409,9 @@ class _TargetedMessage(_BaseMessage):
         """
         try:
             next_hop = self._get_next_hop()
-        except Exception as exc:
+        except Exception:
             exc_info = sys.exc_info()
-            LOG.exception(_LE("Error locating next hop for message: %(exc)s"),
-                          {'exc': exc})
+            LOG.exception(_LE("Error locating next hop for message"))
             return self._send_response_from_exception(exc_info)
 
         if next_hop.is_me:
@@ -432,11 +435,10 @@ class _TargetedMessage(_BaseMessage):
                 raise exception.CellMaxHopCountReached(
                         hop_count=self.hop_count)
             next_hop.send_message(self)
-        except Exception as exc:
+        except Exception:
             exc_info = sys.exc_info()
-            err_str = _("Failed to send message to cell: %(next_hop)s: "
-                        "%(exc)s")
-            LOG.exception(err_str, {'exc': exc, 'next_hop': next_hop})
+            err_str = _LE("Failed to send message to cell: %(next_hop)s")
+            LOG.exception(err_str, {'next_hop': next_hop})
             self._cleanup_response_queue()
             return self._send_response_from_exception(exc_info)
 
@@ -511,10 +513,9 @@ class _BroadcastMessage(_BaseMessage):
         """
         try:
             next_hops = self._get_next_hops()
-        except Exception as exc:
+        except Exception:
             exc_info = sys.exc_info()
-            LOG.exception(_LE("Error locating next hops for message: %(exc)s"),
-                          {'exc': exc})
+            LOG.exception(_LE("Error locating next hops for message"))
             return self._send_response_from_exception(exc_info)
 
         # Short circuit if we don't need to respond
@@ -529,12 +530,11 @@ class _BroadcastMessage(_BaseMessage):
         try:
             self._setup_response_queue()
             self._send_to_cells(next_hops)
-        except Exception as exc:
+        except Exception:
             # Error just trying to send to cells.  Send a single response
             # with the failure.
             exc_info = sys.exc_info()
-            LOG.exception(_LE("Error sending message to next hops: %(exc)s"),
-                          {'exc': exc})
+            LOG.exception(_LE("Error sending message to next hops."))
             self._cleanup_response_queue()
             return self._send_response_from_exception(exc_info)
 
@@ -547,13 +547,12 @@ class _BroadcastMessage(_BaseMessage):
         try:
             remote_responses = self._wait_for_json_responses(
                     num_responses=len(next_hops))
-        except Exception as exc:
+        except Exception:
             # Error waiting for responses, most likely a timeout.
             # Send a single response back with the failure.
             exc_info = sys.exc_info()
-            err_str = _("Error waiting for responses from neighbor cells: "
-                        "%(exc)s")
-            LOG.exception(err_str, {'exc': exc})
+            LOG.exception(_LE("Error waiting for responses from"
+                              " neighbor cells"))
             return self._send_response_from_exception(exc_info)
 
         if local_response:
@@ -732,7 +731,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
 
     def service_get_by_compute_host(self, message, host_name):
         """Return the service entry for a compute host."""
-        service = self.db.service_get_by_compute_host(message.ctxt,
+        service = objects.Service.get_by_compute_host(message.ctxt,
                                                       host_name)
         return jsonutils.to_primitive(service)
 
@@ -746,8 +745,8 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         :param params_to_update: eg. {'disabled': True}
         """
         return jsonutils.to_primitive(
-            self.host_api.service_update(message.ctxt, host_name, binary,
-                                         params_to_update))
+            self.host_api._service_update(message.ctxt, host_name, binary,
+                                          params_to_update))
 
     def service_delete(self, message, service_id):
         """Deletes the specified service."""
@@ -757,7 +756,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                              topic, timeout):
         """Proxy RPC to the given compute topic."""
         # Check that the host exists.
-        self.db.service_get_by_compute_host(message.ctxt, host_name)
+        objects.Service.get_by_compute_host(message.ctxt, host_name)
 
         topic, _sep, server = topic.partition('.')
 
@@ -774,9 +773,12 @@ class _TargetedMessageMethods(_BaseMessageMethods):
 
     def compute_node_get(self, message, compute_id):
         """Get compute node by ID."""
-        compute_node = self.db.compute_node_get(message.ctxt,
-                                                compute_id)
-        return jsonutils.to_primitive(compute_node)
+        compute_node = objects.ComputeNode.get_by_id(message.ctxt, compute_id)
+        # NOTE(sbauza): Cells Manager is calling
+        # cells_utils.add_cell_to_compute_node with this result so we need
+        # to convert it back to a dict so as to prevent the coercion to an
+        # integer for the ID field (which then becomes a string)
+        return objects_base.obj_to_primitive(compute_node)
 
     def actions_get(self, message, instance_uuid):
         actions = self.db.actions_get(message.ctxt, instance_uuid)
@@ -826,7 +828,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         # NOTE(alaski): A cell should be authoritative for its system_metadata
         # and metadata so we don't want to sync it down from the api.
         instance.obj_reset_changes(['metadata', 'system_metadata'])
-        instance.save(message.ctxt, expected_vm_state=expected_vm_state,
+        instance.save(expected_vm_state=expected_vm_state,
                       expected_task_state=expected_task_state)
 
     def _call_compute_api_with_obj(self, ctxt, instance, method, *args,
@@ -844,7 +846,7 @@ class _TargetedMessageMethods(_BaseMessageMethods):
                 self.msg_runner.instance_destroy_at_top(ctxt,
                                                         instance)
         except exception.InstanceInfoCacheNotFound:
-            if method != delete_types.DELETE:
+            if method != 'delete':
                 raise
 
         fn = getattr(self.compute_api, method, None)
@@ -878,12 +880,10 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         return self.host_api.get_host_uptime(message.ctxt, host_name)
 
     def terminate_instance(self, message, instance):
-        self._call_compute_api_with_obj(message.ctxt, instance,
-                                        delete_types.DELETE)
+        self._call_compute_api_with_obj(message.ctxt, instance, 'delete')
 
     def soft_delete_instance(self, message, instance):
-        self._call_compute_api_with_obj(message.ctxt, instance,
-                                        delete_types.SOFT_DELETE)
+        self._call_compute_api_with_obj(message.ctxt, instance, 'soft_delete')
 
     def pause_instance(self, message, instance):
         """Pause an instance via compute_api.pause()."""
@@ -1100,7 +1100,7 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
         """
         LOG.debug("Got broadcast to %(delete_type)s delete instance",
                   {'delete_type': delete_type}, instance=instance)
-        if delete_type == delete_types.SOFT_DELETE:
+        if delete_type == 'soft':
             self.compute_api.soft_delete(message.ctxt, instance)
         else:
             self.compute_api.delete(message.ctxt, instance)
@@ -1162,11 +1162,15 @@ class _BroadcastMessageMethods(_BaseMessageMethods):
     def compute_node_get_all(self, message, hypervisor_match):
         """Return compute nodes in this cell."""
         if hypervisor_match is not None:
-            nodes = self.db.compute_node_search_by_hypervisor(message.ctxt,
-                    hypervisor_match)
+            nodes = objects.ComputeNodeList.get_by_hypervisor(message.ctxt,
+                                                              hypervisor_match)
         else:
-            nodes = self.db.compute_node_get_all(message.ctxt)
-        return jsonutils.to_primitive(nodes)
+            nodes = objects.ComputeNodeList.get_all(message.ctxt)
+        # NOTE(sbauza): Cells Manager is calling
+        # cells_utils.add_cell_to_compute_node with this result so we need
+        # to convert it back to a dict so as to prevent the coercion to an
+        # integer for the ID field (which then becomes a string)
+        return objects_base.obj_to_primitive(nodes)
 
     def compute_node_stats(self, message):
         """Return compute node stats from this cell."""

@@ -36,7 +36,7 @@ NS = "{http://docs.openstack.org/compute/api/v1.1}"
 ATOMNS = "{http://www.w3.org/2005/Atom}"
 
 
-class LimiterTest(test.TestCase):
+class LimiterTest(test.NoDBTestCase):
     """Unit tests for the `nova.api.openstack.common.limited` method which
     takes in a list of items and, depending on the 'offset' and 'limit' GET
     params, returns a subset or complete set of the given items.
@@ -159,7 +159,7 @@ class LimiterTest(test.TestCase):
             webob.exc.HTTPBadRequest, common.limited, self.tiny, req)
 
 
-class SortParamUtilsTest(test.TestCase):
+class SortParamUtilsTest(test.NoDBTestCase):
 
     def test_get_sort_params_defaults(self):
         '''Verifies the default sort key and direction.'''
@@ -228,7 +228,7 @@ class SortParamUtilsTest(test.TestCase):
         self.assertEqual(0, len(params))
 
 
-class PaginationParamsTest(test.TestCase):
+class PaginationParamsTest(test.NoDBTestCase):
     """Unit tests for the `nova.api.openstack.common.get_pagination_params`
     method which takes in a request object and returns 'marker' and 'limit'
     GET params.
@@ -437,6 +437,13 @@ class MiscFunctionsTest(test.TestCase):
                 actual = common.status_from_state(vm_state, task_state)
                 expected = 'REBUILD'
                 self.assertEqual(expected, actual)
+
+    def test_status_migrating_from_state(self):
+        for vm_state in (vm_states.ACTIVE, vm_states.PAUSED):
+            task_state = task_states.MIGRATING
+            actual = common.status_from_state(vm_state, task_state)
+            expected = 'MIGRATING'
+            self.assertEqual(expected, actual)
 
     def test_task_and_vm_state_from_status(self):
         fixture1 = ['reboot']

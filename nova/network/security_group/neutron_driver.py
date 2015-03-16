@@ -17,8 +17,10 @@ import sys
 
 from neutronclient.common import exceptions as n_exc
 from neutronclient.neutron import v2_0 as neutronv20
-from oslo.config import cfg
-from oslo.utils import excutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
+from oslo_utils import uuidutils
 import six
 from webob import exc
 
@@ -28,8 +30,6 @@ from nova.i18n import _, _LE, _LI, _LW
 from nova.network.neutronv2 import api as neutronapi
 from nova.network.security_group import security_group_base
 from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova import utils
 
 
@@ -130,18 +130,21 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                 id = neutronv20.find_resourceid_by_name_or_id(
                     neutron, 'security_group', name, context.project_id)
             group = neutron.show_security_group(id).get('security_group')
+            return self._convert_to_nova_security_group_format(group)
         except n_exc.NeutronClientNoUniqueMatch as e:
             raise exception.NoUniqueMatch(six.text_type(e))
         except n_exc.NeutronClientException as e:
             exc_info = sys.exc_info()
             if e.status_code == 404:
                 LOG.debug("Neutron security group %s not found", name)
-                self.raise_not_found(six.text_type(e))
+                raise exception.SecurityGroupNotFound(six.text_type(e))
             else:
                 LOG.error(_LE("Neutron Error: %s"), e)
                 raise exc_info[0], exc_info[1], exc_info[2]
-
-        return self._convert_to_nova_security_group_format(group)
+        except TypeError as e:
+            LOG.error(_LE("Neutron Error: %s"), e)
+            msg = _("Invalid security group name: %(name)s.") % {"name": name}
+            raise exception.SecurityGroupNotFound(six.text_type(msg))
 
     def list(self, context, names=None, ids=None, project=None,
              search_opts=None):
@@ -417,7 +420,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             else:
                 LOG.exception(_LE("Neutron Error:"))
                 raise exc_info[0], exc_info[1], exc_info[2]
-        params = {'device_id': instance['uuid']}
+        params = {'device_id': instance.uuid}
         try:
             ports = neutron.list_ports(**params).get('ports')
         except n_exc.NeutronClientException:
@@ -426,7 +429,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
 
         if not ports:
             msg = (_("instance_id %s could not be found as device id on"
-                   " any ports") % instance['uuid'])
+                   " any ports") % instance.uuid)
             self.raise_not_found(msg)
 
         for port in ports:
@@ -435,7 +438,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                                 "%(instance)s since the port %(port_id)s "
                                 "does not meet security requirements"),
                             {'name': security_group_name,
-                             'instance': instance['uuid'],
+                             'instance': instance.uuid,
                              'port_id': port['id']})
                 raise exception.SecurityGroupCannotBeApplied()
             if 'security_groups' not in port:
@@ -472,7 +475,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             else:
                 LOG.exception(_LE("Neutron Error:"))
                 raise exc_info[0], exc_info[1], exc_info[2]
-        params = {'device_id': instance['uuid']}
+        params = {'device_id': instance.uuid}
         try:
             ports = neutron.list_ports(**params).get('ports')
         except n_exc.NeutronClientException:
@@ -481,7 +484,7 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
 
         if not ports:
             msg = (_("instance_id %s could not be found as device id on"
-                   " any ports") % instance['uuid'])
+                   " any ports") % instance.uuid)
             self.raise_not_found(msg)
 
         found_security_group = False
@@ -511,14 +514,13 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
             msg = (_("Security group %(security_group_name)s not associated "
                      "with the instance %(instance)s") %
                    {'security_group_name': security_group_name,
-                    'instance': instance['uuid']})
+                    'instance': instance.uuid})
             self.raise_not_found(msg)
 
     def populate_security_groups(self, instance, security_groups):
         # Setting to empty list since we do not want to populate this field
         # in the nova database if using the neutron driver
-        instance['security_groups'] = objects.SecurityGroupList()
-        instance['security_groups'].objects = []
+        instance.security_groups = objects.SecurityGroupList()
 
     def get_default_rule(self, context, id):
         msg = _("Network driver does not support this function.")

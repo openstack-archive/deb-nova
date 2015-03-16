@@ -24,14 +24,13 @@ from nova import compute
 from nova import exception
 
 ALIAS = 'os-deferred-delete'
-authorize = extensions.extension_authorizer('compute',
-                                            'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class DeferredDeleteController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(DeferredDeleteController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
 
     @wsgi.response(202)
     @extensions.expected_errors((404, 409, 403))
@@ -40,8 +39,7 @@ class DeferredDeleteController(wsgi.Controller):
         """Restore a previously deleted instance."""
         context = req.environ["nova.context"]
         authorize(context)
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         try:
             self.compute_api.restore(context, instance)
         except exception.QuotaError as error:
@@ -57,8 +55,7 @@ class DeferredDeleteController(wsgi.Controller):
         """Force delete of instance before deferred cleanup."""
         context = req.environ["nova.context"]
         authorize(context)
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         try:
             self.compute_api.force_delete(context, instance)
         except exception.InstanceIsLocked as e:

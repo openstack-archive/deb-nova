@@ -16,7 +16,7 @@
 import datetime
 
 import iso8601
-from oslo.utils import timeutils
+from oslo_utils import timeutils
 import six
 import six.moves.urllib.parse as urlparse
 from webob import exc
@@ -84,7 +84,7 @@ class SimpleTenantUsageController(wsgi.Controller):
         """
         try:
             return instance.get_flavor()
-        except KeyError:
+        except exception.NotFound:
             if not instance.deleted:
                 # Only support the fallback mechanism for deleted instances
                 # that would have been skipped by migration #153

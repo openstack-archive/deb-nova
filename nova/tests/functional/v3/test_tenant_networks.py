@@ -14,8 +14,8 @@
 #    under the License.
 
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
 
 import nova.quota
 from nova.tests.functional.v3 import api_sample_base
@@ -26,6 +26,7 @@ CONF.import_opt('enable_network_quota',
 
 
 class TenantNetworksJsonTests(api_sample_base.ApiSampleTestBaseV3):
+    ADMIN_API = True
     extension_name = "os-tenant-networks"
 
     def setUp(self):

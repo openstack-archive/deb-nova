@@ -18,7 +18,8 @@ Tests For CellsScheduler
 import copy
 import time
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_utils import uuidutils
 
 from nova import block_device
 from nova.cells import filters
@@ -29,10 +30,10 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import objects
-from nova.openstack.common import uuidutils
 from nova.scheduler import utils as scheduler_utils
 from nova import test
 from nova.tests.unit.cells import fakes
+from nova.tests.unit import fake_block_device
 from nova import utils
 
 CONF = cfg.CONF
@@ -115,8 +116,12 @@ class CellsSchedulerTestCase(test.TestCase):
                           'project_id': self.ctxt.project_id}
 
         call_info = {'uuids': []}
-        block_device_mapping = [block_device.create_image_bdm(
-            'fake_image_ref')]
+        block_device_mapping = [
+                objects.BlockDeviceMapping(context=self.ctxt,
+                    **fake_block_device.FakeDbBlockDeviceDict(
+                            block_device.create_image_bdm('fake_image_ref'),
+                            anon=True))
+               ]
 
         def _fake_instance_update_at_top(_ctxt, instance):
             call_info['uuids'].append(instance['uuid'])

@@ -20,15 +20,20 @@
 A driver wrapping the Ironic API, such that Nova may provision
 bare metal resources.
 """
-import logging as py_logging
+import base64
+import gzip
+import shutil
+import tempfile
 import time
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import importutils
 import six
 
+from nova.api.metadata import base as instance_metadata
 from nova.compute import arch
 from nova.compute import hv_type
 from nova.compute import power_state
@@ -38,10 +43,11 @@ from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
+from nova.i18n import _LI
 from nova.i18n import _LW
 from nova import objects
-from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
+from nova.virt import configdrive
 from nova.virt import driver as virt_driver
 from nova.virt import firewall
 from nova.virt import hardware
@@ -176,8 +182,8 @@ class IronicDriver(virt_driver.ComputeDriver):
         # to be addressed
         ironicclient_log_level = CONF.ironic.client_log_level
         if ironicclient_log_level:
-            level = py_logging.getLevelName(ironicclient_log_level)
-            logger = py_logging.getLogger('ironicclient')
+            level = logging.getLevelName(ironicclient_log_level)
+            logger = logging.getLogger('ironicclient')
             logger.setLevel(level)
 
         self.ironicclient = client_wrapper.IronicClientWrapper()
@@ -303,12 +309,7 @@ class IronicDriver(virt_driver.ComputeDriver):
     def _cleanup_deploy(self, context, node, instance, network_info,
                         flavor=None):
         if flavor is None:
-            # TODO(mrda): It would be better to use instance.get_flavor() here
-            # but right now that doesn't include extra_specs which are required
-            # NOTE(pmurray): Flavor may have been deleted
-            ctxt = context.elevated(read_deleted="yes")
-            flavor = objects.Flavor.get_by_id(ctxt,
-                                              instance.instance_type_id)
+            flavor = instance.flavor
         patch = patcher.create(node).get_cleanup_patch(instance, network_info,
                                                        flavor)
 
@@ -567,6 +568,44 @@ class IronicDriver(virt_driver.ComputeDriver):
         ports = self.ironicclient.call("node.list_ports", node.uuid)
         return set([p.address for p in ports])
 
+    def _generate_configdrive(self, instance, node, network_info,
+                              extra_md=None, files=None):
+        """Generate a config drive.
+
+        :param instance: The instance object.
+        :param node: The node object.
+        :param network_info: Instance network information.
+        :param extra_md: Optional, extra metadata to be added to the
+                         configdrive.
+        :param files: Optional, a list of paths to files to be added to
+                      the configdrive.
+
+        """
+        if not extra_md:
+            extra_md = {}
+
+        i_meta = instance_metadata.InstanceMetadata(instance,
+            content=files, extra_md=extra_md, network_info=network_info)
+
+        with tempfile.NamedTemporaryFile() as uncompressed:
+            try:
+                with configdrive.ConfigDriveBuilder(instance_md=i_meta) as cdb:
+                    cdb.make_drive(uncompressed.name)
+            except Exception as e:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_LE("Creating config drive failed with "
+                                  "error: %s"), e, instance=instance)
+
+            with tempfile.NamedTemporaryFile() as compressed:
+                # compress config drive
+                with gzip.GzipFile(fileobj=compressed, mode='wb') as gzipped:
+                    uncompressed.seek(0)
+                    shutil.copyfileobj(uncompressed, gzipped)
+
+                # base64 encode config drive
+                compressed.seek(0)
+                return base64.b64encode(compressed.read())
+
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None,
               flavor=None):
@@ -594,15 +633,14 @@ class IronicDriver(virt_driver.ComputeDriver):
                   "driver for instance %s.") % instance.uuid)
 
         node = self.ironicclient.call("node.get", node_uuid)
-        flavor = objects.Flavor.get_by_id(context,
-                                          instance.instance_type_id)
+        flavor = instance.flavor
 
         self._add_driver_fields(node, instance, image_meta, flavor)
 
         # NOTE(Shrews): The default ephemeral device needs to be set for
         # services (like cloud-init) that depend on it being returned by the
         # metadata server. Addresses bug https://launchpad.net/bugs/1324286.
-        if flavor['ephemeral_gb']:
+        if flavor.ephemeral_gb:
             instance.default_ephemeral_device = '/dev/sda1'
             instance.save()
 
@@ -632,10 +670,25 @@ class IronicDriver(virt_driver.ComputeDriver):
                 self._cleanup_deploy(context, node, instance, network_info,
                                      flavor=flavor)
 
+        # Config drive
+        configdrive_value = None
+        if configdrive.required_by(instance):
+            extra_md = {}
+            if admin_password:
+                extra_md['admin_pass'] = admin_password
+
+            configdrive_value = self._generate_configdrive(
+                instance, node, network_info, extra_md=extra_md)
+
+            LOG.info(_LI("Config drive for instance %(instance)s on "
+                         "baremetal node %(node)s created."),
+                         {'instance': instance['uuid'], 'node': node_uuid})
+
         # trigger the node deploy
         try:
             self.ironicclient.call("node.set_provision_state", node_uuid,
-                              ironic_states.ACTIVE)
+                                   ironic_states.ACTIVE,
+                                   configdrive=configdrive_value)
         except Exception as e:
             with excutils.save_and_reraise_exception():
                 msg = (_LE("Failed to request Ironic to provision instance "
@@ -985,10 +1038,8 @@ class IronicDriver(virt_driver.ComputeDriver):
 
         node_uuid = instance.node
         node = self.ironicclient.call("node.get", node_uuid)
-        flavor = objects.Flavor.get_by_id(context,
-                                          instance.instance_type_id)
 
-        self._add_driver_fields(node, instance, image_meta, flavor,
+        self._add_driver_fields(node, instance, image_meta, instance.flavor,
                                 preserve_ephemeral)
 
         # Trigger the node rebuild/redeploy.

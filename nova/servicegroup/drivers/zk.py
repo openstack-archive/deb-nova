@@ -17,12 +17,12 @@
 import os
 
 import eventlet
-from oslo.config import cfg
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import importutils
 
 from nova import exception
 from nova.i18n import _LE, _LW
-from nova.openstack.common import log as logging
 from nova.openstack.common import loopingcall
 from nova.servicegroup.drivers import base
 
@@ -59,21 +59,53 @@ class ZooKeeperDriver(base.Driver):
         """Create the zk session object."""
         if not all([evzookeeper, membership, zookeeper]):
             raise ImportError('zookeeper module not found')
+        self._memberships = {}
+        self._monitors = {}
+        super(ZooKeeperDriver, self).__init__()
+        self._cached_session = None
+
+    @property
+    def _session(self):
+        """Creates zookeeper session in lazy manner.
+
+        Session is created in lazy manner to mitigate lock problem
+        in zookeeper.
+
+        Lock happens when many processes try to use the same zk handle.
+        Lazy creation allows to deffer initialization of session until
+        is really required by worker (child process).
+
+        :returns: ZKSession -- new or created earlier
+        """
+        if self._cached_session is None:
+            self._cached_session = self._init_session()
+        return self._cached_session
+
+    def _init_session(self):
+        """Initializes new session.
+
+        Optionally creates required servicegroup prefix.
+
+        :returns ZKSession - newly created session
+        """
         null = open(os.devnull, "w")
-        self._session = evzookeeper.ZKSession(CONF.zookeeper.address,
+        session = evzookeeper.ZKSession(CONF.zookeeper.address,
                                               recv_timeout=
                                                 CONF.zookeeper.recv_timeout,
                                               zklog_fd=null)
-        self._memberships = {}
-        self._monitors = {}
         # Make sure the prefix exists
         try:
-            self._session.create(CONF.zookeeper.sg_prefix, "",
+            session.create(CONF.zookeeper.sg_prefix, "",
                                  acl=[evzookeeper.ZOO_OPEN_ACL_UNSAFE])
         except zookeeper.NodeExistsException:
             pass
-
-        super(ZooKeeperDriver, self).__init__()
+        # Log a warning about quality for this driver.
+        LOG.warning(_LW('The ZooKeeper service group driver in Nova is not '
+                        'tested by the OpenStack project and thus its quality '
+                        'can not be ensured. This may change in the future, '
+                        'but current deployers should be aware that the use '
+                        'of it in production right now may be risky.'))
+        return session
 
     def join(self, member_id, group, service=None):
         """Join the given service with its group."""

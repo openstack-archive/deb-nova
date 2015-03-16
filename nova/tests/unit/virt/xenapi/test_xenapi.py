@@ -25,11 +25,13 @@ import uuid
 
 import mock
 from mox3 import mox
-from oslo.config import cfg
-from oslo.config import fixture as config_fixture
-from oslo.serialization import jsonutils
-from oslo.utils import importutils
 from oslo_concurrency import lockutils
+from oslo_config import cfg
+from oslo_config import fixture as config_fixture
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import importutils
+import testtools
 
 from nova.compute import api as compute_api
 from nova.compute import arch
@@ -46,7 +48,6 @@ from nova import db
 from nova import exception
 from nova import objects
 from nova.objects import base
-from nova.openstack.common import log as logging
 from nova import test
 from nova.tests.unit.db import fakes as db_fakes
 from nova.tests.unit import fake_instance
@@ -55,6 +56,7 @@ from nova.tests.unit import fake_processutils
 import nova.tests.unit.image.fake as fake_image
 from nova.tests.unit import matchers
 from nova.tests.unit.objects import test_aggregate
+from nova.tests.unit import utils as test_utils
 from nova.tests.unit.virt.xenapi import stubs
 from nova.virt import fake
 from nova.virt.xenapi import agent
@@ -934,6 +936,8 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self._test_spawn(IMAGE_VHD, None, None,
                          block_device_info=dev_info)
 
+    @testtools.skipIf(test_utils.is_osx(),
+                      'IPv6 pretty-printing broken on OSX, see bug 1409135')
     def test_spawn_netinject_file(self):
         self.flags(flat_injected=True)
         db_fakes.stub_out_db_instance_api(self.stubs, injected=True)
@@ -954,12 +958,14 @@ iface lo inet loopback
 
 auto eth0
 iface eth0 inet static
+    hwaddress ether DE:AD:BE:EF:00:01
     address 192.168.1.100
     netmask 255.255.255.0
     broadcast 192.168.1.255
     gateway 192.168.1.1
     dns-nameservers 192.168.1.3 192.168.1.4
 iface eth0 inet6 static
+    hwaddress ether DE:AD:BE:EF:00:01
     address 2001:db8:0:1:dcad:beff:feef:1
     netmask 64
     gateway 2001:db8:0:1::1
@@ -982,6 +988,8 @@ iface eth0 inet6 static
                          check_injection=True)
         self.assertTrue(self._tee_executed)
 
+    @testtools.skipIf(test_utils.is_osx(),
+                      'IPv6 pretty-printing broken on OSX, see bug 1409135')
     def test_spawn_netinject_xenstore(self):
         db_fakes.stub_out_db_instance_api(self.stubs, injected=True)
 
@@ -1511,7 +1519,7 @@ iface eth0 inet6 static
     def test_per_instance_usage_suspended(self):
         # Suspended instances do not consume memory:
         instance = self._create_instance(spawn=True)
-        self.conn.suspend(instance)
+        self.conn.suspend(self.context, instance)
         actual = self.conn.get_per_instance_usage()
         self.assertEqual({}, actual)
 
@@ -1572,7 +1580,7 @@ iface eth0 inet6 static
         self.stubs.Set(vm_utils, "destroy_kernel_ramdisk",
                        fake_destroy_kernel_ramdisk)
 
-        instance = self._create_instance(spawn=True)
+        instance = self._create_instance(spawn=True, obj=True)
         network_info = fake_network.fake_get_instance_nw_info(self.stubs)
         self.conn.destroy(self.context, instance, network_info)
 
@@ -2164,16 +2172,16 @@ class XenAPIHostTestCase(stubs.XenAPITestBase):
         _create_service_entries(self.context, values={'nova': ['fake-mini']})
         self._test_host_action_no_param(self.conn.set_host_enabled,
                                         True, 'enabled')
-        service = db.service_get_by_args(self.context, 'fake-mini',
-                                         'nova-compute')
+        service = db.service_get_by_host_and_binary(self.context, 'fake-mini',
+                                                    'nova-compute')
         self.assertEqual(service.disabled, False)
 
     def test_set_enable_host_disable(self):
         _create_service_entries(self.context, values={'nova': ['fake-mini']})
         self._test_host_action_no_param(self.conn.set_host_enabled,
                                         False, 'disabled')
-        service = db.service_get_by_args(self.context, 'fake-mini',
-                                         'nova-compute')
+        service = db.service_get_by_host_and_binary(self.context, 'fake-mini',
+                                                    'nova-compute')
         self.assertEqual(service.disabled, True)
 
     def test_get_host_uptime(self):
@@ -3074,10 +3082,10 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
                     pool_states.POOL_FLAG: "XenAPI",
                     pool_states.KEY: pool_states.CREATED}
 
-        aggregate = objects.Aggregate()
+        aggregate = objects.Aggregate(context=self.context)
         aggregate.name = 'fake_aggregate'
         aggregate.metadata = dict(metadata)
-        aggregate.create(self.context)
+        aggregate.create()
         aggregate.add_host('host')
         self.assertEqual(["host"], aggregate.hosts)
         self.assertEqual(metadata, aggregate.metadata)
@@ -3141,7 +3149,7 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
                          aggr_zone='fake_zone',
                          aggr_state=pool_states.CREATED,
                          hosts=['host'], metadata=None):
-        aggregate = objects.Aggregate()
+        aggregate = objects.Aggregate(context=self.context)
         aggregate.name = aggr_name
         aggregate.metadata = {'availability_zone': aggr_zone,
                               pool_states.POOL_FLAG: 'XenAPI',
@@ -3149,7 +3157,7 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
                               }
         if metadata:
             aggregate.metadata.update(metadata)
-        aggregate.create(self.context)
+        aggregate.create()
         for aggregate_host in hosts:
             aggregate.add_host(aggregate_host)
         return aggregate

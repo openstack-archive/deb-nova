@@ -18,12 +18,15 @@ import os
 import tempfile
 
 import mock
-from oslo.config import cfg
 from oslo_concurrency import processutils
+from oslo_config import cfg
 
+from nova.compute import arch
 from nova import exception
 from nova.openstack.common import fileutils
+from nova.storage import linuxscsi
 from nova import test
+from nova.tests.unit import fake_instance
 from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt import images
@@ -83,6 +86,31 @@ blah BLAH: bb
         mock_execute.assert_has_calls([
             self._rsync_call('--dry-run', 'src', 'host:dest'),
             mock.call('scp', 'src', 'host:dest'),
+        ])
+        self.assertEqual(2, mock_execute.call_count)
+
+    @mock.patch('nova.utils.execute')
+    def test_copy_image_rsync_ipv6(self, mock_execute):
+        libvirt_utils.copy_image('src', 'dest', host='2600::')
+
+        mock_execute.assert_has_calls([
+            self._rsync_call('--dry-run', 'src', '[2600::]:dest'),
+            self._rsync_call('src', '[2600::]:dest'),
+        ])
+        self.assertEqual(2, mock_execute.call_count)
+
+    @mock.patch('nova.utils.execute')
+    def test_copy_image_scp_ipv6(self, mock_execute):
+        mock_execute.side_effect = [
+            processutils.ProcessExecutionError,
+            mock.DEFAULT,
+        ]
+
+        libvirt_utils.copy_image('src', 'dest', host='2600::')
+
+        mock_execute.assert_has_calls([
+            self._rsync_call('--dry-run', 'src', '[2600::]:dest'),
+            mock.call('scp', 'src', '[2600::]:dest'),
         ])
         self.assertEqual(2, mock_execute.call_count)
 
@@ -696,7 +724,8 @@ disk size: 4.4M
         self.assertEqual(out, 'c')
 
     def test_get_instance_path_at_destination(self):
-        instance = dict(name='fake_inst', uuid='fake_uuid')
+        instance = fake_instance.fake_instance_obj(None, name='fake_inst',
+                                                   uuid='fake_uuid')
 
         migrate_data = None
         inst_path_at_dest = libvirt_utils.get_instance_path_at_destination(
@@ -715,3 +744,69 @@ disk size: 4.4M
             instance, migrate_data)
         expected_path = os.path.join(CONF.instances_path, 'fake_relative_path')
         self.assertEqual(expected_path, inst_path_at_dest)
+
+    def test_get_arch(self):
+        image_meta = {'properties': {'architecture': "X86_64"}}
+        image_arch = libvirt_utils.get_arch(image_meta)
+        self.assertEqual(arch.X86_64, image_arch)
+
+    @mock.patch.object(linuxscsi, 'echo_scsi_command')
+    def test_perform_unit_add_for_s390(self, mock_execute):
+        device_number = "0.0.2319"
+        target_wwn = "0x50014380242b9751"
+        lun = 1
+        libvirt_utils.perform_unit_add_for_s390(device_number, target_wwn, lun)
+
+        mock_execute.assert_called_once_with(
+            '/sys/bus/ccw/drivers/zfcp/0.0.2319/0x50014380242b9751/unit_add',
+            lun)
+
+    @mock.patch.object(libvirt_utils.LOG, 'warn')
+    @mock.patch.object(linuxscsi, 'echo_scsi_command')
+    def test_perform_unit_add_for_s390_failed(self, mock_execute, mock_warn):
+        mock_execute.side_effect = processutils.ProcessExecutionError(
+            exit_code=1, stderr='oops')
+        device_number = "0.0.2319"
+        target_wwn = "0x50014380242b9751"
+        lun = 1
+        libvirt_utils.perform_unit_add_for_s390(device_number, target_wwn, lun)
+
+        mock_execute.assert_called_once_with(
+            '/sys/bus/ccw/drivers/zfcp/0.0.2319/0x50014380242b9751/unit_add',
+            lun)
+        # NOTE(mriedem): A better test is to probably make sure that the stderr
+        # message is logged in the warning but that gets messy with Message
+        # objects and mock.call_args.
+        self.assertEqual(1, mock_warn.call_count)
+
+    @mock.patch.object(linuxscsi, 'echo_scsi_command')
+    def test_perform_unit_remove_for_s390(self, mock_execute):
+        device_number = "0.0.2319"
+        target_wwn = "0x50014380242b9751"
+        lun = 1
+        libvirt_utils.perform_unit_remove_for_s390(device_number,
+                                                   target_wwn, lun)
+
+        mock_execute.assert_called_once_with(
+            '/sys/bus/ccw/drivers/zfcp/'
+            '0.0.2319/0x50014380242b9751/unit_remove', lun)
+
+    @mock.patch.object(libvirt_utils.LOG, 'warn')
+    @mock.patch.object(linuxscsi, 'echo_scsi_command')
+    def test_perform_unit_remove_for_s390_failed(self, mock_execute,
+                                                 mock_warn):
+        mock_execute.side_effect = processutils.ProcessExecutionError(
+            exit_code=1, stderr='oops')
+        device_number = "0.0.2319"
+        target_wwn = "0x50014380242b9751"
+        lun = 1
+        libvirt_utils.perform_unit_remove_for_s390(device_number,
+                                                   target_wwn, lun)
+
+        mock_execute.assert_called_once_with(
+            '/sys/bus/ccw/drivers/zfcp/'
+            '0.0.2319/0x50014380242b9751/unit_remove', lun)
+        # NOTE(mriedem): A better test is to probably make sure that the stderr
+        # message is logged in the warning but that gets messy with Message
+        # objects and mock.call_args.
+        self.assertEqual(1, mock_warn.call_count)

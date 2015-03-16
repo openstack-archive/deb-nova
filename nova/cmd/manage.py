@@ -60,9 +60,10 @@ import sys
 
 import decorator
 import netaddr
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_utils import importutils
 import six
 
 from nova.api.ec2 import ec2utils
@@ -75,7 +76,6 @@ from nova import exception
 from nova.i18n import _
 from nova import objects
 from nova.openstack.common import cliutils
-from nova.openstack.common import log as logging
 from nova import quota
 from nova import rpc
 from nova import servicegroup
@@ -693,7 +693,7 @@ class VmCommands(object):
                                                 instance.project_id,
                                                 instance.user_id,
                                                 instance.availability_zone,
-                                                instance.launch_index)))
+                                                instance.launch_index or 0)))
 
 
 class ServiceCommands(object):
@@ -737,7 +737,7 @@ class ServiceCommands(object):
         """Enable scheduling for a service."""
         ctxt = context.get_admin_context()
         try:
-            svc = db.service_get_by_args(ctxt, host, service)
+            svc = db.service_get_by_host_and_binary(ctxt, host, service)
             db.service_update(ctxt, svc['id'], {'disabled': False})
         except exception.NotFound as ex:
             print(_("error: %s") % ex)
@@ -751,7 +751,7 @@ class ServiceCommands(object):
         """Disable scheduling for a service."""
         ctxt = context.get_admin_context()
         try:
-            svc = db.service_get_by_args(ctxt, host, service)
+            svc = db.service_get_by_host_and_binary(ctxt, host, service)
             db.service_update(ctxt, svc['id'], {'disabled': True})
         except exception.NotFound as ex:
             print(_("error: %s") % ex)
@@ -774,18 +774,21 @@ class ServiceCommands(object):
 
         """
         # Getting compute node info and related instances info
-        service_ref = db.service_get_by_compute_host(context, host)
+        service_ref = objects.Service.get_by_compute_host(context, host)
         instance_refs = db.instance_get_all_by_host(context,
-                                                    service_ref['host'])
+                                                    service_ref.host)
 
         # Getting total available/used resource
-        compute_ref = service_ref['compute_node'][0]
-        resource = {'vcpus': compute_ref['vcpus'],
-                    'memory_mb': compute_ref['memory_mb'],
-                    'local_gb': compute_ref['local_gb'],
-                    'vcpus_used': compute_ref['vcpus_used'],
-                    'memory_mb_used': compute_ref['memory_mb_used'],
-                    'local_gb_used': compute_ref['local_gb_used']}
+        # NOTE(sbauza): We're lazily loading the compute_node field here but
+        # we will change that later to get the ComputeNode object by using
+        # the Service host field
+        compute_ref = service_ref.compute_node
+        resource = {'vcpus': compute_ref.vcpus,
+                    'memory_mb': compute_ref.memory_mb,
+                    'local_gb': compute_ref.local_gb,
+                    'vcpus_used': compute_ref.vcpus_used,
+                    'memory_mb_used': compute_ref.memory_mb_used,
+                    'local_gb_used': compute_ref.local_gb_used}
         usage = dict()
         if not instance_refs:
             return {'resource': resource, 'usage': usage}
@@ -897,7 +900,7 @@ class HostCommands(object):
 
 
 class DbCommands(object):
-    """Class for managing the database."""
+    """Class for managing the main database."""
 
     def __init__(self):
         pass
@@ -968,6 +971,22 @@ class DbCommands(object):
                                              flavor_cache)
         print(_('%(total)i instances matched query, %(done)i completed'),
               {'total': match, 'done': done})
+
+
+class ApiDbCommands(object):
+    """Class for managing the api database."""
+
+    def __init__(self):
+        pass
+
+    @args('--version', metavar='<version>', help='Database version')
+    def sync(self, version=None):
+        """Sync the database up to the most recent version."""
+        return migration.db_sync(version, database='api')
+
+    def version(self):
+        """Print the current database version."""
+        print(migration.db_version(database='api'))
 
 
 class AgentBuildCommands(object):
@@ -1227,6 +1246,7 @@ class CellCommands(object):
 CATEGORIES = {
     'account': AccountCommands,
     'agent': AgentBuildCommands,
+    'api_db': ApiDbCommands,
     'cell': CellCommands,
     'db': DbCommands,
     'fixed': FixedIpCommands,
@@ -1304,7 +1324,7 @@ def main():
     CONF.register_cli_opt(category_opt)
     try:
         config.parse_args(sys.argv)
-        logging.setup("nova")
+        logging.setup(CONF, "nova")
     except cfg.ConfigFilesNotFoundError:
         cfgfile = CONF.config_file[-1] if CONF.config_file else None
         if cfgfile and not os.access(cfgfile, os.R_OK):

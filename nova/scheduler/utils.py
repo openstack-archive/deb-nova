@@ -18,9 +18,10 @@ import collections
 import functools
 import sys
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_serialization import jsonutils
 
 from nova.compute import flavors
 from nova.compute import utils as compute_utils
@@ -30,7 +31,6 @@ from nova import notifications
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import instance as instance_obj
-from nova.openstack.common import log as logging
 from nova import rpc
 
 
@@ -290,7 +290,7 @@ def _get_group_details(context, instance_uuid, user_group_hosts=None):
             msg = _("ServerGroupAntiAffinityFilter not configured")
             LOG.error(msg)
             raise exception.UnsupportedPolicyException(reason=msg)
-        group_hosts = set(group.get_hosts(context))
+        group_hosts = set(group.get_hosts())
         user_hosts = set(user_group_hosts) if user_group_hosts else set()
         return GroupDetails(hosts=user_hosts | group_hosts,
                             policies=group.policies)

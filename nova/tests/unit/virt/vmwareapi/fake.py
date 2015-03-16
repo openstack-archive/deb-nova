@@ -21,13 +21,13 @@ A fake VMware VI API implementation.
 
 import collections
 
-from oslo.serialization import jsonutils
-from oslo.utils import units
-from oslo.vmware import exceptions as vexc
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import units
+from oslo_utils import uuidutils
+from oslo_vmware import exceptions as vexc
 
 from nova import exception
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import ds_util
 
@@ -278,6 +278,9 @@ class DataObject(object):
 
     def __repr__(self):
         return str(self.__dict__)
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
 
 
 class HostInternetScsiHba(DataObject):
@@ -1407,13 +1410,6 @@ class FakeVim(object):
         task_mdo = create_task(method, "success")
         return task_mdo.obj
 
-    def fake_transfer_file(self, ds_name, file_path):
-        """Fakes fetch image call.
-        Just adds a reference to the db for the file.
-        """
-        ds_file_path = "[" + ds_name + "] " + file_path
-        _add_file(ds_file_path)
-
     def _make_dir(self, method, *args, **kwargs):
         """Creates a directory in the datastore."""
         ds_path = kwargs.get("name")
@@ -1485,8 +1481,8 @@ class FakeVim(object):
                         prop_list.append(prop)
                     obj_content = ObjectContent(mdo.obj, prop_list)
                     lst_ret_objs.add_object(obj_content)
-            except Exception as exc:
-                LOG.exception(exc)
+            except Exception:
+                LOG.exception("_retrieve_properties error")
                 continue
         return lst_ret_objs
 

@@ -14,11 +14,11 @@
 #    under the License.
 
 import mock
-from oslo import messaging
+import oslo_messaging as messaging
 
-from nova.conductor import api as conductor_api
 from nova import context
 from nova import exception
+from nova import objects
 from nova.scheduler import client as scheduler_client
 from nova.scheduler.client import query as scheduler_query_client
 from nova.scheduler.client import report as scheduler_report_client
@@ -27,7 +27,7 @@ from nova import test
 """Tests for Scheduler Client."""
 
 
-class SchedulerReportClientTestCase(test.TestCase):
+class SchedulerReportClientTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(SchedulerReportClientTestCase, self).setUp()
@@ -37,18 +37,19 @@ class SchedulerReportClientTestCase(test.TestCase):
 
         self.client = scheduler_report_client.SchedulerReportClient()
 
-    def test_constructor(self):
-        self.assertIsNotNone(self.client.conductor_api)
-
-    @mock.patch.object(conductor_api.LocalAPI, 'compute_node_update')
-    def test_update_compute_node_works(self, mock_cn_update):
+    @mock.patch.object(objects.ComputeNode, '__new__')
+    def test_update_compute_node_works(self, mock_cn):
         stats = {"id": 1, "foo": "bar"}
         self.client.update_resource_stats(self.context,
                                           ('fakehost', 'fakenode'),
                                           stats)
-        mock_cn_update.assert_called_once_with(self.context,
-                                               {"id": 1},
-                                               {"foo": "bar"})
+        mock_cn.assert_called_once_with(objects.ComputeNode,
+                                        context=self.context,
+                                        id=1)
+        cn = mock_cn()
+        cn.obj_reset_changes.assert_called_once_with()
+        cn.save.assert_called_once_with()
+        self.assertEqual('bar', cn.foo)
 
     def test_update_compute_node_raises(self):
         stats = {"foo": "bar"}
@@ -57,7 +58,7 @@ class SchedulerReportClientTestCase(test.TestCase):
                           self.context, ('fakehost', 'fakenode'), stats)
 
 
-class SchedulerQueryClientTestCase(test.TestCase):
+class SchedulerQueryClientTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(SchedulerQueryClientTestCase, self).setUp()
@@ -80,8 +81,26 @@ class SchedulerQueryClientTestCase(test.TestCase):
             'fake_request_spec',
             'fake_prop')
 
+    @mock.patch.object(scheduler_rpcapi.SchedulerAPI, 'update_aggregates')
+    def test_update_aggregates(self, mock_update_aggs):
+        aggregates = [objects.Aggregate(id=1)]
+        self.client.update_aggregates(
+            context=self.context,
+            aggregates=aggregates)
+        mock_update_aggs.assert_called_once_with(
+            self.context, aggregates)
 
-class SchedulerClientTestCase(test.TestCase):
+    @mock.patch.object(scheduler_rpcapi.SchedulerAPI, 'delete_aggregate')
+    def test_delete_aggregate(self, mock_delete_agg):
+        aggregate = objects.Aggregate(id=1)
+        self.client.delete_aggregate(
+            context=self.context,
+            aggregate=aggregate)
+        mock_delete_agg.assert_called_once_with(
+            self.context, aggregate)
+
+
+class SchedulerClientTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(SchedulerClientTestCase, self).setUp()
@@ -120,6 +139,26 @@ class SchedulerClientTestCase(test.TestCase):
         fake_args = ['ctxt', 'fake_spec', 'fake_prop']
         self.client.select_destinations(*fake_args)
         mock_select_destinations.assert_has_calls([mock.call(*fake_args)] * 2)
+
+    @mock.patch.object(scheduler_query_client.SchedulerQueryClient,
+                       'update_aggregates')
+    def test_update_aggregates(self, mock_update_aggs):
+        aggregates = [objects.Aggregate(id=1)]
+        self.client.update_aggregates(
+            context='context',
+            aggregates=aggregates)
+        mock_update_aggs.assert_called_once_with(
+            'context', aggregates)
+
+    @mock.patch.object(scheduler_query_client.SchedulerQueryClient,
+                       'delete_aggregate')
+    def test_delete_aggregate(self, mock_delete_agg):
+        aggregate = objects.Aggregate(id=1)
+        self.client.delete_aggregate(
+            context='context',
+            aggregate=aggregate)
+        mock_delete_agg.assert_called_once_with(
+            'context', aggregate)
 
     @mock.patch.object(scheduler_report_client.SchedulerReportClient,
                        'update_resource_stats')

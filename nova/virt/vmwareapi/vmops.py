@@ -24,25 +24,23 @@ import os
 import time
 
 import decorator
-from oslo.config import cfg
-from oslo.utils import excutils
-from oslo.utils import strutils
-from oslo.utils import units
-from oslo.vmware import exceptions as vexc
 from oslo_concurrency import lockutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
+from oslo_utils import strutils
+from oslo_utils import units
+from oslo_utils import uuidutils
+from oslo_vmware import exceptions as vexc
 
 from nova.api.metadata import base as instance_metadata
 from nova import compute
 from nova.compute import power_state
 from nova.compute import task_states
-from nova.compute import vm_states
 from nova.console import type as ctype
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
-from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import diagnostics
@@ -82,7 +80,7 @@ VMWARE_POWER_STATES = {
                     'poweredOn': power_state.RUNNING,
                     'suspended': power_state.SUSPENDED}
 
-RESIZE_TOTAL_STEPS = 4
+RESIZE_TOTAL_STEPS = 6
 
 DcInfo = collections.namedtuple('DcInfo',
                                 ['ref', 'name', 'vmFolder'])
@@ -164,8 +162,6 @@ class VMwareVMOps(object):
         self._datastore_regex = datastore_regex
         self._base_folder = self._get_base_folder()
         self._tmp_folder = 'vmware_temp'
-        self._rescue_suffix = '-rescue'
-        self._migrate_suffix = '-orig'
         self._datastore_dc_mapping = {}
         self._datastore_browser_mapping = {}
         self._imagecache = imagecache.ImageCacheManager(self._session,
@@ -341,6 +337,21 @@ class VMwareVMOps(object):
             vi.dc_info.vmFolder,
             self._root_resource_pool)
 
+    def _fetch_image_as_ova(self, context, vi, image_ds_loc):
+        """Download root disk of an OVA image as streamOptimized."""
+
+        # The directory of the imported disk is the unique name
+        # of the VM use to import it with.
+        vm_name = image_ds_loc.parent.basename
+
+        images.fetch_image_ova(context,
+                               vi.instance,
+                               self._session,
+                               vm_name,
+                               vi.datastore.name,
+                               vi.dc_info.vmFolder,
+                               self._root_resource_pool)
+
     def _prepare_sparse_image(self, vi):
         tmp_dir_loc = vi.datastore.build_path(
                 self._tmp_folder, uuidutils.generate_uuid())
@@ -459,7 +470,9 @@ class VMwareVMOps(object):
     def _get_image_callbacks(self, vi):
         disk_type = vi.ii.disk_type
 
-        if disk_type == constants.DISK_TYPE_STREAM_OPTIMIZED:
+        if vi.ii.is_ova:
+            image_fetch = self._fetch_image_as_ova
+        elif disk_type == constants.DISK_TYPE_STREAM_OPTIMIZED:
             image_fetch = self._fetch_image_as_vapp
         else:
             image_fetch = self._fetch_image_as_file
@@ -501,42 +514,45 @@ class VMwareVMOps(object):
                 LOG.debug("Cleaning up location %s", str(tmp_dir_loc))
                 self._delete_datastore_file(str(tmp_dir_loc), vi.dc_info.ref)
 
-    def _create_and_attach_ephemeral_disk(self, instance, vm_ref, vi, size,
-                                          adapter_type, filename):
-        path = str(ds_util.DatastorePath(vi.datastore.name, instance.uuid,
-                                         filename))
+    def _create_and_attach_ephemeral_disk(self, instance, vm_ref, dc_info,
+                                          size, adapter_type, path):
         disk_type = constants.DISK_TYPE_THIN
         vm_util.create_virtual_disk(
-                self._session, vi.dc_info.ref,
+                self._session, dc_info.ref,
                 adapter_type,
                 disk_type,
                 path,
                 size)
 
         self._volumeops.attach_disk_to_vm(
-                vm_ref, vi.instance,
+                vm_ref, instance,
                 adapter_type, disk_type,
                 path, size, False)
 
-    def _create_ephemeral(self, bdi, instance, vm_ref, vi):
+    def _create_ephemeral(self, bdi, instance, vm_ref, dc_info,
+                          datastore, folder, adapter_type):
         ephemerals = None
         if bdi is not None:
             ephemerals = driver.block_device_info_get_ephemerals(bdi)
             for idx, eph in enumerate(ephemerals):
                 size = eph['size'] * units.Mi
-                adapter_type = eph.get('disk_bus', vi.ii.adapter_type)
+                at = eph.get('disk_bus', adapter_type)
                 filename = vm_util.get_ephemeral_name(idx)
-                self._create_and_attach_ephemeral_disk(instance, vm_ref, vi,
-                                                       size, adapter_type,
-                                                       filename)
+                path = str(ds_util.DatastorePath(datastore.name, folder,
+                                                 filename))
+                self._create_and_attach_ephemeral_disk(instance, vm_ref,
+                                                       dc_info, size,
+                                                       at, path)
         # There may be block devices defined but no ephemerals. In this case
         # we need to allocate a ephemeral disk if required
         if not ephemerals and instance.ephemeral_gb:
             size = instance.ephemeral_gb * units.Mi
             filename = vm_util.get_ephemeral_name(0)
-            self._create_and_attach_ephemeral_disk(instance, vm_ref, vi,
-                                                   size, vi.ii.adapter_type,
-                                                   filename)
+            path = str(ds_util.DatastorePath(datastore.name, folder,
+                                             filename))
+            self._create_and_attach_ephemeral_disk(instance, vm_ref,
+                                                   dc_info, size,
+                                                   adapter_type, path)
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None,
@@ -548,9 +564,7 @@ class VMwareVMOps(object):
                                                    image_meta)
         # Read flavors for extra_specs
         if flavor is None:
-            flavor = objects.Flavor.get_by_id(
-                nova_context.get_admin_context(read_deleted='yes'),
-                instance.instance_type_id)
+            flavor = instance.flavor
 
         extra_specs = self._get_extra_specs(flavor)
 
@@ -586,24 +600,7 @@ class VMwareVMOps(object):
             block_device_mapping = driver.block_device_info_get_mapping(
                 block_device_info)
 
-        # NOTE(mdbooth): the logic here is that we ignore the image if there
-        # are block device mappings. This behaviour is incorrect, and a bug in
-        # the driver.  We should be able to accept an image and block device
-        # mappings.
-        if len(block_device_mapping) > 0:
-            msg = "Block device information present: %s" % block_device_info
-            # NOTE(mriedem): block_device_info can contain an auth_password
-            # so we have to scrub the message before logging it.
-            LOG.debug(strutils.mask_password(msg), instance=instance)
-
-            for root_disk in block_device_mapping:
-                connection_info = root_disk['connection_info']
-                # TODO(hartsocks): instance is unnecessary, remove it
-                # we still use instance in many locations for no other purpose
-                # than logging, can we simplify this?
-                self._volumeops.attach_root_volume(connection_info, instance,
-                                                   vi.datastore.ref)
-        else:
+        if instance.image_ref:
             self._imagecache.enlist_image(
                     image_info.image_id, vi.datastore, vi.dc_info.ref)
             self._fetch_image_if_missing(context, vi)
@@ -615,8 +612,34 @@ class VMwareVMOps(object):
             else:
                 self._use_disk_image_as_full_clone(vm_ref, vi)
 
+        if len(block_device_mapping) > 0:
+            msg = "Block device information present: %s" % block_device_info
+            # NOTE(mriedem): block_device_info can contain an auth_password
+            # so we have to scrub the message before logging it.
+            LOG.debug(strutils.mask_password(msg), instance=instance)
+
+            # Before attempting to attach any volume, make sure the
+            # block_device_mapping (i.e. disk_bus) is valid
+            self._is_bdm_valid(block_device_mapping)
+
+            for disk in block_device_mapping:
+                connection_info = disk['connection_info']
+                adapter_type = disk.get('disk_bus') or vi.ii.adapter_type
+
+                # TODO(hartsocks): instance is unnecessary, remove it
+                # we still use instance in many locations for no other purpose
+                # than logging, can we simplify this?
+                if disk.get('boot_index') == 0:
+                    self._volumeops.attach_root_volume(connection_info,
+                        instance, vi.datastore.ref, adapter_type)
+                else:
+                    self._volumeops.attach_volume(connection_info,
+                        instance, adapter_type)
+
         # Create ephemeral disks
-        self._create_ephemeral(block_device_info, instance, vm_ref, vi)
+        self._create_ephemeral(block_device_info, instance, vm_ref,
+                               vi.dc_info, vi.datastore, instance.uuid,
+                               vi.ii.adapter_type)
 
         if configdrive.required_by(instance):
             self._configure_config_drive(
@@ -625,6 +648,20 @@ class VMwareVMOps(object):
 
         if power_on:
             vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
+
+    def _is_bdm_valid(self, block_device_mapping):
+        """Checks if the block device mapping is valid."""
+        valid_bus = (constants.DEFAULT_ADAPTER_TYPE,
+                     constants.ADAPTER_TYPE_BUSLOGIC,
+                     constants.ADAPTER_TYPE_IDE,
+                     constants.ADAPTER_TYPE_LSILOGICSAS,
+                     constants.ADAPTER_TYPE_PARAVIRTUAL)
+
+        for disk in block_device_mapping:
+            adapter_type = disk.get('disk_bus')
+            if (adapter_type is not None and adapter_type not in valid_bus):
+                raise exception.UnsupportedHardware(model=adapter_type,
+                                                    virt="vmware")
 
     def _create_config_drive(self, instance, injected_files, admin_password,
                              data_store_name, dc_name, upload_folder, cookies):
@@ -810,7 +847,7 @@ class VMwareVMOps(object):
             # TODO(vui) Add handling for when vmdk volume is attached.
             self._delete_vm_snapshot(instance, vm_ref, snapshot_ref)
 
-    def reboot(self, instance, network_info):
+    def reboot(self, instance, network_info, reboot_type="SOFT"):
         """Reboot a VM instance."""
         vm_ref = vm_util.get_vm_ref(self._session, instance)
         lst_properties = ["summary.guest.toolsStatus", "runtime.powerState",
@@ -831,7 +868,8 @@ class VMwareVMOps(object):
         # If latest vmware tools are installed in the VM, and that the tools
         # are running, then only do a guest reboot. Otherwise do a hard reset.
         if (tools_status == "toolsOk" and
-                tools_running_status == "guestToolsRunning"):
+                tools_running_status == "guestToolsRunning" and
+                reboot_type == "SOFT"):
             LOG.debug("Rebooting guest OS of VM", instance=instance)
             self._session._call_method(self._session.vim, "RebootGuest",
                                        vm_ref)
@@ -908,8 +946,9 @@ class VMwareVMOps(object):
                     LOG.warning(_LW("In vmwareapi:vmops:_destroy_instance, "
                                     "exception while deleting the VM contents "
                                     "from the disk"), exc_info=True)
-        except Exception as exc:
-            LOG.exception(exc, instance=instance)
+        except Exception:
+            LOG.exception(_LE('Destroy instance failed'),
+                          instance=instance)
         finally:
             vm_util.vm_ref_cache_delete(instance_name)
 
@@ -921,34 +960,11 @@ class VMwareVMOps(object):
         2. Un-register.
         3. Delete the contents of the folder holding the VM related data.
         """
+        if instance.task_state == task_states.RESIZE_REVERTING:
+            return
+
         # If there is a rescue VM then we need to destroy that one too.
         LOG.debug("Destroying instance", instance=instance)
-        if instance['vm_state'] == vm_states.RESCUED:
-            LOG.debug("Rescue VM configured", instance=instance)
-            try:
-                self.unrescue(instance, power_on=False)
-                LOG.debug("Rescue VM destroyed", instance=instance)
-            except Exception:
-                rescue_name = instance.uuid + self._rescue_suffix
-                self._destroy_instance(instance,
-                                       destroy_disks=destroy_disks,
-                                       instance_name=rescue_name)
-        # NOTE(arnaud): Destroy uuid-orig and uuid VMs iff it is not
-        # triggered by the revert resize api call. This prevents
-        # the uuid-orig VM to be deleted to be able to associate it later.
-        if instance.task_state != task_states.RESIZE_REVERTING:
-            # When a VM deletion is triggered in the middle of VM resize and
-            # before the state is set to RESIZED, the uuid-orig VM needs
-            # to be deleted. This will avoid VM leaks.
-            # The method _destroy_instance will check that the vmref
-            # exists before attempting the deletion.
-            resize_orig_vmname = instance.uuid + self._migrate_suffix
-            vm_orig_ref = vm_util.get_vm_ref_from_name(self._session,
-                                                       resize_orig_vmname)
-            if vm_orig_ref:
-                self._destroy_instance(instance,
-                                       destroy_disks=destroy_disks,
-                                       instance_name=resize_orig_vmname)
         self._destroy_instance(instance, destroy_disks=destroy_disks)
         LOG.debug("Instance destroyed", instance=instance)
 
@@ -998,50 +1014,72 @@ class VMwareVMOps(object):
             reason = _("instance is not in a suspended state")
             raise exception.InstanceResumeFailure(reason=reason)
 
+    def _get_rescue_device(self, instance, vm_ref):
+        hardware_devices = self._session._call_method(vim_util,
+                        "get_dynamic_property", vm_ref,
+                        "VirtualMachine", "config.hardware.device")
+        return vm_util.find_rescue_device(hardware_devices,
+                                          instance)
+
     def rescue(self, context, instance, network_info, image_meta):
         """Rescue the specified instance.
 
-            - shutdown the instance VM.
-            - spawn a rescue VM (the vm name-label will be instance-N-rescue).
-
+        Attach the image that the instance was created from and boot from it.
         """
         vm_ref = vm_util.get_vm_ref(self._session, instance)
 
-        vm_util.power_off_instance(self._session, instance, vm_ref)
-        instance_name = instance.uuid + self._rescue_suffix
-        self.spawn(context, instance, image_meta,
-                   None, None, network_info,
-                   instance_name=instance_name,
-                   power_on=False)
+        # Get the root disk vmdk object
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
+                                     uuid=instance.uuid)
+        ds_ref = vmdk.device.backing.datastore
+        datastore = ds_util.get_datastore_by_ref(self._session, ds_ref)
+        dc_info = self.get_datacenter_ref_and_name(datastore.ref)
 
-        # Attach vmdk to the rescue VM
-        vmdk = vm_util.get_vmdk_info(self._session, vm_ref, instance.uuid)
-        rescue_vm_ref = vm_util.get_vm_ref_from_name(self._session,
-                                                     instance_name)
-        self._volumeops.attach_disk_to_vm(rescue_vm_ref,
-                                          instance,
-                                          vmdk.adapter_type,
-                                          vmdk.disk_type,
-                                          vmdk.path)
-        vm_util.power_on_instance(self._session, instance,
-                                  vm_ref=rescue_vm_ref)
+        # Get the image details of the instance
+        image_info = images.VMwareImage.from_image(instance.image_ref,
+                                                   image_meta)
+        vi = VirtualMachineInstanceConfigInfo(instance,
+                                              None,
+                                              image_info,
+                                              datastore,
+                                              dc_info,
+                                              self._imagecache)
+        vm_util.power_off_instance(self._session, instance, vm_ref)
+
+        # Get the rescue disk path
+        rescue_disk_path = datastore.build_path(instance.uuid,
+                "%s-rescue.%s" % (image_info.image_id, image_info.file_type))
+
+        # Copy the cached image to the be the rescue disk. This will be used
+        # as the rescue disk for the instance.
+        ds_util.disk_copy(self._session, dc_info.ref,
+                          vi.cache_image_path, rescue_disk_path)
+        # Attach the rescue disk to the instance
+        self._volumeops.attach_disk_to_vm(vm_ref, instance, vmdk.adapter_type,
+                                          vmdk.disk_type, rescue_disk_path)
+        # Get the rescue device and configure the boot order to
+        # boot from this device
+        rescue_device = self._get_rescue_device(instance, vm_ref)
+        factory = self._session.vim.client.factory
+        boot_spec = vm_util.get_vm_boot_spec(factory, rescue_device)
+        # Update the VM with the new boot order and power on
+        vm_util.reconfigure_vm(self._session, vm_ref, boot_spec)
+        vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
 
     def unrescue(self, instance, power_on=True):
         """Unrescue the specified instance."""
-        # Get the original vmdk_path
+
         vm_ref = vm_util.get_vm_ref(self._session, instance)
-        vmdk = vm_util.get_vmdk_info(self._session, vm_ref, instance.uuid)
-        instance_name = instance.uuid + self._rescue_suffix
-        # detach the original instance disk from the rescue disk
-        vm_rescue_ref = vm_util.get_vm_ref_from_name(self._session,
-                                                     instance_name)
-        hardware_devices = self._session._call_method(vim_util,
-                        "get_dynamic_property", vm_rescue_ref,
-                        "VirtualMachine", "config.hardware.device")
-        device = vm_util.get_vmdk_volume_disk(hardware_devices, path=vmdk.path)
-        vm_util.power_off_instance(self._session, instance, vm_rescue_ref)
-        self._volumeops.detach_disk_from_vm(vm_rescue_ref, instance, device)
-        self._destroy_instance(instance, instance_name=instance_name)
+        # Get the rescue device and detach it from the instance.
+        try:
+            rescue_device = self._get_rescue_device(instance, vm_ref)
+        except exception.NotFound:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE('Unable to access the rescue disk'),
+                          instance=instance)
+        vm_util.power_off_instance(self._session, instance, vm_ref)
+        self._volumeops.detach_disk_from_vm(vm_ref, instance, rescue_device,
+                                            destroy_disk=True)
         if power_on:
             vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
 
@@ -1074,26 +1112,78 @@ class VMwareVMOps(object):
         instance.progress = progress
         instance.save()
 
+    def _resize_vm(self, vm_ref, flavor):
+        """Resizes the VM according to the flavor."""
+        client_factory = self._session.vim.client.factory
+        extra_specs = self._get_extra_specs(flavor)
+        vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
+                                                    int(flavor['vcpus']),
+                                                    int(flavor['memory_mb']),
+                                                    extra_specs)
+        vm_util.reconfigure_vm(self._session, vm_ref, vm_resize_spec)
+
+    def _resize_disk(self, instance, vm_ref, vmdk, flavor):
+        if (flavor['root_gb'] > instance.root_gb and
+            flavor['root_gb'] > vmdk.capacity_in_bytes / units.Gi):
+            root_disk_in_kb = flavor['root_gb'] * units.Mi
+            ds_ref = vmdk.device.backing.datastore
+            dc_info = self.get_datacenter_ref_and_name(ds_ref)
+            folder = ds_util.DatastorePath.parse(vmdk.path).dirname
+            datastore = ds_util.DatastorePath.parse(vmdk.path).datastore
+            resized_disk = str(ds_util.DatastorePath(datastore, folder,
+                               'resized.vmdk'))
+            ds_util.disk_copy(self._session, dc_info.ref, vmdk.path,
+                              str(resized_disk))
+            self._extend_virtual_disk(instance, root_disk_in_kb, resized_disk,
+                                      dc_info.ref)
+            self._volumeops.detach_disk_from_vm(vm_ref, instance, vmdk.device)
+            original_disk = str(ds_util.DatastorePath(datastore, folder,
+                                'original.vmdk'))
+            ds_util.disk_move(self._session, dc_info.ref, vmdk.path,
+                              original_disk)
+            ds_util.disk_move(self._session, dc_info.ref, resized_disk,
+                              vmdk.path)
+            self._volumeops.attach_disk_to_vm(vm_ref, instance,
+                                              vmdk.adapter_type,
+                                              vmdk.disk_type, vmdk.path)
+
+    def _remove_ephemerals(self, vm_ref):
+        devices = vm_util.get_ephemerals(self._session, vm_ref)
+        if devices:
+            vm_util.detach_devices_from_vm(self._session, vm_ref, devices)
+
+    def _resize_create_ephemerals(self, vm_ref, instance, block_device_info):
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
+                                     uuid=instance.uuid)
+        ds_ref = vmdk.device.backing.datastore
+        datastore = ds_util.get_datastore_by_ref(self._session, ds_ref)
+        dc_info = self.get_datacenter_ref_and_name(ds_ref)
+        folder = ds_util.DatastorePath.parse(vmdk.path).dirname
+        self._create_ephemeral(block_device_info, instance, vm_ref,
+                               dc_info, datastore, folder, vmdk.adapter_type)
+
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    flavor):
         """Transfers the disk of a running instance in multiple phases, turning
         off the instance before the end.
         """
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
+                                     uuid=instance.uuid)
+
         # Checks if the migration needs a disk resize down.
-        if flavor['root_gb'] < instance['root_gb']:
+        if (flavor['root_gb'] < instance.root_gb or
+            flavor['root_gb'] < vmdk.capacity_in_bytes / units.Gi):
             reason = _("Unable to shrink disk.")
             raise exception.InstanceFaultRollback(
                 exception.ResizeError(reason=reason))
+
+        # TODO(garyk): treat dest parameter. Migration needs to be treated.
 
         # 0. Zero out the progress to begin
         self._update_instance_progress(context, instance,
                                        step=0,
                                        total_steps=RESIZE_TOTAL_STEPS)
-
-        vm_ref = vm_util.get_vm_ref(self._session, instance)
-        # Read the host_ref for the destination. If this is None then the
-        # VC will decide on placement
-        host_ref = self._get_host_ref_from_name(dest)
 
         # 1. Power off the instance
         vm_util.power_off_instance(self._session, instance, vm_ref)
@@ -1101,53 +1191,81 @@ class VMwareVMOps(object):
                                        step=1,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
-        # 2. Disassociate the linked vsphere VM from the instance
-        vm_util.disassociate_vmref_from_instance(self._session, instance,
-                                                 vm_ref,
-                                                 suffix=self._migrate_suffix)
+        # 2. Reconfigure the VM properties
+        self._resize_vm(vm_ref, flavor)
+
         self._update_instance_progress(context, instance,
                                        step=2,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
-        ds_ref = ds_util.get_datastore(
-                            self._session, self._cluster,
-                            datastore_regex=self._datastore_regex).ref
-        dc_info = self.get_datacenter_ref_and_name(ds_ref)
-        # 3. Clone the VM for instance
-        vm_util.clone_vmref_for_instance(self._session, instance, vm_ref,
-                                         host_ref, ds_ref, dc_info.vmFolder)
+        # 3.Reconfigure the disk properties
+        self._resize_disk(instance, vm_ref, vmdk, flavor)
         self._update_instance_progress(context, instance,
                                        step=3,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
+        # 4. Purge ephemeral disks
+        self._remove_ephemerals(vm_ref)
+        self._update_instance_progress(context, instance,
+                                       step=4,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+
     def confirm_migration(self, migration, instance, network_info):
         """Confirms a resize, destroying the source VM."""
-        # Destroy the original VM. The vm_ref needs to be searched using the
-        # instance.uuid + self._migrate_suffix as the identifier. We will
-        # not get the vm when searched using the instanceUuid but rather will
-        # be found using the uuid buried in the extraConfig
-        vm_ref = vm_util.search_vm_ref_by_identifier(self._session,
-                                    instance.uuid + self._migrate_suffix)
-        if vm_ref is None:
-            LOG.debug("instance not present", instance=instance)
-            return
-
-        try:
-            LOG.debug("Destroying the VM", instance=instance)
-            destroy_task = self._session._call_method(
-                                        self._session.vim,
-                                        "Destroy_Task", vm_ref)
-            self._session._wait_for_task(destroy_task)
-            LOG.debug("Destroyed the VM", instance=instance)
-        except Exception as excep:
-            LOG.warning(_LW("In vmwareapi:vmops:confirm_migration, got this "
-                            "exception while destroying the VM: %s"), excep)
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
+                                     uuid=instance.uuid)
+        ds_ref = vmdk.device.backing.datastore
+        dc_info = self.get_datacenter_ref_and_name(ds_ref)
+        folder = ds_util.DatastorePath.parse(vmdk.path).dirname
+        datastore = ds_util.DatastorePath.parse(vmdk.path).datastore
+        original_disk = ds_util.DatastorePath(datastore, folder,
+                                              'original.vmdk')
+        ds_browser = self._get_ds_browser(ds_ref)
+        if ds_util.file_exists(self._session, ds_browser,
+                               original_disk.parent,
+                               original_disk.basename):
+            ds_util.disk_delete(self._session, dc_info.ref,
+                                str(original_disk))
 
     def finish_revert_migration(self, context, instance, network_info,
                                 block_device_info, power_on=True):
         """Finish reverting a resize."""
-        vm_util.associate_vmref_for_instance(self._session, instance,
-                                             suffix=self._migrate_suffix)
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        # Ensure that the VM is off
+        vm_util.power_off_instance(self._session, instance, vm_ref)
+        client_factory = self._session.vim.client.factory
+        # Reconfigure the VM properties
+        extra_specs = self._get_extra_specs(instance.flavor)
+        vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
+                                                    int(instance.vcpus),
+                                                    int(instance.memory_mb),
+                                                    extra_specs)
+        vm_util.reconfigure_vm(self._session, vm_ref, vm_resize_spec)
+
+        # Reconfigure the disks if necessary
+        vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
+                                     uuid=instance.uuid)
+        ds_ref = vmdk.device.backing.datastore
+        dc_info = self.get_datacenter_ref_and_name(ds_ref)
+        folder = ds_util.DatastorePath.parse(vmdk.path).dirname
+        datastore = ds_util.DatastorePath.parse(vmdk.path).datastore
+        original_disk = ds_util.DatastorePath(datastore, folder,
+                                             'original.vmdk')
+        ds_browser = self._get_ds_browser(ds_ref)
+        if ds_util.file_exists(self._session, ds_browser,
+                               original_disk.parent,
+                               original_disk.basename):
+            self._volumeops.detach_disk_from_vm(vm_ref, instance, vmdk.device)
+            ds_util.disk_delete(self._session, dc_info.ref, vmdk.path)
+            ds_util.disk_move(self._session, dc_info.ref,
+                              str(original_disk), vmdk.path)
+            self._volumeops.attach_disk_to_vm(vm_ref, instance,
+                                              vmdk.adapter_type,
+                                              vmdk.disk_type, vmdk.path)
+        # Reconfigure ephemerals
+        self._remove_ephemerals(vm_ref)
+        self._resize_create_ephemerals(vm_ref, instance, block_device_info)
         if power_on:
             vm_util.power_on_instance(self._session, instance)
 
@@ -1157,33 +1275,18 @@ class VMwareVMOps(object):
         """Completes a resize, turning on the migrated instance."""
         vm_ref = vm_util.get_vm_ref(self._session, instance)
 
-        if resize_instance:
-            client_factory = self._session.vim.client.factory
-            vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
-                                                        instance)
-            vm_util.reconfigure_vm(self._session, vm_ref, vm_resize_spec)
+        # 5. Update ephemerals if necessary
+        self._resize_create_ephemerals(vm_ref, instance, block_device_info)
 
-            # Resize the disk (if larger)
-            old_root_gb = instance.system_metadata['old_instance_type_root_gb']
-            if instance['root_gb'] > int(old_root_gb):
-                root_disk_in_kb = instance['root_gb'] * units.Mi
-                vmdk_info = vm_util.get_vmdk_info(self._session, vm_ref,
-                                                  instance.uuid)
-                vmdk_path = vmdk_info.path
-                data_store_ref = ds_util.get_datastore(self._session,
-                    self._cluster, datastore_regex=self._datastore_regex).ref
-                dc_info = self.get_datacenter_ref_and_name(data_store_ref)
-                self._extend_virtual_disk(instance, root_disk_in_kb, vmdk_path,
-                                          dc_info.ref)
-
-            # TODO(ericwb): add extend for ephemeral disk
-
-        # 4. Start VM
+        self._update_instance_progress(context, instance,
+                                       step=5,
+                                       total_steps=RESIZE_TOTAL_STEPS)
+        # 6. Start VM
         if power_on:
             vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
 
         self._update_instance_progress(context, instance,
-                                       step=4,
+                                       step=6,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
     def live_migration(self, context, instance_ref, dest,
@@ -1606,7 +1709,7 @@ class VMwareVMOps(object):
                                       '%(error)s'),
                                   {'source': vi.cache_image_path,
                                    'dest': sized_disk_ds_loc,
-                                   'error': e.message})
+                                   'error': e})
                         try:
                             ds_util.file_delete(self._session,
                                                 sized_disk_ds_loc,

@@ -16,12 +16,12 @@
 import functools
 import sys
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova.compute import utils as compute_utils
 from nova import exception
 from nova.image import glance
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.xenapi import vm_utils
 

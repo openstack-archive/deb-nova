@@ -23,15 +23,15 @@ import binascii
 
 from barbicanclient import client as barbican_client
 from keystoneclient import session
-from oslo.config import cfg
-from oslo.utils import excutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
 
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.keymgr import key as keymgr_key
 from nova.keymgr import key_mgr
-from nova.openstack.common import log as logging
 
 barbican_opts = [
      cfg.StrOpt('catalog_info',

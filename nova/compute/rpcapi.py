@@ -16,15 +16,15 @@
 Client side of the compute RPC API.
 """
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_serialization import jsonutils
 
 from nova import exception
 from nova.i18n import _, _LW
 from nova import objects
 from nova.objects import base as objects_base
-from nova.openstack.common import log as logging
 from nova import rpc
 
 rpcapi_opts = [
@@ -59,10 +59,10 @@ def _compute_host(host, instance):
         return host
     if not instance:
         raise exception.NovaException(_('No compute host specified'))
-    if not instance['host']:
+    if not instance.host:
         raise exception.NovaException(_('Unable to find host for '
-                                        'Instance %s') % instance['uuid'])
-    return instance['host']
+                                        'Instance %s') % instance.uuid)
+    return instance.host
 
 
 class ComputeAPI(object):
@@ -282,6 +282,9 @@ class ComputeAPI(object):
         * 3.37 - Add clean_shutdown to stop, resize, rescue, shelve, and
                  shelve_offload
         * 3.38 - Add clean_shutdown to prep_resize
+        * 3.39 - Add quiesce_instance and unquiesce_instance methods
+        * 3.40 - Make build_and_run_instance() take a new-world topology
+                 limits object
     '''
 
     VERSION_ALIASES = {
@@ -308,7 +311,7 @@ class ComputeAPI(object):
         '''Add aggregate host.
 
         :param ctxt: request context
-        :param aggregate_id:
+        :param aggregate:
         :param host_param: This value is placed in the message to be the 'host'
                            parameter for the remote method.
         :param host: This is the host to send the message to.
@@ -648,7 +651,7 @@ class ComputeAPI(object):
         '''Remove aggregate host.
 
         :param ctxt: request context
-        :param aggregate_id:
+        :param aggregate:
         :param host_param: This value is placed in the message to be the 'host'
                            parameter for the remote method.
         :param host: This is the host to send the message to.
@@ -951,7 +954,24 @@ class ComputeAPI(object):
             filter_properties, admin_password=None, injected_files=None,
             requested_networks=None, security_groups=None,
             block_device_mapping=None, node=None, limits=None):
-        version = '3.36'
+
+        version = '3.40'
+        if not self.client.can_send_version(version):
+            version = '3.36'
+            if 'numa_topology' in limits and limits['numa_topology']:
+                topology_limits = limits['numa_topology']
+                if node is not None:
+                    cnode = objects.ComputeNode.get_by_host_and_nodename(
+                        ctxt, host, node)
+                else:
+                    cnode = (
+                        objects.ComputeNode.
+                        get_first_node_by_host_for_old_compat(
+                            ctxt, host))
+                host_topology = objects.NUMATopology.obj_from_db_obj(
+                    cnode.numa_topology)
+                limits['numa_topology'] = jsonutils.dumps(
+                    topology_limits.to_dict_legacy(host_topology))
         if not self.client.can_send_version(version):
             version = '3.33'
             if 'instance_type' in filter_properties:
@@ -976,6 +996,19 @@ class ComputeAPI(object):
                 security_groups=security_groups,
                 block_device_mapping=block_device_mapping, node=node,
                 limits=limits)
+
+    def quiesce_instance(self, ctxt, instance):
+        version = '3.39'
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        return cctxt.call(ctxt, 'quiesce_instance', instance=instance)
+
+    def unquiesce_instance(self, ctxt, instance, mapping=None):
+        version = '3.39'
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        cctxt.cast(ctxt, 'unquiesce_instance', instance=instance,
+                   mapping=mapping)
 
 
 class SecurityGroupAPI(object):

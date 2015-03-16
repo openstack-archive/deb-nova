@@ -19,8 +19,9 @@ import inspect
 import math
 import time
 
-from oslo.serialization import jsonutils
-from oslo.utils import strutils
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import strutils
 import six
 import webob
 
@@ -31,7 +32,6 @@ from nova import i18n
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LI
-from nova.openstack.common import log as logging
 from nova import utils
 from nova import wsgi
 
@@ -72,7 +72,7 @@ VER_METHOD_ATTR = 'versioned_methods'
 
 # Name of header used by clients to request a specific version
 # of the REST API
-API_VERSION_REQUEST_HEADER = 'X-OpenStack-Compute-API-Version'
+API_VERSION_REQUEST_HEADER = 'X-OpenStack-Nova-API-Version'
 
 
 def get_supported_content_types():
@@ -507,6 +507,8 @@ class ResourceExceptionHandler(object):
         if isinstance(ex_value, exception.Forbidden):
             raise Fault(webob.exc.HTTPForbidden(
                     explanation=ex_value.format_message()))
+        elif isinstance(ex_value, exception.VersionNotFoundForAPIMethod):
+            raise
         elif isinstance(ex_value, exception.Invalid):
             raise Fault(exception.ConvertedException(
                     code=ex_value.code,
@@ -706,6 +708,11 @@ class Resource(wsgi.Application):
                     with ResourceExceptionHandler():
                         response = ext(req=request, resp_obj=resp_obj,
                                        **action_args)
+                except exception.VersionNotFoundForAPIMethod:
+                    # If an attached extension (@wsgi.extends) for the
+                    # method has no version match its not an error. We
+                    # just don't run the extends code
+                    continue
                 except Fault as ex:
                     response = ex
 

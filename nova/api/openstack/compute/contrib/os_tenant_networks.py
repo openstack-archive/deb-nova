@@ -13,10 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-
 import netaddr
 import netaddr.core as netexc
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 import six
 import webob
 from webob import exc
@@ -27,7 +27,6 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 import nova.network
-from nova.openstack.common import log as logging
 from nova import quota
 
 
@@ -154,6 +153,9 @@ class NetworkController(object):
                 "num_networks"]
         kwargs = {k: network.get(k) for k in keys}
 
+        if not network.get("label"):
+            msg = _("Network label is required")
+            raise exc.HTTPBadRequest(explanation=msg)
         label = network["label"]
 
         if not (kwargs["cidr"] or kwargs["cidr_v6"]):

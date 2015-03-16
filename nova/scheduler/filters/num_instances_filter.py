@@ -13,10 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 from nova.scheduler import filters
 from nova.scheduler.filters import utils
 
@@ -60,9 +60,8 @@ class AggregateNumInstancesFilter(NumInstancesFilter):
         # TODO(uni): DB query in filter is a performance hit, especially for
         # system with lots of hosts. Will need a general solutnumn here to fix
         # all filters with aggregate DB call things.
-        aggregate_vals = utils.aggregate_values_from_db(
-            filter_properties['context'],
-            host_state.host,
+        aggregate_vals = utils.aggregate_values_from_key(
+            host_state,
             'max_instances_per_host')
         try:
             value = utils.validate_num_values(

@@ -14,11 +14,11 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-import logging
 import sys
 
 import fixtures as fx
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 import testtools
 
 from nova.db.sqlalchemy import api as session
@@ -148,6 +148,32 @@ class TestTimeout(testtools.TestCase):
         self.assertEqual(timeout.test_timeout, 20)
 
 
+class TestOSAPIFixture(testtools.TestCase):
+    def test_responds_to_version(self):
+        """Ensure the OSAPI server responds to calls sensibly."""
+        self.useFixture(fixtures.OutputStreamCapture())
+        self.useFixture(fixtures.StandardLogging())
+        self.useFixture(conf_fixture.ConfFixture())
+        api = self.useFixture(fixtures.OSAPIFixture()).api
+
+        # request the API root, which provides us the versions of the API
+        resp = api.api_request('/', strip_version=True)
+        self.assertEqual(resp.status_code, 200, resp.content)
+
+        # request a bad root url, should be a 404
+        #
+        # NOTE(sdague): this currently fails, as it falls into the 300
+        # dispatcher instead. This is a bug. The test case is left in
+        # here, commented out until we can address it.
+        #
+        # resp = api.api_request('/foo', strip_version=True)
+        # self.assertEqual(resp.status_code, 400, resp.content)
+
+        # request a known bad url, and we should get a 404
+        resp = api.api_request('/foo')
+        self.assertEqual(resp.status_code, 404, resp.content)
+
+
 class TestDatabaseFixture(testtools.TestCase):
     def test_fixture_reset(self):
         # because this sets up reasonable db connection strings
@@ -179,3 +205,18 @@ class TestDatabaseFixture(testtools.TestCase):
         result = conn.execute("select * from instance_types")
         rows = result.fetchall()
         self.assertEqual(len(rows), 5, "Rows %s" % rows)
+
+    def test_fixture_cleanup(self):
+        # because this sets up reasonable db connection strings
+        self.useFixture(conf_fixture.ConfFixture())
+        fix = fixtures.Database()
+        self.useFixture(fix)
+
+        # manually do the cleanup that addCleanup will do
+        fix.cleanup()
+
+        # ensure the db contains nothing
+        engine = session.get_engine()
+        conn = engine.connect()
+        schema = "".join(line for line in conn.connection.iterdump())
+        self.assertEqual(schema, "BEGIN TRANSACTION;COMMIT;")

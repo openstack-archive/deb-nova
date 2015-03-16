@@ -27,13 +27,13 @@ from nova import exception
 
 
 ALIAS = "os-multinic"
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class MultinicController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(MultinicController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
 
     @wsgi.response(202)
     @wsgi.action('addFixedIp')
@@ -44,8 +44,7 @@ class MultinicController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         network_id = body['addFixedIp']['networkId']
         try:
             self.compute_api.add_fixed_ip(context, instance, network_id)
@@ -61,8 +60,7 @@ class MultinicController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         address = body['removeFixedIp']['address']
 
         try:

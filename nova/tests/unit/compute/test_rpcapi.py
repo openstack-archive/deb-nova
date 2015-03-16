@@ -19,13 +19,15 @@ Unit Tests for nova.compute.rpcapi
 import contextlib
 
 import mock
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import context
 from nova.objects import block_device as objects_block_dev
+from nova.objects import compute_node as objects_compute_node
 from nova.objects import network_request as objects_network_request
+from nova.objects import numa as objects_numa
 from nova import test
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_instance
@@ -33,7 +35,7 @@ from nova.tests.unit import fake_instance
 CONF = cfg.CONF
 
 
-class ComputeRpcAPITestCase(test.TestCase):
+class ComputeRpcAPITestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(ComputeRpcAPITestCase, self).setUp()
@@ -52,7 +54,8 @@ class ComputeRpcAPITestCase(test.TestCase):
     def test_serialized_instance_has_name(self):
         self.assertIn('name', self.fake_instance)
 
-    def _test_compute_api(self, method, rpc_method, **kwargs):
+    def _test_compute_api(self, method, rpc_method,
+                          assert_dict=False, **kwargs):
         ctxt = context.RequestContext('fake_user', 'fake_project')
 
         rpcapi = kwargs.pop('rpcapi_class', compute_rpcapi.ComputeAPI)()
@@ -75,7 +78,14 @@ class ComputeRpcAPITestCase(test.TestCase):
             expected_kwargs['host'] = expected_kwargs.pop('host_param')
         else:
             expected_kwargs.pop('host', None)
+        if 'legacy_limits' in expected_kwargs:
+            expected_kwargs['limits'] = expected_kwargs.pop('legacy_limits')
+            kwargs.pop('legacy_limits', None)
         expected_kwargs.pop('destination', None)
+
+        if assert_dict:
+            expected_kwargs['instance'] = jsonutils.to_primitive(
+                expected_kwargs['instance'])
 
         cast_and_call = ['confirm_resize', 'stop_instance']
         if rpc_method == 'call' and method in cast_and_call:
@@ -227,7 +237,8 @@ class ComputeRpcAPITestCase(test.TestCase):
 
     def test_get_instance_diagnostics(self):
         self._test_compute_api('get_instance_diagnostics', 'call',
-                instance=self.fake_instance, version='3.31')
+                assert_dict=True, instance=self.fake_instance_obj,
+                version='3.31')
 
     def test_get_vnc_console(self):
         self._test_compute_api('get_vnc_console', 'call',
@@ -246,7 +257,7 @@ class ComputeRpcAPITestCase(test.TestCase):
 
     def test_get_serial_console(self):
         self._test_compute_api('get_serial_console', 'call',
-                instance=self.fake_instance, console_type='serial',
+                instance=self.fake_instance_obj, console_type='serial',
                 version='3.34')
 
     def test_validate_console_port(self):
@@ -521,7 +532,7 @@ class ComputeRpcAPITestCase(test.TestCase):
 
     def test_volume_snapshot_create(self):
         self._test_compute_api('volume_snapshot_create', 'cast',
-                instance=self.fake_instance, volume_id='fake_id',
+                instance=self.fake_instance_obj, volume_id='fake_id',
                 create_info={}, version='3.6')
 
     def test_volume_snapshot_delete(self):
@@ -542,7 +553,7 @@ class ComputeRpcAPITestCase(test.TestCase):
                 admin_password='passwd', injected_files=None,
                 requested_networks=['network1'], security_groups=None,
                 block_device_mapping=None, node='node', limits=[],
-                version='3.36')
+                version='3.40')
 
     @mock.patch('nova.utils.is_neutron', return_value=True)
     def test_build_and_run_instance_icehouse_compat(self, is_neutron):
@@ -556,5 +567,76 @@ class ComputeRpcAPITestCase(test.TestCase):
                         network_id="fake_network_id", address="10.0.0.1",
                         port_id="fake_port_id")]),
                 security_groups=None,
-                block_device_mapping=None, node='node', limits=[],
+                block_device_mapping=None, node='node', limits={},
                 version='3.23')
+
+    def test_quiesce_instance(self):
+        self._test_compute_api('quiesce_instance', 'call',
+                instance=self.fake_instance_obj, version='3.39')
+
+    def test_unquiesce_instance(self):
+        self._test_compute_api('unquiesce_instance', 'cast',
+                instance=self.fake_instance_obj, mapping=None, version='3.39')
+
+    @mock.patch('nova.utils.is_neutron', return_value=True)
+    def test_build_and_run_instance_juno_compat(self, is_neutron):
+        self.flags(compute='juno', group='upgrade_levels')
+        self._test_compute_api('build_and_run_instance', 'cast',
+                instance=self.fake_instance_obj, host='host', image='image',
+                request_spec={'request': 'spec'}, filter_properties=[],
+                admin_password='passwd', injected_files=None,
+                requested_networks= objects_network_request.NetworkRequestList(
+                    objects=[objects_network_request.NetworkRequest(
+                        network_id="fake_network_id", address="10.0.0.1",
+                        port_id="fake_port_id")]),
+                security_groups=None,
+                block_device_mapping=None, node='node', limits={},
+                version='3.33')
+
+    @mock.patch('nova.objects.ComputeNode.get_by_host_and_nodename')
+    @mock.patch('nova.utils.is_neutron', return_value=True)
+    def test_build_and_run_instance_limits_juno_compat(
+            self, is_neutron, get_by_host_and_nodename):
+        host_topology = objects_numa.NUMATopology(cells=[
+            objects_numa.NUMACell(
+                id=0, cpuset=set([1, 2]), memory=512,
+                cpu_usage=2, memory_usage=256,
+                pinned_cpus=set([1])),
+            objects_numa.NUMACell(
+                id=1, cpuset=set([3, 4]), memory=512,
+                cpu_usage=1, memory_usage=128,
+                pinned_cpus=set([]))
+        ])
+        limits = objects_numa.NUMATopologyLimits(
+            cpu_allocation_ratio=16,
+            ram_allocation_ratio=2)
+        cnode = objects_compute_node.ComputeNode(
+            numa_topology=jsonutils.dumps(
+                host_topology.obj_to_primitive()))
+
+        get_by_host_and_nodename.return_value = cnode
+        legacy_limits = jsonutils.dumps(
+            limits.to_dict_legacy(host_topology))
+
+        self.flags(compute='juno', group='upgrade_levels')
+        netreqs = objects_network_request.NetworkRequestList(objects=[
+            objects_network_request.NetworkRequest(
+                network_id="fake_network_id",
+                address="10.0.0.1",
+                port_id="fake_port_id")])
+
+        self._test_compute_api('build_and_run_instance', 'cast',
+                               instance=self.fake_instance_obj,
+                               host='host',
+                               image='image',
+                               request_spec={'request': 'spec'},
+                               filter_properties=[],
+                               admin_password='passwd',
+                               injected_files=None,
+                               requested_networks=netreqs,
+                               security_groups=None,
+                               block_device_mapping=None,
+                               node='node',
+                               limits={'numa_topology': limits},
+                               legacy_limits={'numa_topology': legacy_limits},
+                               version='3.33')

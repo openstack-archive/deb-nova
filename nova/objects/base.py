@@ -22,16 +22,16 @@ import functools
 import traceback
 
 import netaddr
-from oslo import messaging
-from oslo.utils import timeutils
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_utils import timeutils
 import six
 
 from nova import context
 from nova import exception
 from nova.i18n import _, _LE
 from nova import objects
-from nova.objects import fields
-from nova.openstack.common import log as logging
+from nova.objects import fields as obj_fields
 from nova.openstack.common import versionutils
 from nova import utils
 
@@ -62,7 +62,7 @@ def make_class_properties(cls):
             if name not in cls.fields:
                 cls.fields[name] = field
     for name, field in cls.fields.iteritems():
-        if not isinstance(field, fields.Field):
+        if not isinstance(field, obj_fields.Field):
             raise exception.ObjectFieldInvalid(
                 field=name, objname=cls.obj_name())
 
@@ -91,7 +91,13 @@ def make_class_properties(cls):
                 LOG.exception(_LE('Error setting %(attr)s'), {'attr': attr})
                 raise
 
-        setattr(cls, name, property(getter, setter))
+        def deleter(self, name=name):
+            attrname = get_attrname(name)
+            if not hasattr(self, attrname):
+                raise AttributeError('No such attribute `%s' % name)
+            delattr(self, get_attrname(name))
+
+        setattr(cls, name, property(getter, setter, deleter))
 
 
 class NovaObjectMetaclass(type):
@@ -174,21 +180,16 @@ def remotable(fn):
     """Decorator for remotable object methods."""
     @functools.wraps(fn)
     def wrapper(self, *args, **kwargs):
-        ctxt = self._context
-        try:
-            if isinstance(args[0], (context.RequestContext)):
-                ctxt = args[0]
-                args = args[1:]
-        except IndexError:
-            pass
-        if ctxt is None:
+        if args and isinstance(args[0], context.RequestContext):
+            raise exception.ObjectActionError(
+                action=fn.__name__,
+                reason='Calling remotables with context is deprecated')
+        if self._context is None:
             raise exception.OrphanedObjectError(method=fn.__name__,
                                                 objtype=self.obj_name())
-        # Force this to be set if it wasn't before.
-        self._context = ctxt
         if NovaObject.indirection_api:
             updates, result = NovaObject.indirection_api.object_action(
-                ctxt, self, fn.__name__, args, kwargs)
+                self._context, self, fn.__name__, args, kwargs)
             for key, value in updates.iteritems():
                 if key in self.fields:
                     field = self.fields[key]
@@ -203,7 +204,7 @@ def remotable(fn):
             self._changed_fields = set(updates.get('obj_what_changed', []))
             return result
         else:
-            return fn(self, ctxt, *args, **kwargs)
+            return fn(self, self._context, *args, **kwargs)
 
     wrapper.remotable = True
     wrapper.original_fn = fn
@@ -371,6 +372,42 @@ class NovaObject(object):
         """Create a copy."""
         return copy.deepcopy(self)
 
+    def obj_calculate_child_version(self, target_version, child):
+        """Calculate the appropriate version for a child object.
+
+        This is to be used when backporting an object for an older client.
+        A sub-object will need to be backported to a suitable version for
+        the client as well, and this method will calculate what that
+        version should be, based on obj_relationships.
+
+        :param target_version: Version this object is being backported to
+        :param child: The child field for which the appropriate version
+                      is to be calculated
+        :returns: None if the child should be omitted from the backport,
+                  otherwise, the version to which the child should be
+                  backported
+        """
+        target_version = utils.convert_version_to_tuple(target_version)
+        for index, versions in enumerate(self.obj_relationships[child]):
+            my_version, child_version = versions
+            my_version = utils.convert_version_to_tuple(my_version)
+            if target_version < my_version:
+                if index == 0:
+                    # We're backporting to a version from before this
+                    # subobject was added: delete it from the primitive.
+                    return None
+                else:
+                    # We're in the gap between index-1 and index, so
+                    # backport to the older version
+                    return self.obj_relationships[child][index - 1][1]
+            elif target_version == my_version:
+                # This is the first mapping that satisfies the
+                # target_version request: backport the object.
+                return child_version
+        # No need to backport, as far as we know, so return the latest
+        # version of the sub-object we know about
+        return self.obj_relationships[child][-1][1]
+
     def _obj_make_obj_compatible(self, primitive, target_version, field):
         """Backlevel a sub-object based on our versioning rules.
 
@@ -391,9 +428,10 @@ class NovaObject(object):
             if not obj:
                 return
             if isinstance(obj, NovaObject):
-                obj.obj_make_compatible(
-                    primitive[field]['nova_object.data'],
-                    to_version)
+                if to_version != primitive[field]['nova_object.version']:
+                    obj.obj_make_compatible(
+                        primitive[field]['nova_object.data'],
+                        to_version)
                 primitive[field]['nova_object.version'] = to_version
             elif isinstance(obj, list):
                 for i, element in enumerate(obj):
@@ -402,27 +440,11 @@ class NovaObject(object):
                         to_version)
                     primitive[field][i]['nova_object.version'] = to_version
 
-        target_version = utils.convert_version_to_tuple(target_version)
-        for index, versions in enumerate(self.obj_relationships[field]):
-            my_version, child_version = versions
-            my_version = utils.convert_version_to_tuple(my_version)
-            if target_version < my_version:
-                if index == 0:
-                    # We're backporting to a version from before this
-                    # subobject was added: delete it from the primitive.
-                    del primitive[field]
-                else:
-                    # We're in the gap between index-1 and index, so
-                    # backport to the older version
-                    last_child_version = \
-                        self.obj_relationships[field][index - 1][1]
-                    _do_backport(last_child_version)
-                return
-            elif target_version == my_version:
-                # This is the first mapping that satisfies the
-                # target_version request: backport the object.
-                _do_backport(child_version)
-                return
+        child_version = self.obj_calculate_child_version(target_version, field)
+        if child_version is None:
+            del primitive[field]
+        else:
+            _do_backport(child_version)
 
     def obj_make_compatible(self, primitive, target_version):
         """Make an object representation compatible with a target version.
@@ -451,8 +473,8 @@ class NovaObject(object):
         is not possible for some reason
         """
         for key, field in self.fields.items():
-            if not isinstance(field, (fields.ObjectField,
-                                      fields.ListOfObjectsField)):
+            if not isinstance(field, (obj_fields.ObjectField,
+                                      obj_fields.ListOfObjectsField)):
                 continue
             if not self.obj_attr_is_set(key):
                 continue
@@ -487,15 +509,16 @@ class NovaObject(object):
     def obj_set_defaults(self, *attrs):
         if not attrs:
             attrs = [name for name, field in self.fields.items()
-                     if field.default != fields.UnspecifiedDefault]
+                     if field.default != obj_fields.UnspecifiedDefault]
 
         for attr in attrs:
-            default = self.fields[attr].default
-            if default is fields.UnspecifiedDefault:
+            default = copy.deepcopy(self.fields[attr].default)
+            if default is obj_fields.UnspecifiedDefault:
                 raise exception.ObjectActionError(
                     action='set_defaults',
                     reason='No default set for field %s' % attr)
-            setattr(self, attr, default)
+            if not self.obj_attr_is_set(attr):
+                setattr(self, attr, default)
 
     def obj_load_attr(self, attrname):
         """Load an additional attribute from the real object.
@@ -531,11 +554,44 @@ class NovaObject(object):
             changes[key] = getattr(self, key)
         return changes
 
-    def obj_reset_changes(self, fields=None):
+    def obj_reset_changes(self, fields=None, recursive=False):
         """Reset the list of fields that have been changed.
 
-        Note that this is NOT "revert to previous values"
+        :param fields: List of fields to reset, or "all" if None.
+        :param recursive: Call obj_reset_changes(recursive=True) on
+                          any sub-objects within the list of fields
+                          being reset.
+
+        NOTE: This is NOT "revert to previous values"
+        NOTE: Specifying fields on recursive resets will only be
+              honored at the top level. Everything below the top
+              will reset all.
         """
+        if recursive:
+            for field in self.obj_get_changes():
+
+                # Ignore fields not in requested set (if applicable)
+                if fields and field not in fields:
+                    continue
+
+                # Skip any fields that are unset
+                if not self.obj_attr_is_set(field):
+                    continue
+
+                value = getattr(self, field)
+
+                # Don't reset nulled fields
+                if value is None:
+                    continue
+
+                # Reset straight Object and ListOfObjects fields
+                if isinstance(self.fields[field], obj_fields.ObjectField):
+                    value.obj_reset_changes(recursive=True)
+                elif isinstance(self.fields[field],
+                                obj_fields.ListOfObjectsField):
+                    for thing in value:
+                        thing.obj_reset_changes(recursive=True)
+
         if fields:
             self._changed_fields -= set(fields)
         else:
@@ -557,6 +613,16 @@ class NovaObject(object):
     @property
     def obj_fields(self):
         return self.fields.keys() + self.obj_extra_fields
+
+    # NOTE(danms): This is nova-specific, so don't copy this to o.vo
+    @contextlib.contextmanager
+    def obj_alternate_context(self, context):
+        original_context = self._context
+        self._context = context
+        try:
+            yield
+        finally:
+            self._context = original_context
 
 
 class NovaObjectDictCompat(object):
@@ -635,10 +701,10 @@ class NovaPersistentObject(object):
     This adds the fields that we use in common for all persistent objects.
     """
     fields = {
-        'created_at': fields.DateTimeField(nullable=True),
-        'updated_at': fields.DateTimeField(nullable=True),
-        'deleted_at': fields.DateTimeField(nullable=True),
-        'deleted': fields.BooleanField(default=False),
+        'created_at': obj_fields.DateTimeField(nullable=True),
+        'updated_at': obj_fields.DateTimeField(nullable=True),
+        'deleted_at': obj_fields.DateTimeField(nullable=True),
+        'deleted': obj_fields.BooleanField(default=False),
         }
 
     @contextlib.contextmanager
@@ -674,7 +740,7 @@ class ObjectListBase(object):
     serialization of the list of objects automatically.
     """
     fields = {
-        'objects': fields.ListOfObjectsField('NovaObject'),
+        'objects': obj_fields.ListOfObjectsField('NovaObject'),
         }
 
     # This is a dictionary of my_version:child_version mappings so that

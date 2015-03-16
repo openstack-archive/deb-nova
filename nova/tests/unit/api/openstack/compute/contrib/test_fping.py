@@ -14,6 +14,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import mock
+import webob
+
 from nova.api.openstack.compute.contrib import fping
 from nova.api.openstack.compute.plugins.v3 import fping as fping_v21
 from nova import exception
@@ -98,9 +101,48 @@ class FpingTestV21(test.TestCase):
         for key in "project_id", "id", "alive":
             self.assertIn(key, srv)
 
+    @mock.patch('nova.db.instance_get_by_uuid')
+    def test_fping_show_with_not_found(self, mock_get_instance):
+        mock_get_instance.side_effect = exception.InstanceNotFound(
+            instance_id='')
+        req = fakes.HTTPRequest.blank(self._get_url() +
+                                      "os-fping/%s" % FAKE_UUID)
+        self.assertRaises(webob.exc.HTTPNotFound,
+                          self.controller.show, req, FAKE_UUID)
+
 
 class FpingTestV2(FpingTestV21):
     controller_cls = fping.FpingController
 
     def _get_url(self):
         return "/v2/1234"
+
+
+class FpingPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(FpingPolicyEnforcementV21, self).setUp()
+        self.controller = fping_v21.FpingController()
+        self.req = fakes.HTTPRequest.blank('')
+
+    def common_policy_check(self, rule, func, *arg, **kwarg):
+        self.policy.set_rules(rule)
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized, func, *arg, **kwarg)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." %
+            rule.popitem()[0], exc.format_message())
+
+    def test_list_policy_failed(self):
+        rule = {"compute_extension:v3:os-fping": "project:non_fake"}
+        self.common_policy_check(rule, self.controller.index, self.req)
+
+        self.req.GET.update({"all_tenants": "True"})
+        rule = {"compute_extension:v3:os-fping:all_tenants":
+                "project:non_fake"}
+        self.common_policy_check(rule, self.controller.index, self.req)
+
+    def test_show_policy_failed(self):
+        rule = {"compute_extension:v3:os-fping": "project:non_fake"}
+        self.common_policy_check(
+            rule, self.controller.show, self.req, FAKE_UUID)

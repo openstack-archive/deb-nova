@@ -56,6 +56,7 @@ class Flavor(base.NovaPersistentObject, base.NovaObject,
     def _from_db_object(context, flavor, db_flavor, expected_attrs=None):
         if expected_attrs is None:
             expected_attrs = []
+        flavor._context = context
         for name, field in flavor.fields.items():
             if name in OPTIONAL_FIELDS:
                 continue
@@ -68,9 +69,8 @@ class Flavor(base.NovaPersistentObject, base.NovaObject,
             flavor.extra_specs = db_flavor['extra_specs']
 
         if 'projects' in expected_attrs:
-            flavor._load_projects(context)
+            flavor._load_projects()
 
-        flavor._context = context
         flavor.obj_reset_changes()
         return flavor
 
@@ -151,7 +151,7 @@ class Flavor(base.NovaPersistentObject, base.NovaObject,
             raise exception.ObjectActionError(action='add_access',
                                               reason='projects modified')
         db.flavor_access_add(context, self.flavorid, project_id)
-        self._load_projects(context)
+        self._load_projects()
 
     @base.remotable
     def remove_access(self, context, project_id):
@@ -159,7 +159,7 @@ class Flavor(base.NovaPersistentObject, base.NovaObject,
             raise exception.ObjectActionError(action='remove_access',
                                               reason='projects modified')
         db.flavor_access_remove(context, self.flavorid, project_id)
-        self._load_projects(context)
+        self._load_projects()
 
     @base.remotable
     def create(self, context):
@@ -213,7 +213,6 @@ class Flavor(base.NovaPersistentObject, base.NovaObject,
         self.obj_reset_changes(['extra_specs'])
 
     def save(self):
-        context = self._context
         updates = self.obj_get_changes()
         projects = updates.pop('projects', None)
         extra_specs = updates.pop('extra_specs', None)
@@ -240,10 +239,10 @@ class Flavor(base.NovaPersistentObject, base.NovaObject,
         # call these methods to update them.
 
         if added_keys or deleted_keys:
-            self.save_extra_specs(context, self.extra_specs, deleted_keys)
+            self.save_extra_specs(self.extra_specs, deleted_keys)
 
         if added_projects or deleted_projects:
-            self.save_projects(context, added_projects, deleted_projects)
+            self.save_projects(added_projects, deleted_projects)
 
     @base.remotable
     def destroy(self, context):

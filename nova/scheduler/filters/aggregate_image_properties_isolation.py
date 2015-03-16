@@ -13,9 +13,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
-from nova.openstack.common import log as logging
 from nova.scheduler import filters
 from nova.scheduler.filters import utils
 
@@ -48,9 +48,7 @@ class AggregateImagePropertiesIsolation(filters.BaseHostFilter):
 
         spec = filter_properties.get('request_spec', {})
         image_props = spec.get('image', {}).get('properties', {})
-        context = filter_properties['context']
-        metadata = utils.aggregate_metadata_get_by_host(context,
-                                                        host_state.host)
+        metadata = utils.aggregate_metadata_get_by_host(host_state)
 
         for key, options in metadata.iteritems():
             if (cfg_namespace and

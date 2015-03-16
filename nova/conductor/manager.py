@@ -17,10 +17,11 @@
 import copy
 import itertools
 
-from oslo import messaging
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import timeutils
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import timeutils
 import six
 
 from nova.api.ec2 import ec2utils
@@ -42,7 +43,6 @@ from nova.network.security_group import openstack_driver
 from nova import notifications
 from nova import objects
 from nova.objects import base as nova_object
-from nova.openstack.common import log as logging
 from nova import quota
 from nova.scheduler import client as scheduler_client
 from nova.scheduler import utils as scheduler_utils
@@ -199,6 +199,7 @@ class ConductorManager(manager.Manager):
                                                  architecture)
         return jsonutils.to_primitive(info)
 
+    # NOTE(ndipanov): This can be removed in version 3.0 of the RPC API
     def block_device_mapping_update_or_create(self, context, values, create):
         if create is None:
             bdm = self.db.block_device_mapping_update_or_create(context,
@@ -276,13 +277,20 @@ class ConductorManager(manager.Manager):
         elif all((topic, host)):
             if topic == 'compute':
                 result = self.db.service_get_by_compute_host(context, host)
+                # NOTE(sbauza): Only Juno computes are still calling this
+                # conductor method for getting service_get_by_compute_node,
+                # but expect a compute_node field so we can safely add it.
+                result['compute_node'
+                       ] = objects.ComputeNodeList.get_all_by_host(
+                           context, result['host'])
                 # FIXME(comstud) Potentially remove this on bump to v3.0
                 result = [result]
             else:
                 result = self.db.service_get_by_host_and_topic(context,
                                                                host, topic)
         elif all((host, binary)):
-            result = self.db.service_get_by_args(context, host, binary)
+            result = self.db.service_get_by_host_and_binary(
+                context, host, binary)
         elif topic:
             result = self.db.service_get_all_by_topic(context, topic)
         elif host:
@@ -399,7 +407,7 @@ class ConductorManager(manager.Manager):
     def compute_unrescue(self, context, instance):
         self.compute_api.unrescue(context, instance)
 
-    def _object_dispatch(self, target, method, context, args, kwargs):
+    def _object_dispatch(self, target, method, args, kwargs):
         """Dispatch a call to an object method.
 
         This ensures that object methods get called and any exception
@@ -409,7 +417,7 @@ class ConductorManager(manager.Manager):
         try:
             # NOTE(danms): Keep the getattr inside the try block since
             # a missing method is really a client problem
-            return getattr(target, method)(context, *args, **kwargs)
+            return getattr(target, method)(*args, **kwargs)
         except Exception:
             raise messaging.ExpectedException()
 
@@ -418,8 +426,8 @@ class ConductorManager(manager.Manager):
         """Perform a classmethod action on an object."""
         objclass = nova_object.NovaObject.obj_class_from_name(objname,
                                                               objver)
-        result = self._object_dispatch(objclass, objmethod, context,
-                                       args, kwargs)
+        args = tuple([context] + list(args))
+        result = self._object_dispatch(objclass, objmethod, args, kwargs)
         # NOTE(danms): The RPC layer will convert to primitives for us,
         # but in this case, we need to honor the version the client is
         # asking for, so we do it before returning here.
@@ -429,8 +437,7 @@ class ConductorManager(manager.Manager):
     def object_action(self, context, objinst, objmethod, args, kwargs):
         """Perform an action on an object."""
         oldobj = objinst.obj_clone()
-        result = self._object_dispatch(objinst, objmethod, context,
-                                       args, kwargs)
+        result = self._object_dispatch(objinst, objmethod, args, kwargs)
         updates = dict()
         # NOTE(danms): Diff the object with the one passed to us and
         # generate a list of changes to forward back
@@ -477,7 +484,7 @@ class ComputeTaskManager(base.Base):
                                    exception.InvalidLocalStorage,
                                    exception.InvalidSharedStorage,
                                    exception.HypervisorUnavailable,
-                                   exception.InstanceNotRunning,
+                                   exception.InstanceInvalidState,
                                    exception.MigrationPreCheckError,
                                    exception.LiveMigrationWithOldNovaNotSafe,
                                    exception.UnsupportedPolicyException)
@@ -613,7 +620,7 @@ class ComputeTaskManager(base.Base):
                 exception.InvalidLocalStorage,
                 exception.InvalidSharedStorage,
                 exception.HypervisorUnavailable,
-                exception.InstanceNotRunning,
+                exception.InstanceInvalidState,
                 exception.MigrationPreCheckError,
                 exception.LiveMigrationWithOldNovaNotSafe) as ex:
             with excutils.save_and_reraise_exception():
@@ -766,6 +773,12 @@ class ComputeTaskManager(base.Base):
                 LOG.warning(_LW("No valid host found for unshelve instance"),
                             instance=instance)
                 return
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    instance.task_state = None
+                    instance.save()
+                    LOG.error(_LE("Unshelve attempted but an error "
+                                  "has occurred"), instance=instance)
         else:
             LOG.error(_LE('Unshelve attempted but vm_state not SHELVED or '
                           'SHELVED_OFFLOADED'), instance=instance)

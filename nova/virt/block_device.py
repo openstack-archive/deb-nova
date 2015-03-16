@@ -13,18 +13,18 @@
 #    under the License.
 
 import functools
+import itertools
 import operator
 
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
 
 from nova import block_device
-from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LI
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import log as logging
 from nova.volume import encryptors
 
 LOG = logging.getLogger(__name__)
@@ -301,10 +301,11 @@ class DriverSnapshotBlockDevice(DriverVolumeBlockDevice):
                virt_driver, wait_func=None, do_check_attach=True):
 
         if not self.volume_id:
+            av_zone = instance.availability_zone
             snapshot = volume_api.get_snapshot(context,
                                                self.snapshot_id)
-            vol = volume_api.create(context, self.volume_size,
-                                    '', '', snapshot)
+            vol = volume_api.create(context, self.volume_size, '', '',
+                                    snapshot, availability_zone=av_zone)
             if wait_func:
                 wait_func(context, vol['id'])
 
@@ -324,8 +325,10 @@ class DriverImageBlockDevice(DriverVolumeBlockDevice):
     def attach(self, context, instance, volume_api,
                virt_driver, wait_func=None, do_check_attach=True):
         if not self.volume_id:
+            av_zone = instance.availability_zone
             vol = volume_api.create(context, self.volume_size,
-                                    '', '', image_id=self.image_id)
+                                    '', '', image_id=self.image_id,
+                                    availability_zone=av_zone)
             if wait_func:
                 wait_func(context, vol['id'])
 
@@ -345,7 +348,9 @@ class DriverBlankBlockDevice(DriverVolumeBlockDevice):
                virt_driver, wait_func=None, do_check_attach=True):
         if not self.volume_id:
             vol_name = instance.uuid + '-blank-vol'
-            vol = volume_api.create(context, self.volume_size, vol_name, '')
+            av_zone = instance.availability_zone
+            vol = volume_api.create(context, self.volume_size, vol_name, '',
+                                    availability_zone=av_zone)
             if wait_func:
                 wait_func(context, vol['id'])
 
@@ -388,11 +393,27 @@ convert_blanks = functools.partial(_convert_block_devices,
                                    DriverBlankBlockDevice)
 
 
+def convert_all_volumes(*volume_bdms):
+    source_volume = convert_volumes(volume_bdms)
+    source_snapshot = convert_snapshots(volume_bdms)
+    source_image = convert_images(volume_bdms)
+
+    return [vol for vol in
+            itertools.chain(source_volume, source_snapshot, source_image)]
+
+
+def convert_volume(volume_bdm):
+    try:
+        return convert_all_volumes(volume_bdm)[0]
+    except IndexError:
+        pass
+
+
 def attach_block_devices(block_device_mapping, *attach_args, **attach_kwargs):
     def _log_and_attach(bdm):
         context = attach_args[0]
         instance = attach_args[1]
-        LOG.audit(_('Booting with volume %(volume_id)s at %(mountpoint)s'),
+        LOG.info(_LI('Booting with volume %(volume_id)s at %(mountpoint)s'),
                   {'volume_id': bdm.volume_id,
                    'mountpoint': bdm['mount_device']},
                   context=context, instance=instance)

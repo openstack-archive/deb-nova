@@ -25,13 +25,13 @@ A driver for XenServer or Xen Cloud Platform.
 
 import math
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import units
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import units
 import six.moves.urllib.parse as urlparse
 
 from nova.i18n import _, _LE, _LW
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import driver
 from nova.virt.xenapi.client import session
@@ -272,7 +272,7 @@ class XenAPIDriver(driver.ComputeDriver):
         return self._vmops.migrate_disk_and_power_off(context, instance,
                     dest, flavor, block_device_info)
 
-    def suspend(self, instance):
+    def suspend(self, context, instance):
         """suspend the specified instance."""
         self._vmops.suspend(instance)
 
@@ -490,7 +490,7 @@ class XenAPIDriver(driver.ComputeDriver):
         """Do required cleanup on dest host after check_can_live_migrate calls
 
         :param context: security context
-        :param disk_over_commit: if true, allow disk over commit
+        :param dest_check_data: result of check_can_live_migrate_destination
         """
         pass
 

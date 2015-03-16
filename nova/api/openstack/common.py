@@ -19,7 +19,8 @@ import itertools
 import os
 import re
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 import six.moves.urllib.parse as urlparse
 import webob
 from webob import exc
@@ -31,7 +32,6 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 from nova import quota
 
 osapi_opts = [
@@ -103,6 +103,7 @@ _STATE_MAP = {
     },
     vm_states.PAUSED: {
         'default': 'PAUSED',
+        task_states.MIGRATING: 'MIGRATING',
     },
     vm_states.SUSPENDED: {
         'default': 'SUSPENDED',
@@ -531,12 +532,11 @@ class ViewBuilder(object):
                                         CONF.osapi_compute_link_prefix)
 
 
-def get_instance(compute_api, context, instance_id, want_objects=False,
-                 expected_attrs=None):
+def get_instance(compute_api, context, instance_id, expected_attrs=None):
     """Fetch an instance from the compute API, handling error checking."""
     try:
         return compute_api.get(context, instance_id,
-                               want_objects=want_objects,
+                               want_objects=True,
                                expected_attrs=expected_attrs)
     except exception.InstanceNotFound as e:
         raise exc.HTTPNotFound(explanation=e.format_message())

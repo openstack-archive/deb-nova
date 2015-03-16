@@ -30,15 +30,15 @@ import tempfile
 if os.name != 'nt':
     import crypt
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
 
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk.mount import api as mount
 from nova.virt.disk.vfs import api as vfs
@@ -445,8 +445,8 @@ def teardown_container(container_dir, container_root_device=None):
                 LOG.debug('Release nbd device %s', container_root_device)
                 utils.execute('qemu-nbd', '-d', container_root_device,
                               run_as_root=True)
-    except Exception as exn:
-        LOG.exception(_LE('Failed to teardown container filesystem: %s'), exn)
+    except Exception:
+        LOG.exception(_LE('Failed to teardown container filesystem'))
 
 
 def clean_lxc_namespace(container_dir):
@@ -458,8 +458,8 @@ def clean_lxc_namespace(container_dir):
     try:
         img = _DiskImage(image=None, mount_dir=container_dir)
         img.umount()
-    except Exception as exn:
-        LOG.exception(_LE('Failed to umount container filesystem: %s'), exn)
+    except Exception:
+        LOG.exception(_LE('Failed to umount container filesystem'))
 
 
 def inject_data_into_fs(fs, key, net, metadata, admin_password, files,
@@ -636,9 +636,9 @@ def _set_passwd(username, admin_passwd, passwd_data, shadow_data):
     if the username is not found in both files, an exception is raised.
 
     :param username: the username
-    :param encrypted_passwd: the  encrypted password
-    :param passwd_file: path to the passwd file
-    :param shadow_file: path to the shadow password file
+    :param admin_passwd: the admin password
+    :param passwd_data: path to the passwd file
+    :param shadow_data: path to the shadow password file
     :returns: nothing
     :raises: exception.NovaException(), IOError()
 

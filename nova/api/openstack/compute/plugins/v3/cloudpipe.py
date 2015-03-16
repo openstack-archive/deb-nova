@@ -14,8 +14,8 @@
 
 """Connect your vlan to the world."""
 
-from oslo.config import cfg
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_utils import timeutils
 from webob import exc
 
 from nova.api.openstack.compute.schemas.v3 import cloudpipe
@@ -37,16 +37,16 @@ CONF = cfg.CONF
 CONF.import_opt('keys_path', 'nova.crypto')
 
 ALIAS = 'os-cloudpipe'
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class CloudpipeController(wsgi.Controller):
     """Handle creating and listing cloudpipe instances."""
 
     def __init__(self):
-        self.compute_api = compute.API()
-        self.network_api = network.API()
-        self.cloudpipe = pipelib.CloudPipe()
+        self.compute_api = compute.API(skip_policy_check=True)
+        self.network_api = network.API(skip_policy_check=True)
+        self.cloudpipe = pipelib.CloudPipe(skip_policy_check=True)
         self.setup()
 
     def setup(self):
@@ -59,10 +59,11 @@ class CloudpipeController(wsgi.Controller):
     def _get_all_cloudpipes(self, context):
         """Get all cloudpipes."""
         instances = self.compute_api.get_all(context,
-                                             search_opts={'deleted': False})
+                                             search_opts={'deleted': False},
+                                             want_objects=True)
         return [instance for instance in instances
-                if pipelib.is_vpn_image(instance['image_ref'])
-                and instance['vm_state'] != vm_states.DELETED]
+                if pipelib.is_vpn_image(instance.image_ref)
+                and instance.vm_state != vm_states.DELETED]
 
     def _get_cloudpipe_for_project(self, context):
         """Get the cloudpipe instance for a project from context."""
@@ -75,8 +76,8 @@ class CloudpipeController(wsgi.Controller):
         if not instance:
             rv['state'] = 'pending'
             return rv
-        rv['instance_id'] = instance['uuid']
-        rv['created_at'] = timeutils.isotime(instance['created_at'])
+        rv['instance_id'] = instance.uuid
+        rv['created_at'] = timeutils.isotime(instance.created_at)
         nw_info = compute_utils.get_nw_info_for_instance(instance)
         if not nw_info:
             return rv
@@ -133,7 +134,7 @@ class CloudpipeController(wsgi.Controller):
                 msg = _("Unable to claim IP for VPN instances, ensure it "
                         "isn't running, and try again in a few minutes")
                 raise exc.HTTPBadRequest(explanation=msg)
-        return {'instance_id': instance['uuid']}
+        return {'instance_id': instance.uuid}
 
     @extensions.expected_errors((400, 403, 404))
     def index(self, req):

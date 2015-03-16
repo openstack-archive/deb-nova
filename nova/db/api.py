@@ -27,12 +27,12 @@ these objects be simple dictionaries.
 
 """
 
-from oslo.config import cfg
-from oslo.db import concurrency
+from oslo_config import cfg
+from oslo_db import concurrency
+from oslo_log import log as logging
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova.i18n import _LE
-from nova.openstack.common import log as logging
 
 
 db_opts = [
@@ -94,17 +94,20 @@ def service_destroy(context, service_id):
     return IMPL.service_destroy(context, service_id)
 
 
-def service_get(context, service_id, with_compute_node=False,
-                use_slave=False):
+def service_get(context, service_id, use_slave=False):
     """Get a service or raise if it does not exist."""
     return IMPL.service_get(context, service_id,
-                            with_compute_node=with_compute_node,
                             use_slave=use_slave)
 
 
 def service_get_by_host_and_topic(context, host, topic):
-    """Get a service by host it's on and topic it listens to."""
+    """Get a service by hostname and topic it listens to."""
     return IMPL.service_get_by_host_and_topic(context, host, topic)
+
+
+def service_get_by_host_and_binary(context, host, binary):
+    """Get a service by hostname and binary."""
+    return IMPL.service_get_by_host_and_binary(context, host, binary)
 
 
 def service_get_all(context, disabled=None):
@@ -115,6 +118,11 @@ def service_get_all(context, disabled=None):
 def service_get_all_by_topic(context, topic):
     """Get all services for a given topic."""
     return IMPL.service_get_all_by_topic(context, topic)
+
+
+def service_get_all_by_binary(context, binary):
+    """Get all services for a given binary."""
+    return IMPL.service_get_all_by_binary(context, binary)
 
 
 def service_get_all_by_host(context, host):
@@ -129,11 +137,6 @@ def service_get_by_compute_host(context, host, use_slave=False):
     """
     return IMPL.service_get_by_compute_host(context, host,
                                             use_slave=use_slave)
-
-
-def service_get_by_args(context, host, binary):
-    """Get the state of a service by node name and binary."""
-    return IMPL.service_get_by_args(context, host, binary)
 
 
 def service_create(context, values):
@@ -159,8 +162,7 @@ def compute_node_get(context, compute_id):
     :param context: The security context
     :param compute_id: ID of the compute node
 
-    :returns: Dictionary-like object containing properties of the compute node,
-              including its corresponding service
+    :returns: Dictionary-like object containing properties of the compute node
 
     Raises ComputeHostNotFound if compute node with the given ID doesn't exist.
     """
@@ -197,19 +199,14 @@ def compute_node_get_by_host_and_nodename(context, host, nodename):
     return IMPL.compute_node_get_by_host_and_nodename(context, host, nodename)
 
 
-def compute_node_get_all(context, no_date_fields=False):
+def compute_node_get_all(context):
     """Get all computeNodes.
 
     :param context: The security context
-    :param no_date_fields: If set to True, excludes 'created_at', 'updated_at',
-                           'deleted_at' and 'deleted' fields from the output,
-                           thus significantly reducing its size.
-                           Set to False by default
 
-    :returns: List of dictionaries each containing compute node properties,
-              including corresponding service
+    :returns: List of dictionaries each containing compute node properties
     """
-    return IMPL.compute_node_get_all(context, no_date_fields)
+    return IMPL.compute_node_get_all(context)
 
 
 def compute_node_get_all_by_host(context, host, use_slave=False):
@@ -230,7 +227,7 @@ def compute_node_search_by_hypervisor(context, hypervisor_match):
     :param hypervisor_match: The hypervisor hostname
 
     :returns: List of dictionary-like objects each containing compute node
-              properties, including corresponding service
+              properties
     """
     return IMPL.compute_node_search_by_hypervisor(context, hypervisor_match)
 

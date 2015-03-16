@@ -20,19 +20,19 @@ from nova.api.openstack.compute.contrib import hypervisors as hypervisors_v2
 from nova.api.openstack.compute.plugins.v3 import hypervisors \
     as hypervisors_v21
 from nova.api.openstack import extensions
+from nova import objects
 from nova import test
 from nova.tests.unit.api.openstack.compute.contrib import test_hypervisors
 
-TEST_HYPER = dict(test_hypervisors.TEST_HYPERS[0],
-                  service=dict(id=1,
-                      host="compute1",
-                      binary="nova-compute",
-                      topic="compute_topic",
-                      report_count=5,
-                      disabled=False,
-                      disabled_reason=None,
-                      availability_zone="nova"),
-                  )
+TEST_HYPER = test_hypervisors.TEST_HYPERS_OBJ[0].obj_clone()
+TEST_SERVICE = objects.Service(id=1,
+                               host="compute1",
+                               binary="nova-compute",
+                               topic="compute_topic",
+                               report_count=5,
+                               disabled=False,
+                               disabled_reason=None,
+                               availability_zone="nova")
 
 
 class HypervisorStatusTestV21(test.NoDBTestCase):
@@ -43,27 +43,29 @@ class HypervisorStatusTestV21(test.NoDBTestCase):
 
     def test_view_hypervisor_service_status(self):
         self._prepare_extension()
+
         result = self.controller._view_hypervisor(
-            TEST_HYPER, False)
+            TEST_HYPER, TEST_SERVICE, False)
         self.assertEqual('enabled', result['status'])
         self.assertEqual('up', result['state'])
         self.assertEqual('enabled', result['status'])
 
         self.controller.servicegroup_api.service_is_up.return_value = False
         result = self.controller._view_hypervisor(
-            TEST_HYPER, False)
+            TEST_HYPER, TEST_SERVICE, False)
         self.assertEqual('down', result['state'])
 
         hyper = copy.deepcopy(TEST_HYPER)
-        hyper['service']['disabled'] = True
-        result = self.controller._view_hypervisor(hyper, False)
+        service = copy.deepcopy(TEST_SERVICE)
+        service.disabled = True
+        result = self.controller._view_hypervisor(hyper, service, False)
         self.assertEqual('disabled', result['status'])
 
     def test_view_hypervisor_detail_status(self):
         self._prepare_extension()
 
         result = self.controller._view_hypervisor(
-            TEST_HYPER, True)
+            TEST_HYPER, TEST_SERVICE, True)
 
         self.assertEqual('enabled', result['status'])
         self.assertEqual('up', result['state'])
@@ -71,13 +73,14 @@ class HypervisorStatusTestV21(test.NoDBTestCase):
 
         self.controller.servicegroup_api.service_is_up.return_value = False
         result = self.controller._view_hypervisor(
-            TEST_HYPER, True)
+            TEST_HYPER, TEST_SERVICE, True)
         self.assertEqual('down', result['state'])
 
         hyper = copy.deepcopy(TEST_HYPER)
-        hyper['service']['disabled'] = True
-        hyper['service']['disabled_reason'] = "fake"
-        result = self.controller._view_hypervisor(hyper, True)
+        service = copy.deepcopy(TEST_SERVICE)
+        service.disabled = True
+        service.disabled_reason = "fake"
+        result = self.controller._view_hypervisor(hyper, service, True)
         self.assertEqual('disabled', result['status'],)
         self.assertEqual('fake', result['service']['disabled_reason'])
 

@@ -16,18 +16,20 @@
 
 import netaddr
 import netaddr.core as netexc
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 import six
 from webob import exc
 
+from nova.api.openstack.compute.schemas.v3 import tenant_networks as schema
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 import nova.network
-from nova.openstack.common import log as logging
 from nova import quota
 
 
@@ -46,7 +48,7 @@ ALIAS = 'os-tenant-networks'
 
 QUOTAS = quota.QUOTAS
 LOG = logging.getLogger(__name__)
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 def network_dict(network):
@@ -60,7 +62,7 @@ def network_dict(network):
 
 class TenantNetworkController(wsgi.Controller):
     def __init__(self, network_api=None):
-        self.network_api = nova.network.API()
+        self.network_api = nova.network.API(skip_policy_check=True)
         self._default_networks = []
 
     def _refresh_default_networks(self):
@@ -136,11 +138,8 @@ class TenantNetworkController(wsgi.Controller):
             QUOTAS.commit(context, reservation)
 
     @extensions.expected_errors((400, 403, 503))
+    @validation.schema(schema.create)
     def create(self, req, body):
-        if not body:
-            _msg = _("Missing request body")
-            raise exc.HTTPBadRequest(explanation=_msg)
-
         context = req.environ["nova.context"]
         authorize(context)
 
@@ -151,9 +150,6 @@ class TenantNetworkController(wsgi.Controller):
 
         label = network["label"]
 
-        if not (kwargs["cidr"] or kwargs["cidr_v6"]):
-            msg = _("No CIDR requested")
-            raise exc.HTTPBadRequest(explanation=msg)
         if kwargs["cidr"]:
             try:
                 net = netaddr.IPNetwork(kwargs["cidr"])
@@ -161,9 +157,6 @@ class TenantNetworkController(wsgi.Controller):
                     msg = _("Requested network does not contain "
                             "enough (2+) usable hosts")
                     raise exc.HTTPBadRequest(explanation=msg)
-            except netexc.AddrFormatError:
-                msg = _("CIDR is malformed.")
-                raise exc.HTTPBadRequest(explanation=msg)
             except netexc.AddrConversionError:
                 msg = _("Address could not be converted.")
                 raise exc.HTTPBadRequest(explanation=msg)
@@ -195,7 +188,7 @@ class TenantNetworkController(wsgi.Controller):
 class TenantNetworks(extensions.V3APIExtensionBase):
     """Tenant-based Network Management Extension."""
 
-    name = "TenantNetworks"
+    name = "OSTenantNetworks"
     alias = ALIAS
     version = 1
 

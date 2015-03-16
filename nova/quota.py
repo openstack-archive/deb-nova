@@ -18,16 +18,16 @@
 
 import datetime
 
-from oslo.config import cfg
-from oslo.utils import importutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import importutils
+from oslo_utils import timeutils
 import six
 
 from nova import db
 from nova import exception
 from nova.i18n import _LE
 from nova import objects
-from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
@@ -1208,7 +1208,6 @@ class QuotaEngine(object):
         the given user or project.
 
         :param context: The request context, for access checks.
-        :param resources: A dictionary of the registered resources.
         :param project_id: The ID of the project to return quotas for.
         :param user_id: The ID of the user to return quotas for.
         """
@@ -1421,7 +1420,7 @@ def _keypair_get_count_by_user(*args, **kwargs):
 
 def _server_group_count_members_by_user(context, group, user_id):
     """Helper method to avoid referencing objects.InstanceGroup on import."""
-    return group.count_members_by_user(context, user_id)
+    return group.count_members_by_user(user_id)
 
 
 QUOTAS = QuotaEngine()

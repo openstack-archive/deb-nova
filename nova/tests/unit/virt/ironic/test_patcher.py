@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from nova import context as nova_context
 from nova import test
@@ -59,6 +59,39 @@ class IronicDriverFieldsTestCase(test.NoDBTestCase):
         patch = patcher.create(node).get_deploy_patch(
                 self.instance, self.image_meta, self.flavor)
         self.assertEqual(sorted(self._expected_deploy_patch), sorted(patch))
+
+    def test_generic_get_deploy_patch_capabilities(self):
+        node = ironic_utils.get_test_node(driver='fake')
+        self.flavor['extra_specs']['capabilities:boot_mode'] = 'bios'
+        expected = [{'path': '/instance_info/capabilities',
+                     'value': '{"boot_mode": "bios"}',
+                     'op': 'add'}]
+        expected += self._expected_deploy_patch
+        patch = patcher.create(node).get_deploy_patch(
+                self.instance, self.image_meta, self.flavor)
+        self.assertEqual(sorted(expected), sorted(patch))
+
+    def test_generic_get_deploy_patch_capabilities_op(self):
+        node = ironic_utils.get_test_node(driver='fake')
+        self.flavor['extra_specs']['capabilities:boot_mode'] = '<in> bios'
+        expected = [{'path': '/instance_info/capabilities',
+                     'value': '{"boot_mode": "<in> bios"}',
+                     'op': 'add'}]
+        expected += self._expected_deploy_patch
+        patch = patcher.create(node).get_deploy_patch(
+                self.instance, self.image_meta, self.flavor)
+        self.assertEqual(sorted(expected), sorted(patch))
+
+    def test_generic_get_deploy_patch_capabilities_nested_key(self):
+        node = ironic_utils.get_test_node(driver='fake')
+        self.flavor['extra_specs']['capabilities:key1:key2'] = '<in> bios'
+        expected = [{'path': '/instance_info/capabilities',
+                     'value': '{"key1:key2": "<in> bios"}',
+                     'op': 'add'}]
+        expected += self._expected_deploy_patch
+        patch = patcher.create(node).get_deploy_patch(
+                self.instance, self.image_meta, self.flavor)
+        self.assertEqual(sorted(expected), sorted(patch))
 
     def test_generic_get_deploy_patch_ephemeral(self):
         CONF.set_override('default_ephemeral_format', 'testfmt')

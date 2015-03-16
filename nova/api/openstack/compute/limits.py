@@ -38,8 +38,8 @@ import math
 import re
 import time
 
-from oslo.serialization import jsonutils
-from oslo.utils import importutils
+from oslo_serialization import jsonutils
+from oslo_utils import importutils
 import webob.dec
 import webob.exc
 
@@ -76,10 +76,6 @@ class LimitsController(object):
 
     def delete(self, req, id):
         """Delete the limit."""
-        raise webob.exc.HTTPNotImplemented()
-
-    def detail(self, req):
-        """Return limit details."""
         raise webob.exc.HTTPNotImplemented()
 
     def show(self, req, id):

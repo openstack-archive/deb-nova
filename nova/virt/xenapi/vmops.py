@@ -24,14 +24,15 @@ import zlib
 
 from eventlet import greenthread
 import netaddr
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import importutils
-from oslo.utils import netutils
-from oslo.utils import strutils
-from oslo.utils import timeutils
-from oslo.utils import units
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import importutils
+from oslo_utils import netutils
+from oslo_utils import strutils
+from oslo_utils import timeutils
+from oslo_utils import units
 
 from nova import block_device
 from nova import compute
@@ -44,7 +45,6 @@ from nova import context as nova_context
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
-from nova.openstack.common import log as logging
 from nova.pci import manager as pci_manager
 from nova import utils
 from nova.virt import configdrive
@@ -950,7 +950,7 @@ class VMOps(object):
             transfer_vhd_to_dest(new_vdi_ref, new_vdi_uuid)
         except Exception as error:
             LOG.exception(_LE("_migrate_disk_resizing_down failed. "
-                              "Restoring orig vm due_to: %s."), error,
+                              "Restoring orig vm"),
                           instance=instance)
             undo_mgr._rollback()
             raise exception.InstanceFaultRollback(error)
@@ -996,14 +996,12 @@ class VMOps(object):
 
         @step
         def transfer_immutable_vhds(root_vdi_uuids):
-            active_root_vdi_uuid = root_vdi_uuids[0]
             immutable_root_vdi_uuids = root_vdi_uuids[1:]
             for vhd_num, vdi_uuid in enumerate(immutable_root_vdi_uuids,
                                                start=1):
                 vm_utils.migrate_vhd(self._session, instance, vdi_uuid, dest,
                                      sr_path, vhd_num)
             LOG.debug("Migrated root base vhds", instance=instance)
-            return active_root_vdi_uuid
 
         def _process_ephemeral_chain_recursive(ephemeral_chains,
                                                active_vdi_uuids):
@@ -1041,7 +1039,10 @@ class VMOps(object):
                     vm_ref, label, str(userdevice)) as chain_vdi_uuids:
 
                 # remember active vdi, we will migrate these later
-                active_vdi_uuids.append(chain_vdi_uuids[0])
+                vdi_ref, vm_vdi_rec = vm_utils.get_vdi_for_vm_safely(
+                        self._session, vm_ref, str(userdevice))
+                active_uuid = vm_vdi_rec['uuid']
+                active_vdi_uuids.append(active_uuid)
 
                 # migrate inactive vhds
                 inactive_vdi_uuids = chain_vdi_uuids[1:]
@@ -1113,7 +1114,10 @@ class VMOps(object):
                 fake_step_to_show_snapshot_complete()
 
                 # transfer all the non-active VHDs in the root disk chain
-                active_root_vdi_uuid = transfer_immutable_vhds(root_vdi_uuids)
+                transfer_immutable_vhds(root_vdi_uuids)
+                vdi_ref, vm_vdi_rec = vm_utils.get_vdi_for_vm_safely(
+                        self._session, vm_ref)
+                active_root_vdi_uuid = vm_vdi_rec['uuid']
 
                 # snapshot and transfer all ephemeral disks
                 # then power down and transfer any diffs since
@@ -1472,11 +1476,11 @@ class VMOps(object):
         if rescue_vm_ref:
             self._destroy_rescue_instance(rescue_vm_ref, vm_ref)
 
-        # NOTE(sirp): `block_device_info` is not used, information about which
-        # volumes should be detached is determined by the
-        # VBD.other_config['osvol'] attribute
-        # NOTE(alaski): `block_device_info` is used to determine if there's a
-        # volume still attached if the VM is not present.
+        # NOTE(sirp): information about which volumes should be detached is
+        # determined by the VBD.other_config['osvol'] attribute
+        # NOTE(alaski): `block_device_info` is used to efficiently determine if
+        # there's a volume attached, or which volumes to cleanup if there is
+        # no VM present.
         return self._destroy(instance, vm_ref, network_info=network_info,
                              destroy_disks=destroy_disks,
                              block_device_info=block_device_info)
@@ -1524,7 +1528,15 @@ class VMOps(object):
                             volume_id, instance=instance)
             return
 
-        vm_utils.hard_shutdown_vm(self._session, instance, vm_ref)
+        # NOTE(alaski): Attempt clean shutdown first if there's an attached
+        # volume to reduce the risk of corruption.
+        if block_device_info and block_device_info['block_device_mapping']:
+            if not vm_utils.clean_shutdown_vm(self._session, instance, vm_ref):
+                LOG.debug("Clean shutdown did not complete successfully, "
+                          "trying hard shutdown.", instance=instance)
+                vm_utils.hard_shutdown_vm(self._session, instance, vm_ref)
+        else:
+            vm_utils.hard_shutdown_vm(self._session, instance, vm_ref)
 
         if destroy_disks:
             self._volumeops.detach_all(vm_ref)
@@ -1721,8 +1733,8 @@ class VMOps(object):
         try:
             raw_console_data = self._session.call_plugin('console',
                     'get_console_log', {'dom_id': dom_id})
-        except self._session.XenAPI.Failure as exc:
-            LOG.exception(exc)
+        except self._session.XenAPI.Failure:
+            LOG.exception(_LE("Guest does not have a console available"))
             msg = _("Guest does not have a console available")
             raise exception.NovaException(msg)
 
@@ -2045,8 +2057,8 @@ class VMOps(object):
                                                      destref,
                                                      nwref,
                                                      options)
-        except self._session.XenAPI.Failure as exc:
-            LOG.exception(exc)
+        except self._session.XenAPI.Failure:
+            LOG.exception(_LE('Migrate Receive failed'))
             msg = _('Migrate Receive failed')
             raise exception.MigrationPreCheckError(reason=msg)
         return migrate_data
@@ -2071,7 +2083,7 @@ class VMOps(object):
                                            disk_over_commit=False):
         """Check if it is possible to execute live migration.
 
-        :param context: security context
+        :param ctxt: security context
         :param instance_ref: nova.db.sqlalchemy.models.Instance object
         :param block_migration: if true, prepare for block migration
         :param disk_over_commit: if true, allow disk over commit
@@ -2102,8 +2114,8 @@ class VMOps(object):
                 config_value = self._make_plugin_call('config_file',
                                                       'get_val',
                                                       key='relax-xsm-sr-check')
-            except Exception as exc:
-                LOG.exception(exc)
+            except Exception:
+                LOG.exception(_LE('Plugin config_file get_val failed'))
             self.cached_xsm_sr_relaxed = config_value == "true"
             return self.cached_xsm_sr_relaxed
 
@@ -2111,7 +2123,7 @@ class VMOps(object):
                                       dest_check_data):
         """Check if it's possible to execute live migration on the source side.
 
-        :param context: security context
+        :param ctxt: security context
         :param instance_ref: nova.db.sqlalchemy.models.Instance object
         :param dest_check_data: data returned by the check on the
                                 destination, includes block_migration flag
@@ -2121,7 +2133,7 @@ class VMOps(object):
             # XAPI must support the relaxed SR check for live migrating with
             # iSCSI VBDs
             if not self._is_xsm_sr_check_relaxed():
-                raise exception.MigrationError(_('XAPI supporting '
+                raise exception.MigrationError(reason=_('XAPI supporting '
                                 'relax-xsm-sr-check=true required'))
 
         if 'migrate_data' in dest_check_data:
@@ -2190,9 +2202,10 @@ class VMOps(object):
                 try:
                     self._call_live_migrate_command(
                         "VM.migrate_send", vm_ref, migrate_data)
-                except self._session.XenAPI.Failure as exc:
-                    LOG.exception(exc)
-                    raise exception.MigrationError(_('Migrate Send failed'))
+                except self._session.XenAPI.Failure:
+                    LOG.exception(_LE('Migrate Send failed'))
+                    raise exception.MigrationError(
+                        reason=_('Migrate Send failed'))
 
                 # Tidy up the iSCSI SRs
                 for sr_ref in iscsi_srs:

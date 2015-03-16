@@ -24,19 +24,19 @@ import re
 import time
 
 import netaddr
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import importutils
-from oslo.utils import timeutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import importutils
+from oslo_utils import timeutils
 import six
 
 from nova import exception
 from nova.i18n import _, _LE, _LW
 from nova import objects
 from nova.openstack.common import fileutils
-from nova.openstack.common import log as logging
 from nova import paths
 from nova.pci import utils as pci_utils
 from nova import utils
@@ -73,7 +73,7 @@ linux_net_opts = [
                      ' as dns servers.'),
     cfg.ListOpt('dmz_cidr',
                default=[],
-               help='A list of dmz range that should be accepted'),
+               help='A list of dmz ranges that should be accepted'),
     cfg.MultiStrOpt('force_snat_range',
                default=[],
                help='Traffic to this range will always be snatted to the '
@@ -111,12 +111,12 @@ linux_net_opts = [
                help='The port for the metadata API port'),
     cfg.StrOpt('iptables_top_regex',
                default='',
-               help='Regular expression to match iptables rule that should '
-                    'always be on the top.'),
+               help='Regular expression to match the iptables rule that '
+                    'should always be on the top.'),
     cfg.StrOpt('iptables_bottom_regex',
                default='',
-               help='Regular expression to match iptables rule that should '
-                    'always be on the bottom.'),
+               help='Regular expression to match the iptables rule that '
+                    'should always be on the bottom.'),
     cfg.StrOpt('iptables_drop_action',
                default='DROP',
                help='The table that iptables to jump to when a packet is '
@@ -678,14 +678,25 @@ def metadata_forward():
     iptables_manager.apply()
 
 
+def _iptables_dest(ip):
+    if ((netaddr.IPAddress(ip).version == 4 and ip == '127.0.0.1')
+        or ip == '::1'):
+        return '-m addrtype --dst-type LOCAL'
+    else:
+        return '-d %s' % ip
+
+
 def metadata_accept():
     """Create the filter accept rule for metadata."""
-    rule = '-s 0.0.0.0/0 -p tcp -m tcp --dport %s' % CONF.metadata_port
-    if CONF.metadata_host != '127.0.0.1':
-        rule += ' -d %s -j ACCEPT' % CONF.metadata_host
+
+    rule = ('-p tcp -m tcp --dport %s %s -j ACCEPT' %
+            (CONF.metadata_port, _iptables_dest(CONF.metadata_host)))
+
+    if netaddr.IPAddress(CONF.metadata_host).version == 4:
+        iptables_manager.ipv4['filter'].add_rule('INPUT', rule)
     else:
-        rule += ' -m addrtype --dst-type LOCAL -j ACCEPT'
-    iptables_manager.ipv4['filter'].add_rule('INPUT', rule)
+        iptables_manager.ipv6['filter'].add_rule('INPUT', rule)
+
     iptables_manager.apply()
 
 
@@ -877,7 +888,10 @@ def initialize_gateway_device(dev, network_ref):
     for line in out.split('\n'):
         fields = line.split()
         if fields and fields[0] == 'inet':
-            ip_params = fields[1:-1]
+            if fields[-2] in ('secondary', 'dynamic'):
+                ip_params = fields[1:-2]
+            else:
+                ip_params = fields[1:-1]
             old_ip_params.append(ip_params)
             if ip_params[0] != full_ip:
                 new_ip_params.append(ip_params)
@@ -1366,6 +1380,10 @@ def delete_ovs_vif_port(bridge, dev):
     delete_net_dev(dev)
 
 
+def ovs_set_vhostuser_port_type(dev):
+    _ovs_vsctl(['--', 'set', 'Interface', dev, 'type=dpdkvhostuser'])
+
+
 def create_ivs_vif_port(dev, iface_id, mac, instance_id):
     utils.execute('ivs-ctl', 'add-port',
                    dev, run_as_root=True)
@@ -1404,6 +1422,17 @@ def delete_net_dev(dev):
         except processutils.ProcessExecutionError:
             with excutils.save_and_reraise_exception():
                 LOG.error(_LE("Failed removing net device: '%s'"), dev)
+
+
+def delete_bridge_dev(dev):
+    """Delete a network bridge."""
+    if device_exists(dev):
+        try:
+            utils.execute('ip', 'link', 'set', dev, 'down', run_as_root=True)
+            utils.execute('brctl', 'delbr', dev, run_as_root=True)
+        except processutils.ProcessExecutionError:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE("Failed removing bridge device: '%s'"), dev)
 
 
 # Similar to compute virt layers, the Linux network node
@@ -1659,7 +1688,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
                         ipv4_filter.remove_rule('FORWARD',
                                                 ('--out-interface %s -j %s'
                                                  % (bridge, drop_action)))
-            delete_net_dev(bridge)
+            delete_bridge_dev(bridge)
 
 
 # NOTE(cfb): This is a temporary fix to LP #1316621. We really want to call

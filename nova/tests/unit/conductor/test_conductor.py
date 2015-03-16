@@ -20,9 +20,9 @@ import uuid
 
 import mock
 from mox3 import mox
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import timeutils
+from oslo_config import cfg
+import oslo_messaging as messaging
+from oslo_utils import timeutils
 import six
 
 from nova.api.ec2 import ec2utils
@@ -40,6 +40,7 @@ from nova import context
 from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception as exc
+from nova.image import api as image_api
 from nova import notifications
 from nova import objects
 from nova.objects import base as obj_base
@@ -456,7 +457,13 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
             getattr(db, name)(self.context, *dbargs).AndRaise(db_exception)
             getattr(db, name)(self.context, *dbargs).AndRaise(db_exception)
         else:
-            getattr(db, name)(self.context, *dbargs).AndReturn('fake-result')
+            getattr(db, name)(self.context, *dbargs).AndReturn(condargs)
+            if name == 'service_get_by_compute_host':
+                self.mox.StubOutWithMock(
+                    objects.ComputeNodeList, 'get_all_by_host')
+                objects.ComputeNodeList.get_all_by_host(
+                    self.context, mox.IgnoreArg()
+                ).AndReturn(['fake-compute'])
         self.mox.ReplayAll()
         if db_exception:
             self.assertRaises(messaging.ExpectedException,
@@ -472,9 +479,11 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
             result = self.conductor.service_get_all_by(self.context,
                                                        **condargs)
             if db_result_listified:
-                self.assertEqual(['fake-result'], result)
+                if name == 'service_get_by_compute_host':
+                    condargs['compute_node'] = ['fake-compute']
+                self.assertEqual([condargs], result)
             else:
-                self.assertEqual('fake-result', result)
+                self.assertEqual(condargs, result)
 
     def test_service_get_all(self):
         self._test_stubbed('service_get_all', (),
@@ -502,7 +511,7 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
                            db_result_listified=True)
 
     def test_service_get_by_args(self):
-        self._test_stubbed('service_get_by_args',
+        self._test_stubbed('service_get_by_host_and_binary',
                            ('host', 'binary'),
                            dict(host='host', binary='binary', topic=None))
 
@@ -513,7 +522,7 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
                            db_exception=exc.ComputeHostNotFound(host='host'))
 
     def test_service_get_by_args_not_found(self):
-        self._test_stubbed('service_get_by_args',
+        self._test_stubbed('service_get_by_host_and_binary',
                            ('host', 'binary'),
                            dict(host='host', binary='binary', topic=None),
                            db_exception=exc.HostBinaryNotFound(binary='binary',
@@ -531,7 +540,7 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
 
     def _test_object_action(self, is_classmethod, raise_exception):
         class TestObject(obj_base.NovaObject):
-            def foo(self, context, raise_exception=False):
+            def foo(self, raise_exception=False):
                 if raise_exception:
                     raise Exception('test')
                 else:
@@ -545,13 +554,16 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
                     return 'test'
 
         obj = TestObject()
+        # NOTE(danms): After a trip over RPC, any tuple will be a list,
+        # so use a list here to make sure we can handle it
+        fake_args = []
         if is_classmethod:
             result = self.conductor.object_class_action(
                 self.context, TestObject.obj_name(), 'bar', '1.0',
-                tuple(), {'raise_exception': raise_exception})
+                fake_args, {'raise_exception': raise_exception})
         else:
             updates, result = self.conductor.object_action(
-                self.context, obj, 'foo', tuple(),
+                self.context, obj, 'foo', fake_args,
                 {'raise_exception': raise_exception})
         self.assertEqual('test', result)
 
@@ -573,7 +585,7 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         class TestObject(obj_base.NovaObject):
             fields = {'dict': fields.DictOfStringsField()}
 
-            def touch_dict(self, context):
+            def touch_dict(self):
                 self.dict['foo'] = 'bar'
                 self.obj_reset_changes()
 
@@ -802,7 +814,13 @@ class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
         if db_exception:
             getattr(db, name)(self.context, *dbargs).AndRaise(db_exception)
         else:
-            getattr(db, name)(self.context, *dbargs).AndReturn('fake-result')
+            getattr(db, name)(self.context, *dbargs).AndReturn(condargs)
+            if name == 'service_get_by_compute_host':
+                self.mox.StubOutWithMock(
+                    objects.ComputeNodeList, 'get_all_by_host')
+                objects.ComputeNodeList.get_all_by_host(
+                    self.context, mox.IgnoreArg()
+                ).AndReturn(['fake-compute'])
         self.mox.ReplayAll()
         if db_exception:
             self.assertRaises(db_exception.__class__,
@@ -812,9 +830,11 @@ class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
             result = self.conductor.service_get_all_by(self.context,
                                                        **condargs)
             if db_result_listified:
-                self.assertEqual(['fake-result'], result)
+                if name == 'service_get_by_compute_host':
+                    condargs['compute_node'] = ['fake-compute']
+                self.assertEqual([condargs], result)
             else:
-                self.assertEqual('fake-result', result)
+                self.assertEqual(condargs, result)
 
     def test_service_get_all(self):
         self._test_stubbed('service_get_all', (),
@@ -842,7 +862,7 @@ class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
                            db_result_listified=True)
 
     def test_service_get_by_args(self):
-        self._test_stubbed('service_get_by_args',
+        self._test_stubbed('service_get_by_host_and_binary',
                            ('host', 'binary'),
                            dict(host='host', binary='binary', topic=None))
 
@@ -853,7 +873,7 @@ class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
                            db_exception=exc.ComputeHostNotFound(host='host'))
 
     def test_service_get_by_args_not_found(self):
-        self._test_stubbed('service_get_by_args',
+        self._test_stubbed('service_get_by_host_and_binary',
                            ('host', 'binary'),
                            dict(host='host', binary='binary', topic=None),
                            db_exception=exc.HostBinaryNotFound(binary='binary',
@@ -946,6 +966,7 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
                                                              'fake-bdm')
 
     def _test_stubbed(self, name, *args, **kwargs):
+
         if args and isinstance(args[0], FakeContext):
             ctxt = args[0]
             args = args[1:]
@@ -956,7 +977,13 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
         if db_exception:
             getattr(db, name)(ctxt, *args).AndRaise(db_exception)
         else:
-            getattr(db, name)(ctxt, *args).AndReturn('fake-result')
+            getattr(db, name)(ctxt, *args).AndReturn(dict(host='fake'))
+            if name == 'service_get_by_compute_host':
+                self.mox.StubOutWithMock(
+                    objects.ComputeNodeList, 'get_all_by_host')
+                objects.ComputeNodeList.get_all_by_host(
+                    self.context, mox.IgnoreArg()
+                ).AndReturn(['fake-compute'])
         if name == 'service_destroy':
             # TODO(russellb) This is a hack ... SetUp() starts the conductor()
             # service.  There is a cleanup step that runs after this test which
@@ -970,8 +997,12 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
                               self.context, *args)
         else:
             result = getattr(self.conductor, name)(self.context, *args)
+            expected = dict(host='fake')
+            if name == 'service_get_by_compute_host':
+                expected = dict(host='fake', compute_node=['fake-compute'])
             self.assertEqual(
-                result, 'fake-result' if kwargs.get('returns', True) else None)
+                result, expected
+                if kwargs.get('returns', True) else None)
 
     def test_service_get_all(self):
         self._test_stubbed('service_get_all')
@@ -989,14 +1020,14 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
         self._test_stubbed('service_get_by_compute_host', 'host')
 
     def test_service_get_by_args(self):
-        self._test_stubbed('service_get_by_args', 'host', 'binary')
+        self._test_stubbed('service_get_by_host_and_binary', 'host', 'binary')
 
     def test_service_get_by_compute_host_not_found(self):
         self._test_stubbed('service_get_by_compute_host', 'host',
                            db_exception=exc.ComputeHostNotFound(host='host'))
 
     def test_service_get_by_args_not_found(self):
-        self._test_stubbed('service_get_by_args', 'host', 'binary',
+        self._test_stubbed('service_get_by_host_and_binary', 'host', 'binary',
                            db_exception=exc.HostBinaryNotFound(binary='binary',
                                                                host='host'))
 
@@ -1545,6 +1576,30 @@ class _BaseTaskTestCase(object):
                                       show_deleted=False)])
             self.assertEqual(vm_states.SHELVED_OFFLOADED, instance.vm_state)
 
+    @mock.patch.object(conductor_manager.ComputeTaskManager,
+                       '_schedule_instances',
+                       side_effect=messaging.MessagingTimeout())
+    @mock.patch.object(image_api.API, 'get', return_value='fake_image')
+    def test_unshelve_instance_schedule_and_rebuild_messaging_exception(
+            self, mock_get_image, mock_schedule_instances):
+        instance = self._create_fake_instance_obj()
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        instance.task_state = task_states.UNSHELVING
+        instance.save()
+        system_metadata = instance.system_metadata
+
+        system_metadata['shelved_at'] = timeutils.utcnow()
+        system_metadata['shelved_image_id'] = 'fake_image_id'
+        system_metadata['shelved_host'] = 'fake-mini'
+        self.assertRaises(messaging.MessagingTimeout,
+                          self.conductor_manager.unshelve_instance,
+                          self.context, instance)
+        mock_get_image.assert_has_calls([mock.call(self.context,
+                                        system_metadata['shelved_image_id'],
+                                        show_deleted=False)])
+        self.assertEqual(vm_states.SHELVED_OFFLOADED, instance.vm_state)
+        self.assertIsNone(instance.task_state)
+
     def test_unshelve_instance_schedule_and_rebuild_volume_backed(self):
         instance = self._create_fake_instance_obj()
         instance.vm_state = vm_states.SHELVED_OFFLOADED
@@ -1776,32 +1831,10 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
             {'host': 'destination'}, True, False, None, 'block_migration',
             'disk_over_commit')
 
-    @mock.patch.object(scheduler_utils, 'set_vm_state_and_notify')
-    @mock.patch.object(live_migrate, 'execute')
-    def test_migrate_server_deals_with_instancenotrunning_exception(self,
-                mock_live_migrate, mock_set_state):
-        inst = fake_instance.fake_db_instance()
-        inst_obj = objects.Instance._from_db_object(
-            self.context, objects.Instance(), inst, [])
-
-        error = exc.InstanceNotRunning(instance_id="fake")
-        mock_live_migrate.side_effect = error
-
-        self.conductor = utils.ExceptionHelper(self.conductor)
-
-        self.assertRaises(exc.InstanceNotRunning,
-            self.conductor.migrate_server, self.context, inst_obj,
-            {'host': 'destination'}, True, False, None,
-             'block_migration', 'disk_over_commit')
-
-        request_spec = self._build_request_spec(inst_obj)
-        mock_set_state.assert_called_once_with(self.context, inst_obj.uuid,
-                'compute_task',
-                'migrate_server',
-                 dict(vm_state=inst_obj.vm_state,
-                      task_state=None,
-                      expected_task_state=task_states.MIGRATING),
-                 error, request_spec, self.conductor_manager.db)
+    def test_migrate_server_deals_with_InstanceInvalidState(self):
+        ex = exc.InstanceInvalidState(instance_uuid="fake", attr='',
+                                      state='', method='')
+        self._test_migrate_server_deals_with_expected_exceptions(ex)
 
     def test_migrate_server_deals_with_DestinationHypervisorTooOld(self):
         ex = exc.DestinationHypervisorTooOld()

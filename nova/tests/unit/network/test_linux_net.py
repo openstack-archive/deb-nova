@@ -21,10 +21,11 @@ import time
 
 import mock
 from mox3 import mox
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 
 from nova import context
 from nova import db
@@ -33,7 +34,6 @@ from nova.network import driver
 from nova.network import linux_net
 from nova import objects
 from nova.openstack.common import fileutils
-from nova.openstack.common import log as logging
 from nova import test
 from nova import utils
 
@@ -92,14 +92,13 @@ networks = [{'id': 0,
              'broadcast': '192.168.0.255',
              'dns1': '192.168.0.1',
              'dns2': '192.168.0.2',
-             'dhcp_server': '0.0.0.0',
+             'dhcp_server': '192.168.0.1',
              'dhcp_start': '192.168.100.1',
              'vlan': None,
              'host': None,
              'project_id': 'fake_project',
              'vpn_public_address': '192.168.0.2',
              'mtu': None,
-             'dhcp_server': '192.168.0.1',
              'enable_dhcp': True,
              'share_address': False},
             {'id': 1,
@@ -118,14 +117,13 @@ networks = [{'id': 0,
              'broadcast': '192.168.1.255',
              'dns1': '192.168.0.1',
              'dns2': '192.168.0.2',
-             'dhcp_server': '0.0.0.0',
+             'dhcp_server': '192.168.1.1',
              'dhcp_start': '192.168.100.1',
              'vlan': None,
              'host': None,
              'project_id': 'fake_project',
              'vpn_public_address': '192.168.1.2',
              'mtu': None,
-             'dhcp_server': '192.168.1.1',
              'enable_dhcp': True,
              'share_address': False},
             {'id': 2,
@@ -144,14 +142,13 @@ networks = [{'id': 0,
              'broadcast': '192.168.2.255',
              'dns1': '192.168.0.1',
              'dns2': '192.168.0.2',
-             'dhcp_server': '0.0.0.0',
+             'dhcp_server': '192.168.2.1',
              'dhcp_start': '192.168.100.1',
              'vlan': None,
              'host': None,
              'project_id': 'fake_project',
              'vpn_public_address': '192.168.2.2',
              'mtu': None,
-             'dhcp_server': '192.168.2.1',
              'enable_dhcp': True,
              'share_address': False}]
 
@@ -937,6 +934,29 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         ]
         self._test_initialize_gateway(existing, expected)
 
+    def test_initialize_gateway_ip_with_dynamic_flag(self):
+        existing = ("2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> "
+            "    mtu 1500 qdisc pfifo_fast state UNKNOWN qlen 1000\n"
+            "    link/ether de:ad:be:ef:be:ef brd ff:ff:ff:ff:ff:ff\n"
+            "    inet 192.168.0.1/24 brd 192.168.0.255 scope global "
+            "dynamic eth0\n"
+            "    inet6 dead::beef:dead:beef:dead/64 scope link\n"
+            "    valid_lft forever preferred_lft forever\n")
+        expected = [
+            ('sysctl', '-n', 'net.ipv4.ip_forward'),
+            ('ip', 'addr', 'show', 'dev', 'eth0', 'scope', 'global'),
+            ('ip', 'route', 'show', 'dev', 'eth0'),
+            ('ip', 'addr', 'del', '192.168.0.1/24',
+             'brd', '192.168.0.255', 'scope', 'global', 'dev', 'eth0'),
+            ('ip', 'addr', 'add', '192.168.1.1/24',
+             'brd', '192.168.1.255', 'dev', 'eth0'),
+            ('ip', 'addr', 'add', '192.168.0.1/24',
+             'brd', '192.168.0.255', 'scope', 'global', 'dev', 'eth0'),
+            ('ip', '-f', 'inet6', 'addr', 'change',
+             '2001:db8::/64', 'dev', 'eth0'),
+        ]
+        self._test_initialize_gateway(existing, expected)
+
     def test_initialize_gateway_resets_route(self):
         routes = ("default via 192.168.0.1 dev eth0\n"
                   "192.168.100.0/24 via 192.168.0.254 dev eth0 proto static\n")
@@ -1046,19 +1066,42 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
                        'add_rule', verify_add_rule)
         linux_net.metadata_accept()
 
+    def _test_add_metadata_accept_ipv6_rule(self, expected):
+        def verify_add_rule(chain, rule):
+            self.assertEqual(chain, 'INPUT')
+            self.assertEqual(expected, rule)
+
+        self.stubs.Set(linux_net.iptables_manager.ipv6['filter'],
+                       'add_rule', verify_add_rule)
+        linux_net.metadata_accept()
+
     def test_metadata_accept(self):
         self.flags(metadata_port='8775')
         self.flags(metadata_host='10.10.10.1')
-        expected = ('-s 0.0.0.0/0 -p tcp -m tcp --dport 8775 '
+        expected = ('-p tcp -m tcp --dport 8775 '
                     '-d 10.10.10.1 -j ACCEPT')
         self._test_add_metadata_accept_rule(expected)
+
+    def test_metadata_accept_ipv6(self):
+        self.flags(metadata_port='8775')
+        self.flags(metadata_host='2600::')
+        expected = ('-p tcp -m tcp --dport 8775 '
+                    '-d 2600:: -j ACCEPT')
+        self._test_add_metadata_accept_ipv6_rule(expected)
 
     def test_metadata_accept_localhost(self):
         self.flags(metadata_port='8775')
         self.flags(metadata_host='127.0.0.1')
-        expected = ('-s 0.0.0.0/0 -p tcp -m tcp --dport 8775 '
+        expected = ('-p tcp -m tcp --dport 8775 '
                     '-m addrtype --dst-type LOCAL -j ACCEPT')
         self._test_add_metadata_accept_rule(expected)
+
+    def test_metadata_accept_ipv6_localhost(self):
+        self.flags(metadata_port='8775')
+        self.flags(metadata_host='::1')
+        expected = ('-p tcp -m tcp --dport 8775 '
+                    '-m addrtype --dst-type LOCAL -j ACCEPT')
+        self._test_add_metadata_accept_ipv6_rule(expected)
 
     def _test_add_metadata_forward_rule(self, expected):
         def verify_add_rule(chain, rule):
@@ -1267,3 +1310,34 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         self.driver._exec_ebtables('fake')
         self.assertEqual(2, len(executes))
         self.mox.UnsetStubs()
+
+    def test_ovs_set_vhostuser_type(self):
+        calls = [
+                 mock.call('ovs-vsctl', '--timeout=120', '--', 'set',
+                           'Interface', 'fake-dev', 'type=dpdkvhostuser',
+                           run_as_root=True)
+                 ]
+        with mock.patch.object(utils, 'execute', return_value=('', '')) as ex:
+            linux_net.ovs_set_vhostuser_port_type('fake-dev')
+            ex.assert_has_calls(calls)
+
+    @mock.patch('os.path.exists', return_value=True)
+    @mock.patch('nova.utils.execute')
+    def test_remove_bridge(self, mock_execute, mock_exists):
+        linux_net.LinuxBridgeInterfaceDriver.remove_bridge('fake-bridge')
+        expected_exists_args = mock.call('/sys/class/net/fake-bridge')
+        expected_execute_args = [
+            mock.call('ip', 'link', 'set', 'fake-bridge', 'down',
+                      run_as_root=True),
+            mock.call('brctl', 'delbr', 'fake-bridge', run_as_root=True)]
+
+        self.assertIn(expected_exists_args, mock_exists.mock_calls)
+        self.assertEqual(expected_execute_args, mock_execute.mock_calls)
+
+    @mock.patch('os.path.exists', return_value=True)
+    @mock.patch('nova.utils.execute',
+                side_effect=processutils.ProcessExecutionError())
+    def test_remove_bridge_negative(self, mock_execute, mock_exists):
+        self.assertRaises(processutils.ProcessExecutionError,
+                          linux_net.LinuxBridgeInterfaceDriver.remove_bridge,
+                          'fake-bridge')

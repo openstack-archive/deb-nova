@@ -14,12 +14,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
 
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import log as logging
 from nova.pci import devspec
 
 pci_opts = [cfg.MultiStrOpt('pci_passthrough_whitelist',

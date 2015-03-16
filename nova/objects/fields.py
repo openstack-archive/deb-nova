@@ -15,9 +15,10 @@
 import abc
 import datetime
 
+import copy
 import iso8601
 import netaddr
-from oslo.utils import timeutils
+from oslo_utils import timeutils
 import six
 
 from nova.i18n import _
@@ -161,7 +162,7 @@ class Field(object):
             # NOTE(danms): We coerce the default value each time the field
             # is set to None as our contract states that we'll let the type
             # examine the object and attribute name at that time.
-            return self._type.coerce(obj, attr, self._default)
+            return self._type.coerce(obj, attr, copy.deepcopy(self._default))
         else:
             raise ValueError(_("Field `%s' cannot be None") % attr)
 
@@ -250,6 +251,24 @@ class String(FieldType):
     @staticmethod
     def stringify(value):
         return '\'%s\'' % value
+
+
+class Enum(String):
+    def __init__(self, valid_values=None, **kwargs):
+        self._valid_values = valid_values
+        super(Enum, self).__init__(**kwargs)
+
+    def coerce(self, obj, attr, value):
+        if self._valid_values and value not in self._valid_values:
+            msg = _("Field value %s is invalid") % value
+            raise ValueError(msg)
+        return super(Enum, self).coerce(obj, attr, value)
+
+    def stringify(self, value):
+        if self._valid_values and value not in self._valid_values:
+            msg = _("Field value %s is invalid") % value
+            raise ValueError(msg)
+        return super(Enum, self).stringify(value)
 
 
 class UUID(FieldType):
@@ -572,6 +591,24 @@ class StringField(AutoTypedField):
     AUTO_TYPE = String()
 
 
+class EnumField(AutoTypedField):
+    def __init__(self, valid_values=None, **kwargs):
+        self.AUTO_TYPE = Enum(valid_values=valid_values)
+        super(EnumField, self).__init__(**kwargs)
+
+    def __repr__(self):
+        valid_values = self._type._valid_values
+        args = {
+            'nullable': self._nullable,
+            'default': self._default,
+            }
+        if valid_values:
+            args.update({'valid_values': valid_values})
+        return '%s(%s)' % (self._type.__class__.__name__,
+                           ','.join(['%s=%s' % (k, v)
+                                     for k, v in args.items()]))
+
+
 class UUIDField(AutoTypedField):
     AUTO_TYPE = UUID()
 
@@ -634,6 +671,24 @@ class DictOfIntegersField(AutoTypedField):
 
 class ListOfStringsField(AutoTypedField):
     AUTO_TYPE = List(String())
+
+
+class ListOfEnumField(AutoTypedField):
+    def __init__(self, valid_values=None, **kwargs):
+        self.AUTO_TYPE = List(Enum(valid_values=valid_values))
+        super(ListOfEnumField, self).__init__(**kwargs)
+
+    def __repr__(self):
+        valid_values = self._type._element_type._type._valid_values
+        args = {
+            'nullable': self._nullable,
+            'default': self._default,
+            }
+        if valid_values:
+            args.update({'valid_values': valid_values})
+        return '%s(%s)' % (self._type.__class__.__name__,
+                           ','.join(['%s=%s' % (k, v)
+                                     for k, v in args.items()]))
 
 
 class SetOfIntegersField(AutoTypedField):

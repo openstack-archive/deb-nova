@@ -19,16 +19,16 @@ import traceback
 import fixtures
 import mock
 import netaddr
-from oslo.serialization import jsonutils
-from oslo.utils import importutils
-from oslo.utils import timeutils
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import importutils
+from oslo_utils import timeutils
 import six
 
 from nova.compute import manager
 from nova.console import type as ctype
 from nova import exception
 from nova import objects
-from nova.openstack.common import log as logging
 from nova import test
 from nova.tests.unit import fake_block_device
 from nova.tests.unit.image import fake as fake_image
@@ -108,6 +108,8 @@ class _FakeDriverBackendTestCase(object):
             'nova.virt.libvirt.firewall.libvirt',
             fakelibvirt))
 
+        fakelibvirt.disable_event_thread(self)
+
         self.flags(rescue_image_id="2",
                    rescue_kernel_id="3",
                    rescue_ramdisk_id=None,
@@ -138,7 +140,7 @@ class _FakeDriverBackendTestCase(object):
                        'extend', fake_extend)
 
         self.stubs.Set(nova.virt.libvirt.driver.LibvirtDriver,
-                       '_delete_instance_files',
+                       'delete_instance_files',
                        fake_delete_instance_files)
 
         # Like the existing fakelibvirt.migrateToURI, do nothing,
@@ -398,7 +400,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_suspend(self):
         instance_ref, network_info = self._get_running_instance()
-        self.connection.suspend(instance_ref)
+        self.connection.suspend(self.ctxt, instance_ref)
 
     @catch_notimplementederror
     def test_resume_unsuspended_instance(self):
@@ -408,7 +410,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_resume_suspended_instance(self):
         instance_ref, network_info = self._get_running_instance()
-        self.connection.suspend(instance_ref)
+        self.connection.suspend(self.ctxt, instance_ref)
         self.connection.resume(self.ctxt, instance_ref, network_info)
 
     @catch_notimplementederror

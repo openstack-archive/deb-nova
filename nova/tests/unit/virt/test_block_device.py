@@ -15,7 +15,7 @@
 import contextlib
 
 import mock
-from oslo.serialization import jsonutils
+from oslo_serialization import jsonutils
 
 from nova import block_device
 from nova import context
@@ -512,8 +512,8 @@ class TestDriverBlockDevice(test.NoDBTestCase):
 
         self.volume_api.get_snapshot(self.context,
                                      'fake-snapshot-id-1').AndReturn(snapshot)
-        self.volume_api.create(self.context, 3,
-                               '', '', snapshot).AndReturn(volume)
+        self.volume_api.create(self.context, 3, '', '', snapshot,
+                               availability_zone=None).AndReturn(volume)
         wait_func(self.context, 'fake-volume-id-2').AndReturn(None)
         instance, expected_conn_info = self._test_volume_attach(
                test_bdm, no_volume_snapshot, volume)
@@ -556,8 +556,8 @@ class TestDriverBlockDevice(test.NoDBTestCase):
 
         wait_func = self.mox.CreateMockAnything()
 
-        self.volume_api.create(self.context, 1,
-                               '', '', image_id=image['id']).AndReturn(volume)
+        self.volume_api.create(self.context, 1, '', '', image_id=image['id'],
+                               availability_zone=None).AndReturn(volume)
         wait_func(self.context, 'fake-volume-id-2').AndReturn(None)
         instance, expected_conn_info = self._test_volume_attach(
                test_bdm, no_volume_image, volume)
@@ -606,10 +606,9 @@ class TestDriverBlockDevice(test.NoDBTestCase):
             test_bdm.attach(self.context, instance, self.volume_api,
                             self.virt_driver)
 
-            vol_create.assert_called_once_with(self.context,
-                                               test_bdm.volume_size,
-                                               'fake-uuid-blank-vol',
-                                               '')
+            vol_create.assert_called_once_with(
+                self.context, test_bdm.volume_size, 'fake-uuid-blank-vol',
+                '', availability_zone=instance.availability_zone)
             vol_attach.assert_called_once_with(self.context, instance,
                                                self.volume_api,
                                                self.virt_driver,
@@ -621,6 +620,22 @@ class TestDriverBlockDevice(test.NoDBTestCase):
             self.driver_classes['volume'],
             [self.volume_bdm, self.ephemeral_bdm])
         self.assertEqual(converted, [self.volume_driver_bdm])
+
+    def test_convert_all_volumes(self):
+        converted = driver_block_device.convert_all_volumes()
+        self.assertEqual([], converted)
+
+        converted = driver_block_device.convert_all_volumes(
+            self.volume_bdm, self.ephemeral_bdm, self.image_bdm)
+        self.assertEqual(converted, [self.volume_driver_bdm,
+                                     self.image_driver_bdm])
+
+    def test_convert_volume(self):
+        self.assertIsNone(driver_block_device.convert_volume(self.swap_bdm))
+        self.assertEqual(self.volume_driver_bdm,
+                         driver_block_device.convert_volume(self.volume_bdm))
+        self.assertEqual(self.snapshot_driver_bdm,
+                         driver_block_device.convert_volume(self.snapshot_bdm))
 
     def test_legacy_block_devices(self):
         test_snapshot = self.driver_classes['snapshot'](

@@ -34,13 +34,15 @@ import uuid
 
 import eventlet
 import netaddr
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import excutils
-from oslo.utils import importutils
-from oslo.utils import netutils
-from oslo.utils import strutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_utils import excutils
+from oslo_utils import importutils
+from oslo_utils import netutils
+from oslo_utils import strutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 
 from nova import conductor
 from nova import context
@@ -56,9 +58,7 @@ from nova.network import rpcapi as network_rpcapi
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import quotas as quotas_obj
-from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
-from nova.openstack.common import uuidutils
 from nova import servicegroup
 from nova import utils
 
@@ -174,7 +174,7 @@ class RPCAllocateFixedIP(object):
             else:
                 address = None
             # NOTE(vish): if we are not multi_host pass to the network host
-            # NOTE(tr3buchet): but if we are, host came from instance['host']
+            # NOTE(tr3buchet): but if we are, host came from instance.host
             if not network['multi_host']:
                 host = network['host']
             # NOTE(vish): if there is no network host, set one
@@ -215,7 +215,7 @@ class RPCAllocateFixedIP(object):
         network = fixed_ip.network
 
         # NOTE(vish): if we are not multi_host pass to the network host
-        # NOTE(tr3buchet): but if we are, host came from instance['host']
+        # NOTE(tr3buchet): but if we are, host came from instance.host
         if not network.multi_host:
             host = network.host
         if host == self.host:
@@ -224,8 +224,8 @@ class RPCAllocateFixedIP(object):
                     address, instance=instance)
 
         if network.multi_host:
-            service = objects.Service.get_by_host_and_topic(
-                context, host, CONF.network_topic)
+            service = objects.Service.get_by_host_and_binary(
+                context, host, 'nova-network')
             if not service or not self.servicegroup_api.service_is_up(service):
                 # NOTE(vish): deallocate the fixed ip locally but don't
                 #             teardown network devices
@@ -850,11 +850,11 @@ class NetworkManager(manager.Manager):
 
         # Check the quota; can't put this in the API because we get
         # called into from other places
-        quotas = self.quotas_cls()
+        quotas = self.quotas_cls(context=context)
         quota_project, quota_user = quotas_obj.ids_from_instance(context,
                                                                  instance)
         try:
-            quotas.reserve(context, fixed_ips=1, project_id=quota_project,
+            quotas.reserve(fixed_ips=1, project_id=quota_project,
                            user_id=quota_user)
             cleanup.append(functools.partial(quotas.rollback, context))
         except exception.OverQuota as exc:
@@ -939,7 +939,7 @@ class NetworkManager(manager.Manager):
                     self._teardown_network_on_host,
                     context, network))
 
-            quotas.commit(context)
+            quotas.commit()
             if address is None:
                 # TODO(mriedem): should _setup_network_on_host return the addr?
                 LOG.debug('Fixed IP is setup on network %s but not returning '
@@ -979,11 +979,11 @@ class NetworkManager(manager.Manager):
             instance = objects.Instance.get_by_uuid(
                 context.elevated(read_deleted='yes'), instance_uuid)
 
-        quotas = self.quotas_cls()
+        quotas = self.quotas_cls(context=context)
         quota_project, quota_user = quotas_obj.ids_from_instance(context,
                                                                  instance)
         try:
-            quotas.reserve(context, fixed_ips=-1, project_id=quota_project,
+            quotas.reserve(fixed_ips=-1, project_id=quota_project,
                            user_id=quota_user)
         except Exception:
             LOG.exception(_LE("Failed to update usages deallocating "
@@ -1056,14 +1056,14 @@ class NetworkManager(manager.Manager):
         except Exception:
             with excutils.save_and_reraise_exception():
                 try:
-                    quotas.rollback(context)
+                    quotas.rollback()
                 except Exception:
                     LOG.warning(_LW("Failed to rollback quota for "
                                     "deallocate fixed ip: %s"), address,
                                 instance=instance)
 
         # Commit the reservations
-        quotas.commit(context)
+        quotas.commit()
 
     def lease_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is leased."""
@@ -1135,14 +1135,20 @@ class NetworkManager(manager.Manager):
         self._convert_int_args(kwargs)
 
         # check for certain required inputs
+        # NOTE: We can remove this check after v2.0 API code is removed because
+        # jsonschema has checked already before this.
         label = kwargs["label"]
         if not label:
             raise exception.NetworkNotCreated(req="label")
 
         # Size of "label" column in nova.networks is 255, hence the restriction
+        # NOTE: We can remove this check after v2.0 API code is removed because
+        # jsonschema has checked already before this.
         if len(label) > 255:
             raise exception.LabelTooLong()
 
+        # NOTE: We can remove this check after v2.0 API code is removed because
+        # jsonschema has checked already before this.
         if not (kwargs["cidr"] or kwargs["cidr_v6"]):
             raise exception.NetworkNotCreated(req="cidr or cidr_v6")
 
@@ -1453,12 +1459,12 @@ class NetworkManager(manager.Manager):
 
         instance = objects.Instance.get_by_id(context, instance_id)
         vifs = objects.VirtualInterfaceList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
         LOG.debug('Setup networks on host', instance=instance)
         for vif in vifs:
             network = objects.Network.get_by_id(context, vif.network_id)
             if not network.multi_host:
-                # NOTE (tr3buchet): if using multi_host, host is instance[host]
+                # NOTE (tr3buchet): if using multi_host, host is instance.host
                 host = network['host']
             if self.host == host or host is None:
                 # at this point i am the correct host, or host doesn't
@@ -1744,15 +1750,18 @@ class FlatManager(NetworkManager):
         #             we major version the network_rpcapi to 2.0.
         return []
 
+    # NOTE(hanlind): This method can be removed in version 2.0 of the RPC API
     def allocate_floating_ip(self, context, project_id, pool):
         """Gets a floating ip from the pool."""
         return None
 
+    # NOTE(hanlind): This method can be removed in version 2.0 of the RPC API
     def deallocate_floating_ip(self, context, address,
                                affect_auto_assigned):
         """Returns a floating ip to the pool."""
         return None
 
+    # NOTE(hanlind): This method can be removed in version 2.0 of the RPC API
     def associate_floating_ip(self, context, floating_address, fixed_address,
                               affect_auto_assigned=False):
         """Associates a floating ip with a fixed ip.
@@ -1762,6 +1771,7 @@ class FlatManager(NetworkManager):
         """
         return None
 
+    # NOTE(hanlind): This method can be removed in version 2.0 of the RPC API
     def disassociate_floating_ip(self, context, address,
                                  affect_auto_assigned=False):
         """Disassociates a floating ip from its fixed ip.

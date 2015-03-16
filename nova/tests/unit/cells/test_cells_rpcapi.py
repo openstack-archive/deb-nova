@@ -16,7 +16,7 @@
 Tests For Cells RPCAPI
 """
 
-from oslo.config import cfg
+from oslo_config import cfg
 import six
 
 from nova.cells import rpcapi as cells_rpcapi
@@ -139,7 +139,7 @@ class CellsAPITestCase(test.NoDBTestCase):
                                                'arg2': 2,
                                                'arg3': 3}}
         self._check_result(call_info, 'build_instances',
-                expected_args, version='1.32')
+                expected_args, version='1.34')
 
     def test_get_capacities(self):
         capacity_info = {"capacity": "info"}

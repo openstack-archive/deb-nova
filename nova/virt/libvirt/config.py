@@ -26,11 +26,12 @@ helpers for populating up config object instances.
 import time
 
 from lxml import etree
-from oslo.utils import units
+from oslo_log import log as logging
+from oslo_utils import units
 import six
 
 from nova import exception
-from nova.openstack.common import log as logging
+from nova.i18n import _
 from nova.pci import utils as pci_utils
 from nova.virt import hardware
 
@@ -71,9 +72,9 @@ class LibvirtConfigObject(object):
 
     def parse_dom(self, xmldoc):
         if self.root_name != xmldoc.tag:
-            raise exception.InvalidInput(
-                "Root element name should be '%s' not '%s'"
-                % (self.root_name, xmldoc.tag))
+            msg = (_("Root element name should be '%(name)s' not '%(tag)s'") %
+                   {'name': self.root_name, 'tag': xmldoc.tag})
+            raise exception.InvalidInput(msg)
 
     def to_xml(self, pretty_print=True):
         root = self.format_dom()
@@ -1127,6 +1128,9 @@ class LibvirtConfigGuestInterface(LibvirtConfigGuestDevice):
         self.filtername = None
         self.filterparams = []
         self.driver_name = None
+        self.vhostuser_mode = None
+        self.vhostuser_path = None
+        self.vhostuser_type = None
         self.vif_inbound_peak = None
         self.vif_inbound_burst = None
         self.vif_inbound_average = None
@@ -1165,6 +1169,10 @@ class LibvirtConfigGuestInterface(LibvirtConfigGuestDevice):
             addr_elem.set("function", "0x%s" % (func))
             source_elem.append(addr_elem)
             dev.append(source_elem)
+        elif self.net_type == "vhostuser":
+            dev.append(etree.Element("source", type=self.vhostuser_type,
+                                     mode=self.vhostuser_mode,
+                                     path=self.vhostuser_path))
         else:
             dev.append(etree.Element("source", bridge=self.source_dev))
 
@@ -1803,6 +1811,7 @@ class LibvirtConfigGuest(LibvirtConfigObject):
         self.os_boot_dev = []
         self.os_smbios = None
         self.os_mach_type = None
+        self.os_bootmenu = False
         self.devices = []
         self.metadata = []
         self.idmaps = []
@@ -1854,6 +1863,9 @@ class LibvirtConfigGuest(LibvirtConfigObject):
 
         if self.os_smbios is not None:
             os.append(self.os_smbios.format_dom())
+
+        if self.os_bootmenu:
+            os.append(etree.Element("bootmenu", enable="yes"))
         root.append(os)
 
     def _format_features(self, root):

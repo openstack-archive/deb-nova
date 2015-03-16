@@ -15,7 +15,7 @@
 import traceback
 
 import mock
-from oslo.utils import timeutils
+from oslo_utils import timeutils
 
 from nova import db
 from nova.objects import instance_action
@@ -155,7 +155,7 @@ class _TestInstanceActionObject(object):
         mock_finish.return_value = fake_action
         action = instance_action.InstanceAction.action_start(
             self.context, 'fake-uuid', 'fake-action')
-        action.finish(self.context)
+        action.finish()
         mock_start.assert_called_once_with(self.context,
                                            expected_packed_action_start)
         mock_finish.assert_called_once_with(self.context,

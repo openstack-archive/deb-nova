@@ -22,6 +22,7 @@ from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
 from nova.i18n import _
+from nova import objects
 from nova import servicegroup
 
 
@@ -37,13 +38,14 @@ class HypervisorsController(wsgi.Controller):
         self.servicegroup_api = servicegroup.API()
         super(HypervisorsController, self).__init__()
 
-    def _view_hypervisor(self, hypervisor, detail, servers=None, **kwargs):
-        alive = self.servicegroup_api.service_is_up(hypervisor['service'])
+    def _view_hypervisor(self, hypervisor, service, detail, servers=None,
+                         **kwargs):
+        alive = self.servicegroup_api.service_is_up(service)
         hyp_dict = {
-            'id': hypervisor['id'],
-            'hypervisor_hostname': hypervisor['hypervisor_hostname'],
+            'id': hypervisor.id,
+            'hypervisor_hostname': hypervisor.hypervisor_hostname,
             'state': 'up' if alive else 'down',
-            'status': ('disabled' if hypervisor['service']['disabled']
+            'status': ('disabled' if service.disabled
                        else 'enabled'),
             }
 
@@ -57,9 +59,9 @@ class HypervisorsController(wsgi.Controller):
                 hyp_dict[field] = hypervisor[field]
 
             hyp_dict['service'] = {
-                'id': hypervisor['service_id'],
-                'host': hypervisor['service']['host'],
-                'disabled_reason': hypervisor['service']['disabled_reason'],
+                'id': service.id,
+                'host': hypervisor.host,
+                'disabled_reason': service.disabled_reason,
                 }
 
         if servers is not None:
@@ -78,7 +80,11 @@ class HypervisorsController(wsgi.Controller):
         authorize(context)
         compute_nodes = self.host_api.compute_node_get_all(context)
         req.cache_db_compute_nodes(compute_nodes)
-        return dict(hypervisors=[self._view_hypervisor(hyp, False)
+        return dict(hypervisors=[self._view_hypervisor(
+                                 hyp,
+                                 objects.Service.get_by_host_and_binary(
+                                     context, hyp.host, 'nova-compute'),
+                                 False)
                                  for hyp in compute_nodes])
 
     @extensions.expected_errors(())
@@ -87,7 +93,11 @@ class HypervisorsController(wsgi.Controller):
         authorize(context)
         compute_nodes = self.host_api.compute_node_get_all(context)
         req.cache_db_compute_nodes(compute_nodes)
-        return dict(hypervisors=[self._view_hypervisor(hyp, True)
+        return dict(hypervisors=[self._view_hypervisor(
+                                 hyp,
+                                 objects.Service.get_by_host_and_binary(
+                                     context, hyp.host, 'nova-compute'),
+                                 True)
                                  for hyp in compute_nodes])
 
     @extensions.expected_errors(404)
@@ -100,7 +110,9 @@ class HypervisorsController(wsgi.Controller):
         except (ValueError, exception.ComputeHostNotFound):
             msg = _("Hypervisor with ID '%s' could not be found.") % id
             raise webob.exc.HTTPNotFound(explanation=msg)
-        return dict(hypervisor=self._view_hypervisor(hyp, True))
+        service = objects.Service.get_by_host_and_binary(
+            context, hyp.host, 'nova-compute')
+        return dict(hypervisor=self._view_hypervisor(hyp, service, True))
 
     @extensions.expected_errors((404, 501))
     def uptime(self, req, id):
@@ -115,13 +127,15 @@ class HypervisorsController(wsgi.Controller):
 
         # Get the uptime
         try:
-            host = hyp['service']['host']
+            host = hyp.host
             uptime = self.host_api.get_host_uptime(context, host)
         except NotImplementedError:
             msg = _("Virt driver does not implement uptime function.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
 
-        return dict(hypervisor=self._view_hypervisor(hyp, False,
+        service = objects.Service.get_by_host_and_binary(
+            context, host, 'nova-compute')
+        return dict(hypervisor=self._view_hypervisor(hyp, service, False,
                                                      uptime=uptime))
 
     @extensions.expected_errors(404)
@@ -131,7 +145,12 @@ class HypervisorsController(wsgi.Controller):
         hypervisors = self.host_api.compute_node_search_by_hypervisor(
                 context, id)
         if hypervisors:
-            return dict(hypervisors=[self._view_hypervisor(hyp, False)
+            return dict(hypervisors=[self._view_hypervisor(
+                                     hyp,
+                                     objects.Service.get_by_host_and_binary(
+                                         context,
+                                         hyp.host, 'nova-compute'),
+                                     False)
                                      for hyp in hypervisors])
         else:
             msg = _("No hypervisor matching '%s' could be found.") % id
@@ -149,8 +168,11 @@ class HypervisorsController(wsgi.Controller):
         hypervisors = []
         for compute_node in compute_nodes:
             instances = self.host_api.instance_get_all_by_host(context,
-                    compute_node['service']['host'])
-            hyp = self._view_hypervisor(compute_node, False, instances)
+                    compute_node.host)
+            service = objects.Service.get_by_host_and_binary(
+                context, compute_node.host, 'nova-compute')
+            hyp = self._view_hypervisor(compute_node, service, False,
+                                        instances)
             hypervisors.append(hyp)
         return dict(hypervisors=hypervisors)
 

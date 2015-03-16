@@ -274,8 +274,9 @@ class ComputeHostAPITestCase(test.TestCase):
         service_id = 42
         expected_result = dict(test_service.fake_service, id=service_id)
 
-        self.mox.StubOutWithMock(self.host_api.db, 'service_get_by_args')
-        self.host_api.db.service_get_by_args(self.ctxt,
+        self.mox.StubOutWithMock(self.host_api.db,
+                                 'service_get_by_host_and_binary')
+        self.host_api.db.service_get_by_host_and_binary(self.ctxt,
             host_name, binary).AndReturn(expected_result)
 
         self.mox.StubOutWithMock(self.host_api.db, 'service_update')
@@ -420,7 +421,6 @@ class ComputeHostAPICellsTestCase(ComputeHostAPITestCase):
         # to IDs
         fake_compute_node = dict(test_compute_node.fake_compute_node,
                                  id='region!child@1')
-        exp_compute_node = fake_compute_node.copy()
 
         fake_service = dict(test_service.fake_service, id='cell1@1',
                             compute_node=[fake_compute_node])
@@ -431,10 +431,8 @@ class ComputeHostAPICellsTestCase(ComputeHostAPITestCase):
         result = self.host_api.service_get_by_compute_host(self.ctxt,
                                                            'fake-host')
 
-        # NOTE: Testing equality of a compute node obj and dict requires
-        # multiple comparator methods.  So here we just test that the proxy
-        # object correctly replaces the 'id'.
-        self.assertEqual(exp_compute_node['id'], result.compute_node.id)
+        self.assertIsNone(fake_service.get('compute_node'))
+        self.assertRaises(AttributeError, getattr, result, 'compute_node')
 
     def test_service_update(self):
         host_name = 'fake-host'

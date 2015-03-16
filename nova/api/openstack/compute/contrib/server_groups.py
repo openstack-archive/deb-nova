@@ -15,6 +15,7 @@
 
 """The Server Group API Extension."""
 
+from oslo_log import log as logging
 import webob
 from webob import exc
 
@@ -25,7 +26,6 @@ import nova.exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova import objects
-from nova.openstack.common import log as logging
 from nova import utils
 
 LOG = logging.getLogger(__name__)
@@ -144,13 +144,13 @@ class ServerGroupController(wsgi.Controller):
 
         quotas = None
         if self.ext_mgr.is_loaded('os-server-group-quotas'):
-            quotas = objects.Quotas()
+            quotas = objects.Quotas(context=context)
             project_id, user_id = objects.quotas.ids_from_server_group(context,
                                                                        sg)
             try:
                 # We have to add the quota back to the user that created
                 # the server group
-                quotas.reserve(context, project_id=project_id,
+                quotas.reserve(project_id=project_id,
                                user_id=user_id, server_groups=-1)
             except Exception:
                 quotas = None
@@ -194,9 +194,9 @@ class ServerGroupController(wsgi.Controller):
 
         quotas = None
         if self.ext_mgr.is_loaded('os-server-group-quotas'):
-            quotas = objects.Quotas()
+            quotas = objects.Quotas(context=context)
             try:
-                quotas.reserve(context, project_id=context.project_id,
+                quotas.reserve(project_id=context.project_id,
                                user_id=context.user_id, server_groups=1)
             except nova.exception.OverQuota:
                 msg = _("Quota exceeded, too many server groups.")

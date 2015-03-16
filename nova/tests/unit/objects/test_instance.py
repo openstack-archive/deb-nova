@@ -18,8 +18,8 @@ import iso8601
 import mock
 from mox3 import mox
 import netaddr
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import flavors
@@ -28,6 +28,7 @@ from nova import exception
 from nova.network import model as network_model
 from nova import notifications
 from nova import objects
+from nova.objects import base
 from nova.objects import instance
 from nova.objects import instance_info_cache
 from nova.objects import pci_device
@@ -41,6 +42,7 @@ from nova.tests.unit.objects import test_instance_numa_topology
 from nova.tests.unit.objects import test_instance_pci_requests
 from nova.tests.unit.objects import test_objects
 from nova.tests.unit.objects import test_security_group
+from nova.tests.unit.objects import test_vcpu_model
 
 
 class _TestInstanceObject(object):
@@ -74,7 +76,7 @@ class _TestInstanceObject(object):
         primitive = inst.obj_to_primitive()
         expected = {'nova_object.name': 'Instance',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.18',
+                    'nova_object.version': '1.19',
                     'nova_object.data':
                         {'uuid': 'fake-uuid',
                          'launched_at': '1955-11-05T00:00:00Z'},
@@ -90,7 +92,7 @@ class _TestInstanceObject(object):
         primitive = inst.obj_to_primitive()
         expected = {'nova_object.name': 'Instance',
                     'nova_object.namespace': 'nova',
-                    'nova_object.version': '1.18',
+                    'nova_object.version': '1.19',
                     'nova_object.data':
                         {'uuid': 'fake-uuid',
                          'access_ip_v4': '1.2.3.4',
@@ -127,9 +129,10 @@ class _TestInstanceObject(object):
         exp_cols.remove('fault')
         exp_cols.remove('numa_topology')
         exp_cols.remove('pci_requests')
+        exp_cols.remove('vcpu_model')
         exp_cols = filter(lambda x: 'flavor' not in x, exp_cols)
         exp_cols.extend(['extra', 'extra.numa_topology', 'extra.pci_requests',
-                         'extra.flavor'])
+                         'extra.flavor', 'extra.vcpu_model'])
 
         fake_topology = (test_instance_numa_topology.
                          fake_db_topology['numa_topology'])
@@ -138,11 +141,14 @@ class _TestInstanceObject(object):
         fake_flavor = jsonutils.dumps(
             {'cur': objects.Flavor().obj_to_primitive(),
              'old': None, 'new': None})
+        fake_vcpu_model = jsonutils.dumps(
+            test_vcpu_model.fake_vcpumodel.obj_to_primitive())
         fake_instance = dict(self.fake_instance,
                              extra={
                                  'numa_topology': fake_topology,
                                  'pci_requests': fake_requests,
                                  'flavor': fake_flavor,
+                                 'vcpu_model': fake_vcpu_model,
                                  })
         db.instance_get_by_uuid(
             self.context, 'uuid',
@@ -323,7 +329,12 @@ class _TestInstanceObject(object):
                     exp_vm_state, exp_task_state, admin_reset)
         elif cell_type == 'compute':
             cells_rpcapi.CellsAPI().AndReturn(cells_api_mock)
-            cells_api_mock.instance_update_at_top(self.context, new_ref)
+            expected = ['info_cache', 'security_groups', 'system_metadata',
+                        'flavor', 'new_flavor', 'old_flavor']
+            new_ref_obj = objects.Instance._from_db_object(self.context,
+                          objects.Instance(), new_ref, expected_attrs=expected)
+            instance_ref_p = base.obj_to_primitive(new_ref_obj)
+            cells_api_mock.instance_update_at_top(self.context, instance_ref_p)
         notifications.send_update(self.context, mox.IgnoreArg(),
                                   mox.IgnoreArg())
 
@@ -338,6 +349,7 @@ class _TestInstanceObject(object):
         inst.vm_state = 'meow'
         inst.task_state = 'wuff'
         inst.user_data = 'new'
+        save_kwargs.pop('context', None)
         inst.save(**save_kwargs)
         self.assertEqual('newhost', inst.host)
         self.assertEqual('meow', inst.vm_state)
@@ -459,6 +471,21 @@ class _TestInstanceObject(object):
         inst.save()
         mock_extra_update.assert_called_once_with(
                 self.context, inst.uuid, {'numa_topology': None})
+
+    @mock.patch('nova.db.instance_extra_update_by_uuid')
+    def test_save_vcpu_model(self, mock_update):
+        inst = fake_instance.fake_instance_obj(self.context)
+        inst.vcpu_model = test_vcpu_model.fake_vcpumodel
+        inst.save()
+        mock_update.assert_called_once_with(
+            self.context, inst.uuid,
+            {'vcpu_model': jsonutils.dumps(
+                test_vcpu_model.fake_vcpumodel.obj_to_primitive())})
+        mock_update.reset_mock()
+        inst.vcpu_model = None
+        inst.save()
+        mock_update.assert_called_once_with(
+            self.context, inst.uuid, {'vcpu_model': None})
 
     def test_get_deleted(self):
         fake_inst = dict(self.fake_instance, id=123, deleted=123)
@@ -740,10 +767,13 @@ class _TestInstanceObject(object):
             pci_requests=objects.InstancePCIRequests(
                 requests=[
                     objects.InstancePCIRequest(count=123,
-                                               spec=[])]))
+                                               spec=[])]),
+            vcpu_model=test_vcpu_model.fake_vcpumodel,
+            )
         inst.create()
         self.assertIsNotNone(inst.numa_topology)
         self.assertIsNotNone(inst.pci_requests)
+        self.assertIsNotNone(inst.vcpu_model)
         got_numa_topo = objects.InstanceNUMATopology.get_by_instance_uuid(
             self.context, inst.uuid)
         self.assertEqual(inst.numa_topology.instance_uuid,
@@ -751,6 +781,9 @@ class _TestInstanceObject(object):
         got_pci_requests = objects.InstancePCIRequests.get_by_instance_uuid(
             self.context, inst.uuid)
         self.assertEqual(123, got_pci_requests.requests[0].count)
+        vcpu_model = objects.VirtCPUModel.get_by_instance_uuid(
+            self.context, inst.uuid)
+        self.assertEqual('fake-model', vcpu_model.model)
 
     def test_recreate_fails(self):
         inst = instance.Instance(context=self.context,
@@ -1310,6 +1343,21 @@ class _TestInstanceListObject(object):
         self.mox.ReplayAll()
         inst_list = instance.InstanceList.get_by_host_and_not_type(
             self.context, 'foo', 'bar')
+        for i in range(0, len(fakes)):
+            self.assertIsInstance(inst_list.objects[i], instance.Instance)
+            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+        self.assertRemotes()
+
+    @mock.patch('nova.objects.instance._expected_cols')
+    @mock.patch('nova.db.instance_get_all')
+    def test_get_all(self, mock_get_all, mock_exp):
+        fakes = [self.fake_instance(1), self.fake_instance(2)]
+        mock_get_all.return_value = fakes
+        mock_exp.return_value = mock.sentinel.exp_att
+        inst_list = instance.InstanceList.get_all(
+                self.context, expected_attrs='fake')
+        mock_get_all.assert_called_once_with(
+                self.context, columns_to_join=mock.sentinel.exp_att)
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], instance.Instance)
             self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])

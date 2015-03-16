@@ -12,13 +12,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import collections
+
 import mock
-from oslo.serialization import jsonutils
+from oslo_serialization import jsonutils
+import testtools
 
 from nova import db
+from nova import objects
+from nova.objects import pci_device_pool
 from nova.tests.functional.v3 import api_sample_base
 from nova.tests.functional.v3 import test_servers
 
+skip_msg = "Bug 1426241"
 
 fake_db_dev_1 = {
     'created_at': None,
@@ -64,6 +70,9 @@ fake_db_dev_2 = {
 class ExtendedServerPciSampleJsonTest(test_servers.ServersSampleBase):
     extension_name = "os-pci"
 
+    def setUp(self):
+        raise testtools.TestCase.skipException(skip_msg)
+
     def test_show(self):
         uuid = self._post_server()
         response = self._do_get('servers/%s' % uuid)
@@ -80,37 +89,47 @@ class ExtendedServerPciSampleJsonTest(test_servers.ServersSampleBase):
 
 
 class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
+    ADMIN_API = True
     extra_extensions_to_load = ['os-hypervisors']
     extension_name = 'os-pci'
 
     def setUp(self):
+        raise testtools.TestCase.skipException(skip_msg)
         super(ExtendedHyervisorPciSampleJsonTest, self).setUp()
-        self.fake_compute_node = {"cpu_info": "?",
-                                  "current_workload": 0,
-                                  "disk_available_least": 0,
-                                  "host_ip": "1.1.1.1",
-                                  "state": "up",
-                                  "status": "enabled",
-                                  "free_disk_gb": 1028,
-                                  "free_ram_mb": 7680,
-                                  "hypervisor_hostname": "fake-mini",
-                                  "hypervisor_type": "fake",
-                                  "hypervisor_version": 1000,
-                                  "id": 1,
-                                  "local_gb": 1028,
-                                  "local_gb_used": 0,
-                                  "memory_mb": 8192,
-                                  "memory_mb_used": 512,
-                                  "running_vms": 0,
-                                  "service": {"host": '043b3cacf6f34c90a'
-                                                      '7245151fc8ebcda',
-                                              "disabled": False,
-                                              "disabled_reason": None},
-                                  "vcpus": 1,
-                                  "vcpus_used": 0,
-                                  "service_id": 2,
-                                  "host": '043b3cacf6f34c90a7245151fc8ebcda',
-                                  "pci_stats": [
+        cpu_info = collections.OrderedDict([
+            ('arch', 'x86_64'),
+            ('model', 'Nehalem'),
+            ('vendor', 'Intel'),
+            ('features', ['pge', 'clflush']),
+            ('topology', {
+                'cores': 1,
+                'threads': 1,
+                'sockets': 4,
+                }),
+            ])
+        self.fake_compute_node = objects.ComputeNode(
+            cpu_info=jsonutils.dumps(cpu_info),
+            current_workload=0,
+            disk_available_least=0,
+            host_ip="1.1.1.1",
+            state="up",
+            status="enabled",
+            free_disk_gb=1028,
+            free_ram_mb=7680,
+            hypervisor_hostname="fake-mini",
+            hypervisor_type="fake",
+            hypervisor_version=1000,
+            id=1,
+            local_gb=1028,
+            local_gb_used=0,
+            memory_mb=8192,
+            memory_mb_used=512,
+            running_vms=0,
+            vcpus=1,
+            vcpus_used=0,
+            service_id=2,
+            host='043b3cacf6f34c90a7245151fc8ebcda',
+            pci_device_pools=pci_device_pool.from_pci_stats(
                                       {"count": 5,
                                        "vendor_id": "8086",
                                        "product_id": "1520",
@@ -119,14 +138,19 @@ class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
                                            "phys_function": '[["0x0000", '
                                                             '"0x04", "0x00",'
                                                             ' "0x1"]]',
-                                            "key1": "value1"}}]}
+                                           "key1": "value1"}}),)
+        self.fake_service = objects.Service(
+            id=2,
+            host='043b3cacf6f34c90a7245151fc8ebcda',
+            disabled=False,
+            disabled_reason=None)
 
     @mock.patch("nova.servicegroup.API.service_is_up", return_value=True)
-    @mock.patch("nova.db.compute_node_get")
-    def test_pci_show(self, mock_db, mock_service):
-        self.fake_compute_node['pci_stats'] = jsonutils.dumps(
-            self.fake_compute_node['pci_stats'])
-        mock_db.return_value = self.fake_compute_node
+    @mock.patch("nova.objects.Service.get_by_host_and_binary")
+    @mock.patch("nova.objects.ComputeNode.get_by_id")
+    def test_pci_show(self, mock_obj, mock_svc_get, mock_service):
+        mock_obj.return_value = self.fake_compute_node
+        mock_svc_get.return_value = self.fake_service
         hypervisor_id = 1
         response = self._do_get('os-hypervisors/%s' % hypervisor_id)
         subs = {
@@ -137,12 +161,11 @@ class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
                               subs, response, 200)
 
     @mock.patch("nova.servicegroup.API.service_is_up", return_value=True)
-    @mock.patch("nova.db.compute_node_get_all")
-    def test_pci_detail(self, mock_db, mock_service):
-        self.fake_compute_node['pci_stats'] = jsonutils.dumps(
-            self.fake_compute_node['pci_stats'])
-
-        mock_db.return_value = [self.fake_compute_node]
+    @mock.patch("nova.objects.Service.get_by_host_and_binary")
+    @mock.patch("nova.objects.ComputeNodeList.get_all")
+    def test_pci_detail(self, mock_obj, mock_svc_get, mock_service):
+        mock_obj.return_value = [self.fake_compute_node]
+        mock_svc_get.return_value = self.fake_service
         hypervisor_id = 1
         subs = {
             'hypervisor_id': hypervisor_id
@@ -155,7 +178,11 @@ class ExtendedHyervisorPciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
 
 
 class PciSampleJsonTest(api_sample_base.ApiSampleTestBaseV3):
+    ADMIN_API = True
     extension_name = "os-pci"
+
+    def setUp(self):
+        raise testtools.TestCase.skipException(skip_msg)
 
     def _fake_pci_device_get_by_id(self, context, id):
         return fake_db_dev_1

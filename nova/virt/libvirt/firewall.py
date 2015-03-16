@@ -18,13 +18,13 @@
 import uuid
 
 from lxml import etree
-from oslo.config import cfg
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import importutils
 
 from nova.cloudpipe import pipelib
 from nova.i18n import _LI
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 import nova.virt.firewall as base_firewall
 from nova.virt import netutils
 
@@ -201,7 +201,7 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
         filters added to the list must also be correctly defined
         within the subclass.
         """
-        if pipelib.is_vpn_image(instance['image_ref']):
+        if pipelib.is_vpn_image(instance.image_ref):
             base_filter = 'nova-vpn'
         elif allow_dhcp:
             base_filter = 'nova-base'
@@ -251,7 +251,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             doc = etree.fromstring(xml)
             u = doc.find("./uuid").text
         except Exception as e:
-            LOG.debug("Cannot find UUID for filter '%s': '%s'" % (name, e))
+            LOG.debug(u"Cannot find UUID for filter '%(name)s': '%(e)s'",
+                {'name': name, 'e': e})
             u = uuid.uuid4().hex
 
         LOG.debug("UUID for filter '%s' is '%s'" % (name, u))
@@ -283,8 +284,8 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
     @staticmethod
     def _instance_filter_name(instance, nic_id=None):
         if not nic_id:
-            return 'nova-instance-%s' % (instance['name'])
-        return 'nova-instance-%s-%s' % (instance['name'], nic_id)
+            return 'nova-instance-%s' % (instance.name)
+        return 'nova-instance-%s-%s' % (instance.name, nic_id)
 
     def instance_filter_exists(self, instance, network_info):
         """Check nova-instance-instance-xxx exists."""
@@ -294,7 +295,7 @@ class NWFilterFirewall(base_firewall.FirewallDriver):
             try:
                 self._conn.nwfilterLookupByName(instance_filter_name)
             except libvirt.libvirtError:
-                name = instance['name']
+                name = instance.name
                 LOG.debug('The nwfilter(%(instance_filter_name)s) for'
                           '%(name)s is not found.',
                           {'instance_filter_name': instance_filter_name,
@@ -336,7 +337,7 @@ class IptablesFirewallDriver(base_firewall.IptablesFirewallDriver):
     def unfilter_instance(self, instance, network_info):
         # NOTE(salvatore-orlando):
         # Overriding base class method for applying nwfilter operation
-        if self.instance_info.pop(instance['id'], None):
+        if self.instance_info.pop(instance.id, None):
             self.remove_filters_for_instance(instance)
             self.iptables.apply()
             self.nwfilter.unfilter_instance(instance, network_info)

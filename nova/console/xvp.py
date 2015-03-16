@@ -19,14 +19,14 @@ import os
 import signal
 
 import jinja2
-from oslo.config import cfg
-from oslo.utils import excutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
 
 from nova import context
 from nova import db
 from nova.i18n import _, _LE
-from nova.openstack.common import log as logging
 from nova import paths
 from nova import utils
 

@@ -24,7 +24,8 @@ import os
 import string
 import zipfile
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova import compute
 from nova.compute import flavors
@@ -33,7 +34,6 @@ from nova import db
 from nova import exception
 from nova.i18n import _
 from nova.openstack.common import fileutils
-from nova.openstack.common import log as logging
 from nova import paths
 from nova import utils
 
@@ -89,8 +89,8 @@ def _load_boot_script():
 
 
 class CloudPipe(object):
-    def __init__(self):
-        self.compute_api = compute.API()
+    def __init__(self, skip_policy_check=False):
+        self.compute_api = compute.API(skip_policy_check=skip_policy_check)
 
     def get_encoded_zip(self, project_id):
         # Make a payload.zip

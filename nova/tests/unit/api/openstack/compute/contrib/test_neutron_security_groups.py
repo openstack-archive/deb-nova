@@ -17,8 +17,8 @@ import uuid
 import mock
 from neutronclient.common import exceptions as n_exc
 from neutronclient.neutron import v2_0 as neutronv20
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
 import webob
 
 from nova.api.openstack.compute.contrib import security_groups
@@ -837,11 +837,6 @@ class MockClient(object):
             if subnet['network_id'] == network:
                 del self._fake_subnets[subnet['id']]
         del self._fake_networks[network]
-
-    def delete_subnet(self, subnet):
-        subnet = self.show_subnet(subnet).get('subnet')
-        self._check_ports_on_network(subnet['network_id'])
-        del self._fake_subnet[subnet]
 
     def delete_port(self, port):
         self.show_port(port)

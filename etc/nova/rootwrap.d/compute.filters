@@ -31,6 +31,9 @@ qemu-nbd: CommandFilter, qemu-nbd, root
 # nova/virt/disk/mount/loop.py: 'losetup', '--detach', device
 losetup: CommandFilter, losetup, root
 
+# nova/virt/disk/vfs/localfs.py: 'blkid', '-o', 'value', '-s', 'TYPE', device
+blkid: CommandFilter, blkid, root
+
 # nova/virt/libvirt/utils.py: 'blockdev', '--getsize64', path
 # nova/virt/disk/mount/nbd.py: 'blockdev', '--flushbufs', device
 blockdev: RegExpFilter, blockdev, root, blockdev, (--getsize64|--flushbufs), /dev/.*
@@ -82,6 +85,9 @@ tunctl: CommandFilter, tunctl, root
 # nova/virt/libvirt/vif.py: 'ovs-vsctl', 'del-port', ...
 # nova/network/linux_net.py: 'ovs-vsctl', ....
 ovs-vsctl: CommandFilter, ovs-vsctl, root
+
+# nova/virt/libvirt/vif.py: 'vrouter-port-control', ...
+vrouter-port-control: CommandFilter, vrouter-port-control, root
 
 # nova/network/linux_net.py: 'ovs-ofctl', ....
 ovs-ofctl: CommandFilter, ovs-ofctl, root
@@ -163,9 +169,6 @@ qemu-img: CommandFilter, qemu-img, root
 # nova/virt/disk/vfs/localfs.py: 'readlink', '-e'
 readlink: CommandFilter, readlink, root
 
-# nova/virt/disk/api.py: 'touch', target
-touch: CommandFilter, touch, root
-
 # nova/virt/disk/api.py:
 mkfs.ext3: CommandFilter, mkfs.ext3, root
 mkfs.ext4: CommandFilter, mkfs.ext4, root
@@ -229,3 +232,6 @@ sync: CommandFilter, sync, root
 
 # nova/virt/libvirt/imagebackend.py:
 ploop: CommandFilter, ploop, root
+
+# nova/virt/libvirt/utils.py: 'xend', 'status'
+xend: CommandFilter, xend, root

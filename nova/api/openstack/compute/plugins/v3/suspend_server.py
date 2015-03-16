@@ -23,15 +23,13 @@ from nova import exception
 ALIAS = "os-suspend-server"
 
 
-def authorize(context, action_name):
-    action = 'v3:%s:%s' % (ALIAS, action_name)
-    extensions.extension_authorizer('compute', action)(context)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class SuspendServerController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SuspendServerController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
 
     @wsgi.response(202)
     @extensions.expected_errors((404, 409))
@@ -39,10 +37,9 @@ class SuspendServerController(wsgi.Controller):
     def _suspend(self, req, id, body):
         """Permit admins to suspend the server."""
         context = req.environ['nova.context']
-        authorize(context, 'suspend')
+        authorize(context, action='suspend')
         try:
-            server = common.get_instance(self.compute_api, context, id,
-                                         want_objects=True)
+            server = common.get_instance(self.compute_api, context, id)
             self.compute_api.suspend(context, server)
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
@@ -56,10 +53,9 @@ class SuspendServerController(wsgi.Controller):
     def _resume(self, req, id, body):
         """Permit admins to resume the server from suspend."""
         context = req.environ['nova.context']
-        authorize(context, 'resume')
+        authorize(context, action='resume')
         try:
-            server = common.get_instance(self.compute_api, context, id,
-                                         want_objects=True)
+            server = common.get_instance(self.compute_api, context, id)
             self.compute_api.resume(context, server)
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())

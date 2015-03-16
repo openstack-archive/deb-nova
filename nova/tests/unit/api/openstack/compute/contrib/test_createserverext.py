@@ -15,7 +15,7 @@
 
 import base64
 
-from oslo.serialization import jsonutils
+from oslo_serialization import jsonutils
 import webob
 
 from nova.compute import api as compute_api
@@ -97,11 +97,6 @@ class CreateserverextTest(test.TestCase):
                 'nova.api.openstack.compute.contrib.select_extensions'],
             osapi_compute_ext_list=['Createserverext', 'User_data',
                 'Security_groups', 'Os_networks'])
-
-    def _make_stub_method(self, canned_return):
-        def stub_method(*args, **kwargs):
-            return canned_return
-        return stub_method
 
     def _create_security_group_request_dict(self, security_groups):
         server = {}

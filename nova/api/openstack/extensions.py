@@ -18,7 +18,8 @@ import abc
 import functools
 import os
 
-from oslo.utils import importutils
+from oslo_log import log as logging
+from oslo_utils import importutils
 import six
 import webob.dec
 import webob.exc
@@ -29,7 +30,6 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 import nova.policy
 
 LOG = logging.getLogger(__name__)
@@ -192,8 +192,8 @@ class ExtensionManager(object):
         """Checks for required methods in extension objects."""
         try:
             extension.is_valid()
-        except AttributeError as ex:
-            LOG.exception(_LE("Exception loading extension: %s"), ex)
+        except AttributeError:
+            LOG.exception(_LE("Exception loading extension"))
             return False
 
         return True
@@ -299,8 +299,8 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
             try:
                 ext_mgr.load_extension(classpath)
             except Exception as exc:
-                logger.warn(_('Failed to load extension %(classpath)s: '
-                              '%(exc)s'),
+                logger.warn(_LW('Failed to load extension %(classpath)s: '
+                                '%(exc)s'),
                             {'classpath': classpath, 'exc': exc})
 
         # Now, let's consider any subdirectories we may have...
@@ -322,8 +322,8 @@ def load_standard_extensions(ext_mgr, logger, path, package, ext_list=None):
                 try:
                     ext(ext_mgr)
                 except Exception as exc:
-                    logger.warn(_('Failed to load extension %(ext_name)s:'
-                                  '%(exc)s'),
+                    logger.warn(_LW('Failed to load extension %(ext_name)s:'
+                                    '%(exc)s'),
                                 {'ext_name': ext_name, 'exc': exc})
 
         # Update the list of directories we'll explore...

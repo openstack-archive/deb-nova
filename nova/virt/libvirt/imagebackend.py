@@ -19,10 +19,11 @@ import functools
 import os
 import shutil
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import units
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import units
 import six
 
 from nova import exception
@@ -31,7 +32,6 @@ from nova.i18n import _LE, _LI
 from nova import image
 from nova import keymgr
 from nova.openstack.common import fileutils
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt import images
@@ -545,7 +545,7 @@ class Lvm(Image):
                                      ' images_volume_group'
                                      ' flag to use LVM images.'))
             self.vg = CONF.libvirt.images_volume_group
-            self.lv = '%s_%s' % (instance['uuid'],
+            self.lv = '%s_%s' % (instance.uuid,
                                  self.escape(disk_name))
             if self.ephemeral_key_uuid is None:
                 self.path = os.path.join('/dev', self.vg, self.lv)
@@ -647,7 +647,7 @@ class Rbd(Image):
             except IndexError:
                 raise exception.InvalidDevicePath(path=path)
         else:
-            self.rbd_name = '%s_%s' % (instance['uuid'], disk_name)
+            self.rbd_name = '%s_%s' % (instance.uuid, disk_name)
 
         if not CONF.libvirt.images_rbd_pool:
             raise RuntimeError(_('You should specify'

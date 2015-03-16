@@ -21,14 +21,14 @@ Handling of VM disk images.
 
 import os
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova import exception
 from nova.i18n import _, _LE
 from nova import image
 from nova.openstack.common import fileutils
 from nova.openstack.common import imageutils
-from nova.openstack.common import log as logging
 from nova import utils
 
 LOG = logging.getLogger(__name__)
@@ -48,6 +48,10 @@ def qemu_img_info(path):
     """Return an object containing the parsed output from qemu-img info."""
     # TODO(mikal): this code should not be referring to a libvirt specific
     # flag.
+    # NOTE(sirp): The config option import must go here to avoid an import
+    # cycle
+    CONF.import_opt('images_type', 'nova.virt.libvirt.imagebackend',
+                    group='libvirt')
     if not os.path.exists(path) and CONF.libvirt.images_type != 'rbd':
         msg = (_("Path does not exist %(path)s") % {'path': path})
         raise exception.InvalidDiskInfo(reason=msg)

@@ -20,16 +20,13 @@ from nova import compute
 
 ALIAS = "os-lock-server"
 
-
-def authorize(context, action_name):
-    action = 'v3:%s:%s' % (ALIAS, action_name)
-    extensions.extension_authorizer('compute', action)(context)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class LockServerController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(LockServerController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
 
     @wsgi.response(202)
     @extensions.expected_errors(404)
@@ -37,9 +34,8 @@ class LockServerController(wsgi.Controller):
     def _lock(self, req, id, body):
         """Lock a server instance."""
         context = req.environ['nova.context']
-        authorize(context, 'lock')
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        authorize(context, action='lock')
+        instance = common.get_instance(self.compute_api, context, id)
         self.compute_api.lock(context, instance)
 
     @wsgi.response(202)
@@ -48,9 +44,8 @@ class LockServerController(wsgi.Controller):
     def _unlock(self, req, id, body):
         """Unlock a server instance."""
         context = req.environ['nova.context']
-        authorize(context, 'unlock')
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        authorize(context, action='unlock')
+        instance = common.get_instance(self.compute_api, context, id)
         self.compute_api.unlock(context, instance)
 
 

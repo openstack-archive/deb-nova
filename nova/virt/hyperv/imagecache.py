@@ -17,12 +17,12 @@ Image caching and management.
 """
 import os
 
-from oslo.config import cfg
-from oslo.utils import excutils
-from oslo.utils import units
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
+from oslo_utils import units
 
 from nova.i18n import _
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.hyperv import utilsfactory
 from nova.virt.hyperv import vmutils
@@ -40,12 +40,10 @@ class ImageCache(object):
         self._vhdutils = utilsfactory.get_vhdutils()
 
     def _get_root_vhd_size_gb(self, instance):
-        try:
-            # In case of resizes we need the old root disk size
-            old_flavor = instance.get_flavor('old')
-            return old_flavor.root_gb
-        except KeyError:
-            return instance['root_gb']
+        if instance.old_flavor:
+            return instance.old_flavor.root_gb
+        else:
+            return instance.root_gb
 
     def _resize_and_cache_vhd(self, instance, vhd_path):
         vhd_info = self._vhdutils.get_vhd_info(vhd_path)
@@ -138,5 +136,5 @@ class ImageCache(object):
         return vhd_path
 
     def get_image_details(self, context, instance):
-        image_id = instance['image_ref']
+        image_id = instance.image_ref
         return images.get_info(context, image_id)

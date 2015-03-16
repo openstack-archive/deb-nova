@@ -30,8 +30,7 @@ from nova import network
 
 
 ALIAS = 'os-attach-interfaces'
-authorize = extensions.extension_authorizer('compute',
-                                            'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 def _translate_interface_attachment_view(port_info):
@@ -49,8 +48,8 @@ class InterfaceAttachmentController(wsgi.Controller):
     """The interface attachment API controller for the OpenStack API."""
 
     def __init__(self):
-        self.compute_api = compute.API()
-        self.network_api = network.API()
+        self.compute_api = compute.API(skip_policy_check=True)
+        self.network_api = network.API(skip_policy_check=True)
         super(InterfaceAttachmentController, self).__init__()
 
     @extensions.expected_errors((404, 501))
@@ -73,7 +72,7 @@ class InterfaceAttachmentController(wsgi.Controller):
 
         try:
             port_info = self.network_api.show_port(context, port_id)
-        except exception.NotFound as e:
+        except exception.PortNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.Forbidden as e:
             raise exc.HTTPForbidden(explanation=e.format_message())
@@ -112,13 +111,14 @@ class InterfaceAttachmentController(wsgi.Controller):
             msg = _("Must input network_id when request IP address")
             raise exc.HTTPBadRequest(explanation=msg)
 
-        instance = common.get_instance(self.compute_api, context,
-                                       server_id, want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
         try:
             vif = self.compute_api.attach_interface(context,
                 instance, network_id, port_id, req_ip)
         except (exception.NetworkDuplicated,
-                exception.NetworkAmbiguous) as e:
+                exception.NetworkAmbiguous,
+                exception.NoMoreFixedIps,
+                exception.PortNotUsable) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
         except (exception.InstanceIsLocked,
                 exception.FixedIpAlreadyInUse,
@@ -127,8 +127,9 @@ class InterfaceAttachmentController(wsgi.Controller):
         except (exception.PortNotFound,
                 exception.NetworkNotFound) as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
-        except NotImplementedError as e:
-            raise webob.exc.HTTPNotImplemented(explanation=e.format_message())
+        except NotImplementedError:
+            msg = _("The requested functionality is not supported.")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
         except exception.InterfaceAttachFailed as e:
             raise webob.exc.HTTPInternalServerError(
                 explanation=e.format_message())
@@ -146,8 +147,7 @@ class InterfaceAttachmentController(wsgi.Controller):
         authorize(context)
         port_id = id
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
         try:
             self.compute_api.detach_interface(context,
                 instance, port_id=port_id)
@@ -155,8 +155,9 @@ class InterfaceAttachmentController(wsgi.Controller):
             raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
-        except NotImplementedError as e:
-            raise webob.exc.HTTPNotImplemented(explanation=e.format_message())
+        except NotImplementedError:
+            msg = _("The requested functionality is not supported.")
+            raise webob.exc.HTTPNotImplemented(explanation=msg)
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'detach_interface', server_id)
@@ -166,8 +167,7 @@ class InterfaceAttachmentController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
         results = []
         search_opts = {'device_id': instance.uuid}
 

@@ -17,7 +17,7 @@ import functools
 
 import eventlet
 import netaddr
-from oslo.serialization import jsonutils
+from oslo_serialization import jsonutils
 import six
 
 from nova import exception
@@ -39,6 +39,8 @@ VIF_TYPE_802_QBH = '802.1qbh'
 VIF_TYPE_HW_VEB = 'hw_veb'
 VIF_TYPE_MLNX_DIRECT = 'mlnx_direct'
 VIF_TYPE_MIDONET = 'midonet'
+VIF_TYPE_VHOSTUSER = 'vhostuser'
+VIF_TYPE_VROUTER = 'vrouter'
 VIF_TYPE_OTHER = 'other'
 
 # Constants for dictionary keys in the 'vif_details' field in the VIF
@@ -52,6 +54,16 @@ VIF_DETAILS_PHYSICAL_NETWORK = 'physical_network'
 # 'vlan' for VIF_TYPE_HW_VEB
 VIF_DETAILS_PROFILEID = 'profileid'
 VIF_DETAILS_VLAN = 'vlan'
+
+# Constants for vhost-user related fields in 'vif_details'.
+# Sets mode on vhost-user socket, valid values are 'client'
+# and 'server'
+VIF_DETAILS_VHOSTUSER_MODE = 'vhostuser_mode'
+# vhost-user socket path
+VIF_DETAILS_VHOSTUSER_SOCKET = 'vhostuser_socket'
+# Specifies whether vhost-user socket should be plugged
+# into ovs bridge. Valid values are True and False
+VIF_DETAILS_VHOSTUSER_OVS_PLUG = 'vhostuser_ovs_plug'
 
 # Define supported virtual NIC types. VNIC_TYPE_DIRECT and VNIC_TYPE_MACVTAP
 # are used for SR-IOV ports
@@ -287,7 +299,7 @@ class VIF(Model):
                  details=None, devname=None, ovs_interfaceid=None,
                  qbh_params=None, qbg_params=None, active=False,
                  vnic_type=VNIC_TYPE_NORMAL, profile=None,
-                 **kwargs):
+                 preserve_on_delete=False, **kwargs):
         super(VIF, self).__init__()
 
         self['id'] = id
@@ -303,6 +315,7 @@ class VIF(Model):
         self['active'] = active
         self['vnic_type'] = vnic_type
         self['profile'] = profile
+        self['preserve_on_delete'] = preserve_on_delete
 
         self._set_meta(kwargs)
 
@@ -310,7 +323,7 @@ class VIF(Model):
         keys = ['id', 'address', 'network', 'vnic_type',
                 'type', 'profile', 'details', 'devname',
                 'ovs_interfaceid', 'qbh_params', 'qbg_params',
-                'active']
+                'active', 'preserve_on_delete']
         return all(self[k] == other[k] for k in keys)
 
     def __ne__(self, other):

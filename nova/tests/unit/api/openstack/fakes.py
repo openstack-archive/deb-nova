@@ -16,9 +16,9 @@
 import datetime
 import uuid
 
-from oslo.serialization import jsonutils
-from oslo.utils import netutils
-from oslo.utils import timeutils
+from oslo_serialization import jsonutils
+from oslo_utils import netutils
+from oslo_utils import timeutils
 import routes
 import six
 import webob
@@ -123,15 +123,15 @@ def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
     return mapper
 
 
-def stub_out_key_pair_funcs(stubs, have_key_pair=True):
+def stub_out_key_pair_funcs(stubs, have_key_pair=True, **kwargs):
     def key_pair(context, user_id):
         return [dict(test_keypair.fake_keypair,
-                     name='key', public_key='public_key')]
+                     name='key', public_key='public_key', **kwargs)]
 
     def one_key_pair(context, user_id, name):
         if name == 'key':
             return dict(test_keypair.fake_keypair,
-                        name='key', public_key='public_key')
+                        name='key', public_key='public_key', **kwargs)
         else:
             raise exc.KeypairNotFound(user_id=user_id, name=name)
 
@@ -440,7 +440,8 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
                   terminated_at=timeutils.utcnow(),
                   availability_zone='', locked_by=None, cleaned=False,
                   memory_mb=0, vcpus=0, root_gb=0, ephemeral_gb=0,
-                  instance_type=None):
+                  instance_type=None, launch_index=0, kernel_id="",
+                  ramdisk_id="", user_data=None):
     if user_id is None:
         user_id = 'fake_user'
     if project_id is None:
@@ -495,9 +496,9 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "user_id": user_id,
         "project_id": project_id,
         "image_ref": image_ref,
-        "kernel_id": "",
-        "ramdisk_id": "",
-        "launch_index": 0,
+        "kernel_id": kernel_id,
+        "ramdisk_id": ramdisk_id,
+        "launch_index": launch_index,
         "key_name": key_name,
         "key_data": key_data,
         "config_drive": config_drive,
@@ -514,7 +515,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "node": node,
         "instance_type_id": 1,
         "instance_type": inst_type,
-        "user_data": "",
+        "user_data": user_data,
         "reservation_id": reservation_id,
         "mac_address": "",
         "scheduled_at": timeutils.utcnow(),
@@ -649,7 +650,7 @@ def stub_compute_volume_snapshot_create(self, context, volume_id, create_info):
 
 def stub_snapshot_delete(self, context, snapshot_id):
     if snapshot_id == '-1':
-        raise exc.NotFound
+        raise exc.SnapshotNotFound(snapshot_id=snapshot_id)
 
 
 def stub_compute_volume_snapshot_delete(self, context, volume_id, snapshot_id,
@@ -659,7 +660,7 @@ def stub_compute_volume_snapshot_delete(self, context, volume_id, snapshot_id,
 
 def stub_snapshot_get(self, context, snapshot_id):
     if snapshot_id == '-1':
-        raise exc.NotFound
+        raise exc.SnapshotNotFound(snapshot_id=snapshot_id)
     return stub_snapshot(snapshot_id)
 
 

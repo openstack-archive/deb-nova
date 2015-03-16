@@ -17,22 +17,19 @@
 import itertools
 import os
 
-from oslo.config import cfg
+from oslo_config import cfg
 from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import compute
-from nova import exception
 from nova.i18n import _
 from nova import utils
 
 ALIAS = "os-fping"
 
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
-authorize_all_tenants = extensions.extension_authorizer(
-    'compute', 'v3:%s:all_tenants' % ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 CONF = cfg.CONF
 CONF.import_opt('fping_path', 'nova.api.openstack.compute.contrib.fping')
@@ -41,7 +38,7 @@ CONF.import_opt('fping_path', 'nova.api.openstack.compute.contrib.fping')
 class FpingController(wsgi.Controller):
 
     def __init__(self, network_api=None):
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
         self.last_call = {}
 
     def check_fping(self):
@@ -76,7 +73,7 @@ class FpingController(wsgi.Controller):
         context = req.environ["nova.context"]
         search_opts = dict(deleted=False)
         if "all_tenants" in req.GET:
-            authorize_all_tenants(context)
+            authorize(context, action='all_tenants')
         else:
             authorize(context)
             if context.project_id:
@@ -97,19 +94,19 @@ class FpingController(wsgi.Controller):
                 exclude = set()
 
         instance_list = self.compute_api.get_all(
-            context, search_opts=search_opts)
+            context, search_opts=search_opts, want_objects=True)
         ip_list = []
         instance_ips = {}
         instance_projects = {}
 
         for instance in instance_list:
-            uuid = instance["uuid"]
+            uuid = instance.uuid
             if uuid in exclude or (include is not None and
                                    uuid not in include):
                 continue
             ips = [str(ip) for ip in self._get_instance_ips(context, instance)]
             instance_ips[uuid] = ips
-            instance_projects[uuid] = instance["project_id"]
+            instance_projects[uuid] = instance.project_id
             ip_list += ips
         alive_ips = self.fping(ip_list)
         res = []
@@ -127,19 +124,15 @@ class FpingController(wsgi.Controller):
         authorize(context)
         self.check_fping()
         instance = common.get_instance(self.compute_api, context, id)
-
-        try:
-            ips = [str(ip) for ip in self._get_instance_ips(context, instance)]
-            alive_ips = self.fping(ips)
-            return {
-                "server": {
-                    "id": instance["uuid"],
-                    "project_id": instance["project_id"],
-                    "alive": bool(set(ips) & alive_ips),
-                }
+        ips = [str(ip) for ip in self._get_instance_ips(context, instance)]
+        alive_ips = self.fping(ips)
+        return {
+            "server": {
+                "id": instance.uuid,
+                "project_id": instance.project_id,
+                "alive": bool(set(ips) & alive_ips),
             }
-        except exception.NotFound as e:
-            raise exc.HTTPNotFound(explanation=e.format_message())
+        }
 
 
 class Fping(extensions.V3APIExtensionBase):

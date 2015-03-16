@@ -10,13 +10,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 import webob.dec
 import webob.exc
 
 import nova.api.ec2
 from nova import context
-from nova.openstack.common import log as logging
 from nova import utils
 
 CONF = cfg.CONF

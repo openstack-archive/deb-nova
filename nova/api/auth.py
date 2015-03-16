@@ -16,16 +16,16 @@ Common Auth Middleware.
 
 """
 
-from oslo.config import cfg
-from oslo.middleware import request_id
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_middleware import request_id
+from oslo_serialization import jsonutils
 import webob.dec
 import webob.exc
 
 from nova import context
 from nova.i18n import _
-from nova.i18n import _LW
-from nova.openstack.common import log as logging
+from nova.openstack.common import versionutils
 from nova import wsgi
 
 
@@ -37,7 +37,13 @@ auth_opts = [
                      'is removed from v3 api.'),
     cfg.StrOpt('auth_strategy',
                default='keystone',
-               help='The strategy to use for auth: noauth or keystone.'),
+               help='''
+The strategy to use for auth: keystone, noauth (deprecated), or
+noauth2. Both noauth and noauth2 are designed for testing only, as
+they do no actual credential checking. noauth provides administrative
+credentials regardless of the passed in user, noauth2 only does if
+'admin' is specified as the username.
+'''),
     cfg.BoolOpt('use_forwarded_for',
                 default=False,
                 help='Treat X-Forwarded-For as the canonical remote address. '
@@ -61,17 +67,17 @@ def _load_pipeline(loader, pipeline):
 
 def pipeline_factory(loader, global_conf, **local_conf):
     """A paste pipeline replica that keys off of auth_strategy."""
+    # TODO(sdague): remove deprecated noauth in Liberty
+    if CONF.auth_strategy == 'noauth':
+        versionutils.report_deprecated_feature(
+            LOG,
+            ('The noauth middleware will be removed in Liberty.'
+             ' noauth2 should be used instead.'))
     pipeline = local_conf[CONF.auth_strategy]
     if not CONF.api_rate_limit:
         limit_name = CONF.auth_strategy + '_nolimit'
         pipeline = local_conf.get(limit_name, pipeline)
     pipeline = pipeline.split()
-    # NOTE (Alex Xu): This is just for configuration file compatibility.
-    # If the configuration file still contains 'ratelimit_v3', just ignore it.
-    # We will remove this code at next release (J)
-    if 'ratelimit_v3' in pipeline:
-        LOG.warning(_LW('ratelimit_v3 is removed from v3 api.'))
-        pipeline.remove('ratelimit_v3')
     return _load_pipeline(loader, pipeline)
 
 

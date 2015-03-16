@@ -20,9 +20,10 @@ model.
 """
 import copy
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import importutils
 
 from nova.compute import claims
 from nova.compute import flavors
@@ -36,7 +37,6 @@ from nova.i18n import _, _LI, _LW
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import instance as instance_obj
-from nova.openstack.common import log as logging
 from nova.pci import manager as pci_manager
 from nova.pci import whitelist as pci_whitelist
 from nova import rpc
@@ -86,7 +86,6 @@ class ResourceTracker(object):
         self.monitors = monitor_handler.choose_monitors(self)
         self.ext_resources_handler = \
             ext_resources.ResourceHandler(CONF.compute_resources)
-        self.notifier = rpc.get_notifier()
         self.old_resources = {}
         self.scheduler_client = scheduler_client.SchedulerClient()
 
@@ -312,12 +311,14 @@ class ResourceTracker(object):
         declared a need for resources, but not necessarily retrieved them from
         the hypervisor layer yet.
         """
-        LOG.audit(_("Auditing locally available compute resources"))
+        LOG.info(_LI("Auditing locally available compute resources for "
+                     "node %(node)s"),
+                 {'node': self.nodename})
         resources = self.driver.get_available_resource(self.nodename)
 
         if not resources:
             # The virt driver does not support this function
-            LOG.audit(_("Virt driver does not support "
+            LOG.info(_LI("Virt driver does not support "
                  "'get_available_resource'  Compute tracking is disabled."))
             self.compute_node = None
             return
@@ -344,9 +345,6 @@ class ResourceTracker(object):
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def _update_available_resource(self, context, resources):
         if 'pci_passthrough_devices' in resources:
-            if not self.pci_tracker:
-                self.pci_tracker = pci_manager.PciDevTracker()
-
             devs = []
             for dev in jsonutils.loads(resources.pop(
                 'pci_passthrough_devices')):
@@ -356,6 +354,10 @@ class ResourceTracker(object):
                 if self.pci_filter.device_assignable(dev):
                     devs.append(dev)
 
+            if not self.pci_tracker:
+                n_id = self.compute_node['id'] if self.compute_node else None
+                self.pci_tracker = pci_manager.PciDevTracker(context,
+                                                             node_id=n_id)
             self.pci_tracker.set_hvdevs(devs)
 
         # Grab all instances assigned to this node:
@@ -412,7 +414,7 @@ class ResourceTracker(object):
 
         if not self.compute_node:
             # Need to create the ComputeNode record:
-            resources['service_id'] = service['id']
+            resources['service_id'] = service.id
             resources['host'] = self.host
             self._create(context, resources)
             if self.pci_tracker:
@@ -469,8 +471,7 @@ class ResourceTracker(object):
 
     def _get_service(self, context):
         try:
-            return self.conductor_api.service_get_by_compute_host(context,
-                                                                  self.host)
+            return objects.Service.get_by_compute_host(context, self.host)
         except exception.NotFound:
             LOG.warning(_LW("No service record for host %s"), self.host)
 
@@ -488,23 +489,32 @@ class ResourceTracker(object):
         """
         free_ram_mb = resources['memory_mb'] - resources['memory_mb_used']
         free_disk_gb = resources['local_gb'] - resources['local_gb_used']
-
-        LOG.debug("Hypervisor: free ram (MB): %s" % free_ram_mb)
-        LOG.debug("Hypervisor: free disk (GB): %s" % free_disk_gb)
-
         vcpus = resources['vcpus']
         if vcpus:
             free_vcpus = vcpus - resources['vcpus_used']
             LOG.debug("Hypervisor: free VCPUs: %s" % free_vcpus)
         else:
+            free_vcpus = 'unknown'
             LOG.debug("Hypervisor: VCPU information unavailable")
 
         if ('pci_passthrough_devices' in resources and
                 resources['pci_passthrough_devices']):
             LOG.debug("Hypervisor: assignable PCI devices: %s" %
                 resources['pci_passthrough_devices'])
-        else:
-            LOG.debug("Hypervisor: no assignable PCI devices")
+
+        pci_devices = resources.get('pci_passthrough_devices')
+
+        LOG.debug("Hypervisor/Node resource view: "
+                  "name=%(node)s "
+                  "free_ram=%(free_ram)sMB "
+                  "free_disk=%(free_disk)sGB "
+                  "free_vcpus=%(free_vcpus)s "
+                  "pci_devices=%(pci_devices)s",
+                  {'node': self.nodename,
+                   'free_ram': free_ram_mb,
+                   'free_disk': free_disk_gb,
+                   'free_vcpus': free_vcpus,
+                   'pci_devices': pci_devices})
 
     def _report_final_resource_view(self, resources):
         """Report final calculate of physical memory, used virtual memory,
@@ -512,25 +522,34 @@ class ResourceTracker(object):
         including instance calculations and in-progress resource claims. These
         values will be exposed via the compute node table to the scheduler.
         """
-        LOG.audit(_("Total physical ram (MB): %(pram)s, "
-                    "total allocated virtual ram (MB): %(vram)s"),
-                    {'pram': resources['memory_mb'],
-                     'vram': resources['memory_mb_used']})
-        LOG.audit(_("Total physical disk (GB): %(pdisk)s, "
-                    "total allocated virtual disk (GB): %(vdisk)s"),
-                  {'pdisk': resources['local_gb'],
-                   'vdisk': resources['local_gb_used']})
-
         vcpus = resources['vcpus']
         if vcpus:
-            LOG.audit(_("Total usable vcpus: %(tcpu)s, "
+            tcpu = vcpus
+            ucpu = resources['vcpus_used']
+            LOG.info(_LI("Total usable vcpus: %(tcpu)s, "
                         "total allocated vcpus: %(ucpu)s"),
                         {'tcpu': vcpus, 'ucpu': resources['vcpus_used']})
         else:
-            LOG.audit(_("Free VCPU information unavailable"))
-
-        if 'pci_stats' in resources:
-            LOG.audit(_("PCI stats: %s"), resources['pci_stats'])
+            tcpu = 0
+            ucpu = 0
+        pci_stats = resources.get('pci_stats')
+        LOG.info(_LI("Final resource view: "
+                     "name=%(node)s "
+                     "phys_ram=%(phys_ram)sMB "
+                     "used_ram=%(used_ram)sMB "
+                     "phys_disk=%(phys_disk)sGB "
+                     "used_disk=%(used_disk)sGB "
+                     "total_vcpus=%(total_vcpus)s "
+                     "used_vcpus=%(used_vcpus)s "
+                     "pci_stats=%(pci_stats)s"),
+                 {'node': self.nodename,
+                  'phys_ram': resources['memory_mb'],
+                  'used_ram': resources['memory_mb_used'],
+                  'phys_disk': resources['local_gb'],
+                  'used_disk': resources['local_gb_used'],
+                  'total_vcpus': tcpu,
+                  'used_vcpus': ucpu,
+                  'pci_stats': pci_stats})
 
     def _resource_change(self, resources):
         """Check to see if any resouces have changed."""
@@ -596,7 +615,7 @@ class ResourceTracker(object):
         represent an incoming or outbound migration.
         """
         uuid = migration['instance_uuid']
-        LOG.audit(_("Updating from migration %s") % uuid)
+        LOG.info(_LI("Updating from migration %s") % uuid)
 
         incoming = (migration['dest_compute'] == self.host and
                     migration['dest_node'] == self.nodename)
@@ -752,7 +771,7 @@ class ResourceTracker(object):
         self.ext_resources_handler.reset_resources(resources, self.driver)
 
         for instance in instances:
-            if instance['vm_state'] != vm_states.DELETED:
+            if instance.vm_state != vm_states.DELETED:
                 self._update_usage_from_instance(context, resources, instance)
 
     def _find_orphaned_instances(self):

@@ -19,9 +19,9 @@
 SQLAlchemy models for nova data.
 """
 
-from oslo.config import cfg
-from oslo.db.sqlalchemy import models
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_db.sqlalchemy import models
+from oslo_utils import timeutils
 from sqlalchemy import (Column, Index, Integer, BigInteger, Enum, String,
                         schema, Unicode)
 from sqlalchemy.dialects.mysql import MEDIUMTEXT
@@ -112,13 +112,7 @@ class ComputeNode(BASE, NovaBase):
             name="uniq_compute_nodes0host0hypervisor_hostname"),
     )
     id = Column(Integer, primary_key=True)
-    service_id = Column(Integer, ForeignKey('services.id'), nullable=False)
-    service = orm.relationship(Service,
-                           backref=orm.backref('compute_node'),
-                           foreign_keys=service_id,
-                           primaryjoin='and_('
-                                'ComputeNode.service_id == Service.id,'
-                                'ComputeNode.deleted == 0)')
+    service_id = Column(Integer, nullable=True)
 
     # FIXME(sbauza: Host field is nullable because some old Juno compute nodes
     # can still report stats from an old ResourceTracker without setting this
@@ -364,6 +358,7 @@ class InstanceExtra(BASE, NovaBase):
     numa_topology = orm.deferred(Column(Text))
     pci_requests = orm.deferred(Column(Text))
     flavor = orm.deferred(Column(Text))
+    vcpu_model = orm.deferred(Column(Text))
     instance = orm.relationship(Instance,
                             backref=orm.backref('extra',
                                                 uselist=False),
@@ -756,7 +751,7 @@ class ProviderFirewallRule(BASE, NovaBase):
 
 
 class KeyPair(BASE, NovaBase):
-    """Represents a public key pair for ssh."""
+    """Represents a public key pair for ssh / WinRM."""
     __tablename__ = 'key_pairs'
     __table_args__ = (
         schema.UniqueConstraint("user_id", "name", "deleted",
@@ -770,6 +765,8 @@ class KeyPair(BASE, NovaBase):
 
     fingerprint = Column(String(255))
     public_key = Column(MediumText())
+    type = Column(Enum('ssh', 'x509', name='keypair_types'),
+                  nullable=False, server_default='ssh')
 
 
 class Migration(BASE, NovaBase):
@@ -888,7 +885,9 @@ class FixedIp(BASE, NovaBase):
         Index('fixed_ips_address_reserved_network_id_deleted_idx',
               'address', 'reserved', 'network_id', 'deleted'),
         Index('fixed_ips_deleted_allocated_idx', 'address', 'deleted',
-              'allocated')
+              'allocated'),
+        Index('fixed_ips_deleted_allocated_updated_at_idx', 'deleted',
+              'allocated', 'updated_at')
     )
     id = Column(Integer, primary_key=True)
     address = Column(types.IPAddress())

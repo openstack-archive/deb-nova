@@ -18,8 +18,9 @@ import itertools
 import string
 import traceback
 
-from oslo.config import cfg
-from oslo.utils import encodeutils
+import netifaces
+from oslo_config import cfg
+from oslo_log import log
 
 from nova import block_device
 from nova.compute import power_state
@@ -29,8 +30,6 @@ from nova.i18n import _LW
 from nova.network import model as network_model
 from nova import notifications
 from nova import objects
-from nova.objects import base as obj_base
-from nova.openstack.common import log
 from nova import rpc
 from nova import utils
 from nova.virt import driver
@@ -64,20 +63,7 @@ def exception_to_dict(fault):
     # NOTE(dripton) The message field in the database is limited to 255 chars.
     # MySQL silently truncates overly long messages, but PostgreSQL throws an
     # error if we don't truncate it.
-    b_message = encodeutils.safe_encode(message)[:255]
-
-    # NOTE(chaochin) UTF-8 character byte size varies from 1 to 6. If
-    # truncating a long byte string to 255, the last character may be
-    # cut in the middle, so that UnicodeDecodeError will occur when
-    # converting it back to unicode.
-    decode_ok = False
-    while not decode_ok:
-        try:
-            u_message = encodeutils.safe_decode(b_message)
-            decode_ok = True
-        except UnicodeDecodeError:
-            b_message = b_message[:-1]
-
+    u_message = utils.safe_truncate(message, 255)
     fault_dict = dict(exception=fault)
     fault_dict["message"] = u_message
     fault_dict["code"] = code
@@ -98,7 +84,7 @@ def add_instance_fault_from_exc(context, instance, fault, exc_info=None):
 
     fault_obj = objects.InstanceFault(context=context)
     fault_obj.host = CONF.host
-    fault_obj.instance_uuid = instance['uuid']
+    fault_obj.instance_uuid = instance.uuid
     fault_obj.update(exception_to_dict(fault))
     code = fault_obj.code
     fault_obj.details = _get_fault_details(exc_info, code)
@@ -211,8 +197,8 @@ def _get_unused_letter(used_letters):
 
 def get_image_metadata(context, image_api, image_id_or_uri, instance):
     image_system_meta = {}
-    # In case of boot from volume, image_id_or_uri may be None
-    if image_id_or_uri is not None:
+    # In case of boot from volume, image_id_or_uri may be None or ''
+    if image_id_or_uri is not None and image_id_or_uri != '':
         # If the base image is still available, get its metadata
         try:
             image = image_api.get(context, image_id_or_uri)
@@ -383,16 +369,9 @@ def notify_about_host_update(context, event_suffix, host_payload):
 
 
 def get_nw_info_for_instance(instance):
-    if isinstance(instance, obj_base.NovaObject):
-        if instance.info_cache is None:
-            return network_model.NetworkInfo.hydrate([])
-        return instance.info_cache.network_info
-    # FIXME(comstud): Transitional while we convert to objects.
-    info_cache = instance['info_cache'] or {}
-    nw_info = info_cache.get('network_info') or []
-    if not isinstance(nw_info, network_model.NetworkInfo):
-        nw_info = network_model.NetworkInfo.hydrate(nw_info)
-    return nw_info
+    if instance.info_cache is None:
+        return network_model.NetworkInfo.hydrate([])
+    return instance.info_cache.network_info
 
 
 def has_audit_been_run(context, conductor, host, timestamp=None):
@@ -457,6 +436,31 @@ def get_reboot_type(task_state, current_power_state):
                   task_states.REBOOTING]
     reboot_type = 'SOFT' if task_state in soft_types else 'HARD'
     return reboot_type
+
+
+def get_machine_ips():
+    """Get the machine's ip addresses
+
+    :returns: list of Strings of ip addresses
+    """
+    addresses = []
+    for interface in netifaces.interfaces():
+        try:
+            iface_data = netifaces.ifaddresses(interface)
+            for family in iface_data:
+                if family not in (netifaces.AF_INET, netifaces.AF_INET6):
+                    continue
+                for address in iface_data[family]:
+                    addr = address['addr']
+
+                    # If we have an ipv6 address remove the
+                    # %ether_interface at the end
+                    if family == netifaces.AF_INET6:
+                        addr = addr.split('%')[0]
+                    addresses.append(addr)
+        except ValueError:
+            pass
+    return addresses
 
 
 class EventReporter(object):

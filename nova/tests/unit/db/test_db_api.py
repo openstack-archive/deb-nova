@@ -26,12 +26,13 @@ import uuid as stdlib_uuid
 import iso8601
 import mock
 import netaddr
-from oslo.config import cfg
-from oslo.db import exception as db_exc
-from oslo.db.sqlalchemy import test_base
-from oslo.db.sqlalchemy import utils as sqlalchemyutils
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_db import exception as db_exc
+from oslo_db.sqlalchemy import test_base
+from oslo_db.sqlalchemy import utils as sqlalchemyutils
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import six
 from sqlalchemy import Column
 from sqlalchemy.dialects import sqlite
@@ -56,7 +57,6 @@ from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import uuidutils
 from nova import quota
 from nova import test
 from nova.tests.unit import matchers
@@ -209,24 +209,11 @@ def _create_aggregate_with_hosts(context=context.get_admin_context(),
     return result
 
 
-class NotDbApiTestCase(DbTestCase):
-    def setUp(self):
-        super(NotDbApiTestCase, self).setUp()
-        self.flags(connection='notdb://', group='database')
+@mock.patch.object(sqlalchemy_api, '_get_regexp_op_for_connection',
+        return_value='LIKE')
+class UnsupportedDbRegexpTestCase(DbTestCase):
 
-    def test_instance_get_all_by_filters_regex_unsupported_db(self):
-        # Ensure that the 'LIKE' operator is used for unsupported dbs.
-        self.create_instance_with_args(display_name='test1')
-        self.create_instance_with_args(display_name='test2')
-        self.create_instance_with_args(display_name='diff')
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': 'test'})
-        self.assertEqual(2, len(result))
-        result = db.instance_get_all_by_filters(self.context,
-                                                {'display_name': 'di'})
-        self.assertEqual(1, len(result))
-
-    def test_instance_get_all_by_filters_paginate(self):
+    def test_instance_get_all_by_filters_paginate(self, mock_get_regexp):
         test1 = self.create_instance_with_args(display_name='test1')
         test2 = self.create_instance_with_args(display_name='test2')
         test3 = self.create_instance_with_args(display_name='test3')
@@ -274,7 +261,7 @@ class NotDbApiTestCase(DbTestCase):
                 self.assertEqual(inst1.get(key), inst2.get(key))
         return result
 
-    def test_instance_get_all_by_filters_sort_keys(self):
+    def test_instance_get_all_by_filters_sort_keys(self, mock_get_regexp):
         '''Verifies sort order and direction for multiple instances.'''
         # Instances that will reply to the query
         test1_active = self.create_instance_with_args(
@@ -359,7 +346,8 @@ class NotDbApiTestCase(DbTestCase):
                          test1_error2, test1_error, test1_active]
         self._assert_equals_inst_order(correct_order, {})
 
-    def test_instance_get_all_by_filters_sort_keys_paginate(self):
+    def test_instance_get_all_by_filters_sort_keys_paginate(self,
+            mock_get_regexp):
         '''Verifies sort order with pagination.'''
         # Instances that will reply to the query
         test1_active = self.create_instance_with_args(
@@ -411,41 +399,68 @@ class NotDbApiTestCase(DbTestCase):
                     marker = insts[-1]['uuid']
                     self.assertEqual(correct[-1]['uuid'], marker)
 
-    def test_instance_get_all_by_filters_sort_key_invalid(self):
-        '''InvalidSortKey raised if an invalid key is given.'''
-        for keys in [['foo'], ['uuid', 'foo']]:
-            self.assertRaises(exception.InvalidSortKey,
-                              db.instance_get_all_by_filters_sort,
-                              self.context,
-                              filters={},
-                              sort_keys=keys)
+    def test_instance_get_deleted_by_filters_sort_keys_paginate(self,
+            mock_get_regexp):
+        '''Verifies sort order with pagination for deleted instances.'''
+        ctxt = context.get_admin_context()
+        # Instances that will reply to the query
+        test1_active = self.create_instance_with_args(
+                            display_name='test1',
+                            vm_state=vm_states.ACTIVE)
+        db.instance_destroy(ctxt, test1_active['uuid'])
+        test1_error = self.create_instance_with_args(
+                           display_name='test1',
+                           vm_state=vm_states.ERROR)
+        db.instance_destroy(ctxt, test1_error['uuid'])
+        test1_error2 = self.create_instance_with_args(
+                            display_name='test1',
+                            vm_state=vm_states.ERROR)
+        db.instance_destroy(ctxt, test1_error2['uuid'])
+        test2_active = self.create_instance_with_args(
+                            display_name='test2',
+                            vm_state=vm_states.ACTIVE)
+        db.instance_destroy(ctxt, test2_active['uuid'])
+        test2_error = self.create_instance_with_args(
+                           display_name='test2',
+                           vm_state=vm_states.ERROR)
+        db.instance_destroy(ctxt, test2_error['uuid'])
+        test2_error2 = self.create_instance_with_args(
+                            display_name='test2',
+                            vm_state=vm_states.ERROR)
+        db.instance_destroy(ctxt, test2_error2['uuid'])
+        # Other instances in the DB, will not match name filter
+        self.create_instance_with_args(display_name='other')
+        self.create_instance_with_args(display_name='other')
+        filters = {'display_name': '%test%', 'deleted': True}
+        # Common sort information for every query
+        sort_keys = ['display_name', 'vm_state', 'created_at']
+        sort_dirs = ['asc', 'desc', 'asc']
+        # Overall correct instance order based on the sort keys
+        correct_order = [test1_error, test1_error2, test1_active,
+                         test2_error, test2_error2, test2_active]
 
-    def test_convert_objects_related_datetimes(self):
+        # Limits of 1, 2, and 3, verify that the instances returned are in the
+        # correct sorted order, update the marker to get the next correct page
+        for limit in range(1, 4):
+            marker = None
+            # Include the maximum number of instances (ie, 6) to ensure that
+            # the last query (with marker pointing to the last instance)
+            # returns 0 servers
+            for i in range(0, 7, limit):
+                if i == len(correct_order):
+                    correct = []
+                else:
+                    correct = correct_order[i:i + limit]
+                insts = self._assert_equals_inst_order(
+                    correct, filters,
+                    sort_keys=sort_keys, sort_dirs=sort_dirs,
+                    limit=limit, marker=marker)
+                if correct:
+                    marker = insts[-1]['uuid']
+                    self.assertEqual(correct[-1]['uuid'], marker)
 
-        t1 = timeutils.utcnow()
-        t2 = t1 + datetime.timedelta(seconds=10)
-        t3 = t2 + datetime.timedelta(hours=1)
 
-        t2_utc = t2.replace(tzinfo=iso8601.iso8601.Utc())
-        t3_utc = t3.replace(tzinfo=iso8601.iso8601.Utc())
-
-        datetime_keys = ('created_at', 'deleted_at')
-
-        test1 = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
-        expected_dict = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
-        sqlalchemy_api.convert_objects_related_datetimes(test1, *datetime_keys)
-        self.assertEqual(test1, expected_dict)
-
-        test2 = {'created_at': t1, 'deleted_at': t2_utc, 'updated_at': t3}
-        expected_dict = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
-        sqlalchemy_api.convert_objects_related_datetimes(test2, *datetime_keys)
-        self.assertEqual(test2, expected_dict)
-
-        test3 = {'deleted_at': t2_utc, 'updated_at': t3_utc}
-        expected_dict = {'deleted_at': t2, 'updated_at': t3_utc}
-        sqlalchemy_api.convert_objects_related_datetimes(test3, *datetime_keys)
-        self.assertEqual(test3, expected_dict)
-
+class ModelQueryTestCase(DbTestCase):
     def test_model_query_invalid_arguments(self):
         # read_deleted shouldn't accept invalid values
         self.assertRaises(ValueError, sqlalchemy_api.model_query,
@@ -680,11 +695,13 @@ class AggregateDBApiTestCase(test.TestCase):
         values = _get_fake_aggr_values()
         values['metadata'] = _get_fake_aggr_metadata()
         values['availability_zone'] = 'different_avail_zone'
+        expected_metadata = copy.deepcopy(values['metadata'])
+        expected_metadata['availability_zone'] = values['availability_zone']
         db.aggregate_update(ctxt, result['id'], values)
-        expected = db.aggregate_metadata_get(ctxt, result['id'])
+        metadata = db.aggregate_metadata_get(ctxt, result['id'])
         updated = db.aggregate_get(ctxt, result['id'])
-        self.assertThat(values['metadata'],
-                        matchers.DictMatches(expected))
+        self.assertThat(metadata,
+                        matchers.DictMatches(expected_metadata))
         self.assertNotEqual(result['availability_zone'],
                             updated['availability_zone'])
 
@@ -694,9 +711,10 @@ class AggregateDBApiTestCase(test.TestCase):
         values = _get_fake_aggr_values()
         values['metadata'] = _get_fake_aggr_metadata()
         values['metadata']['fake_key1'] = 'foo'
+        expected_metadata = copy.deepcopy(values['metadata'])
         db.aggregate_update(ctxt, result['id'], values)
-        expected = db.aggregate_metadata_get(ctxt, result['id'])
-        self.assertThat(values['metadata'], matchers.DictMatches(expected))
+        metadata = db.aggregate_metadata_get(ctxt, result['id'])
+        self.assertThat(metadata, matchers.DictMatches(expected_metadata))
 
     def test_aggregate_update_zone_with_existing_metadata(self):
         ctxt = context.get_admin_context()
@@ -898,6 +916,50 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         self.assertEqual(['test'], columns_to_join2)
         self.assertEqual(['system_metadata', 'test'], columns_to_join)
 
+    def test_convert_objects_related_datetimes(self):
+
+        t1 = timeutils.utcnow()
+        t2 = t1 + datetime.timedelta(seconds=10)
+        t3 = t2 + datetime.timedelta(hours=1)
+
+        t2_utc = t2.replace(tzinfo=iso8601.iso8601.Utc())
+        t3_utc = t3.replace(tzinfo=iso8601.iso8601.Utc())
+
+        datetime_keys = ('created_at', 'deleted_at')
+
+        test1 = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
+        expected_dict = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
+        sqlalchemy_api.convert_objects_related_datetimes(test1, *datetime_keys)
+        self.assertEqual(test1, expected_dict)
+
+        test2 = {'created_at': t1, 'deleted_at': t2_utc, 'updated_at': t3}
+        expected_dict = {'created_at': t1, 'deleted_at': t2, 'updated_at': t3}
+        sqlalchemy_api.convert_objects_related_datetimes(test2, *datetime_keys)
+        self.assertEqual(test2, expected_dict)
+
+        test3 = {'deleted_at': t2_utc, 'updated_at': t3_utc}
+        expected_dict = {'deleted_at': t2, 'updated_at': t3_utc}
+        sqlalchemy_api.convert_objects_related_datetimes(test3, *datetime_keys)
+        self.assertEqual(test3, expected_dict)
+
+    def test_get_regexp_op_for_database_sqlite(self):
+        op = sqlalchemy_api._get_regexp_op_for_connection('sqlite:///')
+        self.assertEqual('REGEXP', op)
+
+    def test_get_regexp_op_for_database_mysql(self):
+        op = sqlalchemy_api._get_regexp_op_for_connection(
+                'mysql://root@localhost')
+        self.assertEqual('REGEXP', op)
+
+    def test_get_regexp_op_for_database_postgresql(self):
+        op = sqlalchemy_api._get_regexp_op_for_connection(
+                'postgresql://localhost')
+        self.assertEqual('~', op)
+
+    def test_get_regexp_op_for_database_unknown(self):
+        op = sqlalchemy_api._get_regexp_op_for_connection('notdb:///')
+        self.assertEqual('LIKE', op)
+
 
 class SqlAlchemyDbApiTestCase(DbTestCase):
     def test_instance_get_all_by_host(self):
@@ -998,6 +1060,15 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         mock_get_all_filters_sort.assert_called_once_with(ctxt, {'foo': 'bar'},
             limit=100, marker='uuid', columns_to_join='columns',
             use_slave=True, sort_keys=['sort_key'], sort_dirs=['sort_dir'])
+
+    def test_instance_get_all_by_filters_sort_key_invalid(self):
+        '''InvalidSortKey raised if an invalid key is given.'''
+        for keys in [['foo'], ['uuid', 'foo']]:
+            self.assertRaises(exception.InvalidSortKey,
+                              db.instance_get_all_by_filters_sort,
+                              self.context,
+                              filters={},
+                              sort_keys=keys)
 
 
 class ProcessSortParamTestCase(test.TestCase):
@@ -1840,8 +1911,9 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
             }
         inst = db.instance_create(self.ctxt, {})
         inst = db.instance_update(self.ctxt, inst['uuid'], values)
-        self.assertEqual({'foo': 'bar'}, meta)
-        self.assertEqual({'sfoo': 'sbar'}, sys_meta)
+        self.assertEqual(meta, utils.metadata_to_dict(inst['metadata']))
+        self.assertEqual(sys_meta,
+                         utils.metadata_to_dict(inst['system_metadata']))
 
     def test_instance_get_all_with_meta(self):
         inst = self.create_instance_with_args()
@@ -2647,9 +2719,10 @@ class InstanceExtraTestCase(test.TestCase):
     def test_instance_extra_get_with_columns(self):
         extra = db.instance_extra_get_by_instance_uuid(
             self.ctxt, self.instance['uuid'],
-            columns=['numa_topology'])
+            columns=['numa_topology', 'vcpu_model'])
         self.assertNotIn('pci_requests', extra)
         self.assertIn('numa_topology', extra)
+        self.assertIn('vcpu_model', extra)
 
 
 class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -2712,21 +2785,6 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self._assertEqualObjects(service1, real_service1,
                                  ignored_keys=['compute_node'])
 
-    def test_service_get_with_compute_node(self):
-        service = self._create_service({})
-        compute_values = dict(vcpus=2, memory_mb=1024, local_gb=2048,
-                              vcpus_used=0, memory_mb_used=0,
-                              local_gb_used=0, free_ram_mb=1024,
-                              free_disk_gb=2048, hypervisor_type="xen",
-                              hypervisor_version=1, cpu_info="",
-                              running_vms=0, current_workload=0,
-                              service_id=service['id'], host=service['host'])
-        compute = db.compute_node_create(self.ctxt, compute_values)
-        real_service = db.service_get(self.ctxt, service['id'],
-                                      with_compute_node=True)
-        real_compute = real_service['compute_node'][0]
-        self.assertEqual(compute['id'], real_compute['id'])
-
     def test_service_get_not_found_exception(self):
         self.assertRaises(exception.ServiceNotFound,
                           db.service_get, self.ctxt, 100500)
@@ -2739,6 +2797,20 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                                          host='host1',
                                                          topic='topic1')
         self._assertEqualObjects(service1, real_service1)
+
+    def test_service_get_by_host_and_binary(self):
+        service1 = self._create_service({'host': 'host1', 'binary': 'foo'})
+        self._create_service({'host': 'host2', 'binary': 'bar'})
+
+        real_service1 = db.service_get_by_host_and_binary(self.ctxt,
+                                                         host='host1',
+                                                         binary='foo')
+        self._assertEqualObjects(service1, real_service1)
+
+    def test_service_get_by_host_and_binary_raises(self):
+        self.assertRaises(exception.HostBinaryNotFound,
+                          db.service_get_by_host_and_binary, self.ctxt,
+                          host='host1', binary='baz')
 
     def test_service_get_all(self):
         values = [
@@ -2770,6 +2842,18 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         real = db.service_get_all_by_topic(self.ctxt, 't1')
         self._assertEqualListsOfObjects(expected, real)
 
+    def test_service_get_all_by_binary(self):
+        values = [
+            {'host': 'host1', 'binary': 'b1'},
+            {'host': 'host2', 'binary': 'b1'},
+            {'disabled': True, 'binary': 'b1'},
+            {'host': 'host3', 'binary': 'b2'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+        expected = services[:2]
+        real = db.service_get_all_by_binary(self.ctxt, 'b1')
+        self._assertEqualListsOfObjects(expected, real)
+
     def test_service_get_all_by_host(self):
         values = [
             {'host': 'host1', 'topic': 't11', 'binary': 'b11'},
@@ -2785,15 +2869,14 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_service_get_by_compute_host(self):
         values = [
-            {'host': 'host1', 'topic': CONF.compute_topic},
-            {'host': 'host2', 'topic': 't1'},
-            {'host': 'host3', 'topic': CONF.compute_topic}
+            {'host': 'host1', 'binary': 'nova-compute'},
+            {'host': 'host2', 'binary': 'nova-scheduler'},
+            {'host': 'host3', 'binary': 'nova-compute'}
         ]
         services = [self._create_service(vals) for vals in values]
 
         real_service = db.service_get_by_compute_host(self.ctxt, 'host1')
-        self._assertEqualObjects(services[0], real_service,
-                                 ignored_keys=['compute_node'])
+        self._assertEqualObjects(services[0], real_service)
 
         self.assertRaises(exception.ComputeHostNotFound,
                           db.service_get_by_compute_host,
@@ -2803,24 +2886,6 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertRaises(exception.ComputeHostNotFound,
                           db.service_get_by_compute_host,
                           self.ctxt, 'non-exists-host')
-
-    def test_service_get_by_args(self):
-        values = [
-            {'host': 'host1', 'binary': 'a'},
-            {'host': 'host2', 'binary': 'b'}
-        ]
-        services = [self._create_service(vals) for vals in values]
-
-        service1 = db.service_get_by_args(self.ctxt, 'host1', 'a')
-        self._assertEqualObjects(services[0], service1)
-
-        service2 = db.service_get_by_args(self.ctxt, 'host2', 'b')
-        self._assertEqualObjects(services[1], service2)
-
-    def test_service_get_by_args_not_found_exception(self):
-        self.assertRaises(exception.HostBinaryNotFound,
-                          db.service_get_by_args,
-                          self.ctxt, 'non-exists-host', 'a')
 
     def test_service_binary_exists_exception(self):
         db.service_create(self.ctxt, self._get_base_values())
@@ -3964,6 +4029,80 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
         self.assertEqual(fixed_ip['instance_uuid'], instance_uuid)
         self.assertEqual(fixed_ip['network_id'], network['id'])
 
+    def test_fixed_ip_associate_succeeds_retry_on_deadlock(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+
+        address = self.create_fixed_ip()
+
+        def fake_first():
+            if mock_first.call_count == 1:
+                raise db_exc.DBDeadlock()
+            else:
+                return objects.Instance(id=1, address=address, reserved=False,
+                                        instance_uuid=None, network_id=None)
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            db.fixed_ip_associate(self.ctxt, address, instance_uuid,
+                                  network_id=network['id'])
+            self.assertEqual(2, mock_first.call_count)
+
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
+        self.assertEqual(fixed_ip['instance_uuid'], instance_uuid)
+        self.assertEqual(fixed_ip['network_id'], network['id'])
+
+    def test_fixed_ip_associate_succeeds_retry_on_no_rows_updated(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+
+        address = self.create_fixed_ip()
+
+        def fake_first():
+            if mock_first.call_count == 1:
+                return objects.Instance(id=2, address=address, reserved=False,
+                                        instance_uuid=None, network_id=None)
+            else:
+                return objects.Instance(id=1, address=address, reserved=False,
+                                        instance_uuid=None, network_id=None)
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            db.fixed_ip_associate(self.ctxt, address, instance_uuid,
+                                  network_id=network['id'])
+            self.assertEqual(2, mock_first.call_count)
+
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
+        self.assertEqual(fixed_ip['instance_uuid'], instance_uuid)
+        self.assertEqual(fixed_ip['network_id'], network['id'])
+
+    def test_fixed_ip_associate_succeeds_retry_limit_exceeded(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+
+        address = self.create_fixed_ip()
+
+        def fake_first():
+            return objects.Instance(id=2, address=address, reserved=False,
+                                    instance_uuid=None, network_id=None)
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            self.assertRaises(exception.FixedIpAssociateFailed,
+                              db.fixed_ip_associate, self.ctxt, address,
+                              instance_uuid, network_id=network['id'])
+            self.assertEqual(5, mock_first.call_count)
+
+    def test_fixed_ip_associate_ip_not_in_network_with_no_retries(self):
+        instance_uuid = self._create_instance()
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        return_value=None) as mock_first:
+            self.assertRaises(exception.FixedIpNotFoundForNetwork,
+                              db.fixed_ip_associate,
+                              self.ctxt, None, instance_uuid)
+            self.assertEqual(1, mock_first.call_count)
+
     def test_fixed_ip_associate_pool_invalid_uuid(self):
         instance_uuid = '123'
         self.assertRaises(exception.InvalidUUID, db.fixed_ip_associate_pool,
@@ -4346,6 +4485,59 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertRaises(exception.Forbidden,
                           db.floating_ip_allocate_address,
                           ctxt, 'other_project_id', 'any_pool')
+
+    def test_floating_ip_allocate_address_succeeds_retry(self):
+        pool = 'pool0'
+        address = '0.0.0.0'
+        vals = {'pool': pool, 'address': address, 'project_id': None}
+        floating_ip = self._create_floating_ip(vals)
+
+        project_id = self._get_base_values()['project_id']
+
+        def fake_first():
+            if mock_first.call_count == 1:
+                return {'pool': pool, 'project_id': None, 'fixed_ip_id': None,
+                        'address': address, 'id': 'invalid_id'}
+            else:
+                return {'pool': pool, 'project_id': None, 'fixed_ip_id': None,
+                        'address': address, 'id': 1}
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            float_addr = db.floating_ip_allocate_address(self.ctxt,
+                                                         project_id, pool)
+            self.assertEqual(address, float_addr)
+            self.assertEqual(2, mock_first.call_count)
+
+        float_ip = db.floating_ip_get(self.ctxt, floating_ip.id)
+        self.assertEqual(project_id, float_ip['project_id'])
+
+    def test_floating_ip_allocate_address_retry_limit_exceeded(self):
+        pool = 'pool0'
+        address = '0.0.0.0'
+        vals = {'pool': pool, 'address': address, 'project_id': None}
+        self._create_floating_ip(vals)
+
+        project_id = self._get_base_values()['project_id']
+
+        def fake_first():
+            return {'pool': pool, 'project_id': None, 'fixed_ip_id': None,
+                    'address': address, 'id': 'invalid_id'}
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        side_effect=fake_first) as mock_first:
+            self.assertRaises(exception.FloatingIpAllocateFailed,
+                              db.floating_ip_allocate_address, self.ctxt,
+                              project_id, pool)
+            self.assertEqual(5, mock_first.call_count)
+
+    def test_floating_ip_allocate_address_no_more_ips_with_no_retries(self):
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        return_value=None) as mock_first:
+            self.assertRaises(exception.NoMoreFloatingIps,
+                              db.floating_ip_allocate_address,
+                              self.ctxt, 'any_project_id', 'no_such_pool')
+            self.assertEqual(1, mock_first.call_count)
 
     def _get_existing_ips(self):
         return [ip['address'] for ip in db.floating_ip_get_all(self.ctxt)]
@@ -5590,24 +5782,68 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(2, network_new.vlan)
 
     def test_network_set_host_nonexistent_network(self):
-        self.assertRaises(exception.NetworkNotFound,
-            db.network_set_host, self.ctxt, 123456, 'nonexistent')
+        self.assertRaises(exception.NetworkNotFound, db.network_set_host,
+                          self.ctxt, 123456, 'nonexistent')
 
-    def test_network_set_host_with_initially_no_host(self):
+    def test_network_set_host_already_set_correct(self):
         values = {'host': 'example.com', 'project_id': 'project1'}
         network = db.network_create_safe(self.ctxt, values)
-        self.assertEqual(
-            db.network_set_host(self.ctxt, network.id, 'new.example.com'),
-            'example.com')
+        self.assertIsNone(db.network_set_host(self.ctxt, network.id,
+                          'example.com'))
 
-    def test_network_set_host(self):
+    def test_network_set_host_already_set_incorrect(self):
+        values = {'host': 'example.com', 'project_id': 'project1'}
+        network = db.network_create_safe(self.ctxt, values)
+        self.assertIsNone(db.network_set_host(self.ctxt, network.id,
+                                              'new.example.com'))
+
+    def test_network_set_host_with_initially_no_host(self):
         values = {'project_id': 'project1'}
         network = db.network_create_safe(self.ctxt, values)
-        self.assertEqual(
-            db.network_set_host(self.ctxt, network.id, 'example.com'),
-            'example.com')
+        db.network_set_host(self.ctxt, network.id, 'example.com')
         self.assertEqual('example.com',
             db.network_get(self.ctxt, network.id).host)
+
+    def test_network_set_host_succeeds_retry_on_deadlock(self):
+        values = {'project_id': 'project1'}
+        network = db.network_create_safe(self.ctxt, values)
+
+        def fake_update(params):
+            if mock_update.call_count == 1:
+                raise db_exc.DBDeadlock()
+            else:
+                return 1
+
+        with mock.patch('sqlalchemy.orm.query.Query.update',
+                        side_effect=fake_update) as mock_update:
+            db.network_set_host(self.ctxt, network.id, 'example.com')
+            self.assertEqual(2, mock_update.call_count)
+
+    def test_network_set_host_succeeds_retry_on_no_rows_updated(self):
+        values = {'project_id': 'project1'}
+        network = db.network_create_safe(self.ctxt, values)
+
+        def fake_update(params):
+            if mock_update.call_count == 1:
+                return 0
+            else:
+                return 1
+
+        with mock.patch('sqlalchemy.orm.query.Query.update',
+                        side_effect=fake_update) as mock_update:
+            db.network_set_host(self.ctxt, network.id, 'example.com')
+            self.assertEqual(2, mock_update.call_count)
+
+    def test_network_set_host_failed_with_retry_on_no_rows_updated(self):
+        values = {'project_id': 'project1'}
+        network = db.network_create_safe(self.ctxt, values)
+
+        with mock.patch('sqlalchemy.orm.query.Query.update',
+                        return_value=0) as mock_update:
+            self.assertRaises(exception.NetworkSetHostFailed,
+                              db.network_set_host, self.ctxt, network.id,
+                              'example.com')
+            self.assertEqual(5, mock_update.call_count)
 
     def test_network_get_all_by_host(self):
         self.assertEqual([],
@@ -5737,6 +5973,7 @@ class KeyPairTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_key_pair_create(self):
         param = {
             'name': 'test_1',
+            'type': 'ssh',
             'user_id': 'test_user_id_1',
             'public_key': 'test_public_key_1',
             'fingerprint': 'test_fingerprint_1'
@@ -5749,16 +5986,17 @@ class KeyPairTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self._assertEqualObjects(key_pair, param, ignored_keys)
 
     def test_key_pair_create_with_duplicate_name(self):
-        params = {'name': 'test_name', 'user_id': 'test_user_id'}
+        params = {'name': 'test_name', 'user_id': 'test_user_id',
+                  'type': 'ssh'}
         self._create_key_pair(params)
         self.assertRaises(exception.KeyPairExists, self._create_key_pair,
                           params)
 
     def test_key_pair_get(self):
         params = [
-            {'name': 'test_1', 'user_id': 'test_user_id_1'},
-            {'name': 'test_2', 'user_id': 'test_user_id_2'},
-            {'name': 'test_3', 'user_id': 'test_user_id_3'}
+            {'name': 'test_1', 'user_id': 'test_user_id_1', 'type': 'ssh'},
+            {'name': 'test_2', 'user_id': 'test_user_id_2', 'type': 'ssh'},
+            {'name': 'test_3', 'user_id': 'test_user_id_3', 'type': 'ssh'}
         ]
         key_pairs = [self._create_key_pair(p) for p in params]
 
@@ -5772,7 +6010,7 @@ class KeyPairTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           self.ctxt, param['user_id'], param['name'])
 
     def test_key_pair_get_deleted(self):
-        param = {'name': 'test_1', 'user_id': 'test_user_id_1'}
+        param = {'name': 'test_1', 'user_id': 'test_user_id_1', 'type': 'ssh'}
         key_pair_created = self._create_key_pair(param)
 
         db.key_pair_destroy(self.ctxt, param['user_id'], param['name'])
@@ -5789,9 +6027,9 @@ class KeyPairTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_key_pair_get_all_by_user(self):
         params = [
-            {'name': 'test_1', 'user_id': 'test_user_id_1'},
-            {'name': 'test_2', 'user_id': 'test_user_id_1'},
-            {'name': 'test_3', 'user_id': 'test_user_id_2'}
+            {'name': 'test_1', 'user_id': 'test_user_id_1', 'type': 'ssh'},
+            {'name': 'test_2', 'user_id': 'test_user_id_1', 'type': 'ssh'},
+            {'name': 'test_3', 'user_id': 'test_user_id_2', 'type': 'ssh'}
         ]
         key_pairs_user_1 = [self._create_key_pair(p) for p in params
                             if p['user_id'] == 'test_user_id_1']
@@ -5806,9 +6044,9 @@ class KeyPairTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_key_pair_count_by_user(self):
         params = [
-            {'name': 'test_1', 'user_id': 'test_user_id_1'},
-            {'name': 'test_2', 'user_id': 'test_user_id_1'},
-            {'name': 'test_3', 'user_id': 'test_user_id_2'}
+            {'name': 'test_1', 'user_id': 'test_user_id_1', 'type': 'ssh'},
+            {'name': 'test_2', 'user_id': 'test_user_id_1', 'type': 'ssh'},
+            {'name': 'test_3', 'user_id': 'test_user_id_2', 'type': 'ssh'}
         ]
         for p in params:
             self._create_key_pair(p)
@@ -5820,7 +6058,7 @@ class KeyPairTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(count_2, 1)
 
     def test_key_pair_destroy(self):
-        param = {'name': 'test_1', 'user_id': 'test_user_id_1'}
+        param = {'name': 'test_1', 'user_id': 'test_user_id_1', 'type': 'ssh'}
         self._create_key_pair(param)
 
         db.key_pair_destroy(self.ctxt, param['user_id'], param['name'])
@@ -6301,22 +6539,14 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(self.stats, new_stats)
 
     def test_compute_node_get_all(self):
-        date_fields = set(['created_at', 'updated_at',
-                           'deleted_at', 'deleted'])
-        for no_date_fields in [False, True]:
-            nodes = db.compute_node_get_all(self.ctxt, no_date_fields)
-            self.assertEqual(1, len(nodes))
-            node = nodes[0]
-            self._assertEqualObjects(self.compute_node_dict, node,
-                                     ignored_keys=self._ignored_keys +
-                                                  ['stats', 'service'])
-            node_fields = set(node.keys())
-            if no_date_fields:
-                self.assertFalse(date_fields & node_fields)
-            else:
-                self.assertTrue(date_fields <= node_fields)
-            new_stats = jsonutils.loads(node['stats'])
-            self.assertEqual(self.stats, new_stats)
+        nodes = db.compute_node_get_all(self.ctxt)
+        self.assertEqual(1, len(nodes))
+        node = nodes[0]
+        self._assertEqualObjects(self.compute_node_dict, node,
+                                 ignored_keys=self._ignored_keys +
+                                              ['stats', 'service'])
+        new_stats = jsonutils.loads(node['stats'])
+        self.assertEqual(self.stats, new_stats)
 
     def test_compute_node_get_all_deleted_compute_node(self):
         # Create a service and compute node and ensure we can find its stats;
@@ -6335,7 +6565,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             node = db.compute_node_create(self.ctxt, compute_node_data)
 
             # Ensure the "new" compute node is found
-            nodes = db.compute_node_get_all(self.ctxt, False)
+            nodes = db.compute_node_get_all(self.ctxt)
             self.assertEqual(2, len(nodes))
             found = None
             for n in nodes:
@@ -6359,7 +6589,6 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         service = db.service_create(self.ctxt, service_data)
 
         existing_node = dict(self.item.iteritems())
-        existing_node['service'] = dict(self.service.iteritems())
         expected = [existing_node]
 
         for name in ['bm_node1', 'bm_node2']:
@@ -6370,11 +6599,10 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             node = db.compute_node_create(self.ctxt, compute_node_data)
 
             node = dict(node.iteritems())
-            node['service'] = dict(service.iteritems())
 
             expected.append(node)
 
-        result = sorted(db.compute_node_get_all(self.ctxt, False),
+        result = sorted(db.compute_node_get_all(self.ctxt),
                         key=lambda n: n['hypervisor_hostname'])
 
         self._assertEqualListsOfObjects(expected, result,
@@ -6544,6 +6772,28 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         stats = db.compute_node_statistics(self.ctxt)
         self.assertEqual(2, stats.pop('count'))
 
+    def test_compute_node_statistics_with_other_service(self):
+        other_service = self.service_dict.copy()
+        other_service['topic'] = 'fake-topic'
+        other_service['binary'] = 'nova-fake'
+        db.service_create(self.ctxt, other_service)
+
+        stats = db.compute_node_statistics(self.ctxt)
+        data = {'count': 1,
+                'vcpus_used': 0,
+                'local_gb_used': 0,
+                'memory_mb': 1024,
+                'current_workload': 0,
+                'vcpus': 2,
+                'running_vms': 0,
+                'free_disk_gb': 2048,
+                'disk_available_least': 100,
+                'local_gb': 2048,
+                'free_ram_mb': 1024,
+                'memory_mb_used': 0}
+        for key, value in six.iteritems(data):
+            self.assertEqual(value, stats.pop(key))
+
     def test_compute_node_not_found(self):
         self.assertRaises(exception.ComputeHostNotFound, db.compute_node_get,
                           self.ctxt, 100500)
@@ -6566,6 +6816,27 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                         {'updated_at': first.updated_at,
                                          'free_ram_mb': '13'})
         self.assertNotEqual(first['updated_at'], second['updated_at'])
+
+    def test_service_destroy_with_compute_node(self):
+        db.service_destroy(self.ctxt, self.service['id'])
+        self.assertRaises(exception.ComputeHostNotFound,
+                          db.compute_node_get, self.ctxt,
+                          self.item['id'])
+
+    def test_service_destroy_with_old_compute_node(self):
+        # NOTE(sbauza): This test is only for checking backwards compatibility
+        # with old versions of compute_nodes not providing host column.
+        # This test could be removed once we are sure that all compute nodes
+        # are populating the host field thanks to the ResourceTracker
+        compute_node_old_host_dict = self.compute_node_dict.copy()
+        compute_node_old_host_dict.pop('host')
+        item_old = db.compute_node_create(self.ctxt,
+                                          compute_node_old_host_dict)
+
+        db.service_destroy(self.ctxt, self.service['id'])
+        self.assertRaises(exception.ComputeHostNotFound,
+                          db.compute_node_get, self.ctxt,
+                          item_old['id'])
 
 
 class ProviderFwRuleTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -7361,23 +7632,19 @@ class ArchiveTestCase(test.TestCase):
                                                "instances"])
         self.domain_tablenames_to_cleanup = set(["dns_domains"])
 
-    def tearDown(self):
-        super(ArchiveTestCase, self).tearDown()
-        for tablename in self.id_tablenames_to_cleanup:
-            for name in [tablename, "shadow_" + tablename]:
-                table = sqlalchemyutils.get_table(self.engine, name)
-                del_statement = table.delete(table.c.id.in_(self.ids))
-                self.conn.execute(del_statement)
-        for tablename in self.uuid_tablenames_to_cleanup:
-            for name in [tablename, "shadow_" + tablename]:
-                table = sqlalchemyutils.get_table(self.engine, name)
-                del_statement = table.delete(table.c.uuid.in_(self.uuidstrs))
-                self.conn.execute(del_statement)
-        for tablename in self.domain_tablenames_to_cleanup:
-            for name in [tablename, "shadow_" + tablename]:
-                table = sqlalchemyutils.get_table(self.engine, name)
-                del_statement = table.delete(table.c.domain.in_(self.uuidstrs))
-                self.conn.execute(del_statement)
+    def _assert_shadow_tables_empty_except(self, *exceptions):
+        """Ensure shadow tables are empty
+
+        This method ensures that all the shadow tables in the schema,
+        except for specificially named exceptions, are empty. This
+        makes sure that archiving isn't moving unexpected content.
+        """
+        metadata = MetaData(bind=self.engine)
+        metadata.reflect()
+        for table in metadata.tables:
+            if table.startswith("shadow_") and table not in exceptions:
+                rows = self.conn.execute("select * from %s" % table).fetchall()
+                self.assertEqual(rows, [], "Table %s not empty" % table)
 
     def test_shadow_tables(self):
         metadata = MetaData(bind=self.engine)
@@ -7400,6 +7667,7 @@ class ArchiveTestCase(test.TestCase):
                 continue
             self.assertTrue(db_utils.check_shadow_table(self.engine,
                                                         table_name))
+        self._assert_shadow_tables_empty_except()
 
     def test_archive_deleted_rows(self):
         # Add 6 rows to table
@@ -7446,6 +7714,10 @@ class ArchiveTestCase(test.TestCase):
         rows = self.conn.execute(qsiim).fetchall()
         # Verify we still have 4 in shadow
         self.assertEqual(len(rows), 4)
+
+        # Ensure only deleted rows were deleted
+        self._assert_shadow_tables_empty_except(
+            'shadow_instance_id_mappings')
 
     def test_archive_deleted_rows_for_every_uuid_table(self):
         tablenames = []
@@ -7537,6 +7809,9 @@ class ArchiveTestCase(test.TestCase):
         self.assertEqual(len(rows), 0)
         rows = self.conn.execute(qsdd).fetchall()
         self.assertEqual(len(rows), 1)
+        self._assert_shadow_tables_empty_except(
+            'shadow_dns_domains',
+        )
 
     def test_archive_deleted_rows_fk_constraint(self):
         # consoles.pool_id depends on console_pools.id
@@ -7571,6 +7846,10 @@ class ArchiveTestCase(test.TestCase):
         # Then archiving console_pools should work.
         num = db.archive_deleted_rows_for_table(self.context, "console_pools")
         self.assertEqual(num, 1)
+        self._assert_shadow_tables_empty_except(
+            'shadow_console_pools',
+            'shadow_consoles'
+        )
 
     def test_archive_deleted_rows_2_tables(self):
         # Add 6 rows to each table
@@ -7637,6 +7916,10 @@ class ArchiveTestCase(test.TestCase):
         siim_rows = self.conn.execute(qsiim).fetchall()
         si_rows = self.conn.execute(qsi).fetchall()
         self.assertEqual(len(siim_rows) + len(si_rows), 8)
+        self._assert_shadow_tables_empty_except(
+            'shadow_instances',
+            'shadow_instance_id_mappings'
+        )
 
 
 class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -8324,23 +8607,28 @@ class TestDBInstanceTags(test.TestCase):
         self.assertEqual([], tags)
 
     def test_instance_tag_add_to_non_existing_instance(self):
+        self._create_instance()
         self.assertRaises(exception.InstanceNotFound, db.instance_tag_add,
                           self.context, 'fake_uuid', 'tag')
 
     def test_instance_tag_set_to_non_existing_instance(self):
+        self._create_instance()
         self.assertRaises(exception.InstanceNotFound, db.instance_tag_set,
                           self.context, 'fake_uuid', ['tag1', 'tag2'])
 
     def test_instance_tag_get_from_non_existing_instance(self):
+        self._create_instance()
         self.assertRaises(exception.InstanceNotFound,
                           db.instance_tag_get_by_instance_uuid, self.context,
                           'fake_uuid')
 
     def test_instance_tag_delete_from_non_existing_instance(self):
+        self._create_instance()
         self.assertRaises(exception.InstanceNotFound, db.instance_tag_delete,
                           self.context, 'fake_uuid', 'tag')
 
     def test_instance_tag_delete_all_from_non_existing_instance(self):
+        self._create_instance()
         self.assertRaises(exception.InstanceNotFound,
                           db.instance_tag_delete_all,
                           self.context, 'fake_uuid')

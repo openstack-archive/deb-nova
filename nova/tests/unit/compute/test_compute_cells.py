@@ -19,14 +19,13 @@ import functools
 import inspect
 
 import mock
-from oslo.config import cfg
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_utils import timeutils
 
 from nova import block_device
 from nova.cells import manager
 from nova.compute import api as compute_api
 from nova.compute import cells_api as compute_cells_api
-from nova.compute import delete_types
 from nova.compute import flavors
 from nova.compute import vm_states
 from nova import context
@@ -150,7 +149,7 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
                                  'instance_delete_everywhere')
         inst = self._create_fake_instance_obj()
         cells_rpcapi.instance_delete_everywhere(self.context,
-                inst, delete_types.DELETE)
+                inst, 'hard')
         self.mox.ReplayAll()
         self.stubs.Set(self.compute_api.network_api, 'deallocate_for_instance',
                        lambda *a, **kw: None)
@@ -162,7 +161,7 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
                                  'instance_delete_everywhere')
         inst = self._create_fake_instance_obj()
         cells_rpcapi.instance_delete_everywhere(self.context,
-                inst, delete_types.SOFT_DELETE)
+                inst, 'soft')
         self.mox.ReplayAll()
         self.stubs.Set(self.compute_api.network_api, 'deallocate_for_instance',
                        lambda *a, **kw: None)
@@ -181,14 +180,14 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
 
         self.assertEqual(migrations, response)
 
-    def test_update_block_device_mapping(self):
+    def test_create_block_device_mapping(self):
         instance_type = {'swap': 1, 'ephemeral_gb': 1}
         instance = self._create_fake_instance_obj()
         bdms = [block_device.BlockDeviceDict({'source_type': 'image',
                                               'destination_type': 'local',
                                               'image_id': 'fake-image',
                                               'boot_index': 0})]
-        self.compute_api._update_block_device_mapping(
+        self.compute_api._create_block_device_mapping(
             instance_type, instance.uuid, bdms)
         bdms = db.block_device_mapping_get_all_by_instance(
             self.context, instance['uuid'])

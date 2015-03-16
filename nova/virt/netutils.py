@@ -23,7 +23,7 @@ import os
 
 import jinja2
 import netaddr
-from oslo.config import cfg
+from oslo_config import cfg
 
 from nova.network import model
 from nova import paths
@@ -107,6 +107,7 @@ def get_injected_network_template(network_info, use_ipv6=None, template=None,
         if not network.get_meta('injected'):
             continue
 
+        hwaddress = vif.get('address')
         address = None
         netmask = None
         gateway = ''
@@ -144,6 +145,7 @@ def get_injected_network_template(network_info, use_ipv6=None, template=None,
                 dns_v6 = ' '.join([i['address'] for i in subnet_v6['dns']])
 
         net_info = {'name': 'eth%d' % ifc_num,
+                    'hwaddress': hwaddress,
                     'address': address,
                     'netmask': netmask,
                     'gateway': gateway,

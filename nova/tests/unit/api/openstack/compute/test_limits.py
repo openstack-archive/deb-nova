@@ -21,12 +21,12 @@ import httplib
 import StringIO
 
 import mock
-from oslo.serialization import jsonutils
+from oslo_serialization import jsonutils
 import six
 import webob
 
 from nova.api.openstack.compute import limits
-from nova.api.openstack.compute.plugins.v3 import limits as limits_v3
+from nova.api.openstack.compute.plugins.v3 import limits as limits_v21
 from nova.api.openstack.compute import views
 from nova.api.openstack import wsgi
 import nova.context
@@ -75,7 +75,7 @@ class BaseLimitTestSuite(test.NoDBTestCase):
 
 class LimitsControllerTestV21(BaseLimitTestSuite):
     """Tests for `limits.LimitsController` class."""
-    limits_controller = limits_v3.LimitsController
+    limits_controller = limits_v21.LimitsController
 
     def setUp(self):
         """Run before each test."""
@@ -328,11 +328,6 @@ class LimitsControllerTestV2(LimitsControllerTestV21):
         req = fakes.HTTPRequest.blank('/v2/fake/limits')
         self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.delete,
                           req, 1)
-
-    def test_limit_detail(self):
-        req = fakes.HTTPRequest.blank('/v2/fake/limits')
-        self.assertRaises(webob.exc.HTTPNotImplemented, self.ctrler.detail,
-                          req)
 
     def test_limit_show(self):
         req = fakes.HTTPRequest.blank('/v2/fake/limits')

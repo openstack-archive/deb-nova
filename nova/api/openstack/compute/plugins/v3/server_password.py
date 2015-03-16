@@ -23,13 +23,13 @@ from nova import compute
 
 
 ALIAS = 'os-server-password'
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class ServerPasswordController(wsgi.Controller):
     """The Server Password API controller for the OpenStack API."""
     def __init__(self):
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
 
     @extensions.expected_errors(404)
     def index(self, req, server_id):
@@ -51,8 +51,7 @@ class ServerPasswordController(wsgi.Controller):
 
         context = req.environ['nova.context']
         authorize(context)
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
         meta = password.convert_password(context, None)
         instance.system_metadata.update(meta)
         instance.save()

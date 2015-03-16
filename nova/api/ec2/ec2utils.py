@@ -17,17 +17,18 @@
 import functools
 import re
 
-from oslo.utils import timeutils
+from oslo_log import log as logging
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 
 from nova import context
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LI
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import log as logging
 from nova.openstack.common import memorycache
-from nova.openstack.common import uuidutils
 
 LOG = logging.getLogger(__name__)
 # NOTE(vish): cache mapping for one week
@@ -165,7 +166,7 @@ def get_ip_info_for_instance(context, instance):
         nw_info = instance.info_cache.network_info
     else:
         # FIXME(comstud): Temporary as we transition to objects.
-        info_cache = instance['info_cache'] or {}
+        info_cache = instance.info_cache or {}
         nw_info = info_cache.get('network_info')
     # Make sure empty response is turned into the model
     if not nw_info:
@@ -288,7 +289,7 @@ def is_ec2_timestamp_expired(request, expires=None):
                        timeutils.is_newer_than(query_time, expires)
         return False
     except ValueError:
-        LOG.audit(_("Timestamp is invalid."))
+        LOG.info(_LI("Timestamp is invalid."))
         return True
 
 

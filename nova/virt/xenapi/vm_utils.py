@@ -28,13 +28,14 @@ from xml.dom import minidom
 from xml.parsers import expat
 
 from eventlet import greenthread
-from oslo.config import cfg
-from oslo.utils import excutils
-from oslo.utils import importutils
-from oslo.utils import strutils
-from oslo.utils import timeutils
-from oslo.utils import units
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
+from oslo_utils import importutils
+from oslo_utils import strutils
+from oslo_utils import timeutils
+from oslo_utils import units
 import six
 import six.moves.urllib.parse as urlparse
 
@@ -45,7 +46,6 @@ from nova.compute import vm_mode
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova.network import model as network_model
-from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 from nova import utils
 from nova.virt import configdrive
@@ -315,8 +315,8 @@ def destroy_vm(session, instance, vm_ref):
     """Destroys a VM record."""
     try:
         session.VM.destroy(vm_ref)
-    except session.XenAPI.Failure as exc:
-        LOG.exception(exc)
+    except session.XenAPI.Failure:
+        LOG.exception(_LE('Destroy VM failed'))
         return
 
     LOG.debug("VM destroyed", instance=instance)
@@ -331,8 +331,8 @@ def clean_shutdown_vm(session, instance, vm_ref):
     LOG.debug("Shutting down VM (cleanly)", instance=instance)
     try:
         session.call_xenapi('VM.clean_shutdown', vm_ref)
-    except session.XenAPI.Failure as exc:
-        LOG.exception(exc)
+    except session.XenAPI.Failure:
+        LOG.exception(_LE('Shutting down VM (cleanly) failed.'))
         return False
     return True
 
@@ -346,8 +346,8 @@ def hard_shutdown_vm(session, instance, vm_ref):
     LOG.debug("Shutting down VM (hard)", instance=instance)
     try:
         session.call_xenapi('VM.hard_shutdown', vm_ref)
-    except session.XenAPI.Failure as exc:
-        LOG.exception(exc)
+    except session.XenAPI.Failure:
+        LOG.exception(_LE('Shutting down VM (hard) failed'))
         return False
     return True
 
@@ -400,7 +400,7 @@ def unplug_vbd(session, vbd_ref, this_vm_ref):
                          {'vbd_ref': vbd_ref, 'num_attempt': num_attempt,
                           'max_attempts': max_attempts, 'err': err})
             else:
-                LOG.exception(exc)
+                LOG.exception(_LE('Unable to unplug VBD'))
                 raise exception.StorageError(
                         reason=_('Unable to unplug VBD %s') % vbd_ref)
 
@@ -414,8 +414,8 @@ def destroy_vbd(session, vbd_ref):
     """Destroy VBD from host database."""
     try:
         session.call_xenapi('VBD.destroy', vbd_ref)
-    except session.XenAPI.Failure as exc:
-        LOG.exception(exc)
+    except session.XenAPI.Failure:
+        LOG.exception(_LE('Unable to destroy VBD'))
         raise exception.StorageError(
                 reason=_('Unable to destroy VBD %s') % vbd_ref)
 
@@ -983,7 +983,7 @@ def try_auto_configure_disk(session, vdi_ref, new_gb):
     try:
         _auto_configure_disk(session, vdi_ref, new_gb)
     except exception.CannotResizeDisk as e:
-        msg = _('Attempted auto_configure_disk failed because: %s')
+        msg = _LW('Attempted auto_configure_disk failed because: %s')
         LOG.warn(msg % e)
 
 
@@ -1684,8 +1684,8 @@ def lookup_vm_vdis(session, vm_ref):
                 if not vbd_other_config.get('osvol'):
                     # This is not an attached volume
                     vdi_refs.append(vdi_ref)
-            except session.XenAPI.Failure as exc:
-                LOG.exception(exc)
+            except session.XenAPI.Failure:
+                LOG.exception(_LE('"Look for the VDIs failed'))
     return vdi_refs
 
 

@@ -16,9 +16,9 @@
 Client side of the network RPC API.
 """
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+import oslo_messaging as messaging
+from oslo_serialization import jsonutils
 
 from nova.objects import base as objects_base
 from nova import rpc
@@ -90,6 +90,19 @@ class NetworkAPI(object):
 
         * NOTE: remove unused method get_floating_ips_by_fixed_address()
         * NOTE: remove unused method get_instance_uuids_by_ip_filter()
+        * NOTE: remove unused method disassociate_network()
+        * NOTE: remove unused method get_fixed_ip()
+        * NOTE: remove unused method get_fixed_ip_by_address()
+        * NOTE: remove unused method get_floating_ip()
+        * NOTE: remove unused method get_floating_ip_pools()
+        * NOTE: remove unused method get_floating_ip_by_address()
+        * NOTE: remove unused method get_floating_ips_by_project()
+        * NOTE: remove unused method get_instance_id_by_floating_address()
+        * NOTE: remove unused method allocate_floating_ip()
+        * NOTE: remove unused method deallocate_floating_ip()
+        * NOTE: remove unused method associate_floating_ip()
+        * NOTE: remove unused method disassociate_floating_ip()
+        * NOTE: remove unused method associate()
     '''
 
     VERSION_ALIASES = {
@@ -117,57 +130,6 @@ class NetworkAPI(object):
     def delete_network(self, ctxt, uuid, fixed_range):
         return self.client.call(ctxt, 'delete_network',
                                 uuid=uuid, fixed_range=fixed_range)
-
-    def disassociate_network(self, ctxt, network_uuid):
-        return self.client.call(ctxt, 'disassociate_network',
-                                network_uuid=network_uuid)
-
-    def get_fixed_ip(self, ctxt, id):
-        return self.client.call(ctxt, 'get_fixed_ip', id=id)
-
-    def get_fixed_ip_by_address(self, ctxt, address):
-        return self.client.call(ctxt, 'get_fixed_ip_by_address',
-                                address=address)
-
-    def get_floating_ip(self, ctxt, id):
-        return self.client.call(ctxt, 'get_floating_ip', id=id)
-
-    def get_floating_ip_pools(self, ctxt):
-        cctxt = self.client.prepare(version="1.7")
-        return cctxt.call(ctxt, 'get_floating_ip_pools')
-
-    def get_floating_ip_by_address(self, ctxt, address):
-        return self.client.call(ctxt, 'get_floating_ip_by_address',
-                                address=address)
-
-    def get_floating_ips_by_project(self, ctxt):
-        return self.client.call(ctxt, 'get_floating_ips_by_project')
-
-    def get_instance_id_by_floating_address(self, ctxt, address):
-        return self.client.call(ctxt, 'get_instance_id_by_floating_address',
-                                address=address)
-
-    def allocate_floating_ip(self, ctxt, project_id, pool, auto_assigned):
-        return self.client.call(ctxt, 'allocate_floating_ip',
-                                project_id=project_id, pool=pool,
-                                auto_assigned=auto_assigned)
-
-    def deallocate_floating_ip(self, ctxt, address, affect_auto_assigned):
-        return self.client.call(ctxt, 'deallocate_floating_ip',
-                                address=address,
-                                affect_auto_assigned=affect_auto_assigned)
-
-    def associate_floating_ip(self, ctxt, floating_address, fixed_address,
-                              affect_auto_assigned):
-        return self.client.call(ctxt, 'associate_floating_ip',
-                                floating_address=floating_address,
-                                fixed_address=fixed_address,
-                                affect_auto_assigned=affect_auto_assigned)
-
-    def disassociate_floating_ip(self, ctxt, address, affect_auto_assigned):
-        return self.client.call(ctxt, 'disassociate_floating_ip',
-                                address=address,
-                                affect_auto_assigned=affect_auto_assigned)
 
     def allocate_for_instance(self, ctxt, instance_id, project_id, host,
                               rxtx_factor, vpn, requested_networks, macs=None,
@@ -201,11 +163,11 @@ class NetworkAPI(object):
                 kwargs['requested_networks'] = requested_networks
             else:
                 version = '1.0'
-            kwargs['host'] = instance['host']
+            kwargs['host'] = instance.host
             kwargs['instance_id'] = instance.uuid
             kwargs['project_id'] = instance.project_id
         if CONF.multi_host:
-            cctxt = cctxt.prepare(server=instance['host'], version=version)
+            cctxt = cctxt.prepare(server=instance.host, version=version)
         return cctxt.call(ctxt, 'deallocate_for_instance', **kwargs)
 
     def add_fixed_ip_to_instance(self, ctxt, instance_id, rxtx_factor,
@@ -226,12 +188,6 @@ class NetworkAPI(object):
         return self.client.call(ctxt, 'add_network_to_project',
                                 project_id=project_id,
                                 network_uuid=network_uuid)
-
-    def associate(self, ctxt, network_uuid, associations):
-        cctxt = self.client.prepare(version='1.5')
-        return cctxt.call(ctxt, 'associate',
-                          network_uuid=network_uuid,
-                          associations=associations)
 
     def get_instance_nw_info(self, ctxt, instance_id, rxtx_factor, host,
                              project_id):

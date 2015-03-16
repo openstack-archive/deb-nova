@@ -19,11 +19,13 @@ import os
 import re
 import sys
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import netutils
-from oslo.utils import strutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
+from oslo_utils import netutils
+from oslo_utils import strutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import six
 import webob
 from webob import exc
@@ -37,8 +39,6 @@ from nova.compute import flavors
 from nova import exception
 from nova.i18n import _
 from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova import policy
 from nova import utils
 
@@ -239,7 +239,7 @@ class Controller(wsgi.Controller):
     def _get_server(self, context, req, instance_uuid):
         """Utility function for looking up an instance by uuid."""
         instance = common.get_instance(self.compute_api, context,
-                                       instance_uuid, want_objects=True,
+                                       instance_uuid,
                                        expected_attrs=['flavor'])
         req.cache_db_instance(instance)
         return instance
@@ -1062,7 +1062,7 @@ class Controller(wsgi.Controller):
         try:
             if self.compute_api.is_volume_backed_instance(context, instance,
                                                           bdms):
-                img = instance['image_ref']
+                img = instance.image_ref
                 if not img:
                     properties = bdms.root_metadata(
                             context, self.compute_api.image_api,

@@ -22,11 +22,11 @@ Driver base-classes:
 
 import sys
 
-from oslo.config import cfg
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import importutils
 
 from nova.i18n import _, _LE, _LI
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import event as virtevent
 
@@ -566,12 +566,12 @@ class ComputeDriver(object):
         # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
-    def suspend(self, instance):
+    def suspend(self, context, instance):
         """suspend the specified instance.
 
+        :param context: the context for the suspend
         :param instance: nova.objects.instance.Instance
         """
-        # TODO(Vek): Need to pass context in for access to auth_token
         raise NotImplementedError()
 
     def resume(self, context, instance, network_info, block_device_info=None):
@@ -963,7 +963,7 @@ class ComputeDriver(object):
         """Set the root password on the specified instance.
 
         :param instance: nova.objects.instance.Instance
-        :param new_password: the new password
+        :param new_pass: the new password
         """
         raise NotImplementedError()
 
@@ -1154,7 +1154,7 @@ class ComputeDriver(object):
         related to other calls into the driver. The prime example is to clean
         the cache and remove images which are no longer of interest.
 
-        :param instances: nova.objects.instance.InstanceList
+        :param all_instances: nova.objects.instance.InstanceList
         """
         pass
 

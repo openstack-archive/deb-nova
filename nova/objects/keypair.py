@@ -17,6 +17,10 @@ from nova import exception
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
+from nova import utils
+
+KEYPAIR_TYPE_SSH = 'ssh'
+KEYPAIR_TYPE_X509 = 'x509'
 
 
 # TODO(berrange): Remove NovaObjectDictCompat
@@ -24,7 +28,8 @@ class KeyPair(base.NovaPersistentObject, base.NovaObject,
               base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     # Version 1.1: String attributes updated to support unicode
-    VERSION = '1.1'
+    # Version 1.2: Added keypair type
+    VERSION = '1.2'
 
     fields = {
         'id': fields.IntegerField(),
@@ -32,7 +37,14 @@ class KeyPair(base.NovaPersistentObject, base.NovaObject,
         'user_id': fields.StringField(nullable=True),
         'fingerprint': fields.StringField(nullable=True),
         'public_key': fields.StringField(nullable=True),
+        'type': fields.StringField(nullable=False),
         }
+
+    def obj_make_compatible(self, primitive, target_version):
+        super(KeyPair, self).obj_make_compatible(primitive, target_version)
+        target_version = utils.convert_version_to_tuple(target_version)
+        if target_version < (1, 2) and 'type' in primitive:
+            del primitive['type']
 
     @staticmethod
     def _from_db_object(context, keypair, db_keypair):
@@ -68,7 +80,8 @@ class KeyPair(base.NovaPersistentObject, base.NovaObject,
 class KeyPairList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
     #              KeyPair <= version 1.1
-    VERSION = '1.0'
+    # Version 1.1: KeyPair <= version 1.2
+    VERSION = '1.1'
 
     fields = {
         'objects': fields.ListOfObjectsField('KeyPair'),
@@ -76,6 +89,7 @@ class KeyPairList(base.ObjectListBase, base.NovaObject):
     child_versions = {
         '1.0': '1.1',
         # NOTE(danms): KeyPair was at 1.1 before we added this
+        '1.1': '1.2',
         }
 
     @base.remotable_classmethod

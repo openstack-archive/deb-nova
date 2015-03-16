@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from nova.api.openstack.compute.views import versions as views_versions
 from nova.api.openstack import wsgi
@@ -35,7 +35,7 @@ LINKS = {
 VERSIONS = {
     "v2.0": {
         "id": "v2.0",
-        "status": "CURRENT",
+        "status": "SUPPORTED",
         "updated": "2011-01-21T11:33:21Z",
         "links": [
             {
@@ -53,7 +53,7 @@ VERSIONS = {
     },
     "v2.1": {
         "id": "v2.1",
-        "status": "EXPERIMENTAL",
+        "status": "CURRENT",
         "updated": "2013-07-23T11:33:21Z",
         "links": [
             {

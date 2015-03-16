@@ -23,15 +23,15 @@ except ImportError:
     rados = None
     rbd = None
 
-from oslo.serialization import jsonutils
-from oslo.utils import excutils
-from oslo.utils import units
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import excutils
+from oslo_utils import units
 
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 from nova import utils
 
 LOG = logging.getLogger(__name__)
@@ -257,7 +257,7 @@ class RBDDriver(object):
         with RADOSClient(self, self.pool) as client:
 
             def belongs_to_instance(disk):
-                return disk.startswith(instance['uuid'])
+                return disk.startswith(instance.uuid)
 
             volumes = rbd.RBD().list(client.ioctx)
             for volume in filter(belongs_to_instance, volumes):

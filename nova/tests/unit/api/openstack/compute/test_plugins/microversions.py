@@ -74,6 +74,49 @@ class MicroversionsController3(wsgi.Controller):
         return data
 
 
+class MicroversionsController4(wsgi.Controller):
+
+    @wsgi.Controller.api_version("2.1")
+    def _create(self, req):
+        data = {'param': 'controller4_val1'}
+        return data
+
+    @wsgi.Controller.api_version("2.2")  # noqa
+    def _create(self, req):
+        data = {'param': 'controller4_val2'}
+        return data
+
+    def create(self, req, body):
+        return self._create(req)
+
+
+class MicroversionsExtendsBaseController(wsgi.Controller):
+    @wsgi.Controller.api_version("2.1")
+    def show(self, req, id):
+        return {'base_param': 'base_val'}
+
+
+class MicroversionsExtendsController1(wsgi.Controller):
+    @wsgi.Controller.api_version("2.3")
+    @wsgi.extends
+    def show(self, req, resp_obj, id):
+        resp_obj.obj['extend_ctrlr1'] = 'val_1'
+
+
+class MicroversionsExtendsController2(wsgi.Controller):
+    @wsgi.Controller.api_version("2.4")
+    @wsgi.extends
+    def show(self, req, resp_obj, id):
+        resp_obj.obj['extend_ctrlr2'] = 'val_2'
+
+
+class MicroversionsExtendsController3(wsgi.Controller):
+    @wsgi.Controller.api_version("2.2", "2.3")
+    @wsgi.extends
+    def show(self, req, resp_obj, id):
+        resp_obj.obj['extend_ctrlr3'] = 'val_3'
+
+
 class Microversions(extensions.V3APIExtensionBase):
     """Basic Microversions Extension."""
 
@@ -88,7 +131,17 @@ class Microversions(extensions.V3APIExtensionBase):
                                             MicroversionsController2())
         res3 = extensions.ResourceExtension('microversions3',
                                             MicroversionsController3())
-        return [res1, res2, res3]
+        res4 = extensions.ResourceExtension('microversions4',
+                                            MicroversionsController4())
+        res5 = extensions.ResourceExtension(
+            'microversions5', MicroversionsExtendsBaseController())
+        return [res1, res2, res3, res4, res5]
 
     def get_controller_extensions(self):
-        return []
+        extension1 = extensions.ControllerExtension(
+            self, 'microversions5', MicroversionsExtendsController1())
+        extension2 = extensions.ControllerExtension(
+            self, 'microversions5', MicroversionsExtendsController2())
+        extension3 = extensions.ControllerExtension(
+            self, 'microversions5', MicroversionsExtendsController3())
+        return [extension1, extension2, extension3]

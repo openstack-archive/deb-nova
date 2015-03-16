@@ -13,7 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.openstack.common import log as logging
+from oslo_log import log as logging
+
 from nova.scheduler import filters
 from nova.scheduler.filters import utils
 
@@ -39,9 +40,7 @@ class AggregateMultiTenancyIsolation(filters.BaseHostFilter):
         props = spec.get('instance_properties', {})
         tenant_id = props.get('project_id')
 
-        context = filter_properties['context']
-        metadata = utils.aggregate_metadata_get_by_host(context,
-                                                        host_state.host,
+        metadata = utils.aggregate_metadata_get_by_host(host_state,
                                                         key="filter_tenant_id")
 
         if metadata != {}:

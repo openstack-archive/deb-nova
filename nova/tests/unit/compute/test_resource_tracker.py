@@ -18,9 +18,9 @@
 import uuid
 
 import mock
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 
 from nova.compute import flavors
 from nova.compute import resource_tracker
@@ -38,7 +38,6 @@ from nova.tests.unit.compute.monitors import test_monitors
 from nova.tests.unit.objects import test_migration
 from nova.tests.unit.pci import fakes as pci_fakes
 from nova.virt import driver
-from nova.virt import hardware
 
 
 FAKE_VIRT_MEMORY_MB = 5
@@ -47,14 +46,14 @@ FAKE_VIRT_MEMORY_WITH_OVERHEAD = (
         FAKE_VIRT_MEMORY_MB + FAKE_VIRT_MEMORY_OVERHEAD)
 FAKE_VIRT_NUMA_TOPOLOGY = objects.NUMATopology(
         cells=[objects.NUMACell(id=0, cpuset=set([1, 2]), memory=3072,
-                                cpu_usage=0, memory_usage=0, mempages=[]),
+                                cpu_usage=0, memory_usage=0, mempages=[],
+                                siblings=[], pinned_cpus=set([])),
                objects.NUMACell(id=1, cpuset=set([3, 4]), memory=3072,
-                                cpu_usage=0, memory_usage=0, mempages=[])])
-FAKE_VIRT_NUMA_TOPOLOGY_OVERHEAD = hardware.VirtNUMALimitTopology(
-        cells=[hardware.VirtNUMATopologyCellLimit(
-                    0, set([1, 2]), 3072, 4, 10240),
-               hardware.VirtNUMATopologyCellLimit(
-                    1, set([3, 4]), 3072, 4, 10240)])
+                                cpu_usage=0, memory_usage=0, mempages=[],
+                                siblings=[], pinned_cpus=set([]))])
+FAKE_VIRT_NUMA_TOPOLOGY_OVERHEAD = objects.NUMATopologyLimits(
+    cpu_allocation_ratio=2, ram_allocation_ratio=2)
+
 ROOT_GB = 5
 EPHEMERAL_GB = 1
 FAKE_VIRT_LOCAL_GB = ROOT_GB + EPHEMERAL_GB
@@ -231,6 +230,10 @@ class BaseTestCase(test.TestCase):
                        'flavor_get', self._fake_flavor_get)
 
         self.host = 'fakehost'
+        self.compute = self._create_compute_node()
+        self.updated = False
+        self.deleted = False
+        self.update_call_count = 0
 
     def _create_compute_node(self, values=None):
         compute = {
@@ -425,6 +428,13 @@ class BaseTestCase(test.TestCase):
         # only used in the subsequent notification:
         return (instance, instance)
 
+    def _fake_compute_node_update(self, ctx, compute_node_id, values,
+            prune_stats=False):
+        self.update_call_count += 1
+        self.updated = True
+        self.compute.update(values)
+        return self.compute
+
     def _driver(self):
         return FakeVirtDriver()
 
@@ -438,6 +448,7 @@ class BaseTestCase(test.TestCase):
         driver = self._driver()
 
         tracker = resource_tracker.ResourceTracker(host, driver, node)
+        tracker.compute_node = self._create_compute_node()
         tracker.ext_resources_handler = \
             resources.ResourceHandler(RESOURCE_NAMES, True)
         return tracker
@@ -510,6 +521,8 @@ class MissingServiceTestCase(BaseTestCase):
         self.tracker = self._tracker()
 
     def test_missing_service(self):
+        self.tracker.compute_node = None
+        self.tracker._get_service = mock.Mock(return_value=None)
         self.tracker.update_available_resource(self.context)
         self.assertTrue(self.tracker.disabled)
 
@@ -541,6 +554,7 @@ class MissingComputeNodeTestCase(BaseTestCase):
         raise exception.ComputeHostNotFound(host=host)
 
     def test_create_compute_node(self):
+        self.tracker.compute_node = None
         self.tracker.update_available_resource(self.context)
         self.assertTrue(self.created)
 
@@ -555,10 +569,6 @@ class BaseTrackerTestCase(BaseTestCase):
         # setup plumbing for a working resource tracker with required
         # database models and a compatible compute driver:
         super(BaseTrackerTestCase, self).setUp()
-
-        self.updated = False
-        self.deleted = False
-        self.update_call_count = 0
 
         self.tracker = self._tracker()
         self._migrations = {}
@@ -580,11 +590,12 @@ class BaseTrackerTestCase(BaseTestCase):
         patcher = pci_fakes.fake_pci_whitelist()
         self.addCleanup(patcher.stop)
 
+        self.stubs.Set(self.tracker.scheduler_client, 'update_resource_stats',
+                self._fake_compute_node_update)
         self._init_tracker()
         self.limits = self._limits()
 
     def _fake_service_get_by_compute_host(self, ctx, host):
-        self.compute = self._create_compute_node()
         self.service = self._create_service(host, compute=self.compute)
         return self.service
 
@@ -639,7 +650,7 @@ class BaseTrackerTestCase(BaseTestCase):
             'memory_mb': memory_mb,
             'disk_gb': disk_gb,
             'vcpu': vcpus,
-            'numa_topology': numa_topology.to_json() if numa_topology else None
+            'numa_topology': numa_topology,
         }
 
     def assertEqualNUMAHostTopology(self, expected, got):
@@ -719,7 +730,8 @@ class SchedulerClientTrackerTestCase(BaseTrackerTestCase):
 
     def setUp(self):
         super(SchedulerClientTrackerTestCase, self).setUp()
-        self.tracker.scheduler_client.update_resource_stats = mock.Mock()
+        self.tracker.scheduler_client.update_resource_stats = mock.Mock(
+                side_effect=self._fake_compute_node_update)
 
     def test_create_resource(self):
         self.tracker._write_ext_resources = mock.Mock()
@@ -823,10 +835,12 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
         return objects.NUMATopology(
             cells=[objects.NUMACell(
                        id=0, cpuset=set([1, 2]), memory=3072, cpu_usage=cpus,
-                       memory_usage=mem, mempages=[]),
+                       memory_usage=mem, mempages=[], siblings=[],
+                       pinned_cpus=set([])),
                    objects.NUMACell(
                        id=1, cpuset=set([3, 4]), memory=3072, cpu_usage=cpus,
-                       memory_usage=mem, mempages=[])])
+                       memory_usage=mem, mempages=[], siblings=[],
+                       pinned_cpus=set([]))])
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
@@ -967,7 +981,7 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
         limits = {'memory_mb': memory_mb + FAKE_VIRT_MEMORY_OVERHEAD,
                   'disk_gb': root_gb * 2,
                   'vcpu': vcpus,
-                  'numa_topology': FAKE_VIRT_NUMA_TOPOLOGY_OVERHEAD.to_json()}
+                  'numa_topology': FAKE_VIRT_NUMA_TOPOLOGY_OVERHEAD}
 
         instance = self._fake_instance(memory_mb=memory_mb,
                 root_gb=root_gb, ephemeral_gb=ephemeral_gb,

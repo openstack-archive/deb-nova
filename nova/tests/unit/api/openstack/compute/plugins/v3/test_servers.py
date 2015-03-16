@@ -24,13 +24,14 @@ import uuid
 import iso8601
 import mock
 from mox3 import mox
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 import six.moves.urllib.parse as urlparse
 import testtools
 import webob
 
+from nova.api.openstack import common
 from nova.api.openstack import compute
 from nova.api.openstack.compute import plugins
 from nova.api.openstack.compute.plugins.v3 import disk_config
@@ -43,7 +44,6 @@ from nova.api.openstack.compute.schemas.v3 import servers as servers_schema
 from nova.api.openstack.compute import views
 from nova.api.openstack import extensions
 from nova.compute import api as compute_api
-from nova.compute import delete_types
 from nova.compute import flavors
 from nova.compute import task_states
 from nova.compute import vm_states
@@ -477,26 +477,14 @@ class ServersControllerTest(ControllerTest):
         expected = {
             'addresses': {
                 'private': [
-                    {'version': 4, 'addr': '192.168.0.3',
-                     'OS-EXT-IPS:type': 'fixed',
-                     'OS-EXT-IPS-MAC:mac_addr': 'bb:bb:bb:bb:bb:bb'},
-                    {'version': 4, 'addr': '192.168.0.4',
-                     'OS-EXT-IPS:type': 'fixed',
-                     'OS-EXT-IPS-MAC:mac_addr': 'bb:bb:bb:bb:bb:bb'},
+                    {'version': 4, 'addr': '192.168.0.3'},
+                    {'version': 4, 'addr': '192.168.0.4'},
                 ],
                 'public': [
-                    {'version': 4, 'addr': '172.19.0.1',
-                     'OS-EXT-IPS:type': 'fixed',
-                     'OS-EXT-IPS-MAC:mac_addr': 'aa:aa:aa:aa:aa:aa'},
-                    {'version': 4, 'addr': '172.19.0.2',
-                     'OS-EXT-IPS:type': 'fixed',
-                     'OS-EXT-IPS-MAC:mac_addr': 'aa:aa:aa:aa:aa:aa'},
-                    {'version': 4, 'addr': '1.2.3.4',
-                     'OS-EXT-IPS:type': 'fixed',
-                     'OS-EXT-IPS-MAC:mac_addr': 'aa:aa:aa:aa:aa:aa'},
-                    {'version': 6, 'addr': 'b33f::fdee:ddff:fecc:bbaa',
-                     'OS-EXT-IPS:type': 'fixed',
-                     'OS-EXT-IPS-MAC:mac_addr': 'aa:aa:aa:aa:aa:aa'},
+                    {'version': 4, 'addr': '172.19.0.1'},
+                    {'version': 4, 'addr': '172.19.0.2'},
+                    {'version': 4, 'addr': '1.2.3.4'},
+                    {'version': 6, 'addr': 'b33f::fdee:ddff:fecc:bbaa'},
                 ],
             },
         }
@@ -863,12 +851,11 @@ class ServersControllerTest(ControllerTest):
                        fake_get_all)
 
         rules = {
-            "compute:get_all_tenants":
+            "compute:v3:servers:index":
                 common_policy.parse_rule("project_id:fake"),
-            "compute:get_all":
-                common_policy.parse_rule("project_id:fake"),
+            "compute:v3:servers:index:get_all_tenants":
+                common_policy.parse_rule("project_id:fake")
         }
-
         policy.set_rules(rules)
 
         req = fakes.HTTPRequestV3.blank('/servers?all_tenants=1')
@@ -882,9 +869,9 @@ class ServersControllerTest(ControllerTest):
             return [fakes.stub_instance(100)]
 
         rules = {
-            "compute:get_all_tenants":
+            "compute:v3:servers:index:get_all_tenants":
                 common_policy.parse_rule("project_id:non_fake"),
-            "compute:get_all":
+            "compute:v3:servers:get_all":
                 common_policy.parse_rule("project_id:fake"),
         }
 
@@ -1323,9 +1310,9 @@ class ServersControllerDeleteTest(ControllerTest):
 
     def test_delete_locked_server(self):
         req = self._create_delete_request(FAKE_UUID)
-        self.stubs.Set(compute_api.API, delete_types.SOFT_DELETE,
+        self.stubs.Set(compute_api.API, 'soft_delete',
                        fakes.fake_actions_to_locked_server)
-        self.stubs.Set(compute_api.API, delete_types.DELETE,
+        self.stubs.Set(compute_api.API, 'delete',
                        fakes.fake_actions_to_locked_server)
 
         self.assertRaises(webob.exc.HTTPConflict, self.controller.delete,
@@ -1917,9 +1904,6 @@ class ServersControllerCreateTest(test.TestCase):
 
         def project_get_networks(context, user_id):
             return dict(id='1', host='localhost')
-
-        def queue_get_for(context, *args):
-            return 'network_topic'
 
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
@@ -3413,3 +3397,210 @@ class TestServersExtensionSchema(test.NoDBTestCase):
 
         actual_schema = self._test_load_extension_schema('resize')
         self.assertEqual(expected_schema, actual_schema)
+
+
+# TODO(alex_xu): There isn't specified file for ips extension. Most of
+# unittest related to ips extension is in this file. So put the ips policy
+# enforcement tests at here until there is specified file for ips extension.
+class IPsPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(IPsPolicyEnforcementV21, self).setUp()
+        self.controller = ips.IPsController()
+        self.req = fakes.HTTPRequest.blank('')
+
+    def test_index_policy_failed(self):
+        rule_name = "compute_extension:v3:ips:index"
+        self.policy.set_rules({rule_name: "project:non_fake"})
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            self.controller.index, self.req, fakes.FAKE_UUID)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+    def test_show_policy_failed(self):
+        rule_name = "compute_extension:v3:ips:show"
+        self.policy.set_rules({rule_name: "project:non_fake"})
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            self.controller.show, self.req, fakes.FAKE_UUID, fakes.FAKE_UUID)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+
+class ServersPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(ServersPolicyEnforcementV21, self).setUp()
+        ext_info = plugins.LoadedExtensionInfo()
+        ext_info.extensions.update({'os-networks': 'fake'})
+        self.controller = servers.ServersController(extension_info=ext_info)
+        self.req = fakes.HTTPRequest.blank('')
+        self.image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
+
+    def _common_policy_check(self, rules, rule_name, func, *arg, **kwarg):
+        self.policy.set_rules(rules)
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized, func, *arg, **kwarg)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+    @mock.patch.object(servers.ServersController, '_get_instance')
+    def test_start_policy_failed(self, _get_instance_mock):
+        _get_instance_mock.return_value = None
+        rule_name = "compute:v3:servers:start"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller._start_server,
+            self.req, FAKE_UUID, body={})
+
+    @mock.patch.object(servers.ServersController, '_get_instance')
+    def test_stop_policy_failed(self, _get_instance_mock):
+        _get_instance_mock.return_value = None
+        rule_name = "compute:v3:servers:stop"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller._stop_server,
+            self.req, FAKE_UUID, body={})
+
+    def test_index_policy_failed(self):
+        rule_name = "compute:v3:servers:index"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller.index, self.req)
+
+    def test_detail_policy_failed(self):
+        rule_name = "compute:v3:servers:detail"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller.detail, self.req)
+
+    def test_detail_get_tenants_policy_failed(self):
+        req = fakes.HTTPRequest.blank('')
+        req.GET["all_tenants"] = "True"
+        rule_name = "compute:v3:servers:detail:get_all_tenants"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller._get_servers, req, True)
+
+    def test_index_get_tenants_policy_failed(self):
+        req = fakes.HTTPRequest.blank('')
+        req.GET["all_tenants"] = "True"
+        rule_name = "compute:v3:servers:index:get_all_tenants"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller._get_servers, req, False)
+
+    @mock.patch.object(common, 'get_instance')
+    def test_show_policy_failed(self, get_instance_mock):
+        get_instance_mock.return_value = None
+        rule_name = "compute:v3:servers:show"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller.show, self.req, FAKE_UUID)
+
+    def test_delete_policy_failed(self):
+        rule_name = "compute:v3:servers:delete"
+        rule = {rule_name: "project:non_fake"}
+        self._common_policy_check(
+            rule, rule_name, self.controller.delete, self.req, FAKE_UUID)
+
+    def test_update_policy_failed(self):
+        rule_name = "compute:v3:servers:update"
+        rule = {rule_name: "project:non_fake"}
+        body = {'server': {'name': 'server_test'}}
+        self._common_policy_check(
+            rule, rule_name, self.controller.update, self.req,
+            FAKE_UUID, body=body)
+
+    def test_confirm_resize_policy_failed(self):
+        rule_name = "compute:v3:servers:confirm_resize"
+        rule = {rule_name: "project:non_fake"}
+        body = {'server': {'name': 'server_test'}}
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_confirm_resize,
+            self.req, FAKE_UUID, body=body)
+
+    def test_revert_resize_policy_failed(self):
+        rule_name = "compute:v3:servers:revert_resize"
+        rule = {rule_name: "project:non_fake"}
+        body = {'server': {'name': 'server_test'}}
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_revert_resize,
+            self.req, FAKE_UUID, body=body)
+
+    def test_reboot_policy_failed(self):
+        rule_name = "compute:v3:servers:reboot"
+        rule = {rule_name: "project:non_fake"}
+        body = {'reboot': {'type': 'HARD'}}
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_reboot,
+            self.req, FAKE_UUID, body=body)
+
+    def test_resize_policy_failed(self):
+        rule_name = "compute:v3:servers:resize"
+        rule = {rule_name: "project:non_fake"}
+        flavor_id = 1
+        self._common_policy_check(
+            rule, rule_name, self.controller._resize, self.req,
+            FAKE_UUID, flavor_id)
+
+    def test_create_image_policy_failed(self):
+        rule_name = "compute:v3:servers:create_image"
+        rule = {rule_name: "project:non_fake"}
+        body = {
+            'createImage': {
+                'name': 'Snapshot 1',
+            },
+        }
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_create_image,
+            self.req, FAKE_UUID, body=body)
+
+    def _create_policy_check(self, rules, rule_name):
+        flavor_ref = 'http://localhost/123/flavors/3'
+        body = {
+            'server': {
+                'name': 'server_test',
+                'imageRef': self.image_uuid,
+                'flavorRef': flavor_ref,
+                'availability_zone': "zone1:host1:node1",
+                'block_device_mapping': [{'device_name': "/dev/sda1"}],
+                'networks': [{'uuid': 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'}],
+                'metadata': {
+                    'hello': 'world',
+                    'open': 'stack',
+                },
+            },
+        }
+        self._common_policy_check(
+            rules, rule_name, self.controller.create, self.req, body=body)
+
+    def test_create_policy_failed(self):
+        rule_name = "compute:v3:servers:create"
+        rules = {rule_name: "project:non_fake"}
+        self._create_policy_check(rules, rule_name)
+
+    def test_create_forced_host_policy_failed(self):
+        rule_name = "compute:v3:servers:create:forced_host"
+        rule = {"compute:v3:servers:create": "@",
+                rule_name: "project:non_fake"}
+        self._create_policy_check(rule, rule_name)
+
+    def test_create_attach_volume_policy_failed(self):
+        rule_name = "compute:v3:servers:create:attach_volume"
+        rules = {"compute:v3:servers:create": "@",
+                 "compute:v3:servers:create:forced_host": "@",
+                 rule_name: "project:non_fake"}
+        self._create_policy_check(rules, rule_name)
+
+    def test_create_attach_attach_network_policy_failed(self):
+        rule_name = "compute:v3:servers:create:attach_network"
+        rules = {"compute:v3:servers:create": "@",
+                 "compute:v3:servers:create:forced_host": "@",
+                 "compute:v3:servers:create:attach_volume": "@",
+                 rule_name: "project:non_fake"}
+        self._create_policy_check(rules, rule_name)

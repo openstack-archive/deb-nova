@@ -20,11 +20,10 @@ for Openstack Nova."""
 import os
 import sys
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
-from nova import config
 from nova.console import websocketproxy
-from nova.openstack.common import log as logging
 from nova.openstack.common.report import guru_meditation_report as gmr
 from nova import version
 
@@ -44,8 +43,6 @@ def exit_with_error(msg, errno=-1):
 
 
 def proxy(host, port):
-    # Setup flags
-    config.parse_args(sys.argv)
 
     if CONF.ssl_only and not os.path.exists(CONF.cert):
         exit_with_error("SSL only and %s not found" % CONF.cert)
@@ -54,7 +51,7 @@ def proxy(host, port):
     if CONF.web and not os.path.exists(CONF.web):
         exit_with_error("Can not find html/js files at %s." % CONF.web)
 
-    logging.setup("nova")
+    logging.setup(CONF, "nova")
 
     gmr.TextGuruMeditation.setup_autorun(version)
 

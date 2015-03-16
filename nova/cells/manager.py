@@ -19,10 +19,11 @@ Cells Service Manager
 import datetime
 import time
 
-from oslo.config import cfg
-from oslo import messaging as oslo_messaging
-from oslo.utils import importutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging
+from oslo_utils import importutils
+from oslo_utils import timeutils
 
 from nova.cells import messaging
 from nova.cells import state as cells_state
@@ -34,7 +35,6 @@ from nova import manager
 from nova import objects
 from nova.objects import base as base_obj
 from nova.objects import instance as instance_obj
-from nova.openstack.common import log as logging
 from nova.openstack.common import periodic_task
 
 cell_manager_opts = [
@@ -74,7 +74,7 @@ class CellsManager(manager.Manager):
     Scheduling requests get passed to the scheduler class.
     """
 
-    target = oslo_messaging.Target(version='1.33')
+    target = oslo_messaging.Target(version='1.34')
 
     def __init__(self, *args, **kwargs):
         LOG.warning(_LW('The cells feature of Nova is considered experimental '
@@ -276,6 +276,7 @@ class CellsManager(manager.Manager):
                 ret_services.append(service)
         return ret_services
 
+    @oslo_messaging.expected_exceptions(exception.CellRoutingInconsistency)
     def service_get_by_compute_host(self, ctxt, host_name):
         """Return a service entry for a compute host in a certain cell."""
         cell_name, host_name = cells_utils.split_cell_and_item(host_name)
@@ -320,6 +321,7 @@ class CellsManager(manager.Manager):
             cell_service_id)
         self.msg_runner.service_delete(ctxt, cell_name, service_id)
 
+    @oslo_messaging.expected_exceptions(exception.CellRoutingInconsistency)
     def proxy_rpc_to_manager(self, ctxt, topic, rpc_message, call, timeout):
         """Proxy an RPC message as-is to a manager."""
         compute_topic = CONF.compute_topic

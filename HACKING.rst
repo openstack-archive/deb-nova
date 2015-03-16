@@ -39,7 +39,7 @@ Nova Specific Commandments
 - [N326] Translated messages cannot be concatenated.  String should be included in translated message.
 - [N328] Validate that LOG.info messages use _LI.
 - [N329] Validate that LOG.exception messages use _LE.
-- [N330] Validate that LOG.warning messages use _LW.
+- [N330] Validate that LOG.warning and LOG.warn messages use _LW.
 - [N332] Check that the api_version decorator is the first decorator on a method
 - [N333] Check for oslo library imports use the non-namespaced packages
 - [N334] Change assertTrue/False(A in/not in B, message) to the more specific
@@ -77,6 +77,14 @@ testr arguments that are needed to tox. For example, you can run:
 Python packages may also have dependencies that are outside of tox's ability
 to install. Please refer to doc/source/devref/development.environment.rst for
 a list of those packages on Ubuntu, Fedora and Mac OS X.
+
+To run a single or restricted set of tests, pass a regex that matches
+the class name containing the tests as an extra ``tox`` argument;
+e.g. ``tox -- TestWSGIServer`` (note the double-hypen) will test all
+WSGI server tests from ``nova/tests/test_wsgi.py``; ``--
+TestWSGIServer.test_uri_length_limit`` would run just that test, and
+``-- TestWSGIServer|TestWSGIServerWithSSL`` would run tests from both
+classes.
 
 It is also possible to run the tests inside of a virtual environment
 you have created, or it is possible that you have all of the dependencies

@@ -15,7 +15,9 @@
 
 """The volumes extension."""
 
-from oslo.utils import strutils
+from oslo_log import log as logging
+from oslo_utils import strutils
+from oslo_utils import uuidutils
 import webob
 from webob import exc
 
@@ -25,9 +27,8 @@ from nova.api.openstack import wsgi
 from nova import compute
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LI
 from nova import objects
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 from nova import volume
 
 LOG = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ def _translate_volume_summary_view(context, vol):
         d['volumeType'] = vol['volume_type_id']
 
     d['snapshotId'] = vol['snapshot_id']
-    LOG.audit(_("vol=%s"), vol, context=context)
+    LOG.info(_LI("vol=%s"), vol, context=context)
 
     if vol.get('volume_metadata'):
         d['metadata'] = vol.get('volume_metadata')
@@ -107,7 +108,7 @@ class VolumeController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        LOG.audit(_("Delete volume with id: %s"), id, context=context)
+        LOG.info(_LI("Delete volume with id: %s"), id, context=context)
 
         try:
             self.volume_api.delete(context, id)
@@ -159,7 +160,7 @@ class VolumeController(wsgi.Controller):
         if size is None and snapshot is not None:
             size = snapshot['volume_size']
 
-        LOG.audit(_("Create volume of %s GB"), size, context=context)
+        LOG.info(_LI("Create volume of %s GB"), size, context=context)
 
         availability_zone = vol.get('availability_zone', None)
 
@@ -245,7 +246,7 @@ class VolumeAttachmentController(wsgi.Controller):
         volume_id = id
         instance = common.get_instance(self.compute_api, context, server_id)
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
 
         if not bdms:
             msg = _("Instance %s is not attached.") % server_id
@@ -264,7 +265,7 @@ class VolumeAttachmentController(wsgi.Controller):
 
         return {'volumeAttachment': _translate_attachment_detail_view(
             volume_id,
-            instance['uuid'],
+            instance.uuid,
             assigned_mountpoint)}
 
     def _validate_volume_id(self, volume_id):
@@ -291,15 +292,14 @@ class VolumeAttachmentController(wsgi.Controller):
 
         self._validate_volume_id(volume_id)
 
-        LOG.audit(_("Attach volume %(volume_id)s to instance %(server_id)s "
+        LOG.info(_LI("Attach volume %(volume_id)s to instance %(server_id)s "
                     "at %(device)s"),
                   {'volume_id': volume_id,
                    'device': device,
                    'server_id': server_id},
                   context=context)
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
         try:
             device = self.compute_api.attach_volume(context, instance,
                                                     volume_id, device)
@@ -352,8 +352,7 @@ class VolumeAttachmentController(wsgi.Controller):
         self._validate_volume_id(new_volume_id)
         new_volume = self.volume_api.get(context, new_volume_id)
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
@@ -390,15 +389,14 @@ class VolumeAttachmentController(wsgi.Controller):
         authorize_attach(context, action='delete')
 
         volume_id = id
-        LOG.audit(_("Detach volume %s"), volume_id, context=context)
+        LOG.info(_LI("Detach volume %s"), volume_id, context=context)
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         volume = self.volume_api.get(context, volume_id)
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
         if not bdms:
             msg = _("Instance %s is not attached.") % server_id
             raise exc.HTTPNotFound(explanation=msg)
@@ -439,7 +437,7 @@ class VolumeAttachmentController(wsgi.Controller):
         instance = common.get_instance(self.compute_api, context, server_id)
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
         limited_list = common.limited(bdms, req)
         results = []
 
@@ -500,7 +498,7 @@ class SnapshotController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        LOG.audit(_("Delete snapshot with id: %s"), id, context=context)
+        LOG.info(_LI("Delete snapshot with id: %s"), id, context=context)
 
         try:
             self.volume_api.delete_snapshot(context, id)
@@ -538,7 +536,7 @@ class SnapshotController(wsgi.Controller):
         snapshot = body['snapshot']
         volume_id = snapshot['volume_id']
 
-        LOG.audit(_("Create snapshot from volume %s"), volume_id,
+        LOG.info(_LI("Create snapshot from volume %s"), volume_id,
                   context=context)
 
         force = snapshot.get('force', False)

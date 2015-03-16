@@ -18,15 +18,18 @@ import hashlib
 import importlib
 import os
 import os.path
+import socket
 import StringIO
+import struct
 import tempfile
 
 import mock
 from mox3 import mox
 import netaddr
-from oslo.config import cfg
-from oslo.utils import timeutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_utils import encodeutils
+from oslo_utils import timeutils
 
 import nova
 from nova import exception
@@ -191,6 +194,13 @@ class GenericUtilsTestCase(test.NoDBTestCase):
                           utils.get_shortened_ipv6_cidr,
                           "failure")
 
+    def test_safe_ip_format(self):
+        self.assertEqual("[::1]", utils.safe_ip_format("::1"))
+        self.assertEqual("127.0.0.1", utils.safe_ip_format("127.0.0.1"))
+        self.assertEqual("[::ffff:127.0.0.1]", utils.safe_ip_format(
+                         "::ffff:127.0.0.1"))
+        self.assertEqual("localhost", utils.safe_ip_format("localhost"))
+
     def test_get_hash_str(self):
         base_str = "foo"
         value = hashlib.md5(base_str).hexdigest()
@@ -207,6 +217,58 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.flags(disable_rootwrap=True, group='workarounds')
         cmd = utils._get_root_helper()
         self.assertEqual('sudo', cmd)
+
+
+class VPNPingTestCase(test.NoDBTestCase):
+    """Unit tests for utils.vpn_ping()."""
+    def setUp(self):
+        super(VPNPingTestCase, self).setUp()
+        self.port = 'fake'
+        self.address = 'fake'
+        self.session_id = 0x1234
+        self.fmt = '!BQxxxxxQxxxx'
+
+    def fake_reply_packet(self, pkt_id=0x40):
+        return struct.pack(self.fmt, pkt_id, 0x0, self.session_id)
+
+    def setup_socket(sefl, mock_socket, return_value, side_effect=None):
+        socket_obj = mock.MagicMock()
+        if side_effect is not None:
+            socket_obj.recv.side_effect = side_effect
+        else:
+            socket_obj.recv.return_value = return_value
+        mock_socket.return_value = socket_obj
+
+    @mock.patch.object(socket, 'socket')
+    def test_vpn_ping_timeout(self, mock_socket):
+        """Server doesn't reply within timeout."""
+        self.setup_socket(mock_socket, None, socket.timeout)
+        rc = utils.vpn_ping(self.address, self.port,
+                            session_id=self.session_id)
+        self.assertFalse(rc)
+
+    @mock.patch.object(socket, 'socket')
+    def test_vpn_ping_bad_len(self, mock_socket):
+        """Test a short/invalid server reply."""
+        self.setup_socket(mock_socket, 'fake_reply')
+        rc = utils.vpn_ping(self.address, self.port,
+                            session_id=self.session_id)
+        self.assertFalse(rc)
+
+    @mock.patch.object(socket, 'socket')
+    def test_vpn_ping_bad_id(self, mock_socket):
+        """Server sends an unknown packet ID."""
+        self.setup_socket(mock_socket, self.fake_reply_packet(pkt_id=0x41))
+        rc = utils.vpn_ping(self.address, self.port,
+                            session_id=self.session_id)
+        self.assertFalse(rc)
+
+    @mock.patch.object(socket, 'socket')
+    def test_vpn_ping_ok(self, mock_socket):
+        self.setup_socket(mock_socket, self.fake_reply_packet())
+        rc = utils.vpn_ping(self.address, self.port,
+                            session_id=self.session_id)
+        self.assertTrue(rc)
 
 
 class MonkeyPatchTestCase(test.NoDBTestCase):
@@ -500,27 +562,6 @@ class LastBytesTestCase(test.NoDBTestCase):
         self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
 
 
-class IntLikeTestCase(test.NoDBTestCase):
-
-    def test_is_int_like(self):
-        self.assertTrue(utils.is_int_like(1))
-        self.assertTrue(utils.is_int_like("1"))
-        self.assertTrue(utils.is_int_like("514"))
-        self.assertTrue(utils.is_int_like("0"))
-
-        self.assertFalse(utils.is_int_like(1.1))
-        self.assertFalse(utils.is_int_like("1.1"))
-        self.assertFalse(utils.is_int_like("1.1.1"))
-        self.assertFalse(utils.is_int_like(None))
-        self.assertFalse(utils.is_int_like("0."))
-        self.assertFalse(utils.is_int_like("aaaaaa"))
-        self.assertFalse(utils.is_int_like("...."))
-        self.assertFalse(utils.is_int_like("1g"))
-        self.assertFalse(
-            utils.is_int_like("0cc3346e-9fef-4445-abe6-5d2b2690ec64"))
-        self.assertFalse(utils.is_int_like("a1"))
-
-
 class MetadataToDictTestCase(test.NoDBTestCase):
     def test_metadata_to_dict(self):
         self.assertEqual(utils.metadata_to_dict(
@@ -534,9 +575,9 @@ class MetadataToDictTestCase(test.NoDBTestCase):
     def test_dict_to_metadata(self):
         expected = [{'key': 'foo1', 'value': 'bar1'},
                     {'key': 'foo2', 'value': 'bar2'}]
-        self.assertEqual(utils.dict_to_metadata(dict(foo1='bar1',
-                                                     foo2='bar2')),
-                         expected)
+        self.assertEqual(sorted(utils.dict_to_metadata(dict(foo1='bar1',
+                                                     foo2='bar2'))),
+                         sorted(expected))
 
     def test_dict_to_metadata_empty(self):
         self.assertEqual(utils.dict_to_metadata({}), [])
@@ -952,3 +993,23 @@ class ResourceFilterTestCase(test.NoDBTestCase):
         # Make sure bug #1365887 is fixed
         i1['metadata']['key3'] = 'a'
         self._assert_filtering(rl, {'value': 'banana'}, [])
+
+
+class SafeTruncateTestCase(test.NoDBTestCase):
+    def test_exception_to_dict_with_long_message_3_bytes(self):
+        # Generate Chinese byte string whose length is 300. This Chinese UTF-8
+        # character occupies 3 bytes. After truncating, the byte string length
+        # should be 255.
+        msg = encodeutils.safe_decode('\xe8\xb5\xb5' * 100)
+        truncated_msg = utils.safe_truncate(msg, 255)
+        byte_message = encodeutils.safe_encode(truncated_msg)
+        self.assertEqual(255, len(byte_message))
+
+    def test_exception_to_dict_with_long_message_2_bytes(self):
+        # Generate Russian byte string whose length is 300. This Russian UTF-8
+        # character occupies 2 bytes. After truncating, the byte string length
+        # should be 254.
+        msg = encodeutils.safe_decode('\xd0\x92' * 150)
+        truncated_msg = utils.safe_truncate(msg, 255)
+        byte_message = encodeutils.safe_encode(truncated_msg)
+        self.assertEqual(254, len(byte_message))

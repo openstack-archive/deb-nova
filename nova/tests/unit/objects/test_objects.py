@@ -21,8 +21,9 @@ import os
 import pprint
 
 import mock
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_log import log
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 import six
 from testtools import matchers
 
@@ -32,7 +33,6 @@ from nova import exception
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova.openstack.common import log
 from nova import rpc
 from nova import test
 from nova.tests.unit import fake_notifier
@@ -57,6 +57,7 @@ class MyObj(base.NovaPersistentObject, base.NovaObject,
               'rel_object': fields.ObjectField('MyOwnedObject', nullable=True),
               'rel_objects': fields.ListOfObjectsField('MyOwnedObject',
                                                        nullable=True),
+              'mutable_default': fields.ListOfStringsField(default=[]),
               }
 
     @staticmethod
@@ -140,7 +141,7 @@ class TestSubclassedObject(RandomMixInWithNoFields, MyObj):
     fields = {'new_field': fields.Field(fields.String())}
 
 
-class TestMetaclass(test.TestCase):
+class TestMetaclass(test.NoDBTestCase):
     def test_obj_tracking(self):
 
         @six.add_metaclass(base.NovaObjectMetaclass)
@@ -205,7 +206,7 @@ class TestMetaclass(test.TestCase):
                           create_class, int)
 
 
-class TestObjToPrimitive(test.TestCase):
+class TestObjToPrimitive(test.NoDBTestCase):
 
     def test_obj_to_primitive_list(self):
         class MyObjElement(base.NovaObject):
@@ -248,7 +249,7 @@ class TestObjToPrimitive(test.TestCase):
                          base.obj_to_primitive(obj))
 
 
-class TestObjMakeList(test.TestCase):
+class TestObjMakeList(test.NoDBTestCase):
 
     def test_obj_make_list(self):
         class MyList(base.ObjectListBase, base.NovaObject):
@@ -564,9 +565,8 @@ class _TestObject(object):
         ctxt1 = context.RequestContext('foo', 'foo')
         ctxt2 = context.RequestContext('bar', 'alternate')
         obj = MyObj.query(ctxt1)
-        obj._update_test(ctxt2)
-        self.assertEqual(obj.bar, 'alternate-context')
-        self.assertRemotes()
+        self.assertRaises(exception.ObjectActionError,
+                          obj._update_test, ctxt2)
 
     def test_orphaned_object(self):
         obj = MyObj.query(self.context)
@@ -579,7 +579,7 @@ class _TestObject(object):
         obj = MyObj.query(self.context)
         obj.foo = 123
         self.assertEqual(obj.obj_what_changed(), set(['foo']))
-        obj._update_test(self.context)
+        obj._update_test()
         self.assertEqual(obj.obj_what_changed(), set(['foo', 'bar']))
         self.assertEqual(obj.foo, 123)
         self.assertRemotes()
@@ -607,7 +607,7 @@ class _TestObject(object):
         obj = MyObj.query(self.context)
         obj.bar = 'something'
         self.assertEqual(obj.obj_what_changed(), set(['bar']))
-        obj.modify_save_modify(self.context)
+        obj.modify_save_modify()
         self.assertEqual(obj.obj_what_changed(), set(['foo', 'rel_object']))
         self.assertEqual(obj.foo, 42)
         self.assertEqual(obj.bar, 'meow')
@@ -676,6 +676,23 @@ class _TestObject(object):
         self.assertFalse(obj.obj_attr_is_set('bar'))
         self.assertRaises(AttributeError, obj.obj_attr_is_set, 'bang')
 
+    def test_obj_reset_changes_recursive(self):
+        obj = MyObj(rel_object=MyOwnedObject(baz=123),
+                    rel_objects=[MyOwnedObject(baz=456)])
+        self.assertEqual(set(['rel_object', 'rel_objects']),
+                         obj.obj_what_changed())
+        obj.obj_reset_changes()
+        self.assertEqual(set(['rel_object']), obj.obj_what_changed())
+        self.assertEqual(set(['baz']), obj.rel_object.obj_what_changed())
+        self.assertEqual(set(['baz']), obj.rel_objects[0].obj_what_changed())
+        obj.obj_reset_changes(recursive=True, fields=['foo'])
+        self.assertEqual(set(['rel_object']), obj.obj_what_changed())
+        self.assertEqual(set(['baz']), obj.rel_object.obj_what_changed())
+        self.assertEqual(set(['baz']), obj.rel_objects[0].obj_what_changed())
+        obj.obj_reset_changes(recursive=True)
+        self.assertEqual(set([]), obj.rel_object.obj_what_changed())
+        self.assertEqual(set([]), obj.obj_what_changed())
+
     def test_get(self):
         obj = MyObj(foo=1)
         # Foo has value, should not get the default
@@ -696,7 +713,8 @@ class _TestObject(object):
     def test_object_inheritance(self):
         base_fields = base.NovaPersistentObject.fields.keys()
         myobj_fields = (['foo', 'bar', 'missing',
-                         'readonly', 'rel_object', 'rel_objects'] +
+                         'readonly', 'rel_object',
+                         'rel_objects', 'mutable_default'] +
                         base_fields)
         myobj3_fields = ['new_field']
         self.assertTrue(issubclass(TestSubclassedObject, MyObj))
@@ -727,6 +745,13 @@ class _TestObject(object):
             with obj.obj_as_admin():
                 pass
         self.assertRaises(exception.OrphanedObjectError, testme)
+
+    def test_obj_alternate_context(self):
+        obj = MyObj(context=self.context)
+        with obj.obj_alternate_context(mock.sentinel.alt_ctx):
+            self.assertEqual(mock.sentinel.alt_ctx,
+                             obj._context)
+        self.assertEqual(self.context, obj._context)
 
     def test_get_changes(self):
         obj = MyObj()
@@ -762,54 +787,77 @@ class _TestObject(object):
         self.assertRaises(exception.ReadOnlyFieldError, setattr,
                           obj, 'readonly', 2)
 
+    def test_obj_mutable_default(self):
+        obj = MyObj(context=self.context, foo=123, bar='abc')
+        obj.mutable_default = None
+        obj.mutable_default.append('s1')
+        self.assertEqual(obj.mutable_default, ['s1'])
+
+        obj1 = MyObj(context=self.context, foo=123, bar='abc')
+        obj1.mutable_default = None
+        obj1.mutable_default.append('s2')
+        self.assertEqual(obj1.mutable_default, ['s2'])
+
+    def test_obj_mutable_default_set_default(self):
+        obj1 = MyObj(context=self.context, foo=123, bar='abc')
+        obj1.obj_set_defaults('mutable_default')
+        self.assertEqual(obj1.mutable_default, [])
+        obj1.mutable_default.append('s1')
+        self.assertEqual(obj1.mutable_default, ['s1'])
+
+        obj2 = MyObj(context=self.context, foo=123, bar='abc')
+        obj2.obj_set_defaults('mutable_default')
+        self.assertEqual(obj2.mutable_default, [])
+        obj2.mutable_default.append('s2')
+        self.assertEqual(obj2.mutable_default, ['s2'])
+
     def test_obj_repr(self):
         obj = MyObj(foo=123)
         self.assertEqual('MyObj(bar=<?>,created_at=<?>,deleted=<?>,'
-                         'deleted_at=<?>,foo=123,missing=<?>,readonly=<?>,'
-                         'rel_object=<?>,rel_objects=<?>,updated_at=<?>)',
+                         'deleted_at=<?>,foo=123,missing=<?>,'
+                         'mutable_default=<?>,readonly=<?>,rel_object=<?>,'
+                         'rel_objects=<?>,updated_at=<?>)',
                          repr(obj))
 
     def test_obj_make_obj_compatible(self):
         subobj = MyOwnedObject(baz=1)
+        subobj.VERSION = '1.2'
         obj = MyObj(rel_object=subobj)
         obj.obj_relationships = {
             'rel_object': [('1.5', '1.1'), ('1.7', '1.2')],
         }
-        primitive = obj.obj_to_primitive()['nova_object.data']
+        orig_primitive = obj.obj_to_primitive()['nova_object.data']
         with mock.patch.object(subobj, 'obj_make_compatible') as mock_compat:
-            obj._obj_make_obj_compatible(copy.copy(primitive), '1.8',
-                                         'rel_object')
+            primitive = copy.deepcopy(orig_primitive)
+            obj._obj_make_obj_compatible(primitive, '1.8', 'rel_object')
             self.assertFalse(mock_compat.called)
 
         with mock.patch.object(subobj, 'obj_make_compatible') as mock_compat:
-            obj._obj_make_obj_compatible(copy.copy(primitive),
-                                         '1.7', 'rel_object')
-            mock_compat.assert_called_once_with(
-                primitive['rel_object']['nova_object.data'], '1.2')
-            self.assertEqual('1.2',
-                             primitive['rel_object']['nova_object.version'])
+            primitive = copy.deepcopy(orig_primitive)
+            obj._obj_make_obj_compatible(primitive, '1.7', 'rel_object')
+            self.assertFalse(mock_compat.called)
 
         with mock.patch.object(subobj, 'obj_make_compatible') as mock_compat:
-            obj._obj_make_obj_compatible(copy.copy(primitive),
-                                         '1.6', 'rel_object')
+            primitive = copy.deepcopy(orig_primitive)
+            obj._obj_make_obj_compatible(primitive, '1.6', 'rel_object')
             mock_compat.assert_called_once_with(
                 primitive['rel_object']['nova_object.data'], '1.1')
             self.assertEqual('1.1',
                              primitive['rel_object']['nova_object.version'])
 
         with mock.patch.object(subobj, 'obj_make_compatible') as mock_compat:
-            obj._obj_make_obj_compatible(copy.copy(primitive), '1.5',
-                                         'rel_object')
+            primitive = copy.deepcopy(orig_primitive)
+            obj._obj_make_obj_compatible(primitive, '1.5', 'rel_object')
             mock_compat.assert_called_once_with(
                 primitive['rel_object']['nova_object.data'], '1.1')
             self.assertEqual('1.1',
                              primitive['rel_object']['nova_object.version'])
 
         with mock.patch.object(subobj, 'obj_make_compatible') as mock_compat:
-            _prim = copy.copy(primitive)
-            obj._obj_make_obj_compatible(_prim, '1.4', 'rel_object')
+            primitive = copy.deepcopy(orig_primitive)
+            obj._obj_make_obj_compatible(primitive, '1.4', 'rel_object')
             self.assertFalse(mock_compat.called)
-            self.assertNotIn('rel_object', _prim)
+            self.assertNotIn('rel_object', primitive)
 
     def test_obj_make_compatible_hits_sub_objects(self):
         subobj = MyOwnedObject(baz=1)
@@ -848,6 +896,20 @@ class _TestObject(object):
             obj.obj_to_primitive('1.0')
             self.assertTrue(mock_mc.called)
 
+    def test_delattr(self):
+        obj = MyObj(bar='foo')
+        del obj.bar
+
+        # Should appear unset now
+        self.assertFalse(obj.obj_attr_is_set('bar'))
+
+        # Make sure post-delete, references trigger lazy loads
+        self.assertEqual('loaded!', getattr(obj, 'bar'))
+
+    def test_delattr_unset(self):
+        obj = MyObj()
+        self.assertRaises(AttributeError, delattr, obj, 'bar')
+
 
 class TestObject(_LocalTest, _TestObject):
     def test_set_defaults(self):
@@ -864,8 +926,17 @@ class TestObject(_LocalTest, _TestObject):
     def test_set_all_defaults(self):
         obj = MyObj()
         obj.obj_set_defaults()
-        self.assertEqual(set(['deleted', 'foo']), obj.obj_what_changed())
+        self.assertEqual(set(['deleted', 'foo', 'mutable_default']),
+                         obj.obj_what_changed())
         self.assertEqual(1, obj.foo)
+
+    def test_set_defaults_not_overwrite(self):
+        # NOTE(danms): deleted defaults to False, so verify that it does
+        # not get reset by obj_set_defaults()
+        obj = MyObj(deleted=True)
+        obj.obj_set_defaults()
+        self.assertEqual(1, obj.foo)
+        self.assertTrue(obj.deleted)
 
 
 class TestRemoteObject(_RemoteTest, _TestObject):
@@ -896,7 +967,7 @@ class TestRemoteObject(_RemoteTest, _TestObject):
         self.assertEqual('bar', obj.bar)
 
 
-class TestObjectListBase(test.TestCase):
+class TestObjectListBase(test.NoDBTestCase):
     def test_list_like_operations(self):
         class MyElement(base.NovaObject):
             fields = {'foo': fields.IntegerField()}
@@ -1119,8 +1190,8 @@ object_data = {
     'AggregateList': '1.2-4b02a285b8612bfb86a96ff80052fb0a',
     'BandwidthUsage': '1.2-a9d7c2ba54995e48ce38688c51c9416d',
     'BandwidthUsageList': '1.2-5b564cbfd5ae6e106443c086938e7602',
-    'BlockDeviceMapping': '1.7-c53f09c7f969e0222d9f6d67a950a08e',
-    'BlockDeviceMappingList': '1.8-15ab98892f8fd26faa49f45f3cffaef0',
+    'BlockDeviceMapping': '1.8-c53f09c7f969e0222d9f6d67a950a08e',
+    'BlockDeviceMappingList': '1.9-0faaeebdca213010c791bc37a22546e3',
     'ComputeNode': '1.10-70202a38b858977837b313d94475a26b',
     'ComputeNodeList': '1.10-4ae1f844c247029fbcdb5fdccbe9e619',
     'DNSDomain': '1.0-5bdc288d7c3b723ce86ede998fd5c9ba',
@@ -1128,14 +1199,14 @@ object_data = {
     'EC2InstanceMapping': '1.0-627baaf4b12c9067200979bdc4558a99',
     'EC2SnapshotMapping': '1.0-26cf315be1f8abab4289d4147671c836',
     'EC2VolumeMapping': '1.0-2f8c3bf077c65a425294ec2b361c9143',
-    'FixedIP': '1.8-2472964d39e50da67202109eb85cd173',
-    'FixedIPList': '1.8-6cfaa5b6dd27e9eb8fcf8462dea06077',
+    'FixedIP': '1.9-2472964d39e50da67202109eb85cd173',
+    'FixedIPList': '1.9-68ade91cf8d97053c1ef401d87eb6ecd',
     'Flavor': '1.1-096cfd023c35d07542cf732fb29b45e4',
     'FlavorList': '1.1-a3d5551267cb8f62ff38ded125900721',
     'FloatingIP': '1.6-27eb68b7c9c620dd5f0561b5a3be0e82',
     'FloatingIPList': '1.7-f376f63ed99243f9d90841b7f6732bbf',
     'HVSpec': '1.0-c4d8377cc4fe519930e60c1d8265a142',
-    'Instance': '1.18-7827a9e9846a75f3038bd556e6f530d3',
+    'Instance': '1.19-e5b80cc3b734b418d5c4b9140a4d2a25',
     'InstanceAction': '1.1-6b1d0a6dbd522b5a83c20757ec659663',
     'InstanceActionEvent': '1.1-42dbdba74bd06e0619ca75cd3397cd1b',
     'InstanceActionEventList': '1.0-1d5cc958171d6ce07383c2ad6208318e',
@@ -1146,16 +1217,16 @@ object_data = {
     'InstanceGroup': '1.9-95ece99f092e8f4f88327cdbb44162c9',
     'InstanceGroupList': '1.6-c6b78f3c9d9080d33c08667e80589817',
     'InstanceInfoCache': '1.5-ef64b604498bfa505a8c93747a9d8b2f',
-    'InstanceList': '1.14-fe7f3266de1475454b939dee36a2ebcc',
+    'InstanceList': '1.16-8594a8f95e717e57ee57b4aba59c688e',
     'InstanceNUMACell': '1.2-5d2dfa36e9ecca9b63f24bf3bc958ea4',
     'InstanceNUMATopology': '1.1-86b95d263c4c68411d44c6741b8d2bb0',
     'InstancePCIRequest': '1.1-e082d174f4643e5756ba098c47c1510f',
     'InstancePCIRequests': '1.1-bc7c6684d8579ee49d6a3b8aef756918',
-    'KeyPair': '1.1-3410f51950d052d861c11946a6ae621a',
-    'KeyPairList': '1.0-71132a568cc5d078ba1748a9c02c87b8',
+    'KeyPair': '1.2-adf0be7b68e0b9f1ec011e23a9761354',
+    'KeyPairList': '1.1-152dc1efcc46014cc10656a0d0ac5bb0',
     'Migration': '1.1-67c47726c2c71422058cd9d149d6d3ed',
     'MigrationList': '1.1-8c5f678edc72a592d591a13b35e54353',
-    'MyObj': '1.6-02b1e712b7ee334fa3fefe024c340977',
+    'MyObj': '1.6-d657ff98bce311e7925cb28f1423a8c2',
     'MyOwnedObject': '1.0-0f3d6c028543d7f3715d121db5b8e298',
     'Network': '1.2-2ea21ede5e45bb80e7b7ac7106915c4e',
     'NetworkList': '1.2-aa4ad23f035b97a41732ea8b3445fc5e',
@@ -1164,6 +1235,7 @@ object_data = {
     'NUMACell': '1.2-cb9c3b08cc1c418d021492f788d04173',
     'NUMAPagesTopology': '1.0-97d93f70a68625b5f29ff63a40a4f612',
     'NUMATopology': '1.2-790f6bdff85bf6e5677f409f3a4f1c6a',
+    'NUMATopologyLimits': '1.0-201845851897940c0a300e3d14ebf04a',
     'PciDevice': '1.3-e059641df10e85d464672c5183a9473b',
     'PciDeviceList': '1.1-38cbe2d3c23b9e46f7a74b486abcad85',
     'PciDevicePool': '1.0-d6ed1abe611c9947345a44155abe6f11',
@@ -1175,24 +1247,26 @@ object_data = {
     'SecurityGroupList': '1.0-528e6448adfeeb78921ebeda499ab72f',
     'SecurityGroupRule': '1.1-a9175baf7664439af1a16c2010b55576',
     'SecurityGroupRuleList': '1.1-667fca3a9928f23d2d10e61962c55f3c',
-    'Service': '1.9-82bbfd46a744a9c89bc44b47a1b81683',
-    'ServiceList': '1.7-b856301eb7714839248e189bf4886168',
+    'Service': '1.11-2b157261ffa37b3d2675b39b6c29ce07',
+    'ServiceList': '1.9-54656820acc49b3cc0eb57b2a684b84a',
     'Tag': '1.0-a11531f4e4e3166eef6243d6d58a18bd',
     'TagList': '1.0-e89bf8c8055f1f1d654fb44f0abf1f53',
-    'TestSubclassedObject': '1.6-87177ccbefd7a740a9e261f958e15b00',
+    'TestSubclassedObject': '1.6-4bf996f4a200eba7dcb649cd790babca',
     'VirtualInterface': '1.0-10fdac4c704102b6d57d6936d6d790d2',
     'VirtualInterfaceList': '1.0-accbf02628a8063c1d885077a2bf49b6',
+    'VirtCPUFeature': '1.0-3cac8c77d84a632ba79da01a4b87afb9',
+    'VirtCPUModel': '1.0-ae051080026849eddf7179e353673756',
     'VirtCPUTopology': '1.0-fc694de72e20298f7c6bab1083fd4563',
 }
 
 
 object_relationships = {
-    'BlockDeviceMapping': {'Instance': '1.18'},
-    'ComputeNode': {'PciDevicePoolList': '1.0'},
-    'FixedIP': {'Instance': '1.18', 'Network': '1.2',
+    'BlockDeviceMapping': {'Instance': '1.19'},
+    'ComputeNode': {'HVSpec': '1.0', 'PciDevicePoolList': '1.0'},
+    'FixedIP': {'Instance': '1.19', 'Network': '1.2',
                 'VirtualInterface': '1.0',
                 'FloatingIPList': '1.7'},
-    'FloatingIP': {'FixedIP': '1.8'},
+    'FloatingIP': {'FixedIP': '1.9'},
     'Instance': {'InstanceFault': '1.2',
                  'InstanceInfoCache': '1.5',
                  'InstanceNUMATopology': '1.1',
@@ -1200,16 +1274,23 @@ object_relationships = {
                  'TagList': '1.0',
                  'SecurityGroupList': '1.0',
                  'Flavor': '1.1',
-                 'InstancePCIRequests': '1.1'},
+                 'InstancePCIRequests': '1.1',
+                 'VirtCPUModel': '1.0',
+                 },
     'InstanceNUMACell': {'VirtCPUTopology': '1.0'},
+    'InstanceNUMATopology': {'InstanceNUMACell': '1.2'},
+    'InstancePCIRequests': {'InstancePCIRequest': '1.1'},
     'MyObj': {'MyOwnedObject': '1.0'},
+    'NUMACell': {'NUMAPagesTopology': '1.0'},
+    'NUMATopology': {'NUMACell': '1.2'},
     'SecurityGroupRule': {'SecurityGroup': '1.1'},
     'Service': {'ComputeNode': '1.10'},
-    'TestSubclassedObject': {'MyOwnedObject': '1.0'}
+    'TestSubclassedObject': {'MyOwnedObject': '1.0'},
+    'VirtCPUModel': {'VirtCPUFeature': '1.0', 'VirtCPUTopology': '1.0'},
 }
 
 
-class TestObjectVersions(test.TestCase):
+class TestObjectVersions(test.NoDBTestCase):
     def _find_remotable_method(self, cls, thing, parent_was_remotable=False):
         """Follow a chain of remotable things down to the original function."""
         if isinstance(thing, classmethod):
@@ -1275,14 +1356,26 @@ class TestObjectVersions(test.TestCase):
                          'versions have been bumped, and then update their '
                          'hashes here.')
 
+    def _get_object_field_name(self, field):
+        if isinstance(field._type, fields.Object):
+            return field._type._obj_name
+        if isinstance(field, fields.ListOfObjectsField):
+            return field._type._element_type._type._obj_name
+        return None
+
     def _build_tree(self, tree, obj_class):
         obj_name = obj_class.obj_name()
         if obj_name in tree:
             return
 
         for name, field in obj_class.fields.items():
-            if isinstance(field._type, fields.Object):
-                sub_obj_name = field._type._obj_name
+            # Notes(yjiang5): ObjectListBase should be covered by
+            # child_versions test
+            if (issubclass(obj_class, base.ObjectListBase) and
+                    name == 'objects'):
+                continue
+            sub_obj_name = self._get_object_field_name(field)
+            if sub_obj_name:
                 sub_obj_class = base.NovaObject._obj_classes[sub_obj_name][0]
                 self._build_tree(tree, sub_obj_class)
                 tree.setdefault(obj_name, {})

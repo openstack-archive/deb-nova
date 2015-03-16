@@ -14,16 +14,16 @@
 #    under the License.
 
 
+from oslo_context import context
 from testtools import matchers
 import webob
 import webob.dec
 
 from nova.api import compute_req_id
-from nova.openstack.common import context
 from nova import test
 
 
-class RequestIdTest(test.TestCase):
+class RequestIdTest(test.NoDBTestCase):
     def test_generate_request_id(self):
         @webob.dec.wsgify
         def application(req):

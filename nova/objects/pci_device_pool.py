@@ -15,7 +15,7 @@
 
 import copy
 
-from oslo.serialization import jsonutils
+from oslo_serialization import jsonutils
 import six
 
 from nova import objects
@@ -60,7 +60,7 @@ class PciDevicePool(base.NovaObject):
 
 
 class PciDevicePoolList(base.ObjectListBase, base.NovaObject):
-    # Version 1.0: Initial verison
+    # Version 1.0: Initial version
     #              PciDevicePool <= 1.0
     VERSION = '1.0'
     fields = {

@@ -14,9 +14,10 @@
 
 import copy
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 
 from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
@@ -29,7 +30,6 @@ from nova import notifications
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova.openstack.common import log as logging
 from nova import utils
 
 
@@ -45,7 +45,8 @@ _INSTANCE_OPTIONAL_JOINED_FIELDS = ['metadata', 'system_metadata',
 _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault', 'flavor', 'old_flavor',
                                         'new_flavor']
 # These are fields that are optional and in instance_extra
-_INSTANCE_EXTRA_FIELDS = ['numa_topology', 'pci_requests', 'flavor']
+_INSTANCE_EXTRA_FIELDS = ['numa_topology', 'pci_requests',
+                          'flavor', 'vcpu_model']
 
 # These are fields that can be specified as expected_attrs
 INSTANCE_OPTIONAL_ATTRS = (_INSTANCE_OPTIONAL_JOINED_FIELDS +
@@ -151,7 +152,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     # Version 1.16: Added pci_requests
     # Version 1.17: Added tags
     # Version 1.18: Added flavor, old_flavor, new_flavor
-    VERSION = '1.18'
+    # Version 1.19: Added vcpu_model
+    VERSION = '1.19'
 
     fields = {
         'id': fields.IntegerField(),
@@ -245,6 +247,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         'flavor': fields.ObjectField('Flavor'),
         'old_flavor': fields.ObjectField('Flavor', nullable=True),
         'new_flavor': fields.ObjectField('Flavor', nullable=True),
+        'vcpu_model': fields.ObjectField('VirtCPUModel', nullable=True),
         }
 
     obj_extra_fields = ['name']
@@ -260,6 +263,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         'flavor': [('1.18', '1.1')],
         'old_flavor': [('1.18', '1.1')],
         'new_flavor': [('1.18', '1.1')],
+        'vcpu_model': [('1.19', '1.0')],
     }
 
     def __init__(self, *args, **kwargs):
@@ -445,19 +449,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 self._flavor_from_db(db_inst['extra']['flavor'])
                 sysmeta = self.system_metadata
                 flavors.save_flavor_info(sysmeta, self.flavor)
-                # FIXME(danms): Unfortunately NovaObject doesn't have
-                # a __del__ which means we have to peer behind the
-                # facade here to get these attributes deleted. Since
-                # they're stored as "_$name" we can do that here, but
-                # I need to follow up with a proper handler on the
-                # base class.
-                del self._flavor
+                del self.flavor
                 if self.old_flavor:
                     flavors.save_flavor_info(sysmeta, self.old_flavor, 'old_')
-                    del self._old_flavor
+                    del self.old_flavor
                 if self.new_flavor:
                     flavors.save_flavor_info(sysmeta, self.new_flavor, 'new_')
-                    del self._new_flavor
+                    del self.new_flavor
                 self.system_metadata = sysmeta
         else:
             # Migrate the flavor from system_metadata to extra,
@@ -503,7 +501,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         if 'pci_requests' in expected_attrs:
             instance._load_pci_requests(
                 db_inst.get('extra').get('pci_requests'))
-
+        if 'vcpu_model' in expected_attrs:
+            instance._load_vcpu_model(db_inst.get('extra').get('vcpu_model'))
         if 'info_cache' in expected_attrs:
             if db_inst['info_cache'] is None:
                 instance.info_cache = None
@@ -610,6 +609,11 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 'new': new,
             }
             updates['extra']['flavor'] = jsonutils.dumps(flavor_info)
+        vcpu_model = updates.pop('vcpu_model', None)
+        if vcpu_model:
+            expected_attrs.append('vcpu_model')
+            updates['extra']['vcpu_model'] = (
+                jsonutils.dumps(vcpu_model.obj_to_primitive()))
         db_inst = db.instance_create(context, updates)
         self._from_db_object(context, self, db_inst, expected_attrs)
 
@@ -638,12 +642,14 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
 
     def _save_info_cache(self, context):
         if self.info_cache:
-            self.info_cache.save(context)
+            with self.info_cache.obj_alternate_context(context):
+                self.info_cache.save()
 
     def _save_security_groups(self, context):
         security_groups = self.security_groups or []
         for secgroup in security_groups:
-            secgroup.save(context)
+            with secgroup.obj_alternate_context(context):
+                secgroup.save()
         self.security_groups.obj_reset_changes()
 
     def _save_fault(self, context):
@@ -690,6 +696,18 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     def _save_new_flavor(self, context):
         if 'new_flavor' in self.obj_what_changed():
             self._save_flavor(context)
+
+    def _save_vcpu_model(self, context):
+        # TODO(yjiang5): should merge the db accesses for all the extra
+        # fields
+        if 'vcpu_model' in self.obj_what_changed():
+            if self.vcpu_model:
+                update = jsonutils.dumps(self.vcpu_model.obj_to_primitive())
+            else:
+                update = None
+            db.instance_extra_update_by_uuid(
+                context, self.uuid,
+                {'vcpu_model': update})
 
     def _maybe_upgrade_flavor(self):
         # NOTE(danms): We may have regressed to flavors stored in sysmeta,
@@ -818,12 +836,6 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 context, self.uuid, updates, update_cells=False,
                 columns_to_join=_expected_cols(expected_attrs))
 
-        if stale_instance:
-            _handle_cell_update_from_api()
-        elif cell_type == 'compute':
-            cells_api = cells_rpcapi.CellsAPI()
-            cells_api.instance_update_at_top(context, inst_ref)
-
         self._from_db_object(context, self, inst_ref,
                              expected_attrs=expected_attrs)
 
@@ -831,6 +843,14 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         # any lazy-loads that will unmigrate or unbackport something. So,
         # make a copy of the instance for notifications first.
         new_ref = self.obj_clone()
+
+        if stale_instance:
+            _handle_cell_update_from_api()
+        elif cell_type == 'compute':
+            cells_api = cells_rpcapi.CellsAPI()
+            cells_api.instance_update_at_top(context,
+                                             base.obj_to_primitive(new_ref))
+
         notifications.send_update(context, old_ref, new_ref)
         self.obj_reset_changes()
 
@@ -926,6 +946,15 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         instance.system_metadata.update(self.get('system_metadata', {}))
         self.system_metadata = instance.system_metadata
 
+    def _load_vcpu_model(self, db_vcpu_model=None):
+        if db_vcpu_model is None:
+            self.vcpu_model = objects.VirtCPUModel.get_by_instance_uuid(
+                self._context, self.uuid)
+        else:
+            db_vcpu_model = jsonutils.loads(db_vcpu_model)
+            self.vcpu_model = objects.VirtCPUModel.obj_from_primitive(
+                db_vcpu_model)
+
     def obj_load_attr(self, attrname):
         if attrname not in INSTANCE_OPTIONAL_ATTRS:
             raise exception.ObjectActionError(
@@ -960,6 +989,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             self._load_numa_topology()
         elif attrname == 'pci_requests':
             self._load_pci_requests()
+        elif attrname == 'vcpu_model':
+            self._load_vcpu_model()
         elif 'flavor' in attrname:
             self._load_flavor()
         else:
@@ -1057,7 +1088,9 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.12: Pass expected_attrs to instance_get_active_by_window_joined
     # Version 1.13: Instance <= version 1.17
     # Version 1.14: Instance <= version 1.18
-    VERSION = '1.14'
+    # Version 1.15: Instance <= version 1.19
+    # Version 1.16: Added get_all() method
+    VERSION = '1.16'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -1078,6 +1111,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         '1.12': '1.16',
         '1.13': '1.17',
         '1.14': '1.18',
+        '1.15': '1.19',
+        '1.16': '1.19',
         }
 
     @base.remotable_classmethod
@@ -1120,6 +1155,14 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         db_inst_list = db.instance_get_all_by_host_and_not_type(
             context, host, type_id=type_id)
         return _make_instance_list(context, cls(), db_inst_list,
+                                   expected_attrs)
+
+    @base.remotable_classmethod
+    def get_all(cls, context, expected_attrs=None):
+        """Returns all instances on all nodes."""
+        db_instances = db.instance_get_all(
+                context, columns_to_join=_expected_cols(expected_attrs))
+        return _make_instance_list(context, cls(), db_instances,
                                    expected_attrs)
 
     @base.remotable_classmethod

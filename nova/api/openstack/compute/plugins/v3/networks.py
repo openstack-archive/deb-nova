@@ -17,8 +17,10 @@
 import netaddr
 from webob import exc
 
+from nova.api.openstack.compute.schemas.v3 import networks as schema
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import exception
 from nova.i18n import _
 from nova import network
@@ -26,9 +28,7 @@ from nova.objects import base as base_obj
 from nova.objects import fields as obj_fields
 
 ALIAS = 'os-networks'
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
-authorize_view = extensions.extension_authorizer('compute',
-                                                 'v3:' + ALIAS + ':view')
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 def network_dict(context, network):
@@ -79,12 +79,12 @@ def network_dict(context, network):
 class NetworkController(wsgi.Controller):
 
     def __init__(self, network_api=None):
-        self.network_api = network_api or network.API()
+        self.network_api = network_api or network.API(skip_policy_check=True)
 
     @extensions.expected_errors(())
     def index(self, req):
         context = req.environ['nova.context']
-        authorize_view(context)
+        authorize(context, action='view')
         networks = self.network_api.get_all(context)
         result = [network_dict(context, net_ref) for net_ref in networks]
         return {'networks': result}
@@ -109,7 +109,7 @@ class NetworkController(wsgi.Controller):
     @extensions.expected_errors(404)
     def show(self, req, id):
         context = req.environ['nova.context']
-        authorize_view(context)
+        authorize(context, action='view')
 
         try:
             network = self.network_api.get(context, id)
@@ -133,33 +133,17 @@ class NetworkController(wsgi.Controller):
             raise exc.HTTPNotFound(explanation=msg)
 
     @extensions.expected_errors((400, 409, 501))
+    @validation.schema(schema.create)
     def create(self, req, body):
         context = req.environ['nova.context']
         authorize(context)
 
-        def bad(e):
-            return exc.HTTPBadRequest(explanation=e)
-
-        if not (body and body.get("network")):
-            raise bad(_("Missing network in body"))
-
         params = body["network"]
-        if not params.get("label"):
-            raise bad(_("Network label is required"))
 
         cidr = params.get("cidr") or params.get("cidr_v6")
-        if not cidr:
-            raise bad(_("Network cidr or cidr_v6 is required"))
-
-        if params.get("project_id") == "":
-            params["project_id"] = None
 
         params["num_networks"] = 1
-        try:
-            params["network_size"] = netaddr.IPNetwork(cidr).size
-        except netaddr.AddrFormatError:
-            msg = _('%s is not a valid ip network') % cidr
-            raise exc.HTTPBadRequest(explanation=msg)
+        params["network_size"] = netaddr.IPNetwork(cidr).size
 
         try:
             network = self.network_api.create(context, **params)[0]
@@ -173,15 +157,13 @@ class NetworkController(wsgi.Controller):
         return {"network": network_dict(context, network)}
 
     @wsgi.response(202)
-    @extensions.expected_errors((400, 409, 501))
+    @extensions.expected_errors((400, 501))
+    @validation.schema(schema.add_network_to_project)
     def add(self, req, body):
         context = req.environ['nova.context']
         authorize(context)
-        if not body:
-            msg = _("Missing request body")
-            raise exc.HTTPBadRequest(explanation=msg)
 
-        network_id = body.get('id', None)
+        network_id = body['id']
         project_id = context.project_id
 
         try:

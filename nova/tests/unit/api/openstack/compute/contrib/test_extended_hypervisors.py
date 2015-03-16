@@ -20,22 +20,29 @@ from nova.api.openstack.compute.contrib import hypervisors as hypervisors_v2
 from nova.api.openstack.compute.plugins.v3 import hypervisors \
     as hypervisors_v21
 from nova.api.openstack import extensions
-from nova import db
 from nova import exception
+from nova import objects
 from nova import test
 from nova.tests.unit.api.openstack.compute.contrib import test_hypervisors
 from nova.tests.unit.api.openstack import fakes
 
 
 def fake_compute_node_get(context, compute_id):
-    for hyper in test_hypervisors.TEST_HYPERS:
-        if hyper['id'] == compute_id:
+    for hyper in test_hypervisors.TEST_HYPERS_OBJ:
+        if hyper.id == int(compute_id):
             return hyper
     raise exception.ComputeHostNotFound(host=compute_id)
 
 
 def fake_compute_node_get_all(context):
-    return test_hypervisors.TEST_HYPERS
+    return test_hypervisors.TEST_HYPERS_OBJ
+
+
+@classmethod
+def fake_service_get_by_host_and_binary(cls, context, host, binary):
+    for service in test_hypervisors.TEST_SERVICES:
+        if service.host == host:
+            return service
 
 
 class ExtendedHypervisorsTestV21(test.NoDBTestCase):
@@ -66,13 +73,17 @@ class ExtendedHypervisorsTestV21(test.NoDBTestCase):
         super(ExtendedHypervisorsTestV21, self).setUp()
         self._set_up_controller()
 
-        self.stubs.Set(db, 'compute_node_get_all', fake_compute_node_get_all)
-        self.stubs.Set(db, 'compute_node_get',
+        self.stubs.Set(self.controller.host_api, 'compute_node_get_all',
+                       fake_compute_node_get_all)
+        self.stubs.Set(self.controller.host_api, 'compute_node_get',
                        fake_compute_node_get)
+        self.stubs.Set(objects.Service, 'get_by_host_and_binary',
+                       fake_service_get_by_host_and_binary)
 
     def test_view_hypervisor_detail_noservers(self):
         result = self.controller._view_hypervisor(
-                                   test_hypervisors.TEST_HYPERS[0], True)
+            test_hypervisors.TEST_HYPERS_OBJ[0],
+            test_hypervisors.TEST_SERVICES[0], True)
 
         self.assertEqual(result, self.DETAIL_HYPERS_DICTS[0])
 

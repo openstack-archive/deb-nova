@@ -13,8 +13,8 @@
 #   under the License.
 
 
-from oslo.config import cfg
-from oslo.utils import strutils
+from oslo_config import cfg
+from oslo_utils import strutils
 from webob import exc
 
 from nova.api.openstack import common
@@ -32,13 +32,13 @@ CONF.import_opt('enable_instance_password',
                 'nova.api.openstack.compute.servers')
 
 ALIAS = "os-evacuate"
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class EvacuateController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(EvacuateController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API()
+        self.compute_api = compute.API(skip_policy_check=True)
         self.host_api = compute.HostAPI()
 
     # TODO(eliqiao): Should be responding here with 202 Accept
@@ -74,12 +74,11 @@ class EvacuateController(wsgi.Controller):
         if host is not None:
             try:
                 self.host_api.service_get_by_compute_host(context, host)
-            except exception.NotFound:
+            except exception.ComputeHostNotFound:
                 msg = _("Compute host %s not found.") % host
                 raise exc.HTTPNotFound(explanation=msg)
 
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         if instance.host == host:
             msg = _("The target host can't be the same one.")
             raise exc.HTTPBadRequest(explanation=msg)

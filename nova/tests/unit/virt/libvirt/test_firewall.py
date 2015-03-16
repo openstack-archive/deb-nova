@@ -34,11 +34,6 @@ from nova.virt.libvirt import host
 from nova.virt import netutils
 from nova.virt import virtapi
 
-try:
-    import libvirt
-except ImportError:
-    libvirt = fakelibvirt
-
 _fake_network_info = fake_network.fake_get_instance_nw_info
 _fake_stub_out_get_nw_info = fake_network.stub_out_nw_api_get_instance_nw_info
 _ipv4_like = fake_network.ipv4_like
@@ -51,7 +46,7 @@ class NWFilterFakes(object):
     def nwfilterLookupByName(self, name):
         if name in self.filters:
             return self.filters[name]
-        raise libvirt.libvirtError('Filter Not Found')
+        raise fakelibvirt.libvirtError('Filter Not Found')
 
     def filterDefineXMLMock(self, xml):
         class FakeNWFilterInternal(object):
@@ -78,7 +73,7 @@ class NWFilterFakes(object):
             self.filters[name] = FakeNWFilterInternal(self, name, u, xml)
         else:
             if self.filters[name].uuid != u:
-                raise libvirt.libvirtError(
+                raise fakelibvirt.libvirtError(
                     "Mismatching name '%s' with uuid '%s' vs '%s'"
                     % (name, self.filters[name].uuid, u))
             self.filters[name].xml = xml
@@ -405,8 +400,8 @@ class IptablesFirewallTestCase(test.NoDBTestCase):
         self.fw.do_refresh_security_group_rules("fake")
 
     def test_do_refresh_security_group_rules_instance_gone(self):
-        instance1 = {'id': 1, 'uuid': 'fake-uuid1'}
-        instance2 = {'id': 2, 'uuid': 'fake-uuid2'}
+        instance1 = objects.Instance(None, id=1, uuid='fake-uuid1')
+        instance2 = objects.Instance(None, id=2, uuid='fake-uuid2')
         self.fw.instance_info = {1: (instance1, 'netinfo1'),
                                  2: (instance2, 'netinfo2')}
         mock_filter = mock.MagicMock()
@@ -739,3 +734,12 @@ class NWFilterTestCase(test.NoDBTestCase):
                          expected=['nova-base'])
         assert_filterref(instance_ref, network_info[1],
                          expected=['nova-nodhcp'])
+
+    @mock.patch.object(firewall.LOG, 'debug')
+    def test_get_filter_uuid_unicode_exception_logging(self, debug):
+        with mock.patch.object(self.fw._conn, 'nwfilterLookupByName') as look:
+            look.side_effect = fakelibvirt.libvirtError(u"\U0001F4A9")
+            self.fw._get_filter_uuid('test')
+        self.assertEqual(2, debug.call_count)
+        self.assertEqual(u"Cannot find UUID for filter '%(name)s': '%(e)s'",
+                         debug.call_args_list[0][0][0])

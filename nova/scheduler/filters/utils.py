@@ -16,40 +16,39 @@
 
 import collections
 
+from oslo_log import log as logging
+
 from nova.i18n import _LI
-from nova import objects
-from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 
 
-def aggregate_values_from_db(context, host, key_name):
+def aggregate_values_from_key(host_state, key_name):
     """Returns a set of values based on a metadata key for a specific host."""
-    # TODO(sahid): DB query in filter is a performance hit, especially for
-    # system with lots of hosts. Will need a general solution here to fix
-    # all filters with aggregate DB call things.
-    aggrlist = objects.AggregateList.get_by_host(
-        context.elevated(), host, key=key_name)
-    aggregate_vals = set(aggr.metadata[key_name] for aggr in aggrlist)
+    aggrlist = host_state.aggregates
+    aggregate_vals = set()
+    for aggr in aggrlist:
+        if key_name in aggr.metadata:
+            aggregate_vals.add(aggr.metadata[key_name])
     return aggregate_vals
 
 
-def aggregate_metadata_get_by_host(context, host, key=None):
+def aggregate_metadata_get_by_host(host_state, key=None):
     """Returns a dict of all metadata for a specific host."""
-    # TODO(pmurray): DB query in filter is a performance hit. Will need a
-    # general solution here.
-    aggrlist = objects.AggregateList.get_by_host(
-        context.elevated(), host, key=key)
-
+    aggrlist = host_state.aggregates
     metadata = collections.defaultdict(set)
     for aggr in aggrlist:
+        if key is not None and key not in aggr.metadata:
+            continue
         for k, v in aggr.metadata.iteritems():
-            metadata[k].add(v)
+            values = v.split(',')
+            for value in values:
+                metadata[k].add(value.strip())
     return metadata
 
 
 def validate_num_values(vals, default=None, cast_to=int, based_on=min):
-    """Returns a corretly casted value based on a set of values.
+    """Returns a correctly casted value based on a set of values.
 
     This method is useful to work with per-aggregate filters, It takes
     a set of values then return the 'based_on'{min/max} converted to

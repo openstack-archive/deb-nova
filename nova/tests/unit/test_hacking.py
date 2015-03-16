@@ -248,15 +248,12 @@ class HackingTestCase(test.NoDBTestCase):
             "CONF.option = 1", "nova/compute/foo.py"))), 0)
 
     def test_log_translations(self):
-        logs = ['audit', 'error', 'info', 'warning', 'critical',
+        logs = ['audit', 'error', 'info', 'warning', 'critical', 'warn',
                 'exception']
         levels = ['_LI', '_LW', '_LE', '_LC']
         debug = "LOG.debug('OK')"
-        audit = "LOG.audit(_('OK'))"
         self.assertEqual(
             0, len(list(checks.validate_log_translations(debug, debug, 'f'))))
-        self.assertEqual(
-            0, len(list(checks.validate_log_translations(audit, audit, 'f'))))
         for log in logs:
             bad = 'LOG.%s("Bad")' % log
             self.assertEqual(1,
@@ -440,6 +437,20 @@ class HackingTestCase(test.NoDBTestCase):
     def test_oslo_namespace_imports_check(self):
         code = """
                from oslo.concurrency import processutils
+               """
+        self._assert_has_errors(code, checks.check_oslo_namespace_imports,
+                                expected_errors=[(1, 0, "N333")])
+
+    def test_oslo_namespace_imports_check_2(self):
+        code = """
+               from oslo import i18n
+               """
+        self._assert_has_errors(code, checks.check_oslo_namespace_imports,
+                                expected_errors=[(1, 0, "N333")])
+
+    def test_oslo_namespace_imports_check_3(self):
+        code = """
+               import oslo.messaging
                """
         self._assert_has_errors(code, checks.check_oslo_namespace_imports,
                                 expected_errors=[(1, 0, "N333")])

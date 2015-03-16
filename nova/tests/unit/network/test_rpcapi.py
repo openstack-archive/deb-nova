@@ -19,7 +19,7 @@ Unit Tests for nova.network.rpcapi
 import collections
 
 from mox3 import mox
-from oslo.config import cfg
+from oslo_config import cfg
 
 from nova import context
 from nova.network import rpcapi as network_rpcapi
@@ -113,70 +113,6 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
     def test_delete_network(self):
         self._test_network_api('delete_network', rpc_method='call',
                 uuid='fake_uuid', fixed_range='range')
-
-    def test_disassociate_network(self):
-        self._test_network_api('disassociate_network', rpc_method='call',
-                network_uuid='fake_uuid')
-
-    def test_associate_host_and_project(self):
-        self._test_network_api('associate', rpc_method='call',
-                network_uuid='fake_uuid',
-                associations={'host': "testHost",
-                              'project': 'testProject'},
-                version="1.5")
-
-    def test_get_fixed_ip(self):
-        self._test_network_api('get_fixed_ip', rpc_method='call', id='id')
-
-    def test_get_fixed_ip_by_address(self):
-        self._test_network_api('get_fixed_ip_by_address', rpc_method='call',
-                address='a.b.c.d')
-
-    def test_get_floating_ip(self):
-        self._test_network_api('get_floating_ip', rpc_method='call', id='id')
-
-    def test_get_floating_ip_pools(self):
-        self._test_network_api('get_floating_ip_pools', rpc_method='call',
-                               version="1.7")
-
-    def test_get_floating_ip_by_address(self):
-        self._test_network_api('get_floating_ip_by_address', rpc_method='call',
-                address='a.b.c.d')
-
-    def test_get_floating_ips_by_project(self):
-        self._test_network_api('get_floating_ips_by_project',
-                rpc_method='call')
-
-    def test_get_instance_id_by_floating_address(self):
-        self._test_network_api('get_instance_id_by_floating_address',
-                rpc_method='call', address='w.x.y.z')
-
-    def test_allocate_floating_ip(self):
-        self._test_network_api('allocate_floating_ip', rpc_method='call',
-                project_id='fake_id', pool='fake_pool', auto_assigned=False)
-
-    def test_deallocate_floating_ip(self):
-        self._test_network_api('deallocate_floating_ip', rpc_method='call',
-                address='addr', affect_auto_assigned=True)
-
-    def test_allocate_floating_ip_no_multi(self):
-        self.flags(multi_host=False)
-        self._test_network_api('allocate_floating_ip', rpc_method='call',
-                project_id='fake_id', pool='fake_pool', auto_assigned=False)
-
-    def test_deallocate_floating_ip_no_multi(self):
-        self.flags(multi_host=False)
-        self._test_network_api('deallocate_floating_ip', rpc_method='call',
-                address='addr', affect_auto_assigned=True)
-
-    def test_associate_floating_ip(self):
-        self._test_network_api('associate_floating_ip', rpc_method='call',
-                floating_address='blah', fixed_address='foo',
-                affect_auto_assigned=True)
-
-    def test_disassociate_floating_ip(self):
-        self._test_network_api('disassociate_floating_ip', rpc_method='call',
-                address='addr', affect_auto_assigned=True)
 
     def test_allocate_for_instance(self):
         self._test_network_api('allocate_for_instance', rpc_method='call',

@@ -33,15 +33,18 @@ For postgres on Ubuntu this can be done with the following commands::
 """
 
 import glob
+# NOTE(dhellmann): Use stdlib logging instead of oslo.log because we
+# need to call methods on the logger that are not exposed through the
+# adapter provided by oslo.log.
 import logging
 import os
 
 from migrate import UniqueConstraint
 from migrate.versioning import repository
 import mock
-from oslo.db.sqlalchemy import test_base
-from oslo.db.sqlalchemy import test_migrations
-from oslo.db.sqlalchemy import utils as oslodbutils
+from oslo_db.sqlalchemy import test_base
+from oslo_db.sqlalchemy import test_migrations
+from oslo_db.sqlalchemy import utils as oslodbutils
 import sqlalchemy
 from sqlalchemy.engine import reflection
 import sqlalchemy.exc
@@ -54,6 +57,7 @@ from nova.db.sqlalchemy import models
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
 from nova import test
+from nova.tests import fixtures as nova_fixtures
 
 
 LOG = logging.getLogger(__name__)
@@ -94,21 +98,35 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         migrate_log.setLevel(logging.WARN)
         self.addCleanup(migrate_log.setLevel, old_level)
 
+        # NOTE(rpodolyaka): we need to repeat the functionality of the base
+        # test case a bit here as this gets overriden by oslotest base test
+        # case and nova base test case cleanup must be the last one (as it
+        # deletes attributes of test case instances)
+        self.useFixture(nova_fixtures.Timeout(
+            os.environ.get('OS_TEST_TIMEOUT', 0),
+            self.TIMEOUT_SCALING_FACTOR))
+
     def assertColumnExists(self, engine, table_name, column):
-        self.assertTrue(oslodbutils.column_exists(engine, table_name, column))
+        self.assertTrue(oslodbutils.column_exists(engine, table_name, column),
+                        'Column %s.%s does not exist' % (table_name, column))
 
     def assertColumnNotExists(self, engine, table_name, column):
-        self.assertFalse(oslodbutils.column_exists(engine, table_name, column))
+        self.assertFalse(oslodbutils.column_exists(engine, table_name, column),
+                        'Column %s.%s should not exist' % (table_name, column))
 
     def assertTableNotExists(self, engine, table):
         self.assertRaises(sqlalchemy.exc.NoSuchTableError,
                           oslodbutils.get_table, engine, table)
 
     def assertIndexExists(self, engine, table_name, index):
-        self.assertTrue(oslodbutils.index_exists(engine, table_name, index))
+        self.assertTrue(oslodbutils.index_exists(engine, table_name, index),
+                        'Index %s on table %s does not exist' %
+                        (index, table_name))
 
     def assertIndexNotExists(self, engine, table_name, index):
-        self.assertFalse(oslodbutils.index_exists(engine, table_name, index))
+        self.assertFalse(oslodbutils.index_exists(engine, table_name, index),
+                         'Index %s on table %s should not exist' %
+                         (index, table_name))
 
     def assertIndexMembers(self, engine, table, index, members):
         # NOTE(johannes): Order of columns can matter. Most SQL databases
@@ -758,16 +776,93 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertIndexNotExists(engine, 'instances',
                                   'instances_project_id_deleted_idx')
 
+    def _pre_upgrade_275(self, engine):
+        # Create a keypair record so we can test that the upgrade will set
+        # 'ssh' as default value in the new column for the previous keypair
+        # entries.
+        key_pairs = oslodbutils.get_table(engine, 'key_pairs')
+        fake_keypair = {'name': 'test-migr'}
+        key_pairs.insert().execute(fake_keypair)
+
+    def _check_275(self, engine, data):
+        self.assertColumnExists(engine, 'key_pairs', 'type')
+        self.assertColumnExists(engine, 'shadow_key_pairs', 'type')
+
+        key_pairs = oslodbutils.get_table(engine, 'key_pairs')
+        shadow_key_pairs = oslodbutils.get_table(engine, 'shadow_key_pairs')
+        self.assertIsInstance(key_pairs.c.type.type,
+                              sqlalchemy.types.String)
+        self.assertIsInstance(shadow_key_pairs.c.type.type,
+                              sqlalchemy.types.String)
+
+        # Make sure the keypair entry will have the type 'ssh'
+        key_pairs = oslodbutils.get_table(engine, 'key_pairs')
+        keypair = key_pairs.select(
+            key_pairs.c.name == 'test-migr').execute().first()
+        self.assertEqual('ssh', keypair.type)
+
+    def _post_downgrade_275(self, engine):
+        self.assertColumnNotExists(engine, 'key_pairs', 'type')
+        self.assertColumnNotExists(engine, 'shadow_key_pairs', 'type')
+
+    def _check_276(self, engine, data):
+        self.assertColumnExists(engine, 'instance_extra', 'vcpu_model')
+        self.assertColumnExists(engine, 'shadow_instance_extra', 'vcpu_model')
+
+        instance_extra = oslodbutils.get_table(engine, 'instance_extra')
+        shadow_instance_extra = oslodbutils.get_table(
+                engine, 'shadow_instance_extra')
+        self.assertIsInstance(instance_extra.c.vcpu_model.type,
+                              sqlalchemy.types.Text)
+        self.assertIsInstance(shadow_instance_extra.c.vcpu_model.type,
+                              sqlalchemy.types.Text)
+
+    def _post_downgrade_276(self, engine):
+        self.assertColumnNotExists(engine, 'instance_extra', 'vcpu_model')
+        self.assertColumnNotExists(engine, 'shadow_instance_extra',
+                                   'vcpu_model')
+
+    def _check_277(self, engine, data):
+        self.assertIndexMembers(engine, 'fixed_ips',
+                                'fixed_ips_deleted_allocated_updated_at_idx',
+                                ['deleted', 'allocated', 'updated_at'])
+
+    def _post_downgrade_277(self, engine):
+        self.assertIndexNotExists(engine, 'fixed_ips',
+                                  'fixed_ips_deleted_allocated_updated_at_idx')
+
+    def _check_278(self, engine, data):
+        compute_nodes = oslodbutils.get_table(engine, 'compute_nodes')
+        self.assertEqual(0, len([fk for fk in compute_nodes.foreign_keys
+                                 if fk.parent.name == 'service_id']))
+        self.assertTrue(compute_nodes.c.service_id.nullable)
+
+    def _post_downgrade_278(self, engine):
+        compute_nodes = oslodbutils.get_table(engine, 'compute_nodes')
+        service_id_fks = [fk for fk in compute_nodes.foreign_keys
+                          if fk.parent.name == 'service_id'
+                          and fk.column.name == 'id']
+        self.assertEqual(1, len(service_id_fks))
+        self.assertFalse(compute_nodes.c.service_id.nullable)
+        if engine.name == 'postgresql':
+            # Only make sure that posgresql at least adds a name for the FK
+            self.assertIsNotNone(service_id_fks[0].name)
+        elif engine.name != 'sqlite':
+            # Erm, SQLA<1.0 doesn't return FK names for sqlite so we need to
+            # check only for other engines
+            self.assertEqual('fk_compute_nodes_service_id',
+                             service_id_fks[0].name)
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
-                               test.TestCase,
-                               test_base.DbTestCase):
+                               test_base.DbTestCase,
+                               test.NoDBTestCase):
     pass
 
 
 class TestNovaMigrationsMySQL(NovaMigrationsCheckers,
-                              test.TestCase,
-                              test_base.MySQLOpportunisticTestCase):
+                              test_base.MySQLOpportunisticTestCase,
+                              test.NoDBTestCase):
     def test_innodb_tables(self):
         with mock.patch.object(sa_migration, 'get_engine',
                                return_value=self.migrate_engine):
@@ -792,8 +887,8 @@ class TestNovaMigrationsMySQL(NovaMigrationsCheckers,
 
 
 class TestNovaMigrationsPostgreSQL(NovaMigrationsCheckers,
-                                   test.TestCase,
-                                   test_base.PostgreSQLOpportunisticTestCase):
+                                   test_base.PostgreSQLOpportunisticTestCase,
+                                   test.NoDBTestCase):
     pass
 
 

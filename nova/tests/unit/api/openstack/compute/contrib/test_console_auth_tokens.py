@@ -15,7 +15,7 @@
 
 import copy
 
-from oslo.config import cfg
+from oslo_config import cfg
 import webob
 
 from nova.api.openstack.compute.contrib import console_auth_tokens \
@@ -49,7 +49,7 @@ def _fake_check_token_unauthorized(self, context, token):
     return connect_info
 
 
-class ConsoleAuthTokensExtensionTestV21(test.TestCase):
+class ConsoleAuthTokensExtensionTestV21(test.NoDBTestCase):
     controller_class = console_auth_tokens_v21
 
     _EXPECTED_OUTPUT = {'console': {'instance_uuid': 'fake_instance_uuid',

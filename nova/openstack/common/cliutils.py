@@ -12,6 +12,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+# W0603: Using the global statement
+# W0621: Redefining name %s from outer scope
+# pylint: disable=W0603,W0621
+
 from __future__ import print_function
 
 import getpass
@@ -20,8 +24,8 @@ import os
 import sys
 import textwrap
 
-from oslo.utils import encodeutils
-from oslo.utils import strutils
+from oslo_utils import encodeutils
+from oslo_utils import strutils
 import prettytable
 import six
 from six import moves

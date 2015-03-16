@@ -14,14 +14,14 @@
 
 """Handles all requests to the conductor service."""
 
-from oslo.config import cfg
-from oslo import messaging
+from oslo_config import cfg
+from oslo_log import log as logging
+import oslo_messaging as messaging
 
 from nova import baserpc
 from nova.conductor import manager
 from nova.conductor import rpcapi
 from nova.i18n import _LI, _LW
-from nova.openstack.common import log as logging
 from nova import utils
 
 conductor_opts = [
@@ -156,7 +156,7 @@ class LocalAPI(object):
         # single entry, so we should just return 'result' at that point.
         return result[0]
 
-    def service_get_by_args(self, context, host, binary):
+    def service_get_by_host_and_binary(self, context, host, binary):
         return self._manager.service_get_all_by(context, host=host,
                                                 binary=binary, topic=None)
 

@@ -23,10 +23,12 @@ semantics of real hypervisor connections.
 
 """
 
+import collections
 import contextlib
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
 
 from nova.compute import arch
 from nova.compute import hv_type
@@ -37,7 +39,6 @@ from nova.console import type as ctype
 from nova import db
 from nova import exception
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt import diagnostics
 from nova.virt import driver
@@ -145,14 +146,14 @@ class FakeDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None,
               flavor=None):
-        name = instance['name']
+        name = instance.name
         state = power_state.RUNNING
-        fake_instance = FakeInstance(name, state, instance['uuid'])
+        fake_instance = FakeInstance(name, state, instance.uuid)
         self.instances[name] = fake_instance
 
-    def snapshot(self, context, instance, name, update_task_state):
-        if instance['name'] not in self.instances:
-            raise exception.InstanceNotRunning(instance_id=instance['uuid'])
+    def snapshot(self, context, instance, image_id, update_task_state):
+        if instance.name not in self.instances:
+            raise exception.InstanceNotRunning(instance_id=instance.uuid)
         update_task_state(task_state=task_states.IMAGE_UPLOADING)
 
     def reboot(self, context, instance, network_info, reboot_type,
@@ -199,10 +200,11 @@ class FakeDriver(driver.ComputeDriver):
                                            block_device_info=None):
         pass
 
-    def power_off(self, instance, shutdown_timeout=0, shutdown_attempts=0):
+    def power_off(self, instance, timeout=0, retry_interval=0):
         pass
 
-    def power_on(self, context, instance, network_info, block_device_info):
+    def power_on(self, context, instance, network_info,
+                 block_device_info=None):
         pass
 
     def soft_delete(self, instance):
@@ -217,7 +219,7 @@ class FakeDriver(driver.ComputeDriver):
     def unpause(self, instance):
         pass
 
-    def suspend(self, instance):
+    def suspend(self, context, instance):
         pass
 
     def resume(self, context, instance, network_info, block_device_info=None):
@@ -225,7 +227,7 @@ class FakeDriver(driver.ComputeDriver):
 
     def destroy(self, context, instance, network_info, block_device_info=None,
                 destroy_disks=True, migrate_data=None):
-        key = instance['name']
+        key = instance.name
         if key in self.instances:
             del self.instances[key]
         else:
@@ -240,7 +242,7 @@ class FakeDriver(driver.ComputeDriver):
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):
         """Attach the disk to the instance at mountpoint using info."""
-        instance_name = instance['name']
+        instance_name = instance.name
         if instance_name not in self._mounts:
             self._mounts[instance_name] = {}
         self._mounts[instance_name][mountpoint] = connection_info
@@ -249,14 +251,14 @@ class FakeDriver(driver.ComputeDriver):
                       encryption=None):
         """Detach the disk attached to the instance."""
         try:
-            del self._mounts[instance['name']][mountpoint]
+            del self._mounts[instance.name][mountpoint]
         except KeyError:
             pass
 
     def swap_volume(self, old_connection_info, new_connection_info,
                     instance, mountpoint, resize_to):
         """Replace the disk attached to the instance."""
-        instance_name = instance['name']
+        instance_name = instance.name
         if instance_name not in self._mounts:
             self._mounts[instance_name] = {}
         self._mounts[instance_name][mountpoint] = new_connection_info
@@ -264,7 +266,7 @@ class FakeDriver(driver.ComputeDriver):
     def attach_interface(self, instance, image_meta, vif):
         if vif['id'] in self._interfaces:
             raise exception.InterfaceAttachFailed(
-                    instance_uuid=instance['uuid'])
+                    instance_uuid=instance.uuid)
         self._interfaces[vif['id']] = vif
 
     def detach_interface(self, instance, vif):
@@ -272,19 +274,19 @@ class FakeDriver(driver.ComputeDriver):
             del self._interfaces[vif['id']]
         except KeyError:
             raise exception.InterfaceDetachFailed(
-                    instance_uuid=instance['uuid'])
+                    instance_uuid=instance.uuid)
 
     def get_info(self, instance):
-        if instance['name'] not in self.instances:
-            raise exception.InstanceNotFound(instance_id=instance['name'])
-        i = self.instances[instance['name']]
+        if instance.name not in self.instances:
+            raise exception.InstanceNotFound(instance_id=instance.name)
+        i = self.instances[instance.name]
         return hardware.InstanceInfo(state=i.state,
                                      max_mem_kb=0,
                                      mem_kb=0,
                                      num_cpu=2,
                                      cpu_time_ns=0)
 
-    def get_diagnostics(self, instance_name):
+    def get_diagnostics(self, instance):
         return {'cpu0_time': 17300000000,
                 'memory': 524288,
                 'vda_errors': -1,
@@ -302,7 +304,7 @@ class FakeDriver(driver.ComputeDriver):
                 'vnet1_tx_packets': 662,
         }
 
-    def get_instance_diagnostics(self, instance_name):
+    def get_instance_diagnostics(self, instance):
         diags = diagnostics.Diagnostics(state='running', driver='fake',
                 hypervisor_os='fake-os', uptime=46664, config_drive=True)
         diags.add_cpu(time=17300000000)
@@ -341,7 +343,7 @@ class FakeDriver(driver.ComputeDriver):
         stats['frequency'] = 800
         return stats
 
-    def block_stats(self, instance_name, disk_id):
+    def block_stats(self, instance, disk_id):
         return [0L, 0L, 0L, 0L, None]
 
     def get_console_output(self, context, instance):
@@ -391,6 +393,18 @@ class FakeDriver(driver.ComputeDriver):
            Since we don't have a real hypervisor, pretend we have lots of
            disk and ram.
         """
+
+        cpu_info = collections.OrderedDict([
+            ('arch', 'x86_64'),
+            ('model', 'Nehalem'),
+            ('vendor', 'Intel'),
+            ('features', ['pge', 'clflush']),
+            ('topology', {
+                'cores': 1,
+                'threads': 1,
+                'sockets': 4,
+                }),
+            ])
         if nodename not in _FAKE_NODES:
             return {}
 
@@ -398,33 +412,33 @@ class FakeDriver(driver.ComputeDriver):
         host_status['hypervisor_hostname'] = nodename
         host_status['host_hostname'] = nodename
         host_status['host_name_label'] = nodename
-        host_status['cpu_info'] = '?'
+        host_status['cpu_info'] = jsonutils.dumps(cpu_info)
         return host_status
 
-    def ensure_filtering_rules_for_instance(self, instance_ref, network_info):
+    def ensure_filtering_rules_for_instance(self, instance, network_info):
         return
 
     def get_instance_disk_info(self, instance, block_device_info=None):
         return
 
-    def live_migration(self, context, instance_ref, dest,
+    def live_migration(self, context, instance, dest,
                        post_method, recover_method, block_migration=False,
                        migrate_data=None):
-        post_method(context, instance_ref, dest, block_migration,
+        post_method(context, instance, dest, block_migration,
                             migrate_data)
         return
 
-    def check_can_live_migrate_destination_cleanup(self, ctxt,
+    def check_can_live_migrate_destination_cleanup(self, context,
                                                    dest_check_data):
         return
 
-    def check_can_live_migrate_destination(self, ctxt, instance_ref,
+    def check_can_live_migrate_destination(self, context, instance,
                                            src_compute_info, dst_compute_info,
                                            block_migration=False,
                                            disk_over_commit=False):
         return {}
 
-    def check_can_live_migrate_source(self, ctxt, instance_ref,
+    def check_can_live_migrate_source(self, context, instance,
                                       dest_check_data, block_device_info=None):
         return
 
@@ -436,14 +450,14 @@ class FakeDriver(driver.ComputeDriver):
     def confirm_migration(self, migration, instance, network_info):
         return
 
-    def pre_live_migration(self, context, instance_ref, block_device_info,
-                           network_info, disk, migrate_data=None):
+    def pre_live_migration(self, context, instance, block_device_info,
+                           network_info, disk_info, migrate_data=None):
         return
 
-    def unfilter_instance(self, instance_ref, network_info):
+    def unfilter_instance(self, instance, network_info):
         return
 
-    def test_remove_vm(self, instance_name):
+    def _test_remove_vm(self, instance_name):
         """Removes the named VM, as if it crashed. For testing."""
         self.instances.pop(instance_name)
 

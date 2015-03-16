@@ -15,6 +15,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_log import log as logging
+from oslo_utils import uuidutils
 import webob
 
 from nova.api.openstack import common
@@ -26,8 +28,6 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LW
 from nova import network
-from nova.openstack.common import log as logging
-from nova.openstack.common import uuidutils
 
 
 LOG = logging.getLogger(__name__)
@@ -60,8 +60,7 @@ def get_instance_by_floating_ip_addr(self, context, address):
     snagiibfa = self.network_api.get_instance_id_by_floating_address
     instance_id = snagiibfa(context, address)
     if instance_id:
-        return common.get_instance(self.compute_api, context, instance_id,
-                                   want_objects=True)
+        return common.get_instance(self.compute_api, context, instance_id)
 
 
 def disassociate_floating_ip(self, context, instance, address):
@@ -178,8 +177,7 @@ class FloatingIPActionController(wsgi.Controller):
             msg = _("Address not specified")
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
-        instance = common.get_instance(self.compute_api, context, id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, id)
         cached_nwinfo = compute_utils.get_nw_info_for_instance(instance)
         if not cached_nwinfo:
             msg = _('No nw_info cache associated with instance')
@@ -263,8 +261,8 @@ class FloatingIPActionController(wsgi.Controller):
         if (instance and
             floating_ip.get('fixed_ip_id') and
             (uuidutils.is_uuid_like(id) and
-             [instance['uuid'] == id] or
-             [instance['id'] == id])[0]):
+             [instance.uuid == id] or
+             [instance.id == id])[0]):
             try:
                 disassociate_floating_ip(self, context, instance, address)
             except exception.FloatingIpNotAssociated:

@@ -21,14 +21,14 @@ import contextlib
 
 import mock
 from mox3 import mox
-from oslo.config import cfg
-from oslo import messaging as oslo_messaging
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+import oslo_messaging
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 
 from nova.cells import messaging
 from nova.cells import utils as cells_utils
-from nova.compute import delete_types
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
@@ -38,7 +38,6 @@ from nova.network import model as network_model
 from nova import objects
 from nova.objects import base as objects_base
 from nova.objects import fields as objects_fields
-from nova.openstack.common import uuidutils
 from nova import rpc
 from nova import test
 from nova.tests.unit.cells import fakes
@@ -442,6 +441,16 @@ class CellsMessageClassesTestCase(test.TestCase):
         self.assertTrue(response.failure)
         self.assertRaises(exception.CellRoutingInconsistency,
                 response.value_or_raise)
+
+    def test_targeted_message_target_cell_none(self):
+        target_cell = None
+        method = 'our_fake_method'
+        method_kwargs = dict(arg=1, arg2=2)
+        direction = 'down'
+
+        self.assertRaises(exception.CellRoutingInconsistency,
+                messaging._TargetedMessage, self.msg_runner, self.ctxt, method,
+                method_kwargs, direction, target_cell, need_response=False)
 
     def test_broadcast_routing(self):
         method = 'our_fake_method'
@@ -859,10 +868,9 @@ class CellsTargetedMethodsTestCase(test.TestCase):
     def test_service_get_by_compute_host(self):
         fake_host_name = 'fake-host-name'
 
-        self.mox.StubOutWithMock(self.tgt_db_inst,
-                                 'service_get_by_compute_host')
+        self.mox.StubOutWithMock(objects.Service, 'get_by_compute_host')
 
-        self.tgt_db_inst.service_get_by_compute_host(self.ctxt,
+        objects.Service.get_by_compute_host(self.ctxt,
                 fake_host_name).AndReturn('fake-service')
         self.mox.ReplayAll()
 
@@ -927,10 +935,8 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         fake_rpc_message = {'method': 'fake_rpc_method', 'args': {}}
         fake_host_name = 'fake-host-name'
 
-        self.mox.StubOutWithMock(self.tgt_db_inst,
-                                 'service_get_by_compute_host')
-        self.tgt_db_inst.service_get_by_compute_host(self.ctxt,
-                                                     fake_host_name)
+        self.mox.StubOutWithMock(objects.Service, 'get_by_compute_host')
+        objects.Service.get_by_compute_host(self.ctxt, fake_host_name)
 
         target = oslo_messaging.Target(topic='fake-topic')
         rpcclient = self.mox.CreateMockAnything()
@@ -957,10 +963,8 @@ class CellsTargetedMethodsTestCase(test.TestCase):
         fake_rpc_message = {'method': 'fake_rpc_method', 'args': {}}
         fake_host_name = 'fake-host-name'
 
-        self.mox.StubOutWithMock(self.tgt_db_inst,
-                                 'service_get_by_compute_host')
-        self.tgt_db_inst.service_get_by_compute_host(self.ctxt,
-                                                     fake_host_name)
+        self.mox.StubOutWithMock(objects.Service, 'get_by_compute_host')
+        objects.Service.get_by_compute_host(self.ctxt, fake_host_name)
 
         target = oslo_messaging.Target(topic='fake-topic')
         rpcclient = self.mox.CreateMockAnything()
@@ -1002,8 +1006,8 @@ class CellsTargetedMethodsTestCase(test.TestCase):
 
     def test_compute_node_get(self):
         compute_id = 'fake-id'
-        self.mox.StubOutWithMock(self.tgt_db_inst, 'compute_node_get')
-        self.tgt_db_inst.compute_node_get(self.ctxt,
+        self.mox.StubOutWithMock(objects.ComputeNode, 'get_by_id')
+        objects.ComputeNode.get_by_id(self.ctxt,
                 compute_id).AndReturn('fake_result')
 
         self.mox.ReplayAll()
@@ -1201,7 +1205,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
                 self.assertEqual(set(['user_data']),
                                  instance.obj_what_changed())
 
-        instance.save(self.ctxt, expected_task_state='exp_task',
+        instance.save(expected_task_state='exp_task',
                       expected_vm_state='exp_vm').WithSideEffects(
                               _check_object)
 
@@ -1300,7 +1304,7 @@ class CellsTargetedMethodsTestCase(test.TestCase):
                                           (), {}, (), {}, False)
 
     def test_soft_delete_instance(self):
-        self._test_instance_action_method(delete_types.SOFT_DELETE,
+        self._test_instance_action_method('soft_delete',
                                           (), {}, (), {}, False)
 
     def test_pause_instance(self):
@@ -1627,10 +1631,10 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         instance = {'uuid': 'meow'}
 
         # Should not be called in src (API cell)
-        self.mox.StubOutWithMock(self.src_compute_api, delete_types.DELETE)
+        self.mox.StubOutWithMock(self.src_compute_api, 'delete')
 
-        self.mox.StubOutWithMock(self.mid_compute_api, delete_types.DELETE)
-        self.mox.StubOutWithMock(self.tgt_compute_api, delete_types.DELETE)
+        self.mox.StubOutWithMock(self.mid_compute_api, 'delete')
+        self.mox.StubOutWithMock(self.tgt_compute_api, 'delete')
 
         self.mid_compute_api.delete(self.ctxt, instance)
         self.tgt_compute_api.delete(self.ctxt, instance)
@@ -1638,7 +1642,7 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         self.src_msg_runner.instance_delete_everywhere(self.ctxt,
-                instance, delete_types.DELETE)
+                instance, 'hard')
 
     def test_instance_soft_delete_everywhere(self):
         # Reset this, as this is a broadcast down.
@@ -1646,13 +1650,10 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         instance = {'uuid': 'meow'}
 
         # Should not be called in src (API cell)
-        self.mox.StubOutWithMock(self.src_compute_api,
-                                 delete_types.SOFT_DELETE)
+        self.mox.StubOutWithMock(self.src_compute_api, 'soft_delete')
 
-        self.mox.StubOutWithMock(self.mid_compute_api,
-                                 delete_types.SOFT_DELETE)
-        self.mox.StubOutWithMock(self.tgt_compute_api,
-                                 delete_types.SOFT_DELETE)
+        self.mox.StubOutWithMock(self.mid_compute_api, 'soft_delete')
+        self.mox.StubOutWithMock(self.tgt_compute_api, 'soft_delete')
 
         self.mid_compute_api.soft_delete(self.ctxt, instance)
         self.tgt_compute_api.soft_delete(self.ctxt, instance)
@@ -1660,7 +1661,7 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
         self.mox.ReplayAll()
 
         self.src_msg_runner.instance_delete_everywhere(self.ctxt,
-                instance, delete_types.SOFT_DELETE)
+                instance, 'soft')
 
     def test_instance_fault_create_at_top(self):
         fake_instance_fault = {'id': 1,
@@ -1847,13 +1848,12 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
 
         ctxt = self.ctxt.elevated()
 
-        self.mox.StubOutWithMock(self.src_db_inst, 'compute_node_get_all')
-        self.mox.StubOutWithMock(self.mid_db_inst, 'compute_node_get_all')
-        self.mox.StubOutWithMock(self.tgt_db_inst, 'compute_node_get_all')
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_all')
 
-        self.src_db_inst.compute_node_get_all(ctxt).AndReturn([1, 2])
-        self.mid_db_inst.compute_node_get_all(ctxt).AndReturn([3])
-        self.tgt_db_inst.compute_node_get_all(ctxt).AndReturn([4, 5])
+        # Calls are made from grandchild-cell to api-cell
+        objects.ComputeNodeList.get_all(mox.IgnoreArg()).AndReturn([4, 5])
+        objects.ComputeNodeList.get_all(mox.IgnoreArg()).AndReturn([3])
+        objects.ComputeNodeList.get_all(mox.IgnoreArg()).AndReturn([1, 2])
 
         self.mox.ReplayAll()
 
@@ -1872,19 +1872,15 @@ class CellsBroadcastMethodsTestCase(test.TestCase):
 
         ctxt = self.ctxt.elevated()
 
-        self.mox.StubOutWithMock(self.src_db_inst,
-                                 'compute_node_search_by_hypervisor')
-        self.mox.StubOutWithMock(self.mid_db_inst,
-                                 'compute_node_search_by_hypervisor')
-        self.mox.StubOutWithMock(self.tgt_db_inst,
-                                 'compute_node_search_by_hypervisor')
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_by_hypervisor')
 
-        self.src_db_inst.compute_node_search_by_hypervisor(ctxt,
-                hypervisor_match).AndReturn([1, 2])
-        self.mid_db_inst.compute_node_search_by_hypervisor(ctxt,
-                hypervisor_match).AndReturn([3])
-        self.tgt_db_inst.compute_node_search_by_hypervisor(ctxt,
-                hypervisor_match).AndReturn([4, 5])
+        # Calls are made from grandchild-cell to api-cell
+        objects.ComputeNodeList.get_by_hypervisor(
+            ctxt, hypervisor_match).AndReturn([4, 5])
+        objects.ComputeNodeList.get_by_hypervisor(
+            ctxt, hypervisor_match).AndReturn([3])
+        objects.ComputeNodeList.get_by_hypervisor(
+            ctxt, hypervisor_match).AndReturn([1, 2])
 
         self.mox.ReplayAll()
 

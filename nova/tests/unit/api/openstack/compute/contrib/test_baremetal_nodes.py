@@ -14,7 +14,10 @@
 #    under the License.
 
 import mock
+import six
 from webob import exc
+
+from ironicclient import exc as ironic_exc
 
 from nova.api.openstack.compute.contrib import baremetal_nodes as b_nodes_v2
 from nova.api.openstack.compute.plugins.v3 import baremetal_nodes \
@@ -96,6 +99,24 @@ class BareMetalNodesTestV21(test.NoDBTestCase):
         self.assertEqual(expected_output, res_dict)
         mock_list.assert_called_once_with(detail=True)
 
+    @mock.patch.object(FAKE_IRONIC_CLIENT.node, 'list')
+    def test_index_ironic_missing_properties(self, mock_list):
+        properties = {'cpus': 2}
+        node = ironic_utils.get_test_node(properties=properties)
+        mock_list.return_value = [node]
+
+        res_dict = self.controller.index(self.request)
+        expected_output = {'nodes':
+                            [{'memory_mb': 0,
+                             'host': 'IRONIC MANAGED',
+                             'disk_gb': 0,
+                             'interfaces': [],
+                             'task_state': None,
+                             'id': node.uuid,
+                             'cpus': properties['cpus']}]}
+        self.assertEqual(expected_output, res_dict)
+        mock_list.assert_called_once_with(detail=True)
+
     def test_index_ironic_not_implemented(self):
         with mock.patch.object(self.mod, 'ironic_client', None):
             self.assertRaises(exc.HTTPNotImplemented,
@@ -127,6 +148,29 @@ class BareMetalNodesTestV21(test.NoDBTestCase):
 
     @mock.patch.object(FAKE_IRONIC_CLIENT.node, 'list_ports')
     @mock.patch.object(FAKE_IRONIC_CLIENT.node, 'get')
+    def test_show_ironic_no_properties(self, mock_get, mock_list_ports):
+        properties = {}
+        node = ironic_utils.get_test_node(properties=properties)
+        port = ironic_utils.get_test_port()
+        mock_get.return_value = node
+        mock_list_ports.return_value = [port]
+
+        res_dict = self.controller.show(self.request, node.uuid)
+        expected_output = {'node':
+                            {'memory_mb': 0,
+                             'instance_uuid': None,
+                             'host': 'IRONIC MANAGED',
+                             'disk_gb': 0,
+                             'interfaces': [{'address': port.address}],
+                             'task_state': None,
+                             'id': node.uuid,
+                             'cpus': 0}}
+        self.assertEqual(expected_output, res_dict)
+        mock_get.assert_called_once_with(node.uuid)
+        mock_list_ports.assert_called_once_with(node.uuid)
+
+    @mock.patch.object(FAKE_IRONIC_CLIENT.node, 'list_ports')
+    @mock.patch.object(FAKE_IRONIC_CLIENT.node, 'get')
     def test_show_ironic_no_interfaces(self, mock_get, mock_list_ports):
         properties = {'cpus': 1, 'memory_mb': 512, 'local_gb': 10}
         node = ironic_utils.get_test_node(properties=properties)
@@ -137,6 +181,13 @@ class BareMetalNodesTestV21(test.NoDBTestCase):
         self.assertEqual([], res_dict['node']['interfaces'])
         mock_get.assert_called_once_with(node.uuid)
         mock_list_ports.assert_called_once_with(node.uuid)
+
+    @mock.patch.object(FAKE_IRONIC_CLIENT.node, 'get',
+                       side_effect=ironic_exc.NotFound())
+    def test_show_ironic_node_not_found(self, mock_get):
+        error = self.assertRaises(exc.HTTPNotFound, self.controller.show,
+                                  self.request, 'fake-uuid')
+        self.assertIn('fake-uuid', six.text_type(error))
 
     def test_show_ironic_not_implemented(self):
         with mock.patch.object(self.mod, 'ironic_client', None):

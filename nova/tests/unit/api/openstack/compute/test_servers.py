@@ -24,9 +24,9 @@ import uuid
 
 import iso8601
 import mock
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 import six.moves.urllib.parse as urlparse
 import testtools
 import webob
@@ -36,7 +36,6 @@ from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import views
 from nova.api.openstack import extensions
 from nova.compute import api as compute_api
-from nova.compute import delete_types
 from nova.compute import flavors
 from nova.compute import task_states
 from nova.compute import vm_states
@@ -1472,9 +1471,9 @@ class ServersControllerDeleteTest(ControllerTest):
 
     def test_delete_locked_server(self):
         req = self._create_delete_request(FAKE_UUID)
-        self.stubs.Set(compute_api.API, delete_types.SOFT_DELETE,
+        self.stubs.Set(compute_api.API, 'soft_delete',
                        fakes.fake_actions_to_locked_server)
-        self.stubs.Set(compute_api.API, delete_types.DELETE,
+        self.stubs.Set(compute_api.API, 'delete',
                        fakes.fake_actions_to_locked_server)
 
         self.assertRaises(webob.exc.HTTPConflict, self.controller.delete,
@@ -1869,9 +1868,6 @@ class ServersControllerCreateTest(test.TestCase):
 
         def project_get_networks(context, user_id):
             return dict(id='1', host='localhost')
-
-        def queue_get_for(context, *args):
-            return 'network_topic'
 
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)

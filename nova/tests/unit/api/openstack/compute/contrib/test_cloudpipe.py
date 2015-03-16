@@ -15,14 +15,15 @@
 
 import uuid as uuid_lib
 
-from oslo.config import cfg
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_utils import timeutils
 from webob import exc
 
 from nova.api.openstack.compute.contrib import cloudpipe as cloudpipe_v2
 from nova.api.openstack.compute.plugins.v3 import cloudpipe as cloudpipe_v21
 from nova.compute import utils as compute_utils
 from nova import exception
+from nova import objects
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_network
@@ -38,18 +39,17 @@ uuid = str(uuid_lib.uuid4())
 
 
 def fake_vpn_instance():
-    return {
-        'id': 7, 'image_ref': CONF.vpn_image_id, 'vm_state': 'active',
-        'created_at': timeutils.parse_strtime('1981-10-20T00:00:00.000000'),
-        'uuid': uuid, 'project_id': project_id,
-    }
+    return objects.Instance(
+        id=7, image_ref=CONF.vpn_image_id, vm_state='active',
+        created_at=timeutils.parse_strtime('1981-10-20T00:00:00.000000'),
+        uuid=uuid, project_id=project_id)
 
 
-def compute_api_get_all_empty(context, search_opts=None):
+def compute_api_get_all_empty(context, search_opts=None, want_objects=True):
     return []
 
 
-def compute_api_get_all(context, search_opts=None):
+def compute_api_get_all(context, search_opts=None, want_objects=True):
         return [fake_vpn_instance()]
 
 
@@ -159,3 +159,34 @@ class CloudpipeTestV2(CloudpipeTestV21):
 
     def test_cloudpipe_create_with_bad_project_id_failed(self):
         pass
+
+
+class CloudpipePolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(CloudpipePolicyEnforcementV21, self).setUp()
+        self.controller = cloudpipe_v21.CloudpipeController()
+        self.req = fakes.HTTPRequest.blank('')
+
+    def _common_policy_check(self, func, *arg, **kwarg):
+        rule_name = "compute_extension:v3:os-cloudpipe"
+        rule = {rule_name: "project:non_fake"}
+        self.policy.set_rules(rule)
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized, func, *arg, **kwarg)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+    def test_list_policy_failed(self):
+        self._common_policy_check(self.controller.index, self.req)
+
+    def test_create_policy_failed(self):
+        body = {'cloudpipe': {'project_id': uuid}}
+        self._common_policy_check(self.controller.create, self.req, body=body)
+
+    def test_update_policy_failed(self):
+        body = {"configure_project": {'vpn_ip': '192.168.1.1',
+                                      'vpn_port': 2000}}
+        self._common_policy_check(
+            self.controller.update, self.req, uuid, body=body)

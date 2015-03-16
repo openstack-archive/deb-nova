@@ -22,17 +22,17 @@ import collections
 import copy
 import functools
 
-from oslo.config import cfg
-from oslo.utils import excutils
-from oslo.utils import units
-from oslo.vmware import exceptions as vexc
-from oslo.vmware.objects import datastore as ds_obj
-from oslo.vmware import pbm
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import excutils
+from oslo_utils import units
+from oslo_vmware import exceptions as vexc
+from oslo_vmware.objects import datastore as ds_obj
+from oslo_vmware import pbm
 
 from nova import exception
-from nova.i18n import _, _LI, _LW
+from nova.i18n import _, _LE, _LI, _LW
 from nova.network import model as network_model
-from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import vim_util
 
@@ -107,7 +107,7 @@ def _vm_ref_cache(id, func, session, data):
 def vm_ref_cache_from_instance(func):
     @functools.wraps(func)
     def wrapper(session, instance):
-        id = instance['uuid']
+        id = instance.uuid
         return _vm_ref_cache(id, func, session, instance)
     return wrapper
 
@@ -124,7 +124,8 @@ VNC_CONFIG_KEY = 'config.extraConfig["RemoteDisplay.vnc.port"]'
 
 VmdkInfo = collections.namedtuple('VmdkInfo', ['path', 'adapter_type',
                                                'disk_type',
-                                               'capacity_in_bytes'])
+                                               'capacity_in_bytes',
+                                               'device'])
 
 
 def _iface_id_option_value(client_factory, iface_id, port_index):
@@ -132,6 +133,32 @@ def _iface_id_option_value(client_factory, iface_id, port_index):
     opt.key = "nvp.iface-id.%d" % port_index
     opt.value = iface_id
     return opt
+
+
+def _get_allocation_info(client_factory, extra_specs):
+    allocation = client_factory.create('ns0:ResourceAllocationInfo')
+    if extra_specs.cpu_limits.cpu_limit:
+        allocation.limit = extra_specs.cpu_limits.cpu_limit
+    else:
+        # Set as 'umlimited'
+        allocation.limit = -1
+    if extra_specs.cpu_limits.cpu_reservation:
+        allocation.reservation = extra_specs.cpu_limits.cpu_reservation
+    else:
+        allocation.reservation = 0
+    shares = client_factory.create('ns0:SharesInfo')
+    if extra_specs.cpu_limits.cpu_shares_level:
+        shares.level = extra_specs.cpu_limits.cpu_shares_level
+        if (shares.level == 'custom' and
+            extra_specs.cpu_limits.cpu_shares_share):
+            shares.shares = extra_specs.cpu_limits.cpu_shares_share
+        else:
+            shares.shares = 0
+    else:
+        shares.level = 'normal'
+        shares.shares = 0
+    allocation.shares = shares
+    return allocation
 
 
 def get_vm_create_spec(client_factory, instance, name, data_store_name,
@@ -169,26 +196,13 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     tools_info.beforeGuestReboot = True
 
     config_spec.tools = tools_info
-    config_spec.numCPUs = int(instance['vcpus'])
-    config_spec.memoryMB = int(instance['memory_mb'])
+    config_spec.numCPUs = int(instance.vcpus)
+    config_spec.memoryMB = int(instance.memory_mb)
 
     # Configure cpu information
     if extra_specs.has_cpu_limits():
-        allocation = client_factory.create('ns0:ResourceAllocationInfo')
-        if extra_specs.cpu_limits.cpu_limit:
-            allocation.limit = extra_specs.cpu_limits.cpu_limit
-        if extra_specs.cpu_limits.cpu_reservation:
-            allocation.reservation = extra_specs.cpu_limits.cpu_reservation
-        if extra_specs.cpu_limits.cpu_shares_level:
-            shares = client_factory.create('ns0:SharesInfo')
-            shares.level = extra_specs.cpu_limits.cpu_shares_level
-            if (shares.level == 'custom' and
-                extra_specs.cpu_limits.cpu_shares_share):
-                shares.shares = extra_specs.cpu_limits.cpu_shares_share
-            else:
-                shares.shares = 0
-            allocation.shares = shares
-        config_spec.cpuAllocation = allocation
+        config_spec.cpuAllocation = _get_allocation_info(client_factory,
+                                                         extra_specs)
 
     vif_spec_list = []
     for vif_info in vif_infos:
@@ -203,7 +217,7 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     extra_config = []
     opt = client_factory.create('ns0:OptionValue')
     opt.key = "nvp.vm-uuid"
-    opt.value = instance['uuid']
+    opt.value = instance.uuid
     extra_config.append(opt)
 
     port_index = 0
@@ -225,11 +239,29 @@ def get_vm_create_spec(client_factory, instance, name, data_store_name,
     return config_spec
 
 
-def get_vm_resize_spec(client_factory, instance):
+def get_vm_boot_spec(client_factory, device):
+    """Returns updated boot settings for the instance.
+
+    The boot order for the instance will be changed to have the
+    input device as the boot disk.
+    """
+    config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+    boot_disk = client_factory.create(
+        'ns0:VirtualMachineBootOptionsBootableDiskDevice')
+    boot_disk.deviceKey = device.key
+    boot_options = client_factory.create('ns0:VirtualMachineBootOptions')
+    boot_options.bootOrder = [boot_disk]
+    config_spec.bootOptions = boot_options
+    return config_spec
+
+
+def get_vm_resize_spec(client_factory, vcpus, memory_mb, extra_specs):
     """Provides updates for a VM spec."""
     resize_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
-    resize_spec.numCPUs = int(instance['vcpus'])
-    resize_spec.memoryMB = int(instance['memory_mb'])
+    resize_spec.numCPUs = vcpus
+    resize_spec.memoryMB = memory_mb
+    resize_spec.cpuAllocation = _get_allocation_info(client_factory,
+                                                     extra_specs)
     return resize_spec
 
 
@@ -488,6 +520,7 @@ def get_vmdk_info(session, vm_ref, uuid=None):
     root_device = None
     if uuid:
         root_disk = '%s.vmdk' % uuid
+    vmdk_device = None
 
     adapter_type_dict = {}
     for device in hardware_devices:
@@ -520,7 +553,7 @@ def get_vmdk_info(session, vm_ref, uuid=None):
 
     adapter_type = adapter_type_dict.get(vmdk_controller_key)
     return VmdkInfo(vmdk_file_path, adapter_type, disk_type,
-                    capacity_in_bytes)
+                    capacity_in_bytes, vmdk_device)
 
 
 def _find_controller_slot(controller_keys, taken, max_unit_number):
@@ -944,9 +977,9 @@ def _get_vm_ref_from_extraconfig(session, instance_uuid):
 @vm_ref_cache_from_instance
 def get_vm_ref(session, instance):
     """Get reference to the VM through uuid or vm name."""
-    uuid = instance['uuid']
+    uuid = instance.uuid
     vm_ref = (search_vm_ref_by_identifier(session, uuid) or
-              _get_vm_ref_from_name(session, instance['name']))
+              _get_vm_ref_from_name(session, instance.name))
     if vm_ref is None:
         raise exception.InstanceNotFound(instance_id=uuid)
     return vm_ref
@@ -982,8 +1015,8 @@ def get_host_name_for_vm(session, instance):
                                 host_ref, "HostSystem", "name")
 
 
-def get_vm_state_from_name(session, vm_name):
-    vm_ref = get_vm_ref_from_name(session, vm_name)
+def get_vm_state(session, instance):
+    vm_ref = get_vm_ref(session, instance)
     vm_state = session._call_method(vim_util, "get_dynamic_property",
                 vm_ref, "VirtualMachine", "runtime.powerState")
     return vm_state
@@ -1262,8 +1295,8 @@ def destroy_vm(session, instance, vm_ref=None):
                                             vm_ref)
         session._wait_for_task(destroy_task)
         LOG.info(_LI("Destroyed the VM"), instance=instance)
-    except Exception as exc:
-        LOG.exception(exc, instance=instance)
+    except Exception:
+        LOG.exception(_LE('Destroy VM failed'), instance=instance)
 
 
 def create_virtual_disk(session, dc_ref, adapter_type, disk_type,
@@ -1331,96 +1364,6 @@ def reconfigure_vm(session, vm_ref, config_spec):
                                          "ReconfigVM_Task", vm_ref,
                                          spec=config_spec)
     session._wait_for_task(reconfig_task)
-
-
-def clone_vmref_for_instance(session, instance, vm_ref, host_ref, ds_ref,
-                                vmfolder_ref):
-    """Clone VM and link the cloned VM to the instance.
-
-    Clones the passed vm_ref into a new VM and links the cloned vm to
-    the passed instance.
-    """
-    if vm_ref is None:
-        LOG.warning(_LW("vmwareapi:vm_util:clone_vmref_for_instance, called "
-                        "with vm_ref=None"))
-        raise vexc.MissingParameter(param="vm_ref")
-    # Get the clone vm spec
-    client_factory = session.vim.client.factory
-    rel_spec = relocate_vm_spec(client_factory, ds_ref, host_ref,
-                    disk_move_type='moveAllDiskBackingsAndDisallowSharing')
-    extra_opts = {'nvp.vm-uuid': instance['uuid']}
-    config_spec = get_vm_extra_config_spec(client_factory, extra_opts)
-    config_spec.instanceUuid = instance['uuid']
-    clone_spec = clone_vm_spec(client_factory, rel_spec, config=config_spec)
-
-    # Clone VM on ESX host
-    LOG.debug("Cloning VM for instance %s", instance['uuid'],
-              instance=instance)
-    vm_clone_task = session._call_method(session.vim, "CloneVM_Task",
-                                         vm_ref, folder=vmfolder_ref,
-                                         name=instance['uuid'],
-                                         spec=clone_spec)
-    session._wait_for_task(vm_clone_task)
-    LOG.debug("Cloned VM for instance %s", instance['uuid'],
-              instance=instance)
-    # Invalidate the cache, so that it is refetched the next time
-    vm_ref_cache_delete(instance['uuid'])
-
-
-def disassociate_vmref_from_instance(session, instance, vm_ref=None,
-                                      suffix='-orig'):
-    """Disassociates the VM linked to the instance.
-
-    Disassociates the VM linked to the instance by performing the following
-    1. Update the extraConfig property for nvp.vm-uuid to be replaced with
-    instance[uuid]+suffix
-    2. Rename the VM to be instance[uuid]+suffix instead
-    3. Reset the instanceUUID of the VM to a new generated value
-    """
-    if vm_ref is None:
-        vm_ref = get_vm_ref(session, instance)
-    extra_opts = {'nvp.vm-uuid': instance['uuid'] + suffix}
-    client_factory = session.vim.client.factory
-    reconfig_spec = get_vm_extra_config_spec(client_factory, extra_opts)
-    reconfig_spec.name = instance['uuid'] + suffix
-    reconfig_spec.instanceUuid = ''
-    LOG.debug("Disassociating VM from instance %s", instance['uuid'],
-              instance=instance)
-    reconfigure_vm(session, vm_ref, reconfig_spec)
-    LOG.debug("Disassociated VM from instance %s", instance['uuid'],
-              instance=instance)
-    # Invalidate the cache, so that it is refetched the next time
-    vm_ref_cache_delete(instance['uuid'])
-
-
-def associate_vmref_for_instance(session, instance, vm_ref=None,
-                                    suffix='-orig'):
-    """Associates the VM to the instance.
-
-    Associates the VM to the instance by performing the following
-    1. Update the extraConfig property for nvp.vm-uuid to be replaced with
-    instance[uuid]
-    2. Rename the VM to be instance[uuid]
-    3. Reset the instanceUUID of the VM to be instance[uuid]
-    """
-    if vm_ref is None:
-        vm_ref = search_vm_ref_by_identifier(session,
-                                             instance['uuid'] + suffix)
-        if vm_ref is None:
-            raise exception.InstanceNotFound(instance_id=instance['uuid']
-                                            + suffix)
-    extra_opts = {'nvp.vm-uuid': instance['uuid']}
-    client_factory = session.vim.client.factory
-    reconfig_spec = get_vm_extra_config_spec(client_factory, extra_opts)
-    reconfig_spec.name = instance['uuid']
-    reconfig_spec.instanceUuid = instance['uuid']
-    LOG.debug("Associating VM to instance %s", instance['uuid'],
-              instance=instance)
-    reconfigure_vm(session, vm_ref, reconfig_spec)
-    LOG.debug("Associated VM to instance %s", instance['uuid'],
-              instance=instance)
-    # Invalidate the cache, so that it is refetched the next time
-    vm_ref_cache_delete(instance['uuid'])
 
 
 def power_on_instance(session, instance, vm_ref=None):
@@ -1519,5 +1462,65 @@ def power_off_instance(session, instance, vm_ref=None):
         LOG.debug("VM already powered off", instance=instance)
 
 
+def find_rescue_device(hardware_devices, instance):
+    """Returns the rescue device.
+
+    The method will raise an exception if the rescue device does not
+    exist. The resuce device has suffix '-rescue.vmdk'.
+    :param hardware_devices: the hardware devices for the instance
+    :param instance: nova.objects.instance.Instance object
+    :return: the rescue disk device object
+    """
+    for device in hardware_devices.VirtualDevice:
+        if (device.__class__.__name__ == "VirtualDisk" and
+                device.backing.__class__.__name__ ==
+                'VirtualDiskFlatVer2BackingInfo' and
+                device.backing.fileName.endswith('-rescue.vmdk')):
+            return device
+
+    msg = _('Rescue device does not exist for instance %s') % instance.uuid
+    raise exception.NotFound(msg)
+
+
 def get_ephemeral_name(id):
     return 'ephemeral_%d.vmdk' % id
+
+
+def _detach_and_delete_devices_config_spec(client_factory, devices):
+    config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
+    device_config_spec = []
+    for device in devices:
+        virtual_device_config = client_factory.create(
+                                'ns0:VirtualDeviceConfigSpec')
+        virtual_device_config.operation = "remove"
+        virtual_device_config.device = device
+        virtual_device_config.fileOperation = "destroy"
+        device_config_spec.append(virtual_device_config)
+    config_spec.deviceChange = device_config_spec
+    return config_spec
+
+
+def detach_devices_from_vm(session, vm_ref, devices):
+    """Detach specified devices from VM."""
+    client_factory = session.vim.client.factory
+    config_spec = _detach_and_delete_devices_config_spec(
+        client_factory, devices)
+    reconfigure_vm(session, vm_ref, config_spec)
+
+
+def get_ephemerals(session, vm_ref):
+    devices = []
+    hardware_devices = session._call_method(vim_util,
+            "get_dynamic_property", vm_ref, "VirtualMachine",
+            "config.hardware.device")
+
+    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
+        hardware_devices = hardware_devices.VirtualDevice
+
+    for device in hardware_devices:
+        if device.__class__.__name__ == "VirtualDisk":
+            if (device.backing.__class__.__name__ ==
+                    "VirtualDiskFlatVer2BackingInfo"):
+                if 'ephemeral' in device.backing.fileName:
+                    devices.append(device)
+    return devices

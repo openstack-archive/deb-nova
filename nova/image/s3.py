@@ -26,8 +26,9 @@ import tempfile
 import boto.s3.connection
 import eventlet
 from lxml import etree
-from oslo.config import cfg
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova.api.ec2 import ec2utils
 import nova.cert.rpcapi
@@ -35,7 +36,6 @@ from nova.compute import arch
 from nova import exception
 from nova.i18n import _, _LE, _LI
 from nova.image import glance
-from nova.openstack.common import log as logging
 from nova import utils
 
 
@@ -299,7 +299,6 @@ class S3ImageService(object):
 
         def delayed_create():
             """This handles the fetching and decrypting of the part files."""
-            context.update_store()
             log_vars = {'image_location': image_location,
                         'image_path': image_path}
 

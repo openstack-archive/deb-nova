@@ -27,8 +27,8 @@ import socket
 import sys
 import textwrap
 
-from oslo.config import cfg
-from oslo.utils import importutils
+from oslo_config import cfg
+from oslo_utils import importutils
 import six
 import stevedore.named
 
@@ -104,7 +104,7 @@ def generate(argv):
     # and the list of Opt instances for that group.
     if parsed_args.libraries:
         loader = stevedore.named.NamedExtensionManager(
-            'oslo.config.opts',
+            'oslo_config.opts',
             names=list(set(parsed_args.libraries)),
             invoke_on_load=False,
             on_load_failure_callback=raise_extension_exception
@@ -179,6 +179,10 @@ def _list_opts(obj):
                 not isinstance(o, cfg.SubCommandOpt))
 
     opts = list()
+
+    if 'list_opts' in dir(obj):
+        return getattr(obj, 'list_opts')()
+
     for attr_str in dir(obj):
         attr_obj = getattr(obj, attr_str)
         if is_opt(attr_obj):

@@ -21,13 +21,13 @@ import xmlrpclib
 
 from eventlet import queue
 from eventlet import timeout
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova import context
 from nova import exception
 from nova.i18n import _, _LE, _LW
 from nova import objects
-from nova.openstack.common import log as logging
 from nova.openstack.common import versionutils
 from nova import utils
 from nova import version

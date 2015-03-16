@@ -21,13 +21,13 @@ import re
 
 import jsonschema
 import netaddr
-from oslo.utils import timeutils
+from oslo_utils import timeutils
+from oslo_utils import uuidutils
 import rfc3986
 import six
 
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import uuidutils
 
 
 @jsonschema.FormatChecker.cls_checks('date-time')

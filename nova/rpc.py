@@ -26,9 +26,9 @@ __all__ = [
     'TRANSPORT_ALIASES',
 ]
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+import oslo_messaging as messaging
+from oslo_serialization import jsonutils
 
 import nova.context
 import nova.exception
@@ -140,7 +140,7 @@ def get_server(target, endpoints, serializer=None):
                                     serializer=serializer)
 
 
-def get_notifier(service=None, host=None, publisher_id=None):
+def get_notifier(service, host=None, publisher_id=None):
     assert NOTIFIER is not None
     if not publisher_id:
         publisher_id = "%s.%s" % (service, host or CONF.host)

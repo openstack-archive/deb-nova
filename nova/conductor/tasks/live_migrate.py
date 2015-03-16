@@ -10,17 +10,16 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
-from nova import db
 from nova import exception
 from nova.i18n import _
 from nova import image
 from nova import objects
-from nova.openstack.common import log as logging
 from nova.scheduler import client as scheduler_client
 from nova.scheduler import utils as scheduler_utils
 from nova import servicegroup
@@ -53,7 +52,7 @@ class LiveMigrationTask(object):
         self.image_api = image.API()
 
     def execute(self):
-        self._check_instance_is_running()
+        self._check_instance_is_active()
         self._check_host_is_up(self.source)
 
         if not self.destination:
@@ -78,14 +77,18 @@ class LiveMigrationTask(object):
         # rollback call right now.
         raise NotImplementedError()
 
-    def _check_instance_is_running(self):
-        if self.instance.power_state != power_state.RUNNING:
-            raise exception.InstanceNotRunning(
-                    instance_id=self.instance.uuid)
+    def _check_instance_is_active(self):
+        if self.instance.power_state not in (power_state.RUNNING,
+                                             power_state.PAUSED):
+            raise exception.InstanceInvalidState(
+                    instance_uuid = self.instance.uuid,
+                    attr = 'power_state',
+                    state = self.instance.power_state,
+                    method = 'live migrate')
 
     def _check_host_is_up(self, host):
         try:
-            service = db.service_get_by_compute_host(self.context, host)
+            service = objects.Service.get_by_compute_host(self.context, host)
         except exception.NotFound:
             raise exception.ComputeServiceUnavailable(host=host)
 

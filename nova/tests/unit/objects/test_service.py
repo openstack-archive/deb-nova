@@ -13,11 +13,12 @@
 #    under the License.
 
 import mock
-from oslo.serialization import jsonutils
-from oslo.utils import timeutils
+from oslo_serialization import jsonutils
+from oslo_utils import timeutils
 
 from nova import db
 from nova import exception
+from nova import objects
 from nova.objects import aggregate
 from nova.objects import service
 from nova.tests.unit.objects import test_compute_node
@@ -68,12 +69,20 @@ class _TestServiceObject(object):
 
     def _test_query(self, db_method, obj_method, *args, **kwargs):
         self.mox.StubOutWithMock(db, db_method)
-        getattr(db, db_method)(self.context, *args, **kwargs).AndReturn(
-            fake_service)
+        db_exception = kwargs.pop('db_exception', None)
+        if db_exception:
+            getattr(db, db_method)(self.context, *args, **kwargs).AndRaise(
+                db_exception)
+        else:
+            getattr(db, db_method)(self.context, *args, **kwargs).AndReturn(
+                fake_service)
         self.mox.ReplayAll()
         obj = getattr(service.Service, obj_method)(self.context, *args,
                                                    **kwargs)
-        self.compare_obj(obj, fake_service, allow_missing=OPTIONAL)
+        if db_exception:
+            self.assertIsNone(obj)
+        else:
+            self.compare_obj(obj, fake_service, allow_missing=OPTIONAL)
 
     def test_get_by_id(self):
         self._test_query('service_get', 'get_by_id', 123)
@@ -82,28 +91,23 @@ class _TestServiceObject(object):
         self._test_query('service_get_by_host_and_topic',
                          'get_by_host_and_topic', 'fake-host', 'fake-topic')
 
+    def test_get_by_host_and_binary(self):
+        self._test_query('service_get_by_host_and_binary',
+                         'get_by_host_and_binary', 'fake-host', 'fake-binary')
+
+    def test_get_by_host_and_binary_raises(self):
+        self._test_query('service_get_by_host_and_binary',
+                         'get_by_host_and_binary', 'fake-host', 'fake-binary',
+                         db_exception=exception.HostBinaryNotFound(
+                             host='fake-host', binary='fake-binary'))
+
     def test_get_by_compute_host(self):
         self._test_query('service_get_by_compute_host', 'get_by_compute_host',
                          'fake-host')
 
     def test_get_by_args(self):
-        self._test_query('service_get_by_args', 'get_by_args', 'fake-host',
-                         'fake-service')
-
-    def test_with_compute_node(self):
-        self.mox.StubOutWithMock(db, 'service_get')
-        self.mox.StubOutWithMock(db, 'compute_nodes_get_by_service_id')
-        _fake_service = dict(
-            fake_service, compute_node=[test_compute_node.fake_compute_node])
-        db.service_get(self.context, 123).AndReturn(_fake_service)
-        self.mox.ReplayAll()
-        service_obj = service.Service.get_by_id(self.context, 123)
-        self.assertTrue(service_obj.obj_attr_is_set('compute_node'))
-        self.compare_obj(service_obj.compute_node,
-                         test_compute_node.fake_compute_node,
-                         subs=self.subs(),
-                         allow_missing=OPTIONAL,
-                         comparators=self.comparators())
+        self._test_query('service_get_by_host_and_binary', 'get_by_args',
+                         'fake-host', 'fake-binary')
 
     def test_create(self):
         self.mox.StubOutWithMock(db, 'service_create')
@@ -123,8 +127,7 @@ class _TestServiceObject(object):
         service_obj = service.Service(context=self.context)
         service_obj.host = 'fake-host'
         service_obj.create()
-        self.assertRaises(exception.ObjectActionError, service_obj.create,
-                          self.context)
+        self.assertRaises(exception.ObjectActionError, service_obj.create)
 
     def test_save(self):
         self.mox.StubOutWithMock(db, 'service_update')
@@ -170,6 +173,14 @@ class _TestServiceObject(object):
         self.assertEqual(1, len(services))
         self.compare_obj(services[0], fake_service, allow_missing=OPTIONAL)
 
+    @mock.patch('nova.db.service_get_all_by_binary')
+    def test_get_by_binary(self, mock_get):
+        mock_get.return_value = [fake_service]
+        services = service.ServiceList.get_by_binary(self.context,
+                                                     'fake-binary')
+        self.assertEqual(1, len(services))
+        mock_get.assert_called_once_with(self.context, 'fake-binary')
+
     def test_get_by_host(self):
         self.mox.StubOutWithMock(db, 'service_get_all_by_host')
         db.service_get_all_by_host(self.context, 'fake-host').AndReturn(
@@ -207,18 +218,19 @@ class _TestServiceObject(object):
         self.assertEqual('test-az', services[0].availability_zone)
 
     def test_compute_node(self):
-        self.mox.StubOutWithMock(db, 'compute_nodes_get_by_service_id')
-        db.compute_nodes_get_by_service_id(self.context, 123).AndReturn(
-            [test_compute_node.fake_compute_node])
+        fake_compute_node = objects.ComputeNode._from_db_object(
+            self.context, objects.ComputeNode(),
+            test_compute_node.fake_compute_node)
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_all_by_host')
+        objects.ComputeNodeList.get_all_by_host(
+            self.context, 'fake-host').AndReturn(
+                [fake_compute_node])
         self.mox.ReplayAll()
-        service_obj = service.Service()
+        service_obj = service.Service(id=123, host="fake-host",
+                                      binary="nova-compute")
         service_obj._context = self.context
-        service_obj.id = 123
-        self.compare_obj(service_obj.compute_node,
-                         test_compute_node.fake_compute_node,
-                         subs=self.subs(),
-                         allow_missing=OPTIONAL,
-                         comparators=self.comparators())
+        self.assertEqual(service_obj.compute_node,
+                         fake_compute_node)
         # Make sure it doesn't re-fetch this
         service_obj.compute_node
 
@@ -227,6 +239,18 @@ class _TestServiceObject(object):
         service_obj.id = 123
         self.assertRaises(exception.OrphanedObjectError,
                           getattr, service_obj, 'compute_node')
+
+    @mock.patch.object(objects.ComputeNodeList, 'get_all_by_host')
+    def test_obj_make_compatible_for_compute_node(self, get_all_by_host):
+        service_obj = objects.Service(context=self.context)
+        fake_service_dict = fake_service.copy()
+        fake_compute_obj = objects.ComputeNode(host=fake_service['host'])
+        get_all_by_host.return_value = [fake_compute_obj]
+
+        service_obj.obj_make_compatible(fake_service_dict, '1.9')
+        self.assertEqual(
+            fake_compute_obj.obj_to_primitive(target_version='1.10'),
+            fake_service_dict['compute_node'])
 
 
 class TestServiceObject(test_objects._LocalTest,

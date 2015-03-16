@@ -18,12 +18,12 @@ Management class for VM snapshot operations.
 """
 import os
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova.compute import task_states
 from nova.i18n import _LW
 from nova.image import glance
-from nova.openstack.common import log as logging
 from nova.virt.hyperv import utilsfactory
 
 CONF = cfg.CONF
@@ -48,7 +48,7 @@ class SnapshotOps(object):
 
     def snapshot(self, context, instance, image_id, update_task_state):
         """Create snapshot from a running VM instance."""
-        instance_name = instance["name"]
+        instance_name = instance.name
 
         LOG.debug("Creating snapshot for instance %s", instance_name)
         snapshot_path = self._vmutils.take_vm_snapshot(instance_name)

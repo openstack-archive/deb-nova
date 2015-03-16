@@ -21,16 +21,17 @@ import os
 import time
 
 import mock
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.utils import importutils
 from oslo_concurrency import processutils
+from oslo_config import cfg
+from oslo_log import formatters
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_utils import importutils
 
 from nova import conductor
 from nova import context
 from nova import db
 from nova import objects
-from nova.openstack.common import log as logging
 from nova import test
 from nova.tests.unit import fake_instance
 from nova import utils
@@ -48,7 +49,7 @@ def intercept_log_messages():
         mylog = logging.getLogger('nova')
         stream = cStringIO.StringIO()
         handler = logging.logging.StreamHandler(stream)
-        handler.setFormatter(logging.ContextFormatter())
+        handler.setFormatter(formatters.ContextFormatter())
         mylog.logger.addHandler(handler)
         yield stream
     finally:

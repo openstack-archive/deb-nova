@@ -13,7 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo.config import cfg
+from oslo_config import cfg
 
 from nova.api.metadata import password
 from nova.api.openstack.compute.contrib import server_password \
@@ -21,6 +21,7 @@ from nova.api.openstack.compute.contrib import server_password \
 from nova.api.openstack.compute.plugins.v3 import server_password \
     as server_password_v21
 from nova import compute
+from nova import exception
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_instance
@@ -30,7 +31,7 @@ CONF = cfg.CONF
 CONF.import_opt('osapi_compute_ext_list', 'nova.api.openstack.compute.contrib')
 
 
-class ServerPasswordTestV21(test.TestCase):
+class ServerPasswordTestV21(test.NoDBTestCase):
     content_type = 'application/json'
     server_password = server_password_v21
     delete_call = 'self.controller.clear'
@@ -74,3 +75,29 @@ class ServerPasswordTestV21(test.TestCase):
 class ServerPasswordTestV2(ServerPasswordTestV21):
     server_password = server_password_v2
     delete_call = 'self.controller.delete'
+
+
+class ServerPasswordPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(ServerPasswordPolicyEnforcementV21, self).setUp()
+        self.controller = server_password_v21.ServerPasswordController()
+        self.req = fakes.HTTPRequest.blank('')
+
+    def _test_policy_failed(self, method, rule_name):
+        self.policy.set_rules({rule_name: "project:non_fake"})
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            method, self.req, fakes.FAKE_UUID)
+
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+    def test_get_password_policy_failed(self):
+        rule_name = "compute_extension:v3:os-server-password"
+        self._test_policy_failed(self.controller.index, rule_name)
+
+    def test_clear_password_policy_failed(self):
+        rule_name = "compute_extension:v3:os-server-password"
+        self._test_policy_failed(self.controller.clear, rule_name)

@@ -18,7 +18,9 @@
 
 import functools
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import strutils
 
 from nova import exception
 from nova.i18n import _LI
@@ -28,7 +30,6 @@ from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
 from nova import objects
 from nova.objects import base as obj_base
-from nova.openstack.common import log as logging
 from nova import policy
 from nova import utils
 
@@ -124,7 +125,7 @@ class API(base_api.NetworkAPI):
 
     @wrap_check_policy
     def get_floating_ip(self, context, id):
-        if not utils.is_int_like(id):
+        if not strutils.is_int_like(id):
             raise exception.InvalidID(id=id)
         return objects.FloatingIP.get_by_id(context, id)
 
@@ -317,9 +318,9 @@ class API(base_api.NetworkAPI):
     def add_fixed_ip_to_instance(self, context, instance, network_id):
         """Adds a fixed ip to instance from specified network."""
         flavor = instance.get_flavor()
-        args = {'instance_id': instance['uuid'],
+        args = {'instance_id': instance.uuid,
                 'rxtx_factor': flavor['rxtx_factor'],
-                'host': instance['host'],
+                'host': instance.host,
                 'network_id': network_id}
         nw_info = self.network_rpcapi.add_fixed_ip_to_instance(
             context, **args)
@@ -331,9 +332,9 @@ class API(base_api.NetworkAPI):
         """Removes a fixed ip from instance from specified network."""
 
         flavor = instance.get_flavor()
-        args = {'instance_id': instance['uuid'],
+        args = {'instance_id': instance.uuid,
                 'rxtx_factor': flavor['rxtx_factor'],
-                'host': instance['host'],
+                'host': instance.host,
                 'address': address}
         nw_info = self.network_rpcapi.remove_fixed_ip_from_instance(
             context, **args)
@@ -380,10 +381,10 @@ class API(base_api.NetworkAPI):
     def _get_instance_nw_info(self, context, instance):
         """Returns all network info related to an instance."""
         flavor = instance.get_flavor()
-        args = {'instance_id': instance['uuid'],
+        args = {'instance_id': instance.uuid,
                 'rxtx_factor': flavor['rxtx_factor'],
-                'host': instance['host'],
-                'project_id': instance['project_id']}
+                'host': instance.host,
+                'project_id': instance.project_id}
         nw_info = self.network_rpcapi.get_instance_nw_info(context, **args)
 
         return network_model.NetworkInfo.hydrate(nw_info)
@@ -482,11 +483,11 @@ class API(base_api.NetworkAPI):
         """Setup or teardown the network structures on hosts related to
            instance.
         """
-        host = host or instance['host']
+        host = host or instance.host
         # NOTE(tr3buchet): host is passed in cases where we need to setup
         # or teardown the networks on a host which has been migrated to/from
-        # and instance['host'] is not yet or is no longer equal to
-        args = {'instance_id': instance['id'],
+        # and instance.host is not yet or is no longer equal to
+        args = {'instance_id': instance.id,
                 'host': host,
                 'teardown': teardown}
 
@@ -495,7 +496,7 @@ class API(base_api.NetworkAPI):
     def _get_multi_addresses(self, context, instance):
         try:
             fixed_ips = objects.FixedIPList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
         except exception.FixedIpNotFoundForInstance:
             return False, []
         addresses = []
@@ -509,9 +510,9 @@ class API(base_api.NetworkAPI):
         """Start to migrate the network of an instance."""
         flavor = instance.get_flavor()
         args = dict(
-            instance_uuid=instance['uuid'],
+            instance_uuid=instance.uuid,
             rxtx_factor=flavor['rxtx_factor'],
-            project_id=instance['project_id'],
+            project_id=instance.project_id,
             source_compute=migration['source_compute'],
             dest_compute=migration['dest_compute'],
             floating_addresses=None,
@@ -529,9 +530,9 @@ class API(base_api.NetworkAPI):
         """Finish migrating the network of an instance."""
         flavor = instance.get_flavor()
         args = dict(
-            instance_uuid=instance['uuid'],
+            instance_uuid=instance.uuid,
             rxtx_factor=flavor['rxtx_factor'],
-            project_id=instance['project_id'],
+            project_id=instance.project_id,
             source_compute=migration['source_compute'],
             dest_compute=migration['dest_compute'],
             floating_addresses=None,

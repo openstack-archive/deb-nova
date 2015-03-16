@@ -16,17 +16,16 @@
 
 """The cells extension."""
 
-from oslo.config import cfg
-from oslo import messaging
-from oslo.utils import strutils
-from oslo.utils import timeutils
+from oslo_config import cfg
+import oslo_messaging as messaging
+from oslo_utils import strutils
+from oslo_utils import timeutils
 import six
 from webob import exc
 
 from nova.api.openstack import common
 from nova.api.openstack import extensions
 from nova.cells import rpcapi as cells_rpcapi
-from nova.compute import api as compute
 from nova import exception
 from nova.i18n import _
 from nova import rpc
@@ -94,7 +93,6 @@ class Controller(object):
     """Controller for Cell resources."""
 
     def __init__(self, ext_mgr):
-        self.compute_api = compute.API()
         self.cells_rpcapi = cells_rpcapi.CellsAPI()
         self.ext_mgr = ext_mgr
 

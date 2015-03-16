@@ -13,13 +13,13 @@
 #    under the License.
 
 from migrate import UniqueConstraint
-from oslo.db.sqlalchemy import utils
+from oslo_db.sqlalchemy import utils
+from oslo_log import log as logging
 from sqlalchemy import MetaData
 from sqlalchemy.sql import null
 
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common import log as logging
 
 LOG = logging.getLogger(__name__)
 

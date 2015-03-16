@@ -20,10 +20,10 @@ import sys
 if sys.platform == 'win32':
     import wmi
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 
 from nova.i18n import _
-from nova.openstack.common import log as logging
 from nova import utils
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import vmutils
@@ -171,8 +171,9 @@ class PathUtils(object):
         instance_path = self.get_instance_dir(instance_name)
         return os.path.join(instance_path, 'root.' + format_ext.lower())
 
-    def get_configdrive_path(self, instance_name, format_ext):
-        instance_path = self.get_instance_dir(instance_name)
+    def get_configdrive_path(self, instance_name, format_ext,
+                             remote_server=None):
+        instance_path = self.get_instance_dir(instance_name, remote_server)
         return os.path.join(instance_path, 'configdrive.' + format_ext.lower())
 
     def get_ephemeral_vhd_path(self, instance_name, format_ext):
@@ -241,3 +242,11 @@ class PathUtils(object):
                 if force:
                     raise vmutils.HyperVException(
                         _("Could not unmount share: %s"), smbfs_share)
+
+    def copy_configdrive(self, instance_name, dest_host):
+        local_configdrive_path = self.get_configdrive_path(
+                        instance_name, constants.DVD_FORMAT)
+        remote_configdrive_path = self.get_configdrive_path(
+                instance_name, constants.DVD_FORMAT, remote_server=dest_host)
+        self.copyfile(local_configdrive_path,
+                                 remote_configdrive_path)

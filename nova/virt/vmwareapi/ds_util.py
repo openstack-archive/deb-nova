@@ -15,14 +15,15 @@
 """
 Datastore utility functions
 """
+
 import posixpath
 
-from oslo.vmware import exceptions as vexc
-from oslo.vmware import pbm
+from oslo_log import log as logging
+from oslo_vmware import exceptions as vexc
+from oslo_vmware import pbm
 
 from nova import exception
 from nova.i18n import _, _LE, _LI
-from nova.openstack.common import log as logging
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
@@ -310,6 +311,17 @@ def get_datastore(session, cluster, datastore_regex=None,
         raise exception.DatastoreNotFound()
 
 
+def get_datastore_by_ref(session, ds_ref):
+    lst_properties = ["summary.type", "summary.name",
+                      "summary.capacity", "summary.freeSpace"]
+    props = session._call_method(vim_util, "get_object_properties",
+                                 None, ds_ref, "Datastore", lst_properties)
+    query = vm_util.get_values_from_object_properties(session, props)
+    return Datastore(ds_ref, query["summary.name"],
+                     capacity=query["summary.capacity"],
+                     freespace=query["summary.freeSpace"])
+
+
 def _get_allowed_datastores(data_stores, datastore_regex):
     allowed = []
     for obj_content in data_stores.objects:
@@ -329,14 +341,8 @@ def _get_allowed_datastores(data_stores, datastore_regex):
 
 def get_available_datastores(session, cluster=None, datastore_regex=None):
     """Get the datastore list and choose the first local storage."""
-    if cluster:
-        mobj = cluster
-        resource_type = "ClusterComputeResource"
-    else:
-        mobj = vm_util.get_host_ref(session)
-        resource_type = "HostSystem"
-    ds = session._call_method(vim_util, "get_dynamic_property", mobj,
-                              resource_type, "datastore")
+    ds = session._call_method(vim_util, "get_dynamic_property", cluster,
+                              "ClusterComputeResource", "datastore")
     if not ds:
         return []
     data_store_mors = ds.ManagedObjectReference

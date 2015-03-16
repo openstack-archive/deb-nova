@@ -27,8 +27,8 @@ except ImportError:
     import pickle
 
 import mock
-from oslo.config import cfg
-from oslo.serialization import jsonutils
+from oslo_config import cfg
+from oslo_serialization import jsonutils
 import webob
 
 from nova.api.metadata import base
@@ -45,6 +45,7 @@ from nova.network import api as network_api
 from nova.network import model as network_model
 from nova import objects
 from nova import test
+from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_network
 from nova.tests.unit.objects import test_security_group
@@ -60,9 +61,10 @@ def fake_inst_obj(context):
     inst = objects.Instance(
         context=context,
         id=1,
+        user_id='fake_user',
         uuid='b65cee2f-8c69-4aeb-be2f-f79742548fc2',
         project_id='test',
-        key_name="mykey",
+        key_name="key",
         key_data="ssh-rsa AAAAB3Nzai....N3NtHw== someuser@somehost",
         host='test',
         launch_index=1,
@@ -111,12 +113,13 @@ def fake_InstanceMetadata(stubs, inst_data, address=None,
 
 def fake_request(stubs, mdinst, relpath, address="127.0.0.1",
                  fake_get_metadata=None, headers=None,
-                 fake_get_metadata_by_instance_id=None):
+                 fake_get_metadata_by_instance_id=None, app=None):
 
     def get_metadata_by_remote_address(address):
         return mdinst
 
-    app = handler.MetadataRequestHandler()
+    if app is None:
+        app = handler.MetadataRequestHandler()
 
     if fake_get_metadata is None:
         fake_get_metadata = get_metadata_by_remote_address
@@ -299,6 +302,7 @@ class MetadataTestCase(test.TestCase):
                               network_info=network_info)
 
     def test_InstanceMetadata_invoke_metadata_for_config_drive(self):
+        fakes.stub_out_key_pair_funcs(self.stubs)
         inst = self.instance.obj_clone()
         inst_md = base.InstanceMetadata(inst)
         for (path, value) in inst_md.metadata_for_config_drive():
@@ -395,6 +399,7 @@ class OpenStackMetadataTestCase(test.TestCase):
                          grizzly_supported_apis)
 
     def test_metadata_json(self):
+        fakes.stub_out_key_pair_funcs(self.stubs)
         inst = self.instance.obj_clone()
         content = [
             ('/etc/my.conf', "content of my.conf"),
@@ -428,8 +433,25 @@ class OpenStackMetadataTestCase(test.TestCase):
             found = mdinst.lookup("/openstack%s" % fent['content_path'])
             self.assertEqual(found, content)
 
+    def test_x509_keypair(self):
+        # check if the x509 content is set, if the keypair type is x509.
+        fakes.stub_out_key_pair_funcs(self.stubs, type='x509')
+        inst = self.instance.obj_clone()
+        mdinst = fake_InstanceMetadata(self.stubs, inst)
+
+        mdjson = mdinst.lookup("/openstack/2012-08-10/meta_data.json")
+        mddict = jsonutils.loads(mdjson)
+
+        # keypair is stubbed-out, so it's public_key is 'public_key'.
+        expected = {'name': self.instance['key_name'],
+                    'type': 'x509',
+                    'data': 'public_key'}
+
+        self.assertEqual([expected], mddict['keys'])
+
     def test_extra_md(self):
         # make sure extra_md makes it through to metadata
+        fakes.stub_out_key_pair_funcs(self.stubs)
         inst = self.instance.obj_clone()
         extra = {'foo': 'bar', 'mylist': [1, 2, 3],
                  'mydict': {"one": 1, "two": 2}}
@@ -469,6 +491,7 @@ class OpenStackMetadataTestCase(test.TestCase):
             mdinst.lookup, "/openstack/2012-08-10/user_data")
 
     def test_random_seed(self):
+        fakes.stub_out_key_pair_funcs(self.stubs)
         inst = self.instance.obj_clone()
         mdinst = fake_InstanceMetadata(self.stubs, inst)
 
@@ -485,6 +508,7 @@ class OpenStackMetadataTestCase(test.TestCase):
 
     def test_no_dashes_in_metadata(self):
         # top level entries in meta_data should not contain '-' in their name
+        fakes.stub_out_key_pair_funcs(self.stubs)
         inst = self.instance.obj_clone()
         mdinst = fake_InstanceMetadata(self.stubs, inst)
         mdjson = jsonutils.loads(
@@ -591,6 +615,7 @@ class MetadataHandlerTestCase(test.TestCase):
         self.assertEqual(response.status_int, 404)
 
     def test_json_data(self):
+        fakes.stub_out_key_pair_funcs(self.stubs)
         response = fake_request(self.stubs, self.mdinst,
                                 "/openstack/latest/meta_data.json")
         response_ctype = response.headers['Content-Type']
@@ -799,6 +824,81 @@ class MetadataHandlerTestCase(test.TestCase):
                 self.assertEqual(response.status_int, 200, message=path)
 
         _test_metadata_path('/2009-04-04/meta-data')
+
+    def _metadata_handler_with_instance_id(self, hnd):
+        expected_instance_id = 'a-b-c-d'
+
+        signed = hmac.new(
+            CONF.neutron.metadata_proxy_shared_secret,
+            expected_instance_id,
+            hashlib.sha256).hexdigest()
+
+        self.flags(service_metadata_proxy=True, group='neutron')
+        response = fake_request(
+            None, self.mdinst,
+            relpath="/2009-04-04/user-data",
+            address="192.192.192.2",
+            fake_get_metadata=False,
+            app=hnd,
+            headers={'X-Forwarded-For': '192.192.192.2',
+                     'X-Instance-ID': 'a-b-c-d',
+                     'X-Tenant-ID': 'test',
+                     'X-Instance-ID-Signature': signed})
+
+        self.assertEqual(200, response.status_int)
+        self.assertEqual(base64.b64decode(self.instance['user_data']),
+                         response.body)
+
+    @mock.patch.object(base, 'get_metadata_by_instance_id')
+    def test_metadata_handler_with_instance_id(self, get_by_uuid):
+        # test twice to ensure that the cache works
+        get_by_uuid.return_value = self.mdinst
+        self.flags(metadata_cache_expiration=15)
+        hnd = handler.MetadataRequestHandler()
+        self._metadata_handler_with_instance_id(hnd)
+        self._metadata_handler_with_instance_id(hnd)
+        self.assertEqual(1, get_by_uuid.call_count)
+
+    @mock.patch.object(base, 'get_metadata_by_instance_id')
+    def test_metadata_handler_with_instance_id_no_cache(self, get_by_uuid):
+        # test twice to ensure that disabling the cache works
+        get_by_uuid.return_value = self.mdinst
+        self.flags(metadata_cache_expiration=0)
+        hnd = handler.MetadataRequestHandler()
+        self._metadata_handler_with_instance_id(hnd)
+        self._metadata_handler_with_instance_id(hnd)
+        self.assertEqual(2, get_by_uuid.call_count)
+
+    def _metadata_handler_with_remote_address(self, hnd):
+        response = fake_request(
+            None, self.mdinst,
+            fake_get_metadata=False,
+            app=hnd,
+            relpath="/2009-04-04/user-data",
+            address="192.192.192.2")
+        self.assertEqual(200, response.status_int)
+        self.assertEqual(base64.b64decode(self.instance.user_data),
+                         response.body)
+
+    @mock.patch.object(base, 'get_metadata_by_address')
+    def test_metadata_handler_with_remote_address(self, get_by_uuid):
+        # test twice to ensure that the cache works
+        get_by_uuid.return_value = self.mdinst
+        self.flags(metadata_cache_expiration=15)
+        hnd = handler.MetadataRequestHandler()
+        self._metadata_handler_with_remote_address(hnd)
+        self._metadata_handler_with_remote_address(hnd)
+        self.assertEqual(1, get_by_uuid.call_count)
+
+    @mock.patch.object(base, 'get_metadata_by_address')
+    def test_metadata_handler_with_remote_address_no_cache(self, get_by_uuid):
+        # test twice to ensure that disabling the cache works
+        get_by_uuid.return_value = self.mdinst
+        self.flags(metadata_cache_expiration=0)
+        hnd = handler.MetadataRequestHandler()
+        self._metadata_handler_with_remote_address(hnd)
+        self._metadata_handler_with_remote_address(hnd)
+        self.assertEqual(2, get_by_uuid.call_count)
 
 
 class MetadataPasswordTestCase(test.TestCase):

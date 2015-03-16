@@ -19,8 +19,9 @@ A Hyper-V Nova Compute driver.
 
 import platform
 
+from oslo_log import log as logging
+
 from nova.i18n import _
-from nova.openstack.common import log as logging
 from nova.virt import driver
 from nova.virt.hyperv import hostops
 from nova.virt.hyperv import livemigrationops
@@ -80,12 +81,12 @@ class HyperVDriver(driver.ComputeDriver):
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):
         return self._volumeops.attach_volume(connection_info,
-                                             instance['name'])
+                                             instance.name)
 
     def detach_volume(self, connection_info, instance, mountpoint,
                       encryption=None):
         return self._volumeops.detach_volume(connection_info,
-                                             instance['name'])
+                                             instance.name)
 
     def get_volume_connector(self, instance):
         return self._volumeops.get_volume_connector(instance)
@@ -109,7 +110,7 @@ class HyperVDriver(driver.ComputeDriver):
     def unpause(self, instance):
         self._vmops.unpause(instance)
 
-    def suspend(self, instance):
+    def suspend(self, context, instance):
         self._vmops.suspend(instance)
 
     def resume(self, context, instance, network_info, block_device_info=None):

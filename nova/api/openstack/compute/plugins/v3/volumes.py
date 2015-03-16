@@ -15,7 +15,7 @@
 
 """The volumes extension."""
 
-from oslo.utils import strutils
+from oslo_utils import strutils
 from webob import exc
 
 from nova.api.openstack import common
@@ -95,7 +95,7 @@ class VolumeController(wsgi.Controller):
 
         try:
             vol = self.volume_api.get(context, id)
-        except exception.NotFound as e:
+        except exception.VolumeNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
         return {'volume': _translate_volume_detail_view(context, vol)}
@@ -109,7 +109,7 @@ class VolumeController(wsgi.Controller):
 
         try:
             self.volume_api.delete(context, id)
-        except exception.NotFound as e:
+        except exception.VolumeNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
     @extensions.expected_errors(())
@@ -237,11 +237,10 @@ class VolumeAttachmentController(wsgi.Controller):
         authorize_attach(context, action='show')
 
         volume_id = id
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
 
         if not bdms:
             msg = _("Instance %s is not attached.") % server_id
@@ -260,7 +259,7 @@ class VolumeAttachmentController(wsgi.Controller):
 
         return {'volumeAttachment': _translate_attachment_detail_view(
             volume_id,
-            instance['uuid'],
+            instance.uuid,
             assigned_mountpoint)}
 
     @extensions.expected_errors((400, 404, 409))
@@ -274,8 +273,7 @@ class VolumeAttachmentController(wsgi.Controller):
         volume_id = body['volumeAttachment']['volumeId']
         device = body['volumeAttachment'].get('device')
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
         try:
             device = self.compute_api.attach_volume(context, instance,
                                                     volume_id, device)
@@ -325,8 +323,7 @@ class VolumeAttachmentController(wsgi.Controller):
         except exception.VolumeNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
@@ -367,8 +364,7 @@ class VolumeAttachmentController(wsgi.Controller):
 
         volume_id = id
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         try:
             volume = self.volume_api.get(context, volume_id)
@@ -376,7 +372,7 @@ class VolumeAttachmentController(wsgi.Controller):
             raise exc.HTTPNotFound(explanation=e.format_message())
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
         if not bdms:
             msg = _("Instance %s is not attached.") % server_id
             raise exc.HTTPNotFound(explanation=msg)
@@ -415,11 +411,10 @@ class VolumeAttachmentController(wsgi.Controller):
         context = req.environ['nova.context']
         authorize(context)
 
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance['uuid'])
+                context, instance.uuid)
         limited_list = common.limited(bdms, req)
         results = []
 
@@ -471,7 +466,7 @@ class SnapshotController(wsgi.Controller):
 
         try:
             vol = self.volume_api.get_snapshot(context, id)
-        except exception.NotFound as e:
+        except exception.SnapshotNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
         return {'snapshot': _translate_snapshot_detail_view(context, vol)}
@@ -485,7 +480,7 @@ class SnapshotController(wsgi.Controller):
 
         try:
             self.volume_api.delete_snapshot(context, id)
-        except exception.NotFound as e:
+        except exception.SnapshotNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
     @extensions.expected_errors(())

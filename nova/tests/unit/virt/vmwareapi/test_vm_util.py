@@ -16,16 +16,15 @@
 
 import collections
 import contextlib
-import re
 
 import mock
-from oslo.vmware import exceptions as vexc
-from oslo.vmware import pbm
+from oslo_utils import uuidutils
+from oslo_vmware import exceptions as vexc
+from oslo_vmware import pbm
 
 from nova import context
 from nova import exception
 from nova.network import model as network_model
-from nova.openstack.common import uuidutils
 from nova import test
 from nova.tests.unit import fake_instance
 from nova.tests.unit.virt.vmwareapi import fake
@@ -47,6 +46,9 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         fake.reset()
         stubs.set_stubs(self.stubs)
         vm_util.vm_refs_cache_reset()
+
+    def fake_instance_obj(self, updates):
+        return fake_instance.fake_instance_obj(None, **updates)
 
     def _test_get_stats_from_cluster(self, connection_state="connected",
                                      maintenance_mode=False):
@@ -125,62 +127,75 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
                           fake.FakeObjectRetrievalSession(""), 'fake_cluster')
 
     def test_get_resize_spec(self):
-        fake_instance = {'id': 7, 'name': 'fake!',
-                         'uuid': 'bda5fb9e-b347-40e8-8256-42397848cb00',
-                         'vcpus': 2, 'memory_mb': 2048}
-        result = vm_util.get_vm_resize_spec(fake.FakeFactory(),
-                                            fake_instance)
-        expected = """{'memoryMB': 2048,
-                       'numCPUs': 2,
-                       'obj_name': 'ns0:VirtualMachineConfigSpec'}"""
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        vcpus = 2
+        memory_mb = 2048
+        extra_specs = vm_util.ExtraSpecs()
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_resize_spec(fake_factory,
+                                            vcpus, memory_mb, extra_specs)
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.memoryMB = memory_mb
+        expected.numCPUs = vcpus
+        cpuAllocation = fake_factory.create('ns0:ResourceAllocationInfo')
+        cpuAllocation.reservation = 0
+        cpuAllocation.limit = -1
+        cpuAllocation.shares = fake_factory.create('ns0:SharesInfo')
+        cpuAllocation.shares.level = 'normal'
+        cpuAllocation.shares.shares = 0
+        expected.cpuAllocation = cpuAllocation
+
+        self.assertEqual(expected, result)
+
+    def test_get_resize_spec_with_limits(self):
+        vcpus = 2
+        memory_mb = 2048
+        cpu_limits = vm_util.CpuLimits(cpu_limit=7,
+                                       cpu_reservation=6)
+        extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_resize_spec(fake_factory,
+                                            vcpus, memory_mb, extra_specs)
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.memoryMB = memory_mb
+        expected.numCPUs = vcpus
+        cpuAllocation = fake_factory.create('ns0:ResourceAllocationInfo')
+        cpuAllocation.reservation = 6
+        cpuAllocation.limit = 7
+        cpuAllocation.shares = fake_factory.create('ns0:SharesInfo')
+        cpuAllocation.shares.level = 'normal'
+        cpuAllocation.shares.shares = 0
+        expected.cpuAllocation = cpuAllocation
+
         self.assertEqual(expected, result)
 
     def test_get_cdrom_attach_config_spec(self):
-
-        result = vm_util.get_cdrom_attach_config_spec(fake.FakeFactory(),
-                                             fake.Datastore(),
+        fake_factory = fake.FakeFactory()
+        datastore = fake.Datastore()
+        result = vm_util.get_cdrom_attach_config_spec(fake_factory,
+                                             datastore,
                                              "/tmp/foo.iso",
                                              200, 0)
-        expected = """{
-    'deviceChange': [
-        {
-            'device': {
-                'connectable': {
-                    'allowGuestControl': False,
-                    'startConnected': True,
-                    'connected': True,
-                    'obj_name': 'ns0: VirtualDeviceConnectInfo'
-                },
-                'backing': {
-                    'datastore': {
-                        "summary.maintenanceMode": "normal",
-                        "summary.type": "VMFS",
-                        "summary.accessible":true,
-                        "summary.name": "fake-ds",
-                        "summary.capacity": 1099511627776,
-                        "summary.freeSpace": 536870912000,
-                        "browser": ""
-                    },
-                    'fileName': '/tmp/foo.iso',
-                    'obj_name': 'ns0: VirtualCdromIsoBackingInfo'
-                },
-                'controllerKey': 200,
-                'unitNumber': 0,
-                'key': -1,
-                'obj_name': 'ns0: VirtualCdrom'
-            },
-            'operation': 'add',
-            'obj_name': 'ns0: VirtualDeviceConfigSpec'
-        }
-    ],
-    'obj_name': 'ns0: VirtualMachineConfigSpec'
-}
-"""
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.deviceChange = []
+        device_change = fake_factory.create('ns0:VirtualDeviceConfigSpec')
+        device_change.operation = 'add'
 
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        device_change.device = fake_factory.create('ns0:VirtualCdrom')
+        device_change.device.controllerKey = 200
+        device_change.device.unitNumber = 0
+        device_change.device.key = -1
+
+        connectable = fake_factory.create('ns0:VirtualDeviceConnectInfo')
+        connectable.allowGuestControl = False
+        connectable.startConnected = True
+        connectable.connected = True
+        device_change.device.connectable = connectable
+
+        backing = fake_factory.create('ns0:VirtualCdromIsoBackingInfo')
+        backing.fileName = '/tmp/foo.iso'
+        backing.datastore = datastore
+        device_change.device.backing = backing
+        expected.deviceChange.append(device_change)
         self.assertEqual(expected, result)
 
     def test_lsilogic_controller_spec(self):
@@ -230,6 +245,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
             self.assertEqual('[test_datastore] uuid/ephemeral_0.vmdk',
                              vmdk.path)
             self.assertEqual(512, vmdk.capacity_in_bytes)
+            self.assertEqual(devices[1], vmdk.device)
 
     def test_get_vmdk_path_and_adapter_type_with_match(self):
         n_filename = '[test_datastore] uuid/uuid.vmdk'
@@ -240,6 +256,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
             self.assertEqual('lsiLogicsas', vmdk.adapter_type)
             self.assertEqual(n_filename, vmdk.path)
             self.assertEqual(1024, vmdk.capacity_in_bytes)
+            self.assertEqual(devices[0], vmdk.device)
 
     def test_get_vmdk_path_and_adapter_type_with_nomatch(self):
         n_filename = '[test_datastore] diuu/diuu.vmdk'
@@ -250,6 +267,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
             self.assertIsNone(vmdk.adapter_type)
             self.assertIsNone(vmdk.path)
             self.assertEqual(0, vmdk.capacity_in_bytes)
+            self.assertIsNone(vmdk.device)
 
     def test_get_vmdk_adapter_type(self):
         # Test for the adapter_type to be used in vmdk descriptor
@@ -331,24 +349,23 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual(8, unit_number)
         self.assertIsNone(controller_spec)
 
-    def _test_get_vnc_config_spec(self, port):
-
-        result = vm_util.get_vnc_config_spec(fake.FakeFactory(),
-                                             port)
-        return result
-
     def test_get_vnc_config_spec(self):
-        result = self._test_get_vnc_config_spec(7)
-        expected = """{'extraConfig': [
-                          {'value': 'true',
-                           'key': 'RemoteDisplay.vnc.enabled',
-                           'obj_name': 'ns0:OptionValue'},
-                          {'value': 7,
-                           'key': 'RemoteDisplay.vnc.port',
-                           'obj_name': 'ns0:OptionValue'}],
-                       'obj_name': 'ns0:VirtualMachineConfigSpec'}"""
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vnc_config_spec(fake_factory,
+                                             7)
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.extraConfig = []
+
+        remote_display_vnc_enabled = fake_factory.create('ns0:OptionValue')
+        remote_display_vnc_enabled.value = 'true'
+        remote_display_vnc_enabled.key = 'RemoteDisplay.vnc.enabled'
+        expected.extraConfig.append(remote_display_vnc_enabled)
+
+        remote_display_vnc_port = fake_factory.create('ns0:OptionValue')
+        remote_display_vnc_port.value = 7
+        remote_display_vnc_port.key = 'RemoteDisplay.vnc.port'
+        expected.extraConfig.append(remote_display_vnc_port)
+
         self.assertEqual(expected, result)
 
     def _create_fake_vms(self):
@@ -445,201 +462,252 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
 
     def test_get_vm_create_spec(self):
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         extra_specs = vm_util.ExtraSpecs()
-        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
                                             fake_instance, instance_uuid,
                                             'fake-datastore', [],
                                             extra_specs)
-        expected = """{
-            'files': {'vmPathName': '[fake-datastore]',
-            'obj_name': 'ns0:VirtualMachineFileInfo'},
-            'instanceUuid': '%(instance_uuid)s',
-            'name': '%(instance_uuid)s', 'deviceChange': [],
-            'extraConfig': [{'value': '%(instance_uuid)s',
-                             'key': 'nvp.vm-uuid',
-                             'obj_name': 'ns0:OptionValue'}],
-            'memoryMB': 2048,
-            'managedBy':  {'extensionKey': 'org.openstack.compute',
-                           'type': 'instance',
-                           'obj_name': 'ns0:ManagedByInfo'},
-            'version': None,
-            'obj_name': 'ns0:VirtualMachineConfigSpec',
-            'guestId': 'otherGuest',
-            'tools': {'beforeGuestStandby': True,
-                      'beforeGuestReboot': True,
-                      'beforeGuestShutdown': True,
-                      'afterResume': True,
-                      'afterPowerOn': True,
-            'obj_name': 'ns0:ToolsConfigInfo'},
-            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.name = instance_uuid
+        expected.instanceUuid = instance_uuid
+        expected.deviceChange = []
+        expected.numCPUs = 2
+
+        expected.version = None
+        expected.memoryMB = 2048
+        expected.guestId = 'otherGuest'
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create("ns0:OptionValue")
+        extra_config.value = instance_uuid
+        extra_config.key = 'nvp.vm-uuid'
+        expected.extraConfig.append(extra_config)
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+        expected.managedBy.type = 'instance'
+
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.afterPowerOn = True
+        expected.tools.afterResume = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.beforeGuestStandby = True
+
         self.assertEqual(expected, result)
 
     def test_get_vm_create_spec_with_allocations(self):
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         cpu_limits = vm_util.CpuLimits(cpu_limit=7,
                                        cpu_reservation=6)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
-        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
                                             fake_instance, instance_uuid,
                                             'fake-datastore', [],
                                             extra_specs)
-        expected = """{
-            'files': {'vmPathName': '[fake-datastore]',
-            'obj_name': 'ns0:VirtualMachineFileInfo'},
-            'instanceUuid': '%(instance_uuid)s',
-            'name': '%(instance_uuid)s', 'deviceChange': [],
-            'extraConfig': [{'value': '%(instance_uuid)s',
-                             'key': 'nvp.vm-uuid',
-                             'obj_name': 'ns0:OptionValue'}],
-            'memoryMB': 2048,
-            'managedBy':  {'extensionKey': 'org.openstack.compute',
-                           'type': 'instance',
-                           'obj_name': 'ns0:ManagedByInfo'},
-            'version': None,
-            'obj_name': 'ns0:VirtualMachineConfigSpec',
-            'guestId': 'otherGuest',
-            'tools': {'beforeGuestStandby': True,
-                      'beforeGuestReboot': True,
-                      'beforeGuestShutdown': True,
-                      'afterResume': True,
-                      'afterPowerOn': True,
-            'obj_name': 'ns0:ToolsConfigInfo'},
-            'cpuAllocation': {'reservation': 6,
-                              'limit': 7,
-                              'obj_name': 'ns0:ResourceAllocationInfo'},
-            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.deviceChange = []
+        expected.guestId = 'otherGuest'
+        expected.instanceUuid = instance_uuid
+        expected.memoryMB = fake_instance['memory_mb']
+        expected.name = instance_uuid
+        expected.numCPUs = fake_instance['vcpus']
+        expected.version = None
+
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.afterPowerOn = True
+        expected.tools.afterResume = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.beforeGuestStandby = True
+
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+        expected.managedBy.type = 'instance'
+
+        cpu_allocation = fake_factory.create('ns0:ResourceAllocationInfo')
+        cpu_allocation.limit = 7
+        cpu_allocation.reservation = 6
+        cpu_allocation.shares = fake_factory.create('ns0:SharesInfo')
+        cpu_allocation.shares.level = 'normal'
+        cpu_allocation.shares.shares = 0
+        expected.cpuAllocation = cpu_allocation
+
+        expected.extraConfig = []
+        extra_config = fake_factory.create('ns0:OptionValue')
+        extra_config.key = 'nvp.vm-uuid'
+        extra_config.value = instance_uuid
+        expected.extraConfig.append(extra_config)
         self.assertEqual(expected, result)
 
     def test_get_vm_create_spec_with_limit(self):
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         cpu_limits = vm_util.CpuLimits(cpu_limit=7)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
-        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
                                             fake_instance, instance_uuid,
                                             'fake-datastore', [],
                                             extra_specs)
-        expected = """{
-            'files': {'vmPathName': '[fake-datastore]',
-            'obj_name': 'ns0:VirtualMachineFileInfo'},
-            'instanceUuid': '%(instance_uuid)s',
-            'name': '%(instance_uuid)s', 'deviceChange': [],
-            'extraConfig': [{'value': '%(instance_uuid)s',
-                             'key': 'nvp.vm-uuid',
-                             'obj_name': 'ns0:OptionValue'}],
-            'memoryMB': 2048,
-            'managedBy':  {'extensionKey': 'org.openstack.compute',
-                           'type': 'instance',
-                           'obj_name': 'ns0:ManagedByInfo'},
-            'version': None,
-            'obj_name': 'ns0:VirtualMachineConfigSpec',
-            'guestId': 'otherGuest',
-            'tools': {'beforeGuestStandby': True,
-                      'beforeGuestReboot': True,
-                      'beforeGuestShutdown': True,
-                      'afterResume': True,
-                      'afterPowerOn': True,
-            'obj_name': 'ns0:ToolsConfigInfo'},
-            'cpuAllocation': {'limit': 7,
-                              'obj_name': 'ns0:ResourceAllocationInfo'},
-            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+        expected.instanceUuid = instance_uuid
+        expected.name = instance_uuid
+        expected.deviceChange = []
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create("ns0:OptionValue")
+        extra_config.value = instance_uuid
+        extra_config.key = 'nvp.vm-uuid'
+        expected.extraConfig.append(extra_config)
+
+        expected.memoryMB = 2048
+
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+        expected.managedBy.type = 'instance'
+
+        expected.version = None
+        expected.guestId = 'otherGuest'
+
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.afterPowerOn = True
+        expected.tools.afterResume = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.beforeGuestStandby = True
+
+        cpu_allocation = fake_factory.create('ns0:ResourceAllocationInfo')
+        cpu_allocation.limit = 7
+        cpu_allocation.reservation = 0
+        cpu_allocation.shares = fake_factory.create('ns0:SharesInfo')
+        cpu_allocation.shares.level = 'normal'
+        cpu_allocation.shares.shares = 0
+        expected.cpuAllocation = cpu_allocation
+
+        expected.numCPUs = 2
         self.assertEqual(expected, result)
 
     def test_get_vm_create_spec_with_share(self):
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         cpu_limits = vm_util.CpuLimits(cpu_shares_level='high')
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
-        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
                                             fake_instance, instance_uuid,
                                             'fake-datastore', [],
                                             extra_specs)
-        expected = """{
-            'files': {'vmPathName': '[fake-datastore]',
-            'obj_name': 'ns0:VirtualMachineFileInfo'},
-            'instanceUuid': '%(instance_uuid)s',
-            'name': '%(instance_uuid)s', 'deviceChange': [],
-            'extraConfig': [{'value': '%(instance_uuid)s',
-                             'key': 'nvp.vm-uuid',
-                             'obj_name': 'ns0:OptionValue'}],
-            'memoryMB': 2048,
-            'managedBy':  {'extensionKey': 'org.openstack.compute',
-                           'type': 'instance',
-                           'obj_name': 'ns0:ManagedByInfo'},
-            'version': None,
-            'obj_name': 'ns0:VirtualMachineConfigSpec',
-            'guestId': 'otherGuest',
-            'tools': {'beforeGuestStandby': True,
-                      'beforeGuestReboot': True,
-                      'beforeGuestShutdown': True,
-                      'afterResume': True,
-                      'afterPowerOn': True,
-            'obj_name': 'ns0:ToolsConfigInfo'},
-            'cpuAllocation': {'shares': {'level': 'high',
-                                         'shares': 0,
-                                         'obj_name':'ns0:SharesInfo'},
-                              'obj_name':'ns0:ResourceAllocationInfo'},
-            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+
+        expected.instanceUuid = instance_uuid
+        expected.name = instance_uuid
+        expected.deviceChange = []
+
+        expected.extraConfig = []
+        extra_config = fake_factory.create('ns0:OptionValue')
+        extra_config.value = instance_uuid
+        extra_config.key = 'nvp.vm-uuid'
+        expected.extraConfig.append(extra_config)
+
+        expected.memoryMB = 2048
+
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.type = 'instance'
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+
+        expected.version = None
+        expected.guestId = 'otherGuest'
+
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.beforeGuestStandby = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.afterResume = True
+        expected.tools.afterPowerOn = True
+
+        cpu_allocation = fake_factory.create('ns0:ResourceAllocationInfo')
+        cpu_allocation.reservation = 0
+        cpu_allocation.limit = -1
+        cpu_allocation.shares = fake_factory.create('ns0:SharesInfo')
+        cpu_allocation.shares.level = 'high'
+        cpu_allocation.shares.shares = 0
+        expected.cpuAllocation = cpu_allocation
+        expected.numCPUs = 2
         self.assertEqual(expected, result)
 
     def test_get_vm_create_spec_with_share_custom(self):
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         cpu_limits = vm_util.CpuLimits(cpu_shares_level='custom',
                                        cpu_shares_share=1948)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
-        result = vm_util.get_vm_create_spec(fake.FakeFactory(),
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
                                             fake_instance, instance_uuid,
                                             'fake-datastore', [],
                                             extra_specs)
-        expected = """{
-            'files': {'vmPathName': '[fake-datastore]',
-            'obj_name': 'ns0:VirtualMachineFileInfo'},
-            'instanceUuid': '%(instance_uuid)s',
-            'name': '%(instance_uuid)s', 'deviceChange': [],
-            'extraConfig': [{'value': '%(instance_uuid)s',
-                             'key': 'nvp.vm-uuid',
-                             'obj_name': 'ns0:OptionValue'}],
-            'memoryMB': 2048,
-            'managedBy':  {'extensionKey': 'org.openstack.compute',
-                           'type': 'instance',
-                           'obj_name': 'ns0:ManagedByInfo'},
-            'version': None,
-            'obj_name': 'ns0:VirtualMachineConfigSpec',
-            'guestId': 'otherGuest',
-            'tools': {'beforeGuestStandby': True,
-                      'beforeGuestReboot': True,
-                      'beforeGuestShutdown': True,
-                      'afterResume': True,
-                      'afterPowerOn': True,
-            'obj_name': 'ns0:ToolsConfigInfo'},
-            'cpuAllocation': {'shares': {'level': 'custom',
-                                         'shares': 1948,
-                                         'obj_name':'ns0:SharesInfo'},
-                              'obj_name':'ns0:ResourceAllocationInfo'},
-            'numCPUs': 2}""" % {'instance_uuid': instance_uuid}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+
+        expected.instanceUuid = instance_uuid
+        expected.name = instance_uuid
+        expected.deviceChange = []
+
+        expected.extraConfig = []
+        extra_config = fake_factory.create('ns0:OptionValue')
+        extra_config.key = 'nvp.vm-uuid'
+        extra_config.value = instance_uuid
+        expected.extraConfig.append(extra_config)
+
+        expected.memoryMB = 2048
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+        expected.managedBy.type = 'instance'
+
+        expected.version = None
+        expected.guestId = 'otherGuest'
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.beforeGuestStandby = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.afterResume = True
+        expected.tools.afterPowerOn = True
+
+        cpu_allocation = fake_factory.create('ns0:ResourceAllocationInfo')
+        cpu_allocation.reservation = 0
+        cpu_allocation.limit = -1
+        cpu_allocation.shares = fake_factory.create('ns0:SharesInfo')
+        cpu_allocation.shares.level = 'custom'
+        cpu_allocation.shares.shares = 1948
+        expected.cpuAllocation = cpu_allocation
+        expected.numCPUs = 2
         self.assertEqual(expected, result)
 
     def test_create_vm(self):
@@ -882,34 +950,39 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
                             'network-type': 'opaque'},
             'iface_id': 7,
             'vif_model': 'VirtualE1000'}
+        fake_factory = fake.FakeFactory()
         result = vm_util.get_network_attach_config_spec(
-                fake.FakeFactory(), vif_info, 1)
+                fake_factory, vif_info, 1)
         card = 'ns0:VirtualEthernetCardOpaqueNetworkBackingInfo'
-        expected = """{
-            'extraConfig': [{'value': 7,
-                             'key': 'nvp.iface-id.1',
-                             'obj_name':'ns0:OptionValue'}],
-            'deviceChange': [
-                {'device': {
-                     'macAddress':'00:00:00:ca:fe:01',
-                     'addressType': 'manual',
-                     'connectable': {
-                         'allowGuestControl':True,
-                         'startConnected': True,
-                         'connected': True,
-                         'obj_name':'ns0:VirtualDeviceConnectInfo'},
-                     'backing': {
-                         'opaqueNetworkType': 'opaque',
-                         'opaqueNetworkId': 'fake-network-id',
-                         'obj_name': '%(card)s'},
-                     'key': -47,
-                     'obj_name': 'ns0:VirtualE1000',
-                     'wakeOnLanEnabled': True},
-                 'operation': 'add',
-                 'obj_name': 'ns0:VirtualDeviceConfigSpec'}],
-            'obj_name':'ns0:VirtualMachineConfigSpec'}""" % {'card': card}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create('ns0:OptionValue')
+        extra_config.value = vif_info['iface_id']
+        extra_config.key = 'nvp.iface-id.1'
+        expected.extraConfig.append(extra_config)
+
+        expected.deviceChange = []
+        device_change = fake_factory.create('ns0:VirtualDeviceConfigSpec')
+        device_change.operation = 'add'
+
+        device = fake_factory.create('ns0:VirtualE1000')
+        device.macAddress = vif_info['mac_address']
+        device.addressType = 'manual'
+        connectable = fake_factory.create('ns0:VirtualDeviceConnectInfo')
+        connectable.allowGuestControl = True
+        connectable.startConnected = True
+        connectable.connected = True
+        device.connectable = connectable
+        backing = fake_factory.create(card)
+        backing.opaqueNetworkType = vif_info['network_ref']['network-type']
+        backing.opaqueNetworkId = vif_info['network_ref']['network-id']
+        device.backing = backing
+        device.key = -47
+        device.wakeOnLanEnabled = True
+        device_change.device = device
+        expected.deviceChange.append(device_change)
+
         self.assertEqual(expected, result)
 
     def test_get_network_attach_config_spec_dvs(self):
@@ -920,53 +993,64 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
                             'dvpg': 'fake-group'},
             'iface_id': 7,
             'vif_model': 'VirtualE1000'}
+        fake_factory = fake.FakeFactory()
         result = vm_util.get_network_attach_config_spec(
-                fake.FakeFactory(), vif_info, 1)
+                fake_factory, vif_info, 1)
         port = 'ns0:DistributedVirtualSwitchPortConnection'
         backing = 'ns0:VirtualEthernetCardDistributedVirtualPortBackingInfo'
-        expected = """{
-            'extraConfig': [{'value': 7,
-                             'key': 'nvp.iface-id.1',
-                             'obj_name': 'ns0:OptionValue'}],
-            'deviceChange': [
-                {'device': {'macAddress': '00:00:00:ca:fe:01',
-                            'addressType': 'manual',
-                            'connectable': {
-                                'allowGuestControl': True,
-                                'startConnected': True,
-                                'connected': True,
-                                'obj_name': 'ns0:VirtualDeviceConnectInfo'},
-                 'backing': {
-                     'port': {
-                         'portgroupKey': 'fake-group',
-                         'switchUuid': 'fake-network-id',
-                         'obj_name': '%(obj_name_port)s'},
-                     'obj_name': '%(obj_name_backing)s'},
-                     'key': -47,
-                     'obj_name': 'ns0:VirtualE1000',
-                     'wakeOnLanEnabled': True},
-                 'operation': 'add',
-                 'obj_name': 'ns0:VirtualDeviceConfigSpec'}],
-            'obj_name':'ns0:VirtualMachineConfigSpec'}""" % {
-                    'obj_name_backing': backing,
-                    'obj_name_port': port}
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create('ns0:OptionValue')
+        extra_config.value = vif_info['iface_id']
+        extra_config.key = 'nvp.iface-id.1'
+        expected.extraConfig.append(extra_config)
+
+        expected.deviceChange = []
+
+        device_change = fake_factory.create('ns0:VirtualDeviceConfigSpec')
+        device_change.operation = 'add'
+
+        device = fake_factory.create('ns0:VirtualE1000')
+        device.macAddress = vif_info['mac_address']
+        device.key = -47
+        device.addressType = 'manual'
+        device.wakeOnLanEnabled = True
+
+        device.backing = fake_factory.create(backing)
+        device.backing.port = fake_factory.create(port)
+        device.backing.port.portgroupKey = vif_info['network_ref']['dvpg']
+        device.backing.port.switchUuid = vif_info['network_ref']['dvsw']
+
+        connectable = fake_factory.create('ns0:VirtualDeviceConnectInfo')
+        connectable.allowGuestControl = True
+        connectable.connected = True
+        connectable.startConnected = True
+        device.connectable = connectable
+        device_change.device = device
+
+        expected.deviceChange.append(device_change)
         self.assertEqual(expected, result)
 
     def test_get_network_detach_config_spec(self):
+        fake_factory = fake.FakeFactory()
         result = vm_util.get_network_detach_config_spec(
-                fake.FakeFactory(), 'fake-device', 2)
-        expected = """{
-            'extraConfig': [{'value': 'free',
-                             'key': 'nvp.iface-id.2',
-                             'obj_name': 'ns0:OptionValue'}],
-            'deviceChange': [{'device': 'fake-device',
-                              'operation': 'remove',
-                              'obj_name': 'ns0:VirtualDeviceConfigSpec'}],
-            'obj_name':'ns0:VirtualMachineConfigSpec'}"""
-        expected = re.sub(r'\s+', '', expected)
-        result = re.sub(r'\s+', '', repr(result))
+                fake_factory, 'fake-device', 2)
+
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create('ns0:OptionValue')
+        extra_config.value = 'free'
+        extra_config.key = 'nvp.iface-id.2'
+        expected.extraConfig.append(extra_config)
+        expected.deviceChange = []
+        device_change = fake_factory.create('ns0:VirtualDeviceConfigSpec')
+        device_change.device = 'fake-device'
+        device_change.operation = 'remove'
+        expected.deviceChange.append(device_change)
+
         self.assertEqual(expected, result)
 
     @mock.patch.object(vm_util, "get_vm_ref")
@@ -1041,9 +1125,9 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
     def test_get_vm_create_spec_updated_hw_version(self):
         extra_specs = vm_util.ExtraSpecs(hw_version='vmx-08')
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         result = vm_util.get_vm_create_spec(fake.FakeFactory(),
                                             fake_instance, instance_uuid,
                                             'fake-datastore', [],
@@ -1052,9 +1136,9 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
 
     def test_vm_create_spec_with_profile_spec(self):
         instance_uuid = uuidutils.generate_uuid()
-        fake_instance = {'id': 7, 'name': 'fake!',
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
                          'uuid': instance_uuid,
-                         'vcpus': 2, 'memory_mb': 2048}
+                         'vcpus': 2, 'memory_mb': 2048})
         datastore = ds_util.Datastore('fake-ds-ref', 'fake-ds-name')
         extra_specs = vm_util.ExtraSpecs()
         create_spec = vm_util.get_vm_create_spec(fake.FakeFactory(),
@@ -1085,6 +1169,78 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
     def test_get_ephemeral_name(self):
         filename = vm_util.get_ephemeral_name(0)
         self.assertEqual('ephemeral_0.vmdk', filename)
+
+    def test_detach_and_delete_devices_config_spec(self):
+        fake_devices = ['device1', 'device2']
+        fake_factory = fake.FakeFactory()
+        result = vm_util._detach_and_delete_devices_config_spec(fake_factory,
+                                                                fake_devices)
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.deviceChange = []
+        device1 = fake_factory.create('ns0:VirtualDeviceConfigSpec')
+        device1.device = 'device1'
+        device1.operation = 'remove'
+        device1.fileOperation = 'destroy'
+        expected.deviceChange.append(device1)
+
+        device2 = fake_factory.create('ns0:VirtualDeviceConfigSpec')
+        device2.device = 'device2'
+        device2.operation = 'remove'
+        device2.fileOperation = 'destroy'
+        expected.deviceChange.append(device2)
+        self.assertEqual(expected, result)
+
+    @mock.patch.object(vm_util, 'reconfigure_vm')
+    def test_detach_devices_from_vm(self, mock_reconfigure):
+        fake_devices = ['device1', 'device2']
+        session = fake.FakeSession()
+        vm_util.detach_devices_from_vm(session,
+                                       'fake-ref',
+                                       fake_devices)
+        mock_reconfigure.assert_called_once_with(session, 'fake-ref', mock.ANY)
+
+    def test_get_vm_boot_spec(self):
+        disk = fake.VirtualDisk()
+        disk.key = 7
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_boot_spec(fake_factory,
+                                          disk)
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        boot_disk = fake_factory.create(
+            'ns0:VirtualMachineBootOptionsBootableDiskDevice')
+        boot_disk.deviceKey = disk.key
+        boot_options = fake_factory.create('ns0:VirtualMachineBootOptions')
+        boot_options.bootOrder = [boot_disk]
+        expected.bootOptions = boot_options
+        self.assertEqual(expected, result)
+
+    def _get_devices(self, filename):
+        devices = fake._create_array_of_type('VirtualDevice')
+        devices.VirtualDevice = self._vmdk_path_and_adapter_type_devices(
+            filename)
+        return devices
+
+    def test_find_rescue_device(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048})
+        filename = '[test_datastore] uuid/uuid-rescue.vmdk'
+        devices = self._get_devices(filename)
+        device = vm_util.find_rescue_device(devices, fake_instance)
+        self.assertEqual(filename, device.backing.fileName)
+
+    def test_find_rescue_device_not_found(self):
+        instance_uuid = uuidutils.generate_uuid()
+        fake_instance = self.fake_instance_obj({'id': 7, 'name': 'fake!',
+                         'uuid': instance_uuid,
+                         'vcpus': 2, 'memory_mb': 2048})
+        filename = '[test_datastore] uuid/uuid.vmdk'
+        devices = self._get_devices(filename)
+        self.assertRaises(exception.NotFound,
+                          vm_util.find_rescue_device,
+                          devices,
+                          fake_instance)
 
 
 @mock.patch.object(driver.VMwareAPISession, 'vim', stubs.fake_vim_prop)

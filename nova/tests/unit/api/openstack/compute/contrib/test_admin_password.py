@@ -123,13 +123,14 @@ class AdminPasswordTestV21(test.NoDBTestCase):
         self._check_status(202, res, self._get_action())
 
     @mock.patch('nova.compute.api.API.set_admin_password',
-                side_effect=exception.InstanceInvalidState(instance="1",
-                                                           reason=''))
+                side_effect=exception.InstanceInvalidState(
+                    instance_uuid='fake', attr='vm_state', state='stopped',
+                    method='set_admin_password'))
     def test_change_password_invalid_state(self, mock_set_admin_password):
         body = {'changePassword': {'adminPass': 'test'}}
         self.assertRaises(webob.exc.HTTPConflict,
                           self._get_action(),
-                          self.fake_req, '1', body=body)
+                          self.fake_req, 'fake', body=body)
 
 
 class AdminPasswordTestV2(AdminPasswordTestV21):
@@ -144,3 +145,23 @@ class AdminPasswordTestV2(AdminPasswordTestV21):
 
     def _check_status(self, expected_status, res, controller_method):
         self.assertEqual(expected_status, res.status_int)
+
+
+class AdminPasswordPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(AdminPasswordPolicyEnforcementV21, self).setUp()
+        self.controller = admin_password_v21.AdminPasswordController()
+        self.req = fakes.HTTPRequest.blank('')
+
+    def test_change_password_policy_failed(self):
+        rule_name = "compute_extension:v3:os-admin-password"
+        rule = {rule_name: "project:non_fake"}
+        self.policy.set_rules(rule)
+        body = {'changePassword': {'adminPass': '1234pass'}}
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized, self.controller.change_password,
+            self.req, fakes.FAKE_UUID, body=body)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())

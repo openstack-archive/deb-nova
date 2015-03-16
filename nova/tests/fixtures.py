@@ -17,20 +17,20 @@
 """Fixtures for Nova tests."""
 from __future__ import absolute_import
 
-import gettext
-import logging
+import logging as std_logging
 import os
 import uuid
 import warnings
 
 import fixtures
-from oslo.config import cfg
-from oslo.messaging import conffixture as messaging_conffixture
+from oslo_config import cfg
+from oslo_messaging import conffixture as messaging_conffixture
 
 from nova.db import migration
 from nova.db.sqlalchemy import api as session
 from nova import rpc
 from nova import service
+from nova.tests.functional.api import client
 
 _TRUE_VALUES = ('True', 'true', '1', 'yes')
 
@@ -55,18 +55,7 @@ class ServiceFixture(fixtures.Fixture):
         self.addCleanup(self.service.kill)
 
 
-class TranslationFixture(fixtures.Fixture):
-    """Use gettext NullTranslation objects in tests."""
-
-    def setUp(self):
-        super(TranslationFixture, self).setUp()
-        nulltrans = gettext.NullTranslations()
-        gettext_fixture = fixtures.MonkeyPatch('gettext.translation',
-                                               lambda *x, **y: nulltrans)
-        self.gettext_patcher = self.useFixture(gettext_fixture)
-
-
-class NullHandler(logging.Handler):
+class NullHandler(std_logging.Handler):
     """custom default NullHandler to attempt to format the record.
 
     Used in conjunction with
@@ -114,14 +103,14 @@ class StandardLogging(fixtures.Fixture):
         super(StandardLogging, self).setUp()
 
         # set root logger to debug
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG)
+        root = std_logging.getLogger()
+        root.setLevel(std_logging.DEBUG)
 
         # supports collecting debug level for local runs
         if os.environ.get('OS_DEBUG') in _TRUE_VALUES:
-            level = logging.DEBUG
+            level = std_logging.DEBUG
         else:
-            level = logging.INFO
+            level = std_logging.INFO
 
         # Collect logs
         fs = '%(asctime)s %(levelname)s [%(name)s] %(message)s'
@@ -132,15 +121,15 @@ class StandardLogging(fixtures.Fixture):
         # to the bottom of.
         root.handlers[0].setLevel(level)
 
-        if level > logging.DEBUG:
+        if level > std_logging.DEBUG:
             # Just attempt to format debug level logs, but don't save them
             handler = NullHandler()
             self.useFixture(fixtures.LogHandler(handler, nuke_handlers=False))
-            handler.setLevel(logging.DEBUG)
+            handler.setLevel(std_logging.DEBUG)
 
             # Don't log every single DB migration step
-            logging.getLogger(
-                'migrate.versioning.api').setLevel(logging.WARNING)
+            std_logging.getLogger(
+                'migrate.versioning.api').setLevel(std_logging.WARNING)
 
 
 class OutputStreamCapture(fixtures.Fixture):
@@ -210,6 +199,10 @@ class Database(fixtures.Fixture):
             DB_SCHEMA = "".join(line for line in conn.connection.iterdump())
             engine.dispose()
 
+    def cleanup(self):
+        engine = session.get_engine()
+        engine.dispose()
+
     def reset(self):
         self._cache_schema()
         engine = session.get_engine()
@@ -220,6 +213,7 @@ class Database(fixtures.Fixture):
     def setUp(self):
         super(Database, self).setUp()
         self.reset()
+        self.addCleanup(self.cleanup)
 
 
 class RPCFixture(fixtures.Fixture):
@@ -253,3 +247,126 @@ class WarningsFixture(fixtures.Fixture):
                                         ' multiple context managers')
 
         self.addCleanup(warnings.resetwarnings)
+
+
+class ConfPatcher(fixtures.Fixture):
+    """Fixture to patch and restore global CONF.
+
+    This also resets overrides for everything that is patched during
+    it's teardown.
+
+    """
+
+    def __init__(self, **kwargs):
+        """Constructor
+
+        :params group: if specified all config options apply to that group.
+
+        :params **kwargs: the rest of the kwargs are processed as a
+        set of key/value pairs to be set as configuration override.
+
+        """
+        super(ConfPatcher, self).__init__()
+        self.group = kwargs.pop('group', None)
+        self.args = kwargs
+
+    def setUp(self):
+        super(ConfPatcher, self).setUp()
+        for k, v in self.args.iteritems():
+            self.addCleanup(CONF.clear_override, k, self.group)
+            CONF.set_override(k, v, self.group)
+
+
+class OSAPIFixture(fixtures.Fixture):
+    """Create an OS API server as a fixture.
+
+    This spawns an OS API server as a fixture in a new greenthread in
+    the current test. The fixture has a .api paramenter with is a
+    simple rest client that can communicate with it.
+
+    This fixture is extremely useful for testing REST responses
+    through the WSGI stack easily in functional tests.
+
+    Usage:
+
+        api = self.useFixture(fixtures.OSAPIFixture()).api
+        resp = api.api_request('/someurl')
+        self.assertEqual(200, resp.status_code)
+        resp = api.api_request('/otherurl', method='POST', body='{foo}')
+
+    The resp is a requests library response. Common attributes that
+    you'll want to use are:
+
+    - resp.status_code - integer HTTP status code returned by the request
+    - resp.content - the body of the response
+    - resp.headers - dictionary of HTTP headers returned
+
+    """
+
+    def __init__(self, api_version='v2'):
+        """Constructor
+
+        :param api_version: the API version that we're interested in
+        using. Currently this expects 'v2' or 'v2.1' as possible
+        options.
+
+        """
+        super(OSAPIFixture, self).__init__()
+        self.api_version = api_version
+
+    def setUp(self):
+        super(OSAPIFixture, self).setUp()
+        # in order to run these in tests we need to bind only to local
+        # host, and dynamically allocate ports
+        conf_overrides = {
+            'ec2_listen': '127.0.0.1',
+            'osapi_compute_listen': '127.0.0.1',
+            'metadata_listen': '127.0.0.1',
+            'ec2_listen_port': 0,
+            'osapi_compute_listen_port': 0,
+            'metadata_listen_port': 0,
+            'verbose': True,
+            'debug': True
+        }
+        self.useFixture(ConfPatcher(**conf_overrides))
+        osapi = service.WSGIService("osapi_compute")
+        osapi.start()
+        self.addCleanup(osapi.stop)
+        self.auth_url = 'http://%(host)s:%(port)s/%(api_version)s' % ({
+            'host': osapi.host, 'port': osapi.port,
+            'api_version': self.api_version})
+        self.api = client.TestOpenStackClient('fake', 'fake', self.auth_url)
+        self.admin_api = client.TestOpenStackClient(
+            'admin', 'admin', self.auth_url)
+
+
+class PoisonFunctions(fixtures.Fixture):
+    """Poison functions so they explode if we touch them.
+
+    When running under a non full stack test harness there are parts
+    of the code that you don't want to go anywhere near. These include
+    things like code that spins up extra threads, which just
+    introduces races.
+
+    """
+
+    def setUp(self):
+        super(PoisonFunctions, self).setUp()
+
+        # The nova libvirt driver starts an event thread which only
+        # causes trouble in tests. Make sure that if tests don't
+        # properly patch it the test explodes.
+
+        # explicit import because MonkeyPatch doesn't magic import
+        # correctly if we are patching a method on a class in a
+        # module.
+        import nova.virt.libvirt.host  # noqa
+
+        def evloop(*args, **kwargs):
+            import sys
+            warnings.warn("Forgot to disable libvirt event thread")
+            sys.exit(1)
+
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.virt.libvirt.host.Host._init_events',
+            evloop))

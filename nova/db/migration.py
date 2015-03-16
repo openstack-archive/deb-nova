@@ -16,27 +16,24 @@
 
 """Database setup and migration commands."""
 
-from nova import utils
+from nova.db.sqlalchemy import migration
+
+IMPL = migration
 
 
-IMPL = utils.LazyPluggable('backend',
-                           config_group='database',
-                           sqlalchemy='nova.db.sqlalchemy.migration')
-
-
-def db_sync(version=None):
+def db_sync(version=None, database='main'):
     """Migrate the database to `version` or the most recent version."""
-    return IMPL.db_sync(version=version)
+    return IMPL.db_sync(version=version, database=database)
 
 
-def db_version():
+def db_version(database='main'):
     """Display the current database version."""
-    return IMPL.db_version()
+    return IMPL.db_version(database=database)
 
 
-def db_initial_version():
+def db_initial_version(database='main'):
     """The starting version for the database."""
-    return IMPL.db_initial_version()
+    return IMPL.db_initial_version(database=database)
 
 
 def db_null_instance_uuid_scan(delete=False):

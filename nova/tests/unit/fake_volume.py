@@ -14,11 +14,11 @@
 
 import uuid
 
-from oslo.config import cfg
-from oslo.utils import timeutils
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_utils import timeutils
 
 from nova import exception
-from nova.openstack.common import log as logging
 
 
 LOG = logging.getLogger(__name__)
@@ -94,8 +94,8 @@ class fake_snapshot(object):
             'deleted': False,
             'id': str(id),
             'volume_id': volume_id,
-            'status': 'creating',
-            'progress': '0%',
+            'status': 'available',
+            'progress': '100%',
             'volume_size': 1,
             'display_name': name,
             'display_description': desc,
@@ -279,7 +279,7 @@ class API(object):
         volume['status'] = 'available'
 
     def begin_detaching(self, context, volume_id):
-        LOG.info('beging detaching volume %s', volume_id)
+        LOG.info('begin detaching volume %s', volume_id)
         volume = self.get(context, volume_id)
         volume['status'] = 'detaching'
 

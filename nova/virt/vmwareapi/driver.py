@@ -21,17 +21,18 @@ A connection to the VMware vCenter platform.
 
 import re
 
-from oslo.config import cfg
-from oslo.serialization import jsonutils
-from oslo.vmware import api
-from oslo.vmware import exceptions as vexc
-from oslo.vmware import pbm
-from oslo.vmware import vim
-from oslo.vmware import vim_util
+from oslo_config import cfg
+from oslo_log import log as logging
+from oslo_serialization import jsonutils
+from oslo_vmware import api
+from oslo_vmware import exceptions as vexc
+from oslo_vmware import pbm
+from oslo_vmware import vim
+from oslo_vmware import vim_util
 
 from nova import exception
 from nova.i18n import _, _LI, _LW
-from nova.openstack.common import log as logging
+from nova.openstack.common import versionutils
 from nova.virt import driver
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import error_util
@@ -146,6 +147,14 @@ class VMwareVCDriver(driver.ComputeDriver):
 
         # Get the list of clusters to be used
         self._cluster_names = CONF.vmware.cluster_name
+        if len(self._cluster_names) > 1:
+            versionutils.report_deprecated_feature(
+                LOG,
+                _LW('The "cluster_name" setting should have only one '
+                    'cluster name. The capability of allowing '
+                    'multiple clusters may be dropped in the '
+                    'Liberty release.'))
+
         self.dict_mors = vm_util.get_all_cluster_refs_by_name(self._session,
                                           self._cluster_names)
         if not self.dict_mors:
@@ -237,17 +246,10 @@ class VMwareVCDriver(driver.ComputeDriver):
         """resume guest state when a host is booted."""
         # Check if the instance is running already and avoid doing
         # anything if it is.
-        instances = self.list_instances()
-        if instance['uuid'] not in instances:
-            LOG.warning(_LW('Instance cannot be found in host, or in an '
-                            'unknown state.'), instance=instance)
-        else:
-            state = vm_util.get_vm_state_from_name(self._session,
-                                                   instance['uuid'])
-            ignored_states = ['poweredon', 'suspended']
-
-            if state.lower() in ignored_states:
-                return
+        state = vm_util.get_vm_state(self._session, instance)
+        ignored_states = ['poweredon', 'suspended']
+        if state.lower() in ignored_states:
+            return
         # Instance is not up and could be in an unknown state.
         # Be as absolute as possible about getting it back into
         # a known and running state.
@@ -474,7 +476,7 @@ class VMwareVCDriver(driver.ComputeDriver):
               admin_password, network_info=None, block_device_info=None,
               flavor=None):
         """Create VM instance."""
-        _vmops = self._get_vmops_for_compute_node(instance['node'])
+        _vmops = self._get_vmops_for_compute_node(instance.node)
         _vmops.spawn(context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info,
               flavor=flavor)
@@ -482,14 +484,14 @@ class VMwareVCDriver(driver.ComputeDriver):
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):
         """Attach volume storage to VM instance."""
-        _volumeops = self._get_volumeops_for_compute_node(instance['node'])
+        _volumeops = self._get_volumeops_for_compute_node(instance.node)
         return _volumeops.attach_volume(connection_info,
                                         instance)
 
     def detach_volume(self, connection_info, instance, mountpoint,
                       encryption=None):
         """Detach volume storage to VM instance."""
-        _volumeops = self._get_volumeops_for_compute_node(instance['node'])
+        _volumeops = self._get_volumeops_for_compute_node(instance.node)
         return _volumeops.detach_volume(connection_info,
                                         instance)
 
@@ -508,7 +510,7 @@ class VMwareVCDriver(driver.ComputeDriver):
     def reboot(self, context, instance, network_info, reboot_type,
                block_device_info=None, bad_volumes_callback=None):
         """Reboot VM instance."""
-        self._vmops.reboot(instance, network_info)
+        self._vmops.reboot(instance, network_info, reboot_type)
 
     def destroy(self, context, instance, network_info, block_device_info=None,
                 destroy_disks=True, migrate_data=None):
@@ -517,7 +519,7 @@ class VMwareVCDriver(driver.ComputeDriver):
         # Destroy gets triggered when Resource Claim in resource_tracker
         # is not successful. When resource claim is not successful,
         # node is not set in instance. Perform destroy only if node is set
-        if not instance['node']:
+        if not instance.node:
             return
 
         self._vmops.destroy(instance, destroy_disks)
@@ -530,7 +532,7 @@ class VMwareVCDriver(driver.ComputeDriver):
         """Unpause paused VM instance."""
         self._vmops.unpause(instance)
 
-    def suspend(self, instance):
+    def suspend(self, context, instance):
         """Suspend the specified instance."""
         self._vmops.suspend(instance)
 
@@ -612,12 +614,12 @@ class VMwareVCDriver(driver.ComputeDriver):
         # Running instances per cluster
         cluster_instances = {}
         for instance in all_instances:
-            instances = cluster_instances.get(instance['node'])
+            instances = cluster_instances.get(instance.node)
             if instances:
                 instances.append(instance)
             else:
                 instances = [instance]
-            cluster_instances[instance['node']] = instances
+            cluster_instances[instance.node] = instances
 
         # Invoke the image aging per cluster
         for resource in self._resources.keys():

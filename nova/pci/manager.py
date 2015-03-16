@@ -16,13 +16,13 @@
 
 import collections
 
+from oslo_log import log as logging
+
 from nova.compute import task_states
 from nova.compute import vm_states
-from nova import context
 from nova import exception
 from nova.i18n import _LW
 from nova import objects
-from nova.openstack.common import log as logging
 from nova.pci import device
 from nova.pci import stats
 from nova.virt import hardware
@@ -42,7 +42,7 @@ class PciDevTracker(object):
     information is updated to DB when devices information is changed.
     """
 
-    def __init__(self, node_id=None):
+    def __init__(self, context, node_id=None):
         """Create a pci device tracker.
 
         If a node_id is passed in, it will fetch pci devices information
@@ -80,7 +80,8 @@ class PciDevTracker(object):
     def save(self, context):
         for dev in self.pci_devs:
             if dev.obj_what_changed():
-                dev.save(context)
+                with dev.obj_alternate_context(context):
+                    dev.save()
 
         self.pci_devs = [dev for dev in self.pci_devs
                          if dev['status'] != 'deleted']
@@ -147,6 +148,7 @@ class PciDevTracker(object):
         for dev in [dev for dev in devices if
                     dev['address'] in new_addrs - exist_addrs]:
             dev['compute_node_id'] = self.node_id
+            # NOTE(danms): These devices are created with no context
             dev_obj = objects.PciDevice.create(dev)
             self.pci_devs.append(dev_obj)
             self.stats.add_device(dev_obj)

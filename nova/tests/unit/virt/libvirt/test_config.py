@@ -13,7 +13,7 @@
 #    under the License.
 
 from lxml import etree
-from oslo.utils import units
+from oslo_utils import units
 
 from nova.compute import arch
 from nova import test
@@ -1297,6 +1297,22 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
               </vlan>
             </interface>""")
 
+    def test_config_vhostuser(self):
+        obj = config.LibvirtConfigGuestInterface()
+        obj.net_type = "vhostuser"
+        obj.vhostuser_type = "unix"
+        obj.vhostuser_mode = "server"
+        obj.mac_addr = "DE:AD:BE:EF:CA:FE"
+        obj.vhostuser_path = "/vhost-user/test.sock"
+        obj.model = "virtio"
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <interface type="vhostuser">
+              <mac address="DE:AD:BE:EF:CA:FE"/>
+              <model type="virtio"/>
+              <source type="unix" mode="server" path="/vhost-user/test.sock"/>
+            </interface>""")
+
 
 class LibvirtConfigGuestFeatureTest(LibvirtConfigBaseTest):
 
@@ -1642,6 +1658,29 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
                   <target bus="virtio" dev="/dev/vda"/>
                 </disk>
               </devices>
+            </domain>""")
+
+    def test_config_boot_menu(self):
+        obj = config.LibvirtConfigGuest()
+        obj.virt_type = "kvm"
+        obj.memory = 100 * units.Mi
+        obj.vcpus = 2
+        obj.name = "bootmenu"
+        obj.uuid = "f01cf68d-515c-4daf-b85f-ef1424d93bfc"
+        obj.os_type = "fake"
+        obj.os_bootmenu = True
+        xml = obj.to_xml()
+
+        self.assertXmlEqual(xml, """
+            <domain type="kvm">
+              <uuid>f01cf68d-515c-4daf-b85f-ef1424d93bfc</uuid>
+              <name>bootmenu</name>
+              <memory>104857600</memory>
+              <vcpu>2</vcpu>
+              <os>
+                <type>fake</type>
+                <bootmenu enable="yes"/>
+              </os>
             </domain>""")
 
     def test_config_machine_type(self):
@@ -2053,30 +2092,30 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.fun_capability[1].device_addrs,
                          [(0, 10, 1, 1), ])
 
-        def test_config_read_only_disk(self):
-            obj = config.LibvirtConfigGuestDisk()
-            obj.source_type = "disk"
-            obj.source_device = "disk"
-            obj.driver_name = "kvm"
-            obj.target_dev = "/dev/hdc"
-            obj.target_bus = "virtio"
-            obj.readonly = True
+    def test_config_read_only_disk(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "disk"
+        obj.source_device = "disk"
+        obj.driver_name = "kvm"
+        obj.target_dev = "/dev/hdc"
+        obj.target_bus = "virtio"
+        obj.readonly = True
 
-            xml = obj.to_xml()
-            self.assertXmlEqual(xml, """
-                <disk type="disk" device="disk">
-                    <driver name="kvm"/>
-                    <target bus="virtio" dev="/dev/hdc"/>
-                    <readonly/>
-                </disk>""")
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="disk" device="disk">
+                <driver name="kvm"/>
+                <target bus="virtio" dev="/dev/hdc"/>
+                <readonly/>
+            </disk>""")
 
-            obj.readonly = False
-            xml = obj.to_xml()
-            self.assertXmlEqual(xml, """
-                <disk type="disk" device="disk">
-                    <driver name="kvm"/>
-                    <target bus="virtio" dev="/dev/hdc"/>
-                </disk>""")
+        obj.readonly = False
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="disk" device="disk">
+                <driver name="kvm"/>
+                <target bus="virtio" dev="/dev/hdc"/>
+            </disk>""")
 
 
 class LibvirtConfigNodeDevicePciSubFunctionCap(LibvirtConfigBaseTest):

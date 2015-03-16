@@ -23,10 +23,14 @@ from nova.cmd import manage
 from nova import context
 from nova import db
 from nova.db import migration
+from nova.db.sqlalchemy import migration as sqla_migration
 from nova import exception
+from nova import objects
 from nova import test
 from nova.tests.unit.db import fakes as db_fakes
+from nova.tests.unit import fake_instance
 from nova.tests.unit.objects import test_network
+from nova.tests.unit import test_flavors
 
 
 class FixedIpCommandsTestCase(test.TestCase):
@@ -328,6 +332,49 @@ class ProjectCommandsTestCase(test.TestCase):
         self.assertEqual(2, self.commands.quota('admin', 'volumes1', '10'))
 
 
+class VmCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(VmCommandsTestCase, self).setUp()
+        self.commands = manage.VmCommands()
+        self.fake_flavor = objects.Flavor(**test_flavors.DEFAULT_FLAVORS[0])
+
+    def test_list_without_host(self):
+        output = StringIO.StringIO()
+        sys.stdout = output
+        with mock.patch.object(objects.InstanceList, 'get_by_filters') as get:
+            get.return_value = objects.InstanceList(
+                objects=[fake_instance.fake_instance_obj(
+                    context.get_admin_context(), host='foo-host',
+                    instance_type=self.fake_flavor,
+                    expected_attrs=('flavor'))])
+            self.commands.list()
+
+        sys.stdout = sys.__stdout__
+        result = output.getvalue()
+
+        self.assertIn('node', result)   # check the header line
+        self.assertIn('m1.tiny', result)    # flavor.name
+        self.assertIn('foo-host', result)
+
+    def test_list_with_host(self):
+        output = StringIO.StringIO()
+        sys.stdout = output
+        with mock.patch.object(objects.InstanceList, 'get_by_host') as get:
+            get.return_value = objects.InstanceList(
+                objects=[fake_instance.fake_instance_obj(
+                    context.get_admin_context(),
+                    instance_type=self.fake_flavor,
+                    expected_attrs=('flavor'))])
+            self.commands.list(host='fake-host')
+
+        sys.stdout = sys.__stdout__
+        result = output.getvalue()
+
+        self.assertIn('node', result)   # check the header line
+        self.assertIn('m1.tiny', result)    # flavor.name
+        self.assertIn('fake-host', result)
+
+
 class DBCommandsTestCase(test.TestCase):
     def setUp(self):
         super(DBCommandsTestCase, self).setUp()
@@ -368,6 +415,32 @@ class DBCommandsTestCase(test.TestCase):
 
     def test_migrate_flavor_data_negative(self):
         self.assertEqual(1, self.commands.migrate_flavor_data(-1))
+
+    @mock.patch.object(sqla_migration, 'db_version', return_value=2)
+    def test_version(self, sqla_migrate):
+        self.commands.version()
+        sqla_migrate.assert_called_once_with(database='main')
+
+    @mock.patch.object(sqla_migration, 'db_sync')
+    def test_sync(self, sqla_sync):
+        self.commands.sync(version=4)
+        sqla_sync.assert_called_once_with(version=4, database='main')
+
+
+class ApiDbCommandsTestCase(test.TestCase):
+    def setUp(self):
+        super(ApiDbCommandsTestCase, self).setUp()
+        self.commands = manage.ApiDbCommands()
+
+    @mock.patch.object(sqla_migration, 'db_version', return_value=2)
+    def test_version(self, sqla_migrate):
+        self.commands.version()
+        sqla_migrate.assert_called_once_with(database='api')
+
+    @mock.patch.object(sqla_migration, 'db_sync')
+    def test_sync(self, sqla_sync):
+        self.commands.sync(version=4)
+        sqla_sync.assert_called_once_with(version=4, database='api')
 
 
 class ServiceCommandsTestCase(test.TestCase):

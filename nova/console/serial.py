@@ -16,12 +16,12 @@
 
 import socket
 
-from oslo.config import cfg
+from oslo_config import cfg
+from oslo_log import log as logging
 import six.moves
 
 from nova import exception
 from nova.i18n import _LW
-from nova.openstack.common import log as logging
 from nova import utils
 
 LOG = logging.getLogger(__name__)

@@ -23,7 +23,7 @@ from nova import network
 
 
 ALIAS = 'os-virtual-interfaces'
-authorize = extensions.extension_authorizer('compute', 'v3:' + ALIAS)
+authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 def _translate_vif_summary_view(_context, vif):
@@ -39,15 +39,15 @@ class ServerVirtualInterfaceController(wsgi.Controller):
     """
 
     def __init__(self):
-        self.compute_api = compute.API()
-        self.network_api = network.API()
+        self.compute_api = compute.API(skip_policy_check=True)
+        self.network_api = network.API(skip_policy_check=True)
         super(ServerVirtualInterfaceController, self).__init__()
 
     def _items(self, req, server_id, entity_maker):
         """Returns a list of VIFs, transformed through entity_maker."""
         context = req.environ['nova.context']
-        instance = common.get_instance(self.compute_api, context, server_id,
-                                       want_objects=True)
+        authorize(context)
+        instance = common.get_instance(self.compute_api, context, server_id)
 
         vifs = self.network_api.get_vifs_by_instance(context, instance)
         limited_list = common.limited(vifs, req)
@@ -57,7 +57,6 @@ class ServerVirtualInterfaceController(wsgi.Controller):
     @extensions.expected_errors((404))
     def index(self, req, server_id):
         """Returns the list of VIFs for a given instance."""
-        authorize(req.environ['nova.context'])
         return self._items(req, server_id,
                            entity_maker=_translate_vif_summary_view)
 
