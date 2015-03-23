@@ -243,6 +243,7 @@ Depends: adduser,
          nova-compute,
          python-libvirt (>= 1.2.5),
          ${misc:Depends},
+         ${python:Depends},
 Provides: nova-compute-hypervisor
 Conflicts: nova-compute-ironic,
            nova-compute-kvm,
