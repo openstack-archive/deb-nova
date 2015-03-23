@@ -2335,8 +2335,7 @@ class LibvirtDriver(driver.ComputeDriver):
     # NOTE(ilyaalekseyev): Implementation like in multinics
     # for xenapi(tr3buchet)
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info=None, block_device_info=None,
-              flavor=None):
+              admin_password, network_info=None, block_device_info=None):
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
                                             image_meta,
@@ -2351,7 +2350,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                   disk_info, image_meta,
                                   block_device_info=block_device_info,
                                   write_to_disk=True,
-                                  flavor=flavor)
+                                  flavor=instance.flavor)
         self._create_domain_and_network(context, xml, instance, network_info,
                                         disk_info,
                                         block_device_info=block_device_info)
@@ -4589,8 +4588,7 @@ class LibvirtDriver(driver.ComputeDriver):
     def _get_cpu_info(self):
         """Get cpuinfo information.
 
-        Obtains cpu feature from virConnect.getCapabilities,
-        and returns as a json string.
+        Obtains cpu feature from virConnect.getCapabilities.
 
         :return: see above description
 
@@ -4609,21 +4607,11 @@ class LibvirtDriver(driver.ComputeDriver):
         topology['threads'] = caps.host.cpu.threads
         cpu_info['topology'] = topology
 
-        features = list()
+        features = set()
         for f in caps.host.cpu.features:
-            features.append(f.name)
+            features.add(f.name)
         cpu_info['features'] = features
-
-        # TODO(berrange): why do we bother converting the
-        # libvirt capabilities XML into a special JSON format ?
-        # The data format is different across all the drivers
-        # so we could just return the raw capabilities XML
-        # which 'compare_cpu' could use directly
-        #
-        # That said, arch_filter.py now seems to rely on
-        # the libvirt drivers format which suggests this
-        # data format needs to be standardized across drivers
-        return jsonutils.dumps(cpu_info)
+        return cpu_info
 
     def _get_pcidev_info(self, devname):
         """Returns a dict of PCI device."""
@@ -4867,7 +4855,16 @@ class LibvirtDriver(driver.ComputeDriver):
         data["hypervisor_type"] = self._host.get_driver_type()
         data["hypervisor_version"] = self._host.get_version()
         data["hypervisor_hostname"] = self._host.get_hostname()
-        data["cpu_info"] = self._get_cpu_info()
+        # TODO(berrange): why do we bother converting the
+        # libvirt capabilities XML into a special JSON format ?
+        # The data format is different across all the drivers
+        # so we could just return the raw capabilities XML
+        # which 'compare_cpu' could use directly
+        #
+        # That said, arch_filter.py now seems to rely on
+        # the libvirt drivers format which suggests this
+        # data format needs to be standardized across drivers
+        data["cpu_info"] = jsonutils.dumps(self._get_cpu_info())
 
         disk_free_gb = disk_info_dict['free']
         disk_over_committed = self._get_disk_over_committed_size_total()
@@ -5587,13 +5584,15 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Migration did not succeed
                 LOG.error(_LE("Migration operation has aborted"),
                           instance=instance)
-                recover_method(context, instance, dest, block_migration)
+                recover_method(context, instance, dest, block_migration,
+                               migrate_data)
                 break
             elif info.type == libvirt.VIR_DOMAIN_JOB_CANCELLED:
                 # Migration was stopped by admin
                 LOG.warn(_LW("Migration operation was cancelled"),
                          instance=instance)
-                recover_method(context, instance, dest, block_migration)
+                recover_method(context, instance, dest, block_migration,
+                               migrate_data)
                 break
             else:
                 LOG.warn(_LW("Unexpected migration job type: %d"),
@@ -5731,11 +5730,13 @@ class LibvirtDriver(driver.ComputeDriver):
             instance.system_metadata)
 
         if not (is_shared_instance_path and is_shared_block_storage):
-            # NOTE(mikal): live migration of instances using config drive is
-            # not supported because of a bug in libvirt (read only devices
-            # are not copied by libvirt). See bug/1246201
-            if configdrive.required_by(instance):
-                raise exception.NoLiveMigrationForConfigDriveInLibVirt()
+            # NOTE(dims): Using config drive with iso format does not work
+            # because of a bug in libvirt with read only devices. However
+            # one can use vfat as config_drive_format which works fine.
+            # Please see bug/1246201 for details on the libvirt bug.
+            if CONF.config_drive_format != 'vfat':
+                if configdrive.required_by(instance):
+                    raise exception.NoLiveMigrationForConfigDriveInLibVirt()
 
         if not is_shared_instance_path:
             instance_dir = libvirt_utils.get_instance_path_at_destination(
@@ -6159,7 +6160,14 @@ class LibvirtDriver(driver.ComputeDriver):
                    instance=instance)
 
         ephemerals = driver.block_device_info_get_ephemerals(block_device_info)
-        eph_size = block_device.get_bdm_ephemeral_disk_size(ephemerals)
+
+        # get_bdm_ephemeral_disk_size() will return 0 if the new
+        # instance's requested block device mapping contain no
+        # ephemeral devices. However, we still want to check if
+        # the original instance's ephemeral_gb property was set and
+        # ensure that the new requested flavor ephemeral size is greater
+        eph_size = (block_device.get_bdm_ephemeral_disk_size(ephemerals) or
+                    instance.ephemeral_gb)
 
         # Checks if the migration needs a disk resize down.
         if (flavor['root_gb'] < instance.root_gb or

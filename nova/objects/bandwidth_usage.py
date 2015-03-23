@@ -54,15 +54,15 @@ class BandwidthUsage(base.NovaPersistentObject, base.NovaObject,
 
     @base.serialize_args
     @base.remotable
-    def create(self, context, uuid, mac, bw_in, bw_out, last_ctr_in,
+    def create(self, uuid, mac, bw_in, bw_out, last_ctr_in,
                last_ctr_out, start_period=None, last_refreshed=None,
                update_cells=True):
         db_bw_usage = db.bw_usage_update(
-            context, uuid, mac, start_period, bw_in, bw_out,
+            self._context, uuid, mac, start_period, bw_in, bw_out,
             last_ctr_in, last_ctr_out, last_refreshed=last_refreshed,
             update_cells=update_cells)
 
-        self._from_db_object(context, self, db_bw_usage)
+        self._from_db_object(self._context, self, db_bw_usage)
 
 
 class BandwidthUsageList(base.ObjectListBase, base.NovaObject):

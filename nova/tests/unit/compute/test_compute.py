@@ -29,6 +29,7 @@ import uuid
 from eventlet import greenthread
 import mock
 from mox3 import mox
+from neutronclient.common import exceptions as neutron_exceptions
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
@@ -559,7 +560,7 @@ class ComputeVolumeTestCase(BaseTestCase):
             })]
             prepped_bdm = self.compute._prep_block_device(
                     self.context, self.instance_object, block_device_mapping)
-            mock_save.assert_called_once_with()
+            self.assertEqual(2, mock_save.call_count)
             volume_driver_bdm = prepped_bdm['block_device_mapping'][0]
             self.assertEqual(volume_driver_bdm['connection_info']['serial'],
                              self.volume_id)
@@ -5865,8 +5866,8 @@ class ComputeTestCase(BaseTestCase):
         LOG.info("Running instances: %s", instances)
         self.assertEqual(len(instances), 1)
 
-        instance_name = instances[0]['name']
-        self.compute.driver._test_remove_vm(instance_name)
+        instance_uuid = instances[0]['uuid']
+        self.compute.driver._test_remove_vm(instance_uuid)
 
         # Force the compute manager to do its periodic poll
         ctxt = context.get_admin_context()
@@ -9187,6 +9188,57 @@ class ComputeAPITestCase(BaseTestCase):
         self.compute.detach_interface(self.context, instance, port_id)
         self.assertEqual(self.compute.driver._interfaces, {})
 
+    def test_detach_interface_failed(self):
+        nwinfo, port_id = self.test_attach_interface()
+        instance = objects.Instance()
+        instance['uuid'] = 'fake-uuid'
+        instance.info_cache = objects.InstanceInfoCache.new(
+            self.context, 'fake-uuid')
+        instance.info_cache.network_info = network_model.NetworkInfo.hydrate(
+            nwinfo)
+
+        with contextlib.nested(
+            mock.patch.object(self.compute.driver, 'detach_interface',
+                side_effect=exception.NovaException('detach_failed')),
+            mock.patch.object(self.compute.network_api,
+                              'deallocate_port_for_instance')) as (
+            mock_detach, mock_deallocate):
+            self.assertRaises(exception.InterfaceDetachFailed,
+                              self.compute.detach_interface, self.context,
+                              instance, port_id)
+            self.assertFalse(mock_deallocate.called)
+
+    @mock.patch.object(compute_manager.LOG, 'warning')
+    def test_detach_interface_deallocate_port_for_instance_failed(self,
+                                                                  warn_mock):
+        # Tests that when deallocate_port_for_instance fails we log the failure
+        # before exiting compute.detach_interface.
+        nwinfo, port_id = self.test_attach_interface()
+        instance = objects.Instance(uuid=uuidutils.generate_uuid())
+        instance.info_cache = objects.InstanceInfoCache.new(
+            self.context, 'fake-uuid')
+        instance.info_cache.network_info = network_model.NetworkInfo.hydrate(
+            nwinfo)
+
+        # Sometimes neutron errors slip through the neutronv2 API so we want
+        # to make sure we catch those in the compute manager and not just
+        # NovaExceptions.
+        error = neutron_exceptions.PortNotFoundClient()
+        with contextlib.nested(
+            mock.patch.object(self.compute.driver, 'detach_interface'),
+            mock.patch.object(self.compute.network_api,
+                              'deallocate_port_for_instance',
+                              side_effect=error),
+            mock.patch.object(self.compute, '_instance_update')) as (
+            mock_detach, mock_deallocate, mock_instance_update):
+            ex = self.assertRaises(neutron_exceptions.PortNotFoundClient,
+                                   self.compute.detach_interface, self.context,
+                                   instance, port_id)
+            self.assertEqual(error, ex)
+        mock_deallocate.assert_called_once_with(
+            self.context, instance, port_id)
+        self.assertEqual(1, warn_mock.call_count)
+
     def test_attach_volume(self):
         fake_bdm = fake_block_device.FakeDbBlockDeviceDict(
                 {'source_type': 'volume', 'destination_type': 'volume',
@@ -11073,8 +11125,7 @@ class ComputeRescheduleOrErrorTestCase(BaseTestCase):
                 expected=task_states.SPAWNING, actual=task_states.DELETING)
         self.compute._spawn(mox.IgnoreArg(), self.instance, mox.IgnoreArg(),
                 mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg(), set_access_ip=False,
-                flavor=None).AndRaise(exc)
+                mox.IgnoreArg(), set_access_ip=False).AndRaise(exc)
 
         self.mox.ReplayAll()
         # test succeeds if mocked method '_reschedule_or_error' is not
@@ -11092,8 +11143,7 @@ class ComputeRescheduleOrErrorTestCase(BaseTestCase):
                 actual=task_states.SCHEDULING)
         self.compute._spawn(mox.IgnoreArg(), self.instance, mox.IgnoreArg(),
                 mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg(),
-                mox.IgnoreArg(), set_access_ip=False,
-                flavor=None).AndRaise(exc)
+                mox.IgnoreArg(), set_access_ip=False).AndRaise(exc)
 
         self.mox.ReplayAll()
         self.assertRaises(exception.UnexpectedTaskStateError,
@@ -11467,8 +11517,7 @@ class ComputeInjectedFilesTestCase(BaseTestCase):
         self.stubs.Set(self.compute.driver, 'spawn', self._spawn)
 
     def _spawn(self, context, instance, image_meta, injected_files,
-               admin_password, nw_info, block_device_info, db_api=None,
-               flavor=None):
+               admin_password, nw_info, block_device_info, db_api=None):
         self.assertEqual(self.expected, injected_files)
 
     def _test(self, injected_files, decoded_files):

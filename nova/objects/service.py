@@ -61,14 +61,17 @@ class Service(base.NovaPersistentObject, base.NovaObject,
     }
 
     def obj_make_compatible(self, primitive, target_version):
-        super(Service, self).obj_make_compatible(primitive, target_version)
-        target_version = utils.convert_version_to_tuple(target_version)
-        if target_version < (1, 10):
+        _target_version = utils.convert_version_to_tuple(target_version)
+        if _target_version < (1, 10):
+            target_compute_version = self.obj_calculate_child_version(
+                target_version, 'compute_node')
             # service.compute_node was not lazy-loaded, we need to provide it
             # when called
-            self._do_compute_node(self._context, primitive)
+            self._do_compute_node(self._context, primitive,
+                                  target_compute_version)
+        super(Service, self).obj_make_compatible(primitive, target_version)
 
-    def _do_compute_node(self, context, primitive):
+    def _do_compute_node(self, context, primitive, target_version):
         try:
             # NOTE(sbauza): Some drivers (VMware, Ironic) can have multiple
             # nodes for the same service, but for keeping same behaviour,
@@ -78,7 +81,7 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         except Exception:
             return
         primitive['compute_node'] = compute.obj_to_primitive(
-            target_version='1.10')
+            target_version=target_version)
 
     @staticmethod
     def _from_db_object(context, service, db_service):
@@ -154,24 +157,24 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         return cls._from_db_object(context, cls(), db_service)
 
     @base.remotable
-    def create(self, context):
+    def create(self):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
         updates = self.obj_get_changes()
-        db_service = db.service_create(context, updates)
-        self._from_db_object(context, self, db_service)
+        db_service = db.service_create(self._context, updates)
+        self._from_db_object(self._context, self, db_service)
 
     @base.remotable
-    def save(self, context):
+    def save(self):
         updates = self.obj_get_changes()
         updates.pop('id', None)
-        db_service = db.service_update(context, self.id, updates)
-        self._from_db_object(context, self, db_service)
+        db_service = db.service_update(self._context, self.id, updates)
+        self._from_db_object(self._context, self, db_service)
 
     @base.remotable
-    def destroy(self, context):
-        db.service_destroy(context, self.id)
+    def destroy(self):
+        db.service_destroy(self._context, self.id)
 
 
 class ServiceList(base.ObjectListBase, base.NovaObject):

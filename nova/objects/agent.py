@@ -51,22 +51,22 @@ class Agent(base.NovaPersistentObject, base.NovaObject,
         return cls._from_db_object(context, objects.Agent(), db_agent)
 
     @base.remotable
-    def create(self, context):
+    def create(self):
         updates = self.obj_get_changes()
         if 'id' in updates:
             raise exception.ObjectActionError(action='create',
                                               reason='Already Created')
-        db_agent = db.agent_build_create(context, updates)
-        self._from_db_object(context, self, db_agent)
+        db_agent = db.agent_build_create(self._context, updates)
+        self._from_db_object(self._context, self, db_agent)
 
     @base.remotable
-    def destroy(self, context):
-        db.agent_build_destroy(context, self.id)
+    def destroy(self):
+        db.agent_build_destroy(self._context, self.id)
 
     @base.remotable
-    def save(self, context):
+    def save(self):
         updates = self.obj_get_changes()
-        db.agent_build_update(context, self.id, updates)
+        db.agent_build_update(self._context, self.id, updates)
         self.obj_reset_changes()
 
 

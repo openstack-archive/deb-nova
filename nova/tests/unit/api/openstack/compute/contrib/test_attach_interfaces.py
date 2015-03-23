@@ -137,7 +137,7 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         super(InterfaceAttachTestsV21, self).setUp()
         self.flags(auth_strategy=None, group='neutron')
         self.flags(url='http://anyhost/', group='neutron')
-        self.flags(url_timeout=30, group='neutron')
+        self.flags(timeout=30, group='neutron')
         self.stubs.Set(network_api.API, 'show_port', fake_show_port)
         self.stubs.Set(network_api.API, 'list_ports', fake_list_ports)
         self.stubs.Set(compute_api.API, 'get', fake_get_instance)
@@ -472,7 +472,7 @@ class AttachInterfacesPolicyEnforcementv21(test.NoDBTestCase):
         self.controller = \
             attach_interfaces_v21.InterfaceAttachmentController()
         self.req = fakes.HTTPRequest.blank('')
-        self.rule_name = "compute_extension:v3:os-attach-interfaces"
+        self.rule_name = "os_compute_api:os-attach-interfaces"
         self.policy.set_rules({self.rule_name: "project:non_fake"})
 
     def test_index_attach_interfaces_policy_failed(self):

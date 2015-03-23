@@ -161,18 +161,16 @@ def _get_allocation_info(client_factory, extra_specs):
     return allocation
 
 
-def get_vm_create_spec(client_factory, instance, name, data_store_name,
+def get_vm_create_spec(client_factory, instance, data_store_name,
                        vif_infos, extra_specs,
                        os_type=constants.DEFAULT_OS_TYPE,
                        profile_spec=None):
     """Builds the VM Create spec."""
     config_spec = client_factory.create('ns0:VirtualMachineConfigSpec')
-    config_spec.name = name
+    config_spec.name = instance.uuid
     config_spec.guestId = os_type
-    # The name is the unique identifier for the VM. This will either be the
-    # instance UUID or the instance UUID with suffix '-rescue' for VM's that
-    # are in rescue mode
-    config_spec.instanceUuid = name
+    # The name is the unique identifier for the VM.
+    config_spec.instanceUuid = instance.uuid
     # set the Hardware version
     config_spec.version = extra_specs.hw_version
 
@@ -1098,18 +1096,6 @@ def propset_dict(propset):
         return {}
 
     return {prop.name: prop.val for prop in propset}
-
-
-def get_vmdk_backed_disk_uuid(hardware_devices, volume_uuid):
-    if hardware_devices.__class__.__name__ == "ArrayOfVirtualDevice":
-        hardware_devices = hardware_devices.VirtualDevice
-
-    for device in hardware_devices:
-        if (device.__class__.__name__ == "VirtualDisk" and
-                device.backing.__class__.__name__ ==
-                "VirtualDiskFlatVer2BackingInfo" and
-                volume_uuid in device.backing.fileName):
-            return device.backing.uuid
 
 
 def get_vmdk_backed_disk_device(hardware_devices, uuid):

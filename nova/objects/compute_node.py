@@ -231,7 +231,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
             updates['pci_stats'] = jsonutils.dumps(pools.obj_to_primitive())
 
     @base.remotable
-    def create(self, context):
+    def create(self):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
@@ -241,11 +241,11 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         self._convert_supported_instances_to_db_format(updates)
         self._convert_pci_stats_to_db_format(updates)
 
-        db_compute = db.compute_node_create(context, updates)
-        self._from_db_object(context, self, db_compute)
+        db_compute = db.compute_node_create(self._context, updates)
+        self._from_db_object(self._context, self, db_compute)
 
     @base.remotable
-    def save(self, context, prune_stats=False):
+    def save(self, prune_stats=False):
         # NOTE(belliott) ignore prune_stats param, no longer relevant
 
         updates = self.obj_get_changes()
@@ -255,12 +255,12 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         self._convert_supported_instances_to_db_format(updates)
         self._convert_pci_stats_to_db_format(updates)
 
-        db_compute = db.compute_node_update(context, self.id, updates)
-        self._from_db_object(context, self, db_compute)
+        db_compute = db.compute_node_update(self._context, self.id, updates)
+        self._from_db_object(self._context, self, db_compute)
 
     @base.remotable
-    def destroy(self, context):
-        db.compute_node_delete(context, self.id)
+    def destroy(self):
+        db.compute_node_delete(self._context, self.id)
 
     @property
     def service(self):

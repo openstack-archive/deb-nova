@@ -1049,6 +1049,14 @@ def fake_get_network(*args, **kwargs):
     return {'type': 'fake'}
 
 
+def assertPathExists(test, path):
+    test.assertIn(path, _db_content.get('files'))
+
+
+def assertPathNotExists(test, path):
+    test.assertNotIn(path, _db_content.get('files'))
+
+
 def get_file(file_path):
     """Check if file exists in the db."""
     return file_path in _db_content.get("files")
@@ -1585,18 +1593,13 @@ class FakeVim(object):
         elif attr_name == "AddPortGroup":
             return lambda *args, **kwargs: self._add_port_group(attr_name,
                                                 *args, **kwargs)
-        elif attr_name == "RebootHost_Task":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)
-        elif attr_name == "ShutdownHost_Task":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)
-        elif attr_name == "PowerUpHostFromStandBy_Task":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)
-        elif attr_name == "EnterMaintenanceMode_Task":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)
-        elif attr_name == "ExitMaintenanceMode_Task":
+        elif attr_name in ("RebootHost_Task",
+                           "ShutdownHost_Task",
+                           "PowerUpHostFromStandBy_Task",
+                           "EnterMaintenanceMode_Task",
+                           "ExitMaintenanceMode_Task",
+                           "RescanHba"):
             return lambda *args, **kwargs: self._just_return_task(attr_name)
         elif attr_name == "AddInternetScsiSendTargets":
             return lambda *args, **kwargs: self._add_iscsi_send_tgt(attr_name,
                                                 *args, **kwargs)
-        elif attr_name == "RescanHba":
-            return lambda *args, **kwargs: self._just_return_task(attr_name)

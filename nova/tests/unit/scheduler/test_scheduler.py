@@ -36,7 +36,9 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
     driver_cls = driver.Scheduler
     driver_cls_name = 'nova.scheduler.driver.Scheduler'
 
-    def setUp(self):
+    @mock.patch.object(host_manager.HostManager, '_init_instance_info')
+    @mock.patch.object(host_manager.HostManager, '_init_aggregates')
+    def setUp(self, mock_init_agg, mock_init_inst):
         super(SchedulerManagerTestCase, self).setUp()
         self.flags(scheduler_driver=self.driver_cls_name)
         with mock.patch.object(host_manager.HostManager, '_init_aggregates'):
@@ -72,9 +74,42 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
             self.manager.delete_aggregate(None, aggregate='agg')
             delete_aggregate.assert_called_once_with('agg')
 
+    def test_update_instance_info(self):
+        with mock.patch.object(self.manager.driver.host_manager,
+                               'update_instance_info') as mock_update:
+            self.manager.update_instance_info(mock.sentinel.context,
+                                              mock.sentinel.host_name,
+                                              mock.sentinel.instance_info)
+            mock_update.assert_called_once_with(mock.sentinel.context,
+                                                mock.sentinel.host_name,
+                                                mock.sentinel.instance_info)
+
+    def test_delete_instance_info(self):
+        with mock.patch.object(self.manager.driver.host_manager,
+                               'delete_instance_info') as mock_delete:
+            self.manager.delete_instance_info(mock.sentinel.context,
+                                              mock.sentinel.host_name,
+                                              mock.sentinel.instance_uuid)
+            mock_delete.assert_called_once_with(mock.sentinel.context,
+                                                mock.sentinel.host_name,
+                                                mock.sentinel.instance_uuid)
+
+    def test_sync_instance_info(self):
+        with mock.patch.object(self.manager.driver.host_manager,
+                               'sync_instance_info') as mock_sync:
+            self.manager.sync_instance_info(mock.sentinel.context,
+                                            mock.sentinel.host_name,
+                                            mock.sentinel.instance_uuids)
+            mock_sync.assert_called_once_with(mock.sentinel.context,
+                                              mock.sentinel.host_name,
+                                              mock.sentinel.instance_uuids)
+
 
 class SchedulerV3PassthroughTestCase(test.TestCase):
-    def setUp(self):
+
+    @mock.patch.object(host_manager.HostManager, '_init_instance_info')
+    @mock.patch.object(host_manager.HostManager, '_init_aggregates')
+    def setUp(self, mock_init_agg, mock_init_inst):
         super(SchedulerV3PassthroughTestCase, self).setUp()
         self.manager = manager.SchedulerManager()
         self.proxy = manager._SchedulerManagerV3Proxy(self.manager)
@@ -92,10 +127,11 @@ class SchedulerTestCase(test.NoDBTestCase):
     # So we can subclass this test and re-use tests if we need.
     driver_cls = driver.Scheduler
 
-    def setUp(self):
+    @mock.patch.object(host_manager.HostManager, '_init_instance_info')
+    @mock.patch.object(host_manager.HostManager, '_init_aggregates')
+    def setUp(self, mock_init_agg, mock_init_inst):
         super(SchedulerTestCase, self).setUp()
-        with mock.patch.object(host_manager.HostManager, '_init_aggregates'):
-            self.driver = self.driver_cls()
+        self.driver = self.driver_cls()
         self.context = context.RequestContext('fake_user', 'fake_project')
         self.topic = 'fake_topic'
         self.servicegroup_api = servicegroup.API()

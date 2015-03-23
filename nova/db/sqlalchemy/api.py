@@ -28,6 +28,7 @@ import uuid
 
 from oslo_config import cfg
 from oslo_db import exception as db_exc
+from oslo_db import options as oslo_db_options
 from oslo_db.sqlalchemy import session as db_session
 from oslo_db.sqlalchemy import utils as sqlalchemyutils
 from oslo_log import log as logging
@@ -75,34 +76,120 @@ db_opts = [
                     'Should be empty, "project" or "global".'),
 ]
 
+api_db_opts = [
+    cfg.StrOpt('connection',
+               help='The SQLAlchemy connection string to use to connect to '
+                    'the Nova API database.',
+               secret=True),
+    cfg.BoolOpt('sqlite_synchronous',
+                default=True,
+                help='If True, SQLite uses synchronous mode.'),
+    cfg.StrOpt('slave_connection',
+               secret=True,
+               help='The SQLAlchemy connection string to use to connect to the'
+                    ' slave database.'),
+    cfg.StrOpt('mysql_sql_mode',
+               default='TRADITIONAL',
+               help='The SQL mode to be used for MySQL sessions. '
+                    'This option, including the default, overrides any '
+                    'server-set SQL mode. To use whatever SQL mode '
+                    'is set by the server configuration, '
+                    'set this to no value. Example: mysql_sql_mode='),
+    cfg.IntOpt('idle_timeout',
+               default=3600,
+               help='Timeout before idle SQL connections are reaped.'),
+    cfg.IntOpt('max_pool_size',
+               help='Maximum number of SQL connections to keep open in a '
+                    'pool.'),
+    cfg.IntOpt('max_retries',
+               default=10,
+               help='Maximum number of database connection retries '
+                    'during startup. Set to -1 to specify an infinite '
+                    'retry count.'),
+    cfg.IntOpt('retry_interval',
+               default=10,
+               help='Interval between retries of opening a SQL connection.'),
+    cfg.IntOpt('max_overflow',
+               help='If set, use this value for max_overflow with '
+                    'SQLAlchemy.'),
+    cfg.IntOpt('connection_debug',
+               default=0,
+               help='Verbosity of SQL debugging information: 0=None, '
+                    '100=Everything.'),
+    cfg.BoolOpt('connection_trace',
+                default=False,
+                help='Add Python stack traces to SQL as comment strings.'),
+    cfg.IntOpt('pool_timeout',
+               help='If set, use this value for pool_timeout with '
+                    'SQLAlchemy.'),
+]
+
 CONF = cfg.CONF
 CONF.register_opts(db_opts)
+CONF.register_opts(oslo_db_options.database_opts, 'database')
+CONF.register_opts(api_db_opts, group='api_database')
 CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 
 LOG = logging.getLogger(__name__)
 
-
-_ENGINE_FACADE = None
+_ENGINE_FACADE = {'main': None, 'api': None}
+_MAIN_FACADE = 'main'
+_API_FACADE = 'api'
 _LOCK = threading.Lock()
 
 
-def _create_facade_lazily():
+def _create_facade(conf_group):
+
+    # NOTE(dheeraj): This fragment is copied from oslo.db
+    return db_session.EngineFacade(
+        sql_connection=conf_group.connection,
+        slave_connection=conf_group.slave_connection,
+        sqlite_fk=False,
+        autocommit=True,
+        expire_on_commit=False,
+        mysql_sql_mode=conf_group.mysql_sql_mode,
+        idle_timeout=conf_group.idle_timeout,
+        connection_debug=conf_group.connection_debug,
+        max_pool_size=conf_group.max_pool_size,
+        max_overflow=conf_group.max_overflow,
+        pool_timeout=conf_group.pool_timeout,
+        sqlite_synchronous=conf_group.sqlite_synchronous,
+        connection_trace=conf_group.connection_trace,
+        max_retries=conf_group.max_retries,
+        retry_interval=conf_group.retry_interval)
+
+
+def _create_facade_lazily(facade, conf_group):
     global _LOCK, _ENGINE_FACADE
-    if _ENGINE_FACADE is None:
+    if _ENGINE_FACADE[facade] is None:
         with _LOCK:
-            if _ENGINE_FACADE is None:
-                _ENGINE_FACADE = db_session.EngineFacade.from_config(CONF)
-    return _ENGINE_FACADE
+            if _ENGINE_FACADE[facade] is None:
+                _ENGINE_FACADE[facade] = _create_facade(conf_group)
+    return _ENGINE_FACADE[facade]
 
 
 def get_engine(use_slave=False):
-    facade = _create_facade_lazily()
+    conf_group = CONF.database
+    facade = _create_facade_lazily(_MAIN_FACADE, conf_group)
     return facade.get_engine(use_slave=use_slave)
 
 
+def get_api_engine():
+    conf_group = CONF.api_database
+    facade = _create_facade_lazily(_API_FACADE, conf_group)
+    return facade.get_engine()
+
+
 def get_session(use_slave=False, **kwargs):
-    facade = _create_facade_lazily()
+    conf_group = CONF.database
+    facade = _create_facade_lazily(_MAIN_FACADE, conf_group)
     return facade.get_session(use_slave=use_slave, **kwargs)
+
+
+def get_api_session(**kwargs):
+    conf_group = CONF.api_database
+    facade = _create_facade_lazily(_API_FACADE, conf_group)
+    return facade.get_session(**kwargs)
 
 
 _SHADOW_TABLE_PREFIX = 'shadow_'
@@ -380,7 +467,6 @@ def service_get(context, service_id, use_slave=False):
                         use_slave=use_slave)
 
 
-@require_admin_context
 def service_get_all(context, disabled=None):
     query = model_query(context, models.Service)
 
@@ -390,7 +476,6 @@ def service_get_all(context, disabled=None):
     return query.all()
 
 
-@require_admin_context
 def service_get_all_by_topic(context, topic):
     return model_query(context, models.Service, read_deleted="no").\
                 filter_by(disabled=False).\
@@ -407,7 +492,6 @@ def service_get_by_host_and_topic(context, host, topic):
                 first()
 
 
-@require_admin_context
 def service_get_all_by_binary(context, binary):
     return model_query(context, models.Service, read_deleted="no").\
                 filter_by(disabled=False).\
@@ -428,7 +512,6 @@ def service_get_by_host_and_binary(context, host, binary):
     return result
 
 
-@require_admin_context
 def service_get_all_by_host(context, host):
     return model_query(context, models.Service, read_deleted="no").\
                 filter_by(host=host).\
@@ -2707,7 +2790,6 @@ def _network_ips_query(context, network_id):
                    filter_by(network_id=network_id)
 
 
-@require_admin_context
 def network_count_reserved_ips(context, network_id):
     return _network_ips_query(context, network_id).\
                     filter_by(reserved=True).\
@@ -2727,7 +2809,6 @@ def network_create_safe(context, values):
         raise exception.DuplicateVlan(vlan=values['vlan'])
 
 
-@require_admin_context
 def network_delete_safe(context, network_id):
     session = get_session()
     with session.begin():
@@ -2885,7 +2966,6 @@ def _network_get_query(context, session=None):
                        read_deleted="no")
 
 
-@require_admin_context
 def network_get_by_uuid(context, uuid):
     result = _network_get_query(context).filter_by(uuid=uuid).first()
 
@@ -2895,7 +2975,6 @@ def network_get_by_uuid(context, uuid):
     return result
 
 
-@require_admin_context
 def network_get_by_cidr(context, cidr):
     result = _network_get_query(context).\
                 filter(or_(models.Network.cidr == cidr,
@@ -4272,7 +4351,6 @@ def project_get_networks(context, project_id, associate=True):
 ###################
 
 
-@require_admin_context
 def migration_create(context, values):
     migration = models.Migration()
     migration.update(values)
@@ -4280,7 +4358,6 @@ def migration_create(context, values):
     return migration
 
 
-@require_admin_context
 def migration_update(context, id, values):
     session = get_session()
     with session.begin():
@@ -4302,12 +4379,10 @@ def _migration_get(context, id, session=None):
     return result
 
 
-@require_admin_context
 def migration_get(context, id):
     return _migration_get(context, id)
 
 
-@require_admin_context
 def migration_get_by_instance_and_status(context, instance_uuid, status):
     result = model_query(context, models.Migration, read_deleted="yes").\
                      filter_by(instance_uuid=instance_uuid).\
@@ -4321,7 +4396,6 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
     return result
 
 
-@require_admin_context
 def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
                                               dest_compute, use_slave=False):
     confirm_window = (timeutils.utcnow() -
@@ -4335,7 +4409,6 @@ def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
              all()
 
 
-@require_admin_context
 def migration_get_in_progress_by_host_and_node(context, host, node):
 
     return model_query(context, models.Migration).\
@@ -4349,7 +4422,6 @@ def migration_get_in_progress_by_host_and_node(context, host, node):
             all()
 
 
-@require_admin_context
 def migration_get_all_by_filters(context, filters):
     query = model_query(context, models.Migration)
     if "status" in filters:
@@ -4466,7 +4538,6 @@ def console_get(context, console_id, instance_uuid=None):
 ##################
 
 
-@require_admin_context
 def flavor_create(context, values, projects=None):
     """Create a new instance type. In order to pass in extra specs,
     the values dict should contain a 'extra_specs' key/value pair:
@@ -4649,7 +4720,6 @@ def flavor_get_by_flavor_id(context, flavor_id, read_deleted):
     return _dict_with_extra_specs(result)
 
 
-@require_admin_context
 def flavor_destroy(context, name):
     """Marks specific flavor as deleted."""
     session = get_session()
@@ -5743,21 +5813,18 @@ def _task_log_get_query(context, task_name, period_beginning,
     return query
 
 
-@require_admin_context
 def task_log_get(context, task_name, period_beginning, period_ending, host,
                  state=None):
     return _task_log_get_query(context, task_name, period_beginning,
                                period_ending, host, state).first()
 
 
-@require_admin_context
 def task_log_get_all(context, task_name, period_beginning, period_ending,
                      host=None, state=None):
     return _task_log_get_query(context, task_name, period_beginning,
                                period_ending, host, state).all()
 
 
-@require_admin_context
 def task_log_begin_task(context, task_name, period_beginning, period_ending,
                         host, task_items=None, message=None):
 
@@ -5777,7 +5844,6 @@ def task_log_begin_task(context, task_name, period_beginning, period_ending,
         raise exception.TaskAlreadyRunning(task_name=task_name, host=host)
 
 
-@require_admin_context
 def task_log_end_task(context, task_name, period_beginning, period_ending,
                       host, errors, message=None):
     values = dict(state="DONE", errors=errors)
@@ -5834,8 +5900,12 @@ def archive_deleted_rows_for_table(context, tablename, max_rows):
     conn = engine.connect()
     metadata = MetaData()
     metadata.bind = engine
-    table = Table(tablename, metadata, autoload=True)
-    default_deleted_value = _get_default_deleted_value(table)
+    # NOTE(tdurakov): table metadata should be received
+    # from models, not db tables. Default value specified by SoftDeleteMixin
+    # is known only by models, not DB layer.
+    # IMPORTANT: please do not change source of metadata information for table.
+    table = models.BASE.metadata.tables[tablename]
+
     shadow_tablename = _SHADOW_TABLE_PREFIX + tablename
     rows_archived = 0
     try:
@@ -5850,22 +5920,24 @@ def archive_deleted_rows_for_table(context, tablename, max_rows):
         column = table.c.domain
     else:
         column = table.c.id
-    # NOTE(guochbo): Use InsertFromSelect and DeleteFromSelect to avoid
+    # NOTE(guochbo): Use DeleteFromSelect to avoid
     # database's limit of maximum parameter in one SQL statement.
-    query_insert = sql.select([table],
-                          table.c.deleted != default_deleted_value).\
-                          order_by(column).limit(max_rows)
+    deleted_column = table.c.deleted
+    columns = [c.name for c in table.c]
+    insert = shadow_table.insert(inline=True).\
+        from_select(columns,
+                    sql.select([table],
+                               deleted_column != deleted_column.default.arg).
+                    order_by(column).limit(max_rows))
     query_delete = sql.select([column],
-                          table.c.deleted != default_deleted_value).\
+                          deleted_column != deleted_column.default.arg).\
                           order_by(column).limit(max_rows)
 
-    insert_statement = sqlalchemyutils.InsertFromSelect(
-        shadow_table, query_insert)
     delete_statement = db_utils.DeleteFromSelect(table, query_delete, column)
     try:
         # Group the insert and delete in a transaction.
         with conn.begin():
-            conn.execute(insert_statement)
+            conn.execute(insert)
             result_delete = conn.execute(delete_statement)
     except db_exc.DBError:
         # TODO(ekudryashova): replace by DBReferenceError when db layer
@@ -6280,7 +6352,6 @@ def instance_group_policies_get(context, group_uuid):
 ####################
 
 
-@require_admin_context
 def pci_device_get_by_addr(context, node_id, dev_addr):
     pci_dev_ref = model_query(context, models.PciDevice).\
                         filter_by(compute_node_id=node_id).\
@@ -6291,7 +6362,6 @@ def pci_device_get_by_addr(context, node_id, dev_addr):
     return pci_dev_ref
 
 
-@require_admin_context
 def pci_device_get_by_id(context, id):
     pci_dev_ref = model_query(context, models.PciDevice).\
                         filter_by(id=id).\
@@ -6301,7 +6371,6 @@ def pci_device_get_by_id(context, id):
     return pci_dev_ref
 
 
-@require_admin_context
 def pci_device_get_all_by_node(context, node_id):
     return model_query(context, models.PciDevice).\
                        filter_by(compute_node_id=node_id).\
@@ -6322,7 +6391,6 @@ def _instance_pcidevs_get_multi(context, instance_uuids, session=None):
         filter(models.PciDevice.instance_uuid.in_(instance_uuids))
 
 
-@require_admin_context
 def pci_device_destroy(context, node_id, address):
     result = model_query(context, models.PciDevice).\
                          filter_by(compute_node_id=node_id).\
@@ -6332,7 +6400,6 @@ def pci_device_destroy(context, node_id, address):
         raise exception.PciDeviceNotFound(node_id=node_id, address=address)
 
 
-@require_admin_context
 def pci_device_update(context, node_id, address, values):
     session = get_session()
     with session.begin():

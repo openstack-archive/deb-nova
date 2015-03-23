@@ -60,7 +60,7 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject,
         return cls._from_db_object(context, cls(), db_aggregate)
 
     @base.remotable
-    def create(self, context):
+    def create(self):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
@@ -70,47 +70,48 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject,
         if 'metadata' in updates:
             # NOTE(danms): For some reason the notification format is weird
             payload['meta_data'] = payload.pop('metadata')
-        compute_utils.notify_about_aggregate_update(context,
+        compute_utils.notify_about_aggregate_update(self._context,
                                                     "create.start",
                                                     payload)
         metadata = updates.pop('metadata', None)
-        db_aggregate = db.aggregate_create(context, updates, metadata=metadata)
-        self._from_db_object(context, self, db_aggregate)
+        db_aggregate = db.aggregate_create(self._context, updates,
+                                           metadata=metadata)
+        self._from_db_object(self._context, self, db_aggregate)
         payload['aggregate_id'] = self.id
-        compute_utils.notify_about_aggregate_update(context,
+        compute_utils.notify_about_aggregate_update(self._context,
                                                     "create.end",
                                                     payload)
 
     @base.remotable
-    def save(self, context):
+    def save(self):
         self._assert_no_hosts('save')
         updates = self.obj_get_changes()
 
         payload = {'aggregate_id': self.id}
         if 'metadata' in updates:
             payload['meta_data'] = updates['metadata']
-        compute_utils.notify_about_aggregate_update(context,
+        compute_utils.notify_about_aggregate_update(self._context,
                                                     "updateprop.start",
                                                     payload)
         updates.pop('id', None)
-        db_aggregate = db.aggregate_update(context, self.id, updates)
-        compute_utils.notify_about_aggregate_update(context,
+        db_aggregate = db.aggregate_update(self._context, self.id, updates)
+        compute_utils.notify_about_aggregate_update(self._context,
                                                     "updateprop.end",
                                                     payload)
-        self._from_db_object(context, self, db_aggregate)
+        self._from_db_object(self._context, self, db_aggregate)
 
     @base.remotable
-    def update_metadata(self, context, updates):
+    def update_metadata(self, updates):
         payload = {'aggregate_id': self.id,
                    'meta_data': updates}
-        compute_utils.notify_about_aggregate_update(context,
+        compute_utils.notify_about_aggregate_update(self._context,
                                                     "updatemetadata.start",
                                                     payload)
         to_add = {}
         for key, value in updates.items():
             if value is None:
                 try:
-                    db.aggregate_metadata_delete(context, self.id, key)
+                    db.aggregate_metadata_delete(self._context, self.id, key)
                 except exception.AggregateMetadataNotFound:
                     pass
                 try:
@@ -120,27 +121,27 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject,
             else:
                 to_add[key] = value
                 self.metadata[key] = value
-        db.aggregate_metadata_add(context, self.id, to_add)
-        compute_utils.notify_about_aggregate_update(context,
+        db.aggregate_metadata_add(self._context, self.id, to_add)
+        compute_utils.notify_about_aggregate_update(self._context,
                                                     "updatemetadata.end",
                                                     payload)
         self.obj_reset_changes(fields=['metadata'])
 
     @base.remotable
-    def destroy(self, context):
-        db.aggregate_delete(context, self.id)
+    def destroy(self):
+        db.aggregate_delete(self._context, self.id)
 
     @base.remotable
-    def add_host(self, context, host):
-        db.aggregate_host_add(context, self.id, host)
+    def add_host(self, host):
+        db.aggregate_host_add(self._context, self.id, host)
         if self.hosts is None:
             self.hosts = []
         self.hosts.append(host)
         self.obj_reset_changes(fields=['hosts'])
 
     @base.remotable
-    def delete_host(self, context, host):
-        db.aggregate_host_delete(context, self.id, host)
+    def delete_host(self, host):
+        db.aggregate_host_delete(self._context, self.id, host)
         self.hosts.remove(host)
         self.obj_reset_changes(fields=['hosts'])
 

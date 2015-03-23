@@ -525,9 +525,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                       self.fake_image_uuid,
                                       '%s.vmdk' % self.fake_image_uuid)
         if exists:
-            self.assertTrue(vmwareapi_fake.get_file(str(cache)))
+            vmwareapi_fake.assertPathExists(self, str(cache))
         else:
-            self.assertFalse(vmwareapi_fake.get_file(str(cache)))
+            vmwareapi_fake.assertPathNotExists(self, str(cache))
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
                        'from_image')
@@ -542,7 +542,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         mock_from_image.return_value = img_props
         self._create_vm()
         path = ds_util.DatastorePath(self.ds, self.uuid, '%s.vmdk' % self.uuid)
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
         self._cached_files_exist()
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
@@ -565,8 +565,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         root = ds_util.DatastorePath(self.ds, 'vmware_base',
                                      self.fake_image_uuid,
                                      '%s.80.vmdk' % self.fake_image_uuid)
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
-        self.assertTrue(vmwareapi_fake.get_file(str(root)))
+        vmwareapi_fake.assertPathExists(self, str(path))
+        vmwareapi_fake.assertPathExists(self, str(root))
 
     def _iso_disk_type_created(self, instance_type='m1.large'):
         self.image['disk_format'] = 'iso'
@@ -574,17 +574,17 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         path = ds_util.DatastorePath(self.ds, 'vmware_base',
                                      self.fake_image_uuid,
                                      '%s.iso' % self.fake_image_uuid)
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
 
     def test_iso_disk_type_created(self):
         self._iso_disk_type_created()
         path = ds_util.DatastorePath(self.ds, self.uuid, '%s.vmdk' % self.uuid)
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
 
     def test_iso_disk_type_created_with_root_gb_0(self):
         self._iso_disk_type_created(instance_type='m1.micro')
         path = ds_util.DatastorePath(self.ds, self.uuid, '%s.vmdk' % self.uuid)
-        self.assertFalse(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathNotExists(self, str(path))
 
     def test_iso_disk_cdrom_attach(self):
         iso_path = ds_util.DatastorePath(self.ds, 'vmware_base',
@@ -642,7 +642,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm(ephemeral=50)
         path = ds_util.DatastorePath(self.ds, self.uuid,
                                      'ephemeral_0.vmdk')
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
 
     def test_ephemeral_disk_attach_from_bdi(self):
         ephemerals = [{'device_type': 'disk',
@@ -655,17 +655,17 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm(bdi=bdi, ephemeral=50)
         path = ds_util.DatastorePath(self.ds, self.uuid,
                                      'ephemeral_0.vmdk')
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
         path = ds_util.DatastorePath(self.ds, self.uuid,
                                      'ephemeral_1.vmdk')
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
 
     def test_ephemeral_disk_attach_from_bdii_with_no_ephs(self):
         bdi = {'ephemerals': []}
         self._create_vm(bdi=bdi, ephemeral=50)
         path = ds_util.DatastorePath(self.ds, self.uuid,
                                      'ephemeral_0.vmdk')
-        self.assertTrue(vmwareapi_fake.get_file(str(path)))
+        vmwareapi_fake.assertPathExists(self, str(path))
 
     def test_cdrom_attach_with_config_drive(self):
         self.flags(force_config_drive=True)
@@ -707,13 +707,11 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         def _fake_spawn(context, instance, image_meta, injected_files,
             admin_password, network_info, block_device_info=None,
-            instance_name=None, power_on=True, flavor=None):
+            power_on=True):
             return self._spawn(context, instance, image_meta,
                                injected_files, admin_password, network_info,
                                block_device_info=block_device_info,
-                               instance_name=instance_name,
-                               power_on=self._power_on,
-                               flavor=flavor)
+                               power_on=self._power_on)
 
         with (
             mock.patch.object(self.conn._vmops, 'spawn', _fake_spawn)
@@ -739,8 +737,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                  (self.ds, self.fake_image_uuid, self.fake_image_uuid))
         gb_cache = ('[%s] vmware_base/%s/%s.0.vmdk' %
                     (self.ds, self.fake_image_uuid, self.fake_image_uuid))
-        self.assertTrue(vmwareapi_fake.get_file(cache))
-        self.assertFalse(vmwareapi_fake.get_file(gb_cache))
+        vmwareapi_fake.assertPathExists(self, cache)
+        vmwareapi_fake.assertPathNotExists(self, gb_cache)
 
     def _spawn_with_delete_exception(self, fault=None):
 
@@ -804,7 +802,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm()
         info = self._get_info()
         self._check_vm_info(info, power_state.RUNNING)
-        self.assertTrue(vmwareapi_fake.get_file(str(root)))
+        vmwareapi_fake.assertPathExists(self, str(root))
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
                        'from_image')
@@ -877,7 +875,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         def fake_wait_for_task(task_ref):
             if task_ref == self.task_ref:
                 self.task_ref = None
-                self.assertTrue(vmwareapi_fake.get_file(cached_image))
+                vmwareapi_fake.assertPathExists(self, cached_image)
                 # N.B. We don't test for -flat here because real
                 # CopyVirtualDisk_Task doesn't actually create it
                 raise CopyError('Copy failed!')
@@ -895,7 +893,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             mock.patch.object(self.conn._session, '_wait_for_task',
                               new=fake_wait_for_task)):
             self.assertRaises(CopyError, self._create_vm)
-        self.assertFalse(vmwareapi_fake.get_file(cached_image))
+        vmwareapi_fake.assertPathNotExists(self, cached_image)
 
     def test_spawn_disk_extend_failed_partial_copy_failed_cleanup(self):
         # Spawn instance
@@ -916,7 +914,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         def fake_wait_for_task(task_ref):
             if task_ref == self.task_ref:
                 self.task_ref = None
-                self.assertTrue(vmwareapi_fake.get_file(cached_image))
+                vmwareapi_fake.assertPathExists(self, cached_image)
                 # N.B. We don't test for -flat here because real
                 # CopyVirtualDisk_Task doesn't actually create it
                 raise CopyError('Copy failed!')
@@ -939,7 +937,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             mock.patch.object(self.conn._session, '_call_method',
                               new=fake_call_method)):
             self.assertRaises(DeleteError, self._create_vm)
-        self.assertTrue(vmwareapi_fake.get_file(cached_image))
+        vmwareapi_fake.assertPathExists(self, cached_image)
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
                        'from_image')
@@ -996,8 +994,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                               fake_call_method)
         ) as (mock_wait_for_task, mock_call_method):
             self.assertRaises(NoDiskSpace, self._create_vm)
-            self.assertFalse(vmwareapi_fake.get_file(str(cached_image)))
-            self.assertFalse(vmwareapi_fake.get_file(str(tmp_file)))
+            vmwareapi_fake.assertPathNotExists(self, str(cached_image))
+            vmwareapi_fake.assertPathNotExists(self, str(tmp_file))
 
     def test_spawn_with_move_file_exists_exception(self):
         # The test will validate that the spawn completes
@@ -1685,8 +1683,11 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         adapter_type = constants.DEFAULT_ADAPTER_TYPE
         disk_type = constants.DEFAULT_DISK_TYPE
+        disk_uuid = 'e97f357b-331e-4ad1-b726-89be048fb811'
+        backing = mock.Mock(uuid=disk_uuid)
+        device = mock.Mock(backing=backing)
         vmdk_info = vm_util.VmdkInfo('fake-path', adapter_type, disk_type, 64,
-                                     'fake-device')
+                                     device)
         with contextlib.nested(
             mock.patch.object(vm_util, 'get_vm_ref',
                               return_value=mock.sentinel.vm_ref),
@@ -1709,8 +1710,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             attach_disk_to_vm.assert_called_once_with(mock.sentinel.vm_ref,
                 self.instance, adapter_type, disk_type, vmdk_path='fake-path')
             update_volume_details.assert_called_once_with(
-                mock.sentinel.vm_ref, self.instance,
-                connection_info['data']['volume_id'])
+                mock.sentinel.vm_ref, connection_info['data']['volume_id'],
+                disk_uuid)
 
     def test_detach_vmdk_disk_from_vm(self):
         self._create_vm()
@@ -1908,9 +1909,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                           self.fake_image_uuid,
                                           self._get_timestamp_filename() + '/')
         if exists:
-            self.assertTrue(vmwareapi_fake.get_file(str(timestamp)))
+            vmwareapi_fake.assertPathExists(self, str(timestamp))
         else:
-            self.assertFalse(vmwareapi_fake.get_file(str(timestamp)))
+            vmwareapi_fake.assertPathNotExists(self, str(timestamp))
 
     def _image_aging_image_marked_for_deletion(self):
         self._create_vm(uuid=uuidutils.generate_uuid())

@@ -570,7 +570,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                                    expected_attrs)
 
     @base.remotable
-    def create(self, context):
+    def create(self):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
@@ -614,11 +614,11 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             expected_attrs.append('vcpu_model')
             updates['extra']['vcpu_model'] = (
                 jsonutils.dumps(vcpu_model.obj_to_primitive()))
-        db_inst = db.instance_create(context, updates)
-        self._from_db_object(context, self, db_inst, expected_attrs)
+        db_inst = db.instance_create(self._context, updates)
+        self._from_db_object(self._context, self, db_inst, expected_attrs)
 
     @base.remotable
-    def destroy(self, context):
+    def destroy(self):
         if not self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='destroy',
                                               reason='already destroyed')
@@ -632,9 +632,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             constraint = None
 
         try:
-            db_inst = db.instance_destroy(context, self.uuid,
+            db_inst = db.instance_destroy(self._context, self.uuid,
                                           constraint=constraint)
-            self._from_db_object(context, self, db_inst)
+            self._from_db_object(self._context, self, db_inst)
         except exception.ConstraintNotMet:
             raise exception.ObjectActionError(action='destroy',
                                               reason='host changed')
@@ -659,7 +659,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     def _save_numa_topology(self, context):
         if self.numa_topology:
             self.numa_topology.instance_uuid = self.uuid
-            self.numa_topology._save(context)
+            with self.numa_topology.obj_alternate_context(context):
+                self.numa_topology._save()
         else:
             objects.InstanceNUMATopology.delete_by_instance_uuid(
                     context, self.uuid)
@@ -736,7 +737,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 setattr(self, attr, None)
 
     @base.remotable
-    def save(self, context, expected_vm_state=None,
+    def save(self, expected_vm_state=None,
              expected_task_state=None, admin_state_reset=False):
         """Save updates to this instance
 
@@ -754,7 +755,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         of task_state/vm_state
 
         """
-
+        context = self._context
         cell_type = cells_opts.get_cell_type()
         if cell_type == 'api' and self.cell_name:
             # NOTE(comstud): We need to stash a copy of ourselves
@@ -855,10 +856,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         self.obj_reset_changes()
 
     @base.remotable
-    def refresh(self, context, use_slave=False):
+    def refresh(self, use_slave=False):
         extra = [field for field in INSTANCE_OPTIONAL_ATTRS
                        if self.obj_attr_is_set(field)]
-        current = self.__class__.get_by_uuid(context, uuid=self.uuid,
+        current = self.__class__.get_by_uuid(self._context, uuid=self.uuid,
                                              expected_attrs=extra,
                                              use_slave=use_slave)
         # NOTE(danms): We orphan the instance copy so we do not unexpectedly
@@ -1029,7 +1030,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         self.save()
 
     @base.remotable
-    def delete_metadata_key(self, context, key):
+    def delete_metadata_key(self, key):
         """Optimized metadata delete method.
 
         This provides a more efficient way to delete a single metadata
@@ -1037,11 +1038,11 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         with the key still present in self.metadata, which it will update
         after completion.
         """
-        db.instance_metadata_delete(context, self.uuid, key)
+        db.instance_metadata_delete(self._context, self.uuid, key)
         md_was_changed = 'metadata' in self.obj_what_changed()
         del self.metadata[key]
         self._orig_metadata.pop(key, None)
-        notifications.send_update(context, self, self)
+        notifications.send_update(self._context, self, self)
         if not md_was_changed:
             self.obj_reset_changes(['metadata'])
 

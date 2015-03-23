@@ -32,7 +32,9 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     ctype = 'json'
     all_extensions = False
     extension_name = None
+    sample_dir = None
     request_api_version = None
+    _use_common_server_api_samples = False
 
     def _pretty_data(self, data):
         data = jsonutils.dumps(jsonutils.loads(data), sort_keys=True,
@@ -52,7 +54,14 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         parts.append('api_samples')
         if cls.all_extensions:
             parts.append('all_extensions')
-        if cls.extension_name:
+        # Note(gmann): if _use_common_server_api_samples is set to True
+        # then common server sample files present in 'servers' directory
+        # will be used.
+        elif cls._use_common_server_api_samples:
+            parts.append('servers')
+        elif cls.sample_dir:
+            parts.append(cls.sample_dir)
+        elif cls.extension_name:
             alias = importutils.import_class(cls.extension_name).alias
             parts.append(alias)
         parts.append(name + "." + cls.ctype + suffix)

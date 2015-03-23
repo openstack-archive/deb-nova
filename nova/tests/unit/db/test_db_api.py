@@ -960,6 +960,46 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         op = sqlalchemy_api._get_regexp_op_for_connection('notdb:///')
         self.assertEqual('LIKE', op)
 
+    @mock.patch.object(sqlalchemy_api, '_create_facade_lazily')
+    def test_get_engine(self, mock_create_facade):
+        mock_facade = mock.MagicMock()
+        mock_create_facade.return_value = mock_facade
+
+        sqlalchemy_api.get_engine()
+        mock_create_facade.assert_called_once_with(sqlalchemy_api._MAIN_FACADE,
+                CONF.database)
+        mock_facade.get_engine.assert_called_once_with(use_slave=False)
+
+    @mock.patch.object(sqlalchemy_api, '_create_facade_lazily')
+    def test_get_api_engine(self, mock_create_facade):
+        mock_facade = mock.MagicMock()
+        mock_create_facade.return_value = mock_facade
+
+        sqlalchemy_api.get_api_engine()
+        mock_create_facade.assert_called_once_with(sqlalchemy_api._API_FACADE,
+                CONF.api_database)
+        mock_facade.get_engine.assert_called_once_with()
+
+    @mock.patch.object(sqlalchemy_api, '_create_facade_lazily')
+    def test_get_session(self, mock_create_facade):
+        mock_facade = mock.MagicMock()
+        mock_create_facade.return_value = mock_facade
+
+        sqlalchemy_api.get_session()
+        mock_create_facade.assert_called_once_with(sqlalchemy_api._MAIN_FACADE,
+                CONF.database)
+        mock_facade.get_session.assert_called_once_with(use_slave=False)
+
+    @mock.patch.object(sqlalchemy_api, '_create_facade_lazily')
+    def test_get_api_session(self, mock_create_facade):
+        mock_facade = mock.MagicMock()
+        mock_create_facade.return_value = mock_facade
+
+        sqlalchemy_api.get_api_session()
+        mock_create_facade.assert_called_once_with(sqlalchemy_api._API_FACADE,
+                CONF.api_database)
+        mock_facade.get_session.assert_called_once_with()
+
 
 class SqlAlchemyDbApiTestCase(DbTestCase):
     def test_instance_get_all_by_host(self):
@@ -1259,14 +1299,6 @@ class MigrationTestCase(test.TestCase):
             self.assertEqual(filters["status"], migration['status'])
             hosts = [migration['source_compute'], migration['dest_compute']]
             self.assertIn(filters["host"], hosts)
-
-    def test_only_admin_can_get_all_migrations_by_filters(self):
-        user_ctxt = context.RequestContext(user_id=None, project_id=None,
-                                   is_admin=False, read_deleted="no",
-                                   overwrite=False)
-
-        self.assertRaises(exception.AdminRequired,
-                          db.migration_get_all_by_filters, user_ctxt, {})
 
     def test_migration_get_unconfirmed_by_dest_compute(self):
         # Ensure no migrations are returned.
@@ -7605,24 +7637,22 @@ class ArchiveTestCase(test.TestCase):
         self.context = context.get_admin_context()
         self.engine = get_engine()
         self.conn = self.engine.connect()
-        self.instance_id_mappings = sqlalchemyutils.get_table(
-            self.engine, "instance_id_mappings")
+        self.instance_id_mappings = models.InstanceIdMapping.__table__
         self.shadow_instance_id_mappings = sqlalchemyutils.get_table(
             self.engine, "shadow_instance_id_mappings")
-        self.dns_domains = sqlalchemyutils.get_table(
-            self.engine, "dns_domains")
+        self.dns_domains = models.DNSDomain.__table__
         self.shadow_dns_domains = sqlalchemyutils.get_table(
             self.engine, "shadow_dns_domains")
-        self.consoles = sqlalchemyutils.get_table(self.engine, "consoles")
-        self.console_pools = sqlalchemyutils.get_table(
-            self.engine, "console_pools")
+        self.consoles = models.Console.__table__
         self.shadow_consoles = sqlalchemyutils.get_table(
             self.engine, "shadow_consoles")
+        self.console_pools = models.ConsolePool.__table__
         self.shadow_console_pools = sqlalchemyutils.get_table(
             self.engine, "shadow_console_pools")
-        self.instances = sqlalchemyutils.get_table(self.engine, "instances")
+        self.instances = models.Instance.__table__
         self.shadow_instances = sqlalchemyutils.get_table(
             self.engine, "shadow_instances")
+
         self.uuidstrs = []
         for unused in range(6):
             self.uuidstrs.append(stdlib_uuid.uuid4().hex)
@@ -8281,12 +8311,6 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           db.pci_device_get_by_addr, self.admin_context,
                           1, '0000:0f:08:09')
 
-    def test_pci_device_get_by_addr_low_priv(self):
-        self._create_fake_pci_devs()
-        self.assertRaises(exception.AdminRequired,
-                          db.pci_device_get_by_addr,
-                          self.context, 1, '0000:0f:08.7')
-
     def test_pci_device_get_by_id(self):
         v1, v2 = self._create_fake_pci_devs()
         result = db.pci_device_get_by_id(self.admin_context, 3353)
@@ -8298,12 +8322,6 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           db.pci_device_get_by_id,
                           self.admin_context, 3354)
 
-    def test_pci_device_get_by_id_low_priv(self):
-        self._create_fake_pci_devs()
-        self.assertRaises(exception.AdminRequired,
-                          db.pci_device_get_by_id,
-                          self.context, 3553)
-
     def test_pci_device_get_all_by_node(self):
         v1, v2 = self._create_fake_pci_devs()
         results = db.pci_device_get_all_by_node(self.admin_context, 1)
@@ -8313,12 +8331,6 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         v1, v2 = self._get_fake_pci_devs()
         results = db.pci_device_get_all_by_node(self.admin_context, 9)
         self.assertEqual(len(results), 0)
-
-    def test_pci_device_get_all_by_node_low_priv(self):
-        self._create_fake_pci_devs()
-        self.assertRaises(exception.AdminRequired,
-                          db.pci_device_get_all_by_node,
-                          self.context, 1)
 
     def test_pci_device_get_by_instance_uuid(self):
         v1, v2 = self._get_fake_pci_devs()
@@ -8361,12 +8373,6 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         result = db.pci_device_get_by_addr(
             self.admin_context, 1, '0000:0f:08.7')
         self._assertEqualObjects(v1, result, self.ignored_keys)
-
-    def test_pci_device_update_low_priv(self):
-        v1, v2 = self._get_fake_pci_devs()
-        self.assertRaises(exception.AdminRequired,
-                          db.pci_device_update, self.context,
-                          v1['compute_node_id'], v1['address'], v1)
 
     def test_pci_device_destroy(self):
         v1, v2 = self._create_fake_pci_devs()

@@ -40,6 +40,7 @@ from nova.compute import api as compute_api
 from nova.compute import cells_api as cells_api
 from nova.compute import manager as compute_manager
 from nova.compute import rpcapi as compute_rpcapi
+from nova.compute import vm_states
 from nova.conductor import manager as conductor_manager
 from nova.console import manager as console_manager  # noqa - only for cfg
 from nova import context
@@ -161,6 +162,8 @@ class ApiSamplesTrap(ApiSampleTestBaseV2):
 
 
 class VersionsSampleJsonTest(ApiSampleTestBaseV2):
+    sample_dir = 'versions'
+
     def test_versions_get(self):
         response = self._do_get('', strip_version=True)
         subs = self._get_regexes()
@@ -168,17 +171,32 @@ class VersionsSampleJsonTest(ApiSampleTestBaseV2):
 
 
 class ServersSampleBase(ApiSampleTestBaseV2):
-    def _post_server(self):
+    def _post_server(self, use_common_server_api_samples=True):
+        # param use_common_server_api_samples: Boolean to set whether tests use
+        # common sample files for server post request and response.
+        # Default is True which means _get_sample_path method will fetch the
+        # common server sample files.
+        # Set False if tests need to use extension specific sample files
         subs = {
             'image_id': fake.get_valid_image_id(),
             'host': self._get_host(),
         }
-        response = self._do_post('servers', 'server-post-req', subs)
-        subs = self._get_regexes()
-        return self._verify_response('server-post-resp', subs, response, 202)
+        orig_value = self.__class__._use_common_server_api_samples
+        try:
+            self.__class__._use_common_server_api_samples = (
+                                        use_common_server_api_samples)
+            response = self._do_post('servers', 'server-post-req', subs)
+            subs = self._get_regexes()
+            status = self._verify_response('server-post-resp', subs,
+                                           response, 202)
+            return status
+        finally:
+            self.__class__._use_common_server_api_samples = orig_value
 
 
 class ServersSampleJsonTest(ServersSampleBase):
+    sample_dir = 'servers'
+
     def test_servers_post(self):
         return self._post_server()
 
@@ -215,9 +233,18 @@ class ServersSampleAllExtensionJsonTest(ServersSampleJsonTest):
 
 
 class ServersSampleHideAddressesJsonTest(ServersSampleJsonTest):
+    sample_dir = None
     extension_name = '.'.join(('nova.api.openstack.compute.contrib',
                                'hide_server_addresses',
                                'Hide_server_addresses'))
+
+    def setUp(self):
+        # We override osapi_hide_server_address_states in order
+        # to have an example of in the json samples of the
+        # addresses being hidden
+        CONF.set_override("osapi_hide_server_address_states",
+                          [vm_states.ACTIVE])
+        super(ServersSampleHideAddressesJsonTest, self).setUp()
 
 
 class ServersSampleMultiStatusJsonTest(ServersSampleBase):
@@ -234,6 +261,8 @@ class ServersSampleMultiStatusJsonTest(ServersSampleBase):
 
 
 class ServersMetadataJsonTest(ServersSampleBase):
+    sample_dir = 'servers'
+
     def _create_and_set(self, subs):
         uuid = self._post_server()
         response = self._do_put('servers/%s/metadata' % uuid,
@@ -295,6 +324,8 @@ class ServersMetadataJsonTest(ServersSampleBase):
 
 
 class ServersIpsJsonTest(ServersSampleBase):
+    sample_dir = 'servers'
+
     def test_get(self):
         # Test getting a server's IP information.
         uuid = self._post_server()
@@ -320,6 +351,7 @@ class ExtensionsSampleJsonTest(ApiSampleTestBaseV2):
 
 
 class FlavorsSampleJsonTest(ApiSampleTestBaseV2):
+    sample_dir = 'flavors'
 
     def test_flavors_get(self):
         response = self._do_get('flavors/1')
@@ -373,6 +405,8 @@ class FlavorsSampleAllExtensionJsonTest(FlavorsSampleJsonTest):
 
 
 class ImagesSampleJsonTest(ApiSampleTestBaseV2):
+    sample_dir = 'images'
+
     def test_images_list(self):
         # Get api sample of images get list request.
         response = self._do_get('images')
@@ -437,6 +471,8 @@ class ImagesSampleJsonTest(ApiSampleTestBaseV2):
 
 
 class LimitsSampleJsonTest(ApiSampleTestBaseV2):
+    sample_dir = 'limits'
+
     def test_limits_get(self):
         response = self._do_get('limits')
         subs = self._get_regexes()
@@ -444,6 +480,8 @@ class LimitsSampleJsonTest(ApiSampleTestBaseV2):
 
 
 class ServersActionsJsonTest(ServersSampleBase):
+    sample_dir = 'servers'
+
     def _test_server_action(self, uuid, action,
                             subs=None, resp_tpl=None, code=202):
         subs = subs or {}
@@ -554,6 +592,7 @@ class UserDataJsonTest(ApiSampleTestBaseV2):
 
 
 class FlavorsExtraDataJsonTest(ApiSampleTestBaseV2):
+    ADMIN_API = True
     extension_name = ('nova.api.openstack.compute.contrib.flavorextradata.'
                       'Flavorextradata')
 
@@ -596,6 +635,7 @@ class FlavorsExtraDataJsonTest(ApiSampleTestBaseV2):
 
 
 class FlavorRxtxJsonTest(ApiSampleTestBaseV2):
+    ADMIN_API = True
     extension_name = ('nova.api.openstack.compute.contrib.flavor_rxtx.'
                       'Flavor_rxtx')
 
@@ -635,6 +675,7 @@ class FlavorRxtxJsonTest(ApiSampleTestBaseV2):
 
 
 class FlavorSwapJsonTest(ApiSampleTestBaseV2):
+    ADMIN_API = True
     extension_name = ('nova.api.openstack.compute.contrib.flavor_swap.'
                       'Flavor_swap')
 
@@ -717,7 +758,7 @@ class SecurityGroupsSampleJsonTest(ServersSampleBase):
 
     def test_security_groups_list_server(self):
         # Get api sample of security groups for a specific server.
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/%s/os-security-groups' % uuid)
         subs = self._get_regexes()
         self._verify_response('server-security-groups-list-resp',
@@ -725,14 +766,14 @@ class SecurityGroupsSampleJsonTest(ServersSampleBase):
 
     def test_security_groups_add(self):
         self._create_security_group()
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         response = self._add_group(uuid)
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.content, '')
 
     def test_security_groups_remove(self):
         self._create_security_group()
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         self._add_group(uuid)
         subs = {
                 'group_name': 'test'
@@ -2214,6 +2255,7 @@ class ExtendedVIFNetSampleJsonTests(ServersSampleBase):
 
 
 class FlavorManageSampleJsonTests(ApiSampleTestBaseV2):
+    ADMIN_API = True
     extension_name = ("nova.api.openstack.compute.contrib.flavormanage."
                       "Flavormanage")
 
@@ -2274,7 +2316,7 @@ class DiskConfigJsonTest(ServersSampleBase):
                       "Disk_config")
 
     def test_list_servers_detail(self):
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/detail')
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
@@ -2282,14 +2324,14 @@ class DiskConfigJsonTest(ServersSampleBase):
         self._verify_response('list-servers-detail-get', subs, response, 200)
 
     def test_get_server(self):
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/%s' % uuid)
         subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         self._verify_response('server-get-resp', subs, response, 200)
 
     def test_update_server(self):
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_put('servers/%s' % uuid,
                                 'server-update-put-req', {})
         subs = self._get_regexes()
@@ -2298,7 +2340,7 @@ class DiskConfigJsonTest(ServersSampleBase):
 
     def test_resize_server(self):
         self.flags(allow_resize_to_same_host=True)
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-resize-post-req', {})
         self.assertEqual(response.status_code, 202)
@@ -2307,7 +2349,7 @@ class DiskConfigJsonTest(ServersSampleBase):
         self.assertEqual(response.content, "")
 
     def test_rebuild_server(self):
-        uuid = self._post_server()
+        uuid = self._post_server(use_common_server_api_samples=False)
         subs = {
             'image_id': fake.get_valid_image_id(),
             'host': self._get_host(),
@@ -3460,7 +3502,7 @@ class AttachInterfacesSampleJsonTest(ServersSampleBase):
                        fake_detach_interface)
         self.flags(auth_strategy=None, group='neutron')
         self.flags(url='http://anyhost/', group='neutron')
-        self.flags(url_timeout=30, group='neutron')
+        self.flags(timeout=30, group='neutron')
 
     def generalize_subs(self, subs, vanilla_regexes):
         subs['subnet_id'] = vanilla_regexes['uuid']
@@ -4045,6 +4087,7 @@ class ServerGroupsSampleJsonTest(ServersSampleBase):
 
 
 class ServerGroupQuotas_LimitsSampleJsonTest(LimitsSampleJsonTest):
+    sample_dir = None
     extension_name = ("nova.api.openstack.compute.contrib."
                       "server_group_quotas.Server_group_quotas")
 

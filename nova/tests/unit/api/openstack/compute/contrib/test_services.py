@@ -582,6 +582,10 @@ class ServicesTestV20(ServicesTestV21):
         self.assertRaises(exception.AdminRequired, self.controller.delete,
                           self.non_admin_req, fakes.FAKE_UUID)
 
+    def test_index_with_non_admin(self):
+        self.assertRaises(exception.AdminRequired, self.controller.index,
+                          self.non_admin_req)
+
 
 class ServicesCellsTestV21(test.TestCase):
 
@@ -673,7 +677,7 @@ class ServicesPolicyEnforcementV21(test.NoDBTestCase):
         self.req = fakes.HTTPRequest.blank('')
 
     def test_update_policy_failed(self):
-        rule_name = "compute_extension:v3:os-services"
+        rule_name = "os_compute_api:os-services"
         self.policy.set_rules({rule_name: "project_id:non_fake"})
         exc = self.assertRaises(
             exception.PolicyNotAuthorized,
@@ -685,11 +689,21 @@ class ServicesPolicyEnforcementV21(test.NoDBTestCase):
             exc.format_message())
 
     def test_delete_policy_failed(self):
-        rule_name = "compute_extension:v3:os-services"
+        rule_name = "os_compute_api:os-services"
         self.policy.set_rules({rule_name: "project_id:non_fake"})
         exc = self.assertRaises(
             exception.PolicyNotAuthorized,
             self.controller.delete, self.req, fakes.FAKE_UUID)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+    def test_index_policy_failed(self):
+        rule_name = "os_compute_api:os-services"
+        self.policy.set_rules({rule_name: "project_id:non_fake"})
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            self.controller.index, self.req)
         self.assertEqual(
             "Policy doesn't allow %s to be performed." % rule_name,
             exc.format_message())
