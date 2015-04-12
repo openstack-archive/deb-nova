@@ -1,4 +1,4 @@
-nova (2015.1~b3-1) UNRELEASED; urgency=medium
+nova (2015.1~rc1-1) UNRELEASED; urgency=medium
 
   * New upstream release.
   * Reviewed (build-)depends for this release.
