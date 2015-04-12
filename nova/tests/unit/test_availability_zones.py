@@ -188,7 +188,7 @@ class AvailabilityZoneTestCases(test.TestCase):
         # to default False, it returns two lists, zones with at least one
         # enabled services, and zones with no enabled services,
         # when get_only_available is set to True, only return a list of zones
-        # with at least one enabled servies.
+        # with at least one enabled services.
         # Use the following test data:
         #
         # zone         host        enabled
@@ -229,10 +229,12 @@ class AvailabilityZoneTestCases(test.TestCase):
         zones, not_zones = az.get_availability_zones(self.context,
                                                      with_hosts=True)
 
-        self.assertEqual(zones, [(u'nova-test2', set([u'host3'])),
+        self.assertJsonEqual(zones,
+                         [(u'nova-test2', set([u'host3'])),
                                  (u'nova-test', set([u'host1']))])
-        self.assertEqual(not_zones, [(u'nova-test3', set([u'host4'])),
-                                     (u'nova', set([u'host5']))])
+        self.assertJsonEqual(not_zones,
+                         [(u'nova-test3', set([u'host4'])),
+                                 (u'nova', set([u'host5']))])
 
     def test_get_instance_availability_zone_default_value(self):
         """Test get right availability zone by given an instance."""

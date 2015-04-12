@@ -282,3 +282,32 @@ class RbdTestCase(test.NoDBTestCase):
         rbd.remove.assert_called_once_with(client.ioctx, '12345_test')
         client.__enter__.assert_called_once_with()
         client.__exit__.assert_called_once_with(None, None, None)
+
+    @mock.patch.object(rbd_utils, 'rbd')
+    @mock.patch.object(rbd_utils, 'rados')
+    @mock.patch.object(rbd_utils, 'RADOSClient')
+    def _test_cleanup_exception(self, exception_name,
+                                mock_client, mock_rados, mock_rbd):
+        instance = objects.Instance(id=1, uuid='12345')
+
+        setattr(mock_rbd, exception_name, test.TestingException)
+        rbd = mock_rbd.RBD.return_value
+        rbd.remove.side_effect = test.TestingException
+        rbd.list.return_value = ['12345_test', '111_test']
+
+        client = mock_client.return_value
+        with mock.patch('eventlet.greenthread.sleep'):
+            self.driver.cleanup_volumes(instance)
+        rbd.remove.assert_any_call(client.ioctx, '12345_test')
+        # NOTE(danms): 10 retries + 1 final attempt to propagate = 11
+        self.assertEqual(11, len(rbd.remove.call_args_list))
+
+    def test_cleanup_volumes_fail_not_found(self):
+        self._test_cleanup_exception('ImageBusy')
+
+    def test_cleanup_volumes_fail_snapshots(self):
+        self._test_cleanup_exception('ImageHasSnapshots')
+
+    def test_cleanup_volumes_fail_other(self):
+        self.assertRaises(test.TestingException,
+                          self._test_cleanup_exception, 'DoesNotExist')

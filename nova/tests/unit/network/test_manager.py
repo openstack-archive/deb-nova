@@ -1734,8 +1734,8 @@ class VlanNetworkTestCase(test.TestCase):
     @mock.patch('nova.db.fixed_ip_get_by_address')
     @mock.patch('nova.db.network_get')
     @mock.patch('nova.db.fixed_ip_update')
-    def test_deallocate_fixed_with_dhcp_exception(self, fixed_update, net_get,
-                                                  fixed_get):
+    def _deallocate_fixed_with_dhcp(self, mock_dev_exists, fixed_update,
+                                    net_get, fixed_get):
         net_get.return_value = dict(test_network.fake_network,
                                     **networks[1])
 
@@ -1769,11 +1769,21 @@ class VlanNetworkTestCase(test.TestCase):
                                              'fake')
             fixed_update.assert_called_once_with(context1, fix_addr.address,
                                                  {'allocated': False})
-            _execute.assert_called_once_with('dhcp_release',
-                                             networks[1]['bridge'],
-                                             fix_addr.address,
-                                             'DE:AD:BE:EF:00:00',
-                                             run_as_root=True)
+            mock_dev_exists.assert_called_once_with(networks[1]['bridge'])
+            if mock_dev_exists.return_value:
+                _execute.assert_called_once_with('dhcp_release',
+                                                 networks[1]['bridge'],
+                                                 fix_addr.address,
+                                                 'DE:AD:BE:EF:00:00',
+                                                 run_as_root=True)
+
+    @mock.patch('nova.network.linux_net.device_exists', return_value=True)
+    def test_deallocate_fixed_with_dhcp(self, mock_dev_exists):
+        self._deallocate_fixed_with_dhcp(mock_dev_exists)
+
+    @mock.patch('nova.network.linux_net.device_exists', return_value=False)
+    def test_deallocate_fixed_without_dhcp(self, mock_dev_exists):
+        self._deallocate_fixed_with_dhcp(mock_dev_exists)
 
     def test_deallocate_fixed_deleted(self):
         # Verify doesn't deallocate deleted fixed_ip from deleted network.
@@ -2013,6 +2023,29 @@ class CommonNetworkTestCase(test.TestCase):
             (ctx, '1.2.3.4', 'fake-host')
         ], manager.deallocate_fixed_ip_calls)
 
+    @mock.patch('nova.db.fixed_ip_get_by_instance')
+    def test_deallocate_for_instance_passes_host_info_with_update_dns_entries(
+            self, fixed_get):
+        self.flags(update_dns_entries=True)
+        manager = fake_network.FakeNetworkManager()
+        db = manager.db
+        db.virtual_interface_delete_by_instance = lambda _x, _y: None
+        ctx = context.RequestContext('igonre', 'igonre')
+
+        fixed_get.return_value = [dict(test_fixed_ip.fake_fixed_ip,
+                                       address='1.2.3.4',
+                                       network_id=123)]
+
+        with mock.patch.object(manager.network_rpcapi,
+                               'update_dns') as mock_update_dns:
+            manager.deallocate_for_instance(
+                ctx, instance=fake_instance.fake_instance_obj(ctx))
+            mock_update_dns.assert_called_once_with(ctx, ['123'])
+
+        self.assertEqual([
+            (ctx, '1.2.3.4', 'fake-host')
+        ], manager.deallocate_fixed_ip_calls)
+
     def test_deallocate_for_instance_with_requested_networks(self):
         manager = fake_network.FakeNetworkManager()
         db = manager.db
@@ -2020,11 +2053,33 @@ class CommonNetworkTestCase(test.TestCase):
         ctx = context.RequestContext('igonre', 'igonre')
         requested_networks = objects.NetworkRequestList(
             objects=[objects.NetworkRequest.from_tuple(t)
-                     for t in [('123', '1.2.3.4'), ('123', '4.3.2.1')]])
+                     for t in [('123', '1.2.3.4'), ('123', '4.3.2.1'),
+                               ('123', None)]])
         manager.deallocate_for_instance(
             ctx,
             instance=fake_instance.fake_instance_obj(ctx),
             requested_networks=requested_networks)
+
+        self.assertEqual([
+            (ctx, '1.2.3.4', 'fake-host'), (ctx, '4.3.2.1', 'fake-host')
+        ], manager.deallocate_fixed_ip_calls)
+
+    def test_deallocate_for_instance_with_update_dns_entries(self):
+        self.flags(update_dns_entries=True)
+        manager = fake_network.FakeNetworkManager()
+        db = manager.db
+        db.virtual_interface_delete_by_instance = mock.Mock()
+        ctx = context.RequestContext('igonre', 'igonre')
+        requested_networks = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest.from_tuple(t)
+                     for t in [('123', '1.2.3.4'), ('123', '4.3.2.1')]])
+        with mock.patch.object(manager.network_rpcapi,
+                               'update_dns') as mock_update_dns:
+            manager.deallocate_for_instance(
+                ctx,
+                instance=fake_instance.fake_instance_obj(ctx),
+                requested_networks=requested_networks)
+            mock_update_dns.assert_called_once_with(ctx, ['123'])
 
         self.assertEqual([
             (ctx, '1.2.3.4', 'fake-host'), (ctx, '4.3.2.1', 'fake-host')
@@ -2209,6 +2264,20 @@ class CommonNetworkTestCase(test.TestCase):
         args = [self.context.elevated(), 'foo', cidr, None, 1, 256,
                 'fd00::/48', None, None, None, None, None]
         self.assertTrue(manager.create_networks(*args))
+
+    def test_create_networks_with_uuid(self):
+        cidr = '192.168.0.0/24'
+        uuid = FAKEUUID
+        manager = fake_network.FakeNetworkManager()
+        self.stubs.Set(manager, '_create_fixed_ips',
+                                self.fake_create_fixed_ips)
+        args = [self.context.elevated(), 'foo', cidr, None, 1, 256,
+                'fd00::/48', None, None, None, None, None]
+        kwargs = {'uuid': uuid}
+        nets = manager.create_networks(*args, **kwargs)
+        self.assertEqual(1, len(nets))
+        net = nets[0]
+        self.assertEqual(uuid, net['uuid'])
 
     @mock.patch('nova.db.network_get_all')
     def test_create_networks_cidr_already_used(self, get_all):

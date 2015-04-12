@@ -372,6 +372,8 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         fake_network_info = {'id': mock.sentinel.ID,
                              'address': mock.sentinel.ADDRESS}
         mock_instance = fake_instance.fake_instance_obj(self.context)
+        instance_path = os.path.join(CONF.instances_path, mock_instance.name)
+
         self._vmops.create_instance(instance=mock_instance,
                                     network_info=[fake_network_info],
                                     block_device_info=mock.sentinel.DEV_INFO,
@@ -381,7 +383,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         self._vmops._vmutils.create_vm.assert_called_once_with(
             mock_instance.name, mock_instance.memory_mb,
             mock_instance.vcpus, CONF.hyperv.limit_cpu_features,
-            CONF.hyperv.dynamic_memory_ratio, vm_gen,
+            CONF.hyperv.dynamic_memory_ratio, vm_gen, instance_path,
             [mock_instance.uuid])
         expected = []
         ctrl_type = vmops.VM_GENERATIONS_CONTROLLER_TYPES[vm_gen]
@@ -1010,3 +1012,19 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             mock_list_notes.assert_called_once_with()
 
         self.assertEqual(response, [fake_uuid])
+
+    def test_copy_vm_dvd_disks(self):
+        fake_paths = [mock.sentinel.FAKE_DVD_PATH1,
+                      mock.sentinel.FAKE_DVD_PATH2]
+        mock_copy = self._vmops._pathutils.copyfile
+        mock_get_dvd_disk_paths = self._vmops._vmutils.get_vm_dvd_disk_paths
+        mock_get_dvd_disk_paths.return_value = fake_paths
+
+        self._vmops.copy_vm_dvd_disks(mock.sentinel.FAKE_VM_NAME,
+                                      mock.sentinel.FAKE_DEST)
+
+        mock_get_dvd_disk_paths.assert_called_with(mock.sentinel.FAKE_VM_NAME)
+        mock_copy.has_calls(mock.call(mock.sentinel.FAKE_DVD_PATH1,
+                                      mock.sentinel.FAKE_DEST),
+                            mock.call(mock.sentinel.FAKE_DVD_PATH2,
+                                      mock.sentinel.FAKE_DEST))

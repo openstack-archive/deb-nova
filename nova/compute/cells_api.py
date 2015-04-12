@@ -205,32 +205,6 @@ class ComputeCellsAPI(compute_api.API):
         """
         pass
 
-    def update(self, context, instance, **kwargs):
-        """Update an instance."""
-        cell_name = instance.cell_name
-        if cell_name and self._cell_read_only(cell_name):
-            raise exception.InstanceInvalidState(
-                    attr="vm_state",
-                    instance_uuid=instance.uuid,
-                    state="temporary_readonly",
-                    method='update')
-        rv = super(ComputeCellsAPI, self).update(context,
-                instance, **kwargs)
-        kwargs_copy = kwargs.copy()
-        # We need to skip vm_state/task_state updates as the child
-        # cell is authoritative for these.  The admin API does
-        # support resetting state, but it has been converted to use
-        # Instance.save() with an appropriate kwarg.
-        kwargs_copy.pop('vm_state', None)
-        kwargs_copy.pop('task_state', None)
-        if kwargs_copy:
-            try:
-                self._cast_to_cells(context, instance, 'update',
-                        **kwargs_copy)
-            except exception.InstanceUnknownCell:
-                pass
-        return rv
-
     def soft_delete(self, context, instance):
         self._handle_cell_delete(context, instance, 'soft_delete')
 
@@ -363,7 +337,7 @@ class ComputeCellsAPI(compute_api.API):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type, connect_info['host'],
                 connect_info['port'], connect_info['internal_access_path'],
-                instance.uuid)
+                instance.uuid, access_url=connect_info['access_url'])
         return {'url': connect_info['access_url']}
 
     @wrap_check_policy
@@ -379,7 +353,7 @@ class ComputeCellsAPI(compute_api.API):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type, connect_info['host'],
                 connect_info['port'], connect_info['internal_access_path'],
-                instance.uuid)
+                instance.uuid, access_url=connect_info['access_url'])
         return {'url': connect_info['access_url']}
 
     @wrap_check_policy
@@ -395,7 +369,7 @@ class ComputeCellsAPI(compute_api.API):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type, connect_info['host'],
                 connect_info['port'], connect_info['internal_access_path'],
-                instance.uuid)
+                instance.uuid, access_url=connect_info['access_url'])
         return {'url': connect_info['access_url']}
 
     @wrap_check_policy
@@ -411,7 +385,7 @@ class ComputeCellsAPI(compute_api.API):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type, connect_info['host'],
                 connect_info['port'], connect_info['internal_access_path'],
-                instance.uuid)
+                instance.uuid, access_url=connect_info['access_url'])
         return {'url': connect_info['access_url']}
 
     @check_instance_cell
@@ -476,30 +450,6 @@ class ComputeCellsAPI(compute_api.API):
         return self.cells_rpcapi.get_migrations(context, filters)
 
 
-class ServiceProxy(object):
-    def __init__(self, obj, cell_path):
-        self._obj = obj
-        self._cell_path = cell_path
-
-    @property
-    def id(self):
-        return cells_utils.cell_with_item(self._cell_path, self._obj.id)
-
-    def __getitem__(self, key):
-        if key == 'id':
-            return self.id
-
-        return getattr(self._obj, key)
-
-    def __getattr__(self, key):
-        if key == 'compute_node':
-            # NOTE(sbauza): As the Service object is still having a nested
-            # ComputeNode object that consumers of this Proxy don't use, we can
-            # safely remove it from what's returned
-            raise AttributeError
-        return getattr(self._obj, key)
-
-
 class HostAPI(compute_api.HostAPI):
     """HostAPI() class for cells.
 
@@ -554,65 +504,40 @@ class HostAPI(compute_api.HostAPI):
         services = self.cells_rpcapi.service_get_all(context,
                                                      filters=filters)
         if set_zones:
+            # TODO(sbauza): set_availability_zones returns flat dicts,
+            # we should rather modify the RPC API to amend service_get_all by
+            # adding a set_zones argument
             services = availability_zones.set_availability_zones(context,
                                                                  services)
             if zone_filter is not None:
                 services = [s for s in services
                             if s['availability_zone'] == zone_filter]
-        # NOTE(johannes): Cells adds the cell path as a prefix to the id
-        # to uniquely identify the service amongst all cells. Unfortunately
-        # the object model makes the id an integer. Use a proxy here to
-        # work around this particular problem.
 
-        # Split out the cell path first
-        cell_paths = []
-        for service in services:
-            cell_path, id = cells_utils.split_cell_and_item(service['id'])
-            service['id'] = id
-            cell_paths.append(cell_path)
+            # NOTE(sbauza): As services is a list of flat dicts, we need to
+            # rehydrate the corresponding ServiceProxy objects
+            cell_paths = []
+            for service in services:
+                cell_path, id = cells_utils.split_cell_and_item(service['id'])
+                cell_path, host = cells_utils.split_cell_and_item(
+                    service['host'])
+                service['id'] = id
+                service['host'] = host
+                cell_paths.append(cell_path)
+            services = obj_base.obj_make_list(context,
+                                              objects.ServiceList(),
+                                              objects.Service,
+                                              services)
+            services = [cells_utils.ServiceProxy(s, c)
+                        for s, c in zip(services, cell_paths)]
 
-        # NOTE(danms): Currently cells does not support objects as
-        # return values, so just convert the db-formatted service objects
-        # to new-world objects here
-        services = obj_base.obj_make_list(context,
-                                          objects.ServiceList(),
-                                          objects.Service,
-                                          services)
-
-        # Now wrap it in the proxy with the original cell_path
-        services = [ServiceProxy(s, c) for s, c in zip(services, cell_paths)]
         return services
 
     def service_get_by_compute_host(self, context, host_name):
         try:
-            db_service = self.cells_rpcapi.service_get_by_compute_host(context,
+            return self.cells_rpcapi.service_get_by_compute_host(context,
                     host_name)
         except exception.CellRoutingInconsistency:
             raise exception.ComputeHostNotFound(host=host_name)
-
-        # NOTE(danms): Currently cells does not support objects as
-        # return values, so just convert the db-formatted service objects
-        # to new-world objects here
-
-        # NOTE(dheeraj): Use ServiceProxy here too. See johannes'
-        # note on service_get_all
-        if db_service:
-            # NOTE(sbauza): Creation of the Service object involves creating
-            # a ComputeNode object in this case. Now that the relationship
-            # between those is removed, we can safely remove the compute_node
-            # field from the DB until we're removing the SQLA relationship too.
-            # We're sure that no consumers of this method are using the
-            # nested compute_node field.
-            if 'compute_node' in db_service:
-                del db_service['compute_node']
-
-            cell_path, _id = cells_utils.split_cell_and_item(db_service['id'])
-            db_service['id'] = _id
-            ser_obj = objects.Service._from_db_object(context,
-                                                      objects.Service(),
-                                                      db_service)
-
-            return ServiceProxy(ser_obj, cell_path)
 
     def service_update(self, context, host_name, binary, params_to_update):
         """Used to enable/disable a service. For compute services, setting to
@@ -623,21 +548,8 @@ class HostAPI(compute_api.HostAPI):
         :param binary: The name of the executable that the service runs as
         :param params_to_update: eg. {'disabled': True}
         """
-        db_service = self.cells_rpcapi.service_update(
+        return self.cells_rpcapi.service_update(
             context, host_name, binary, params_to_update)
-        # NOTE(danms): Currently cells does not support objects as
-        # return values, so just convert the db-formatted service objects
-        # to new-world objects here
-
-        # NOTE(dheeraj): Use ServiceProxy here too. See johannes'
-        # note on service_get_all
-        if db_service:
-            cell_path, _id = cells_utils.split_cell_and_item(db_service['id'])
-            db_service['id'] = _id
-            ser_obj = objects.Service._from_db_object(context,
-                                                      objects.Service(),
-                                                      db_service)
-            return ServiceProxy(ser_obj, cell_path)
 
     def service_delete(self, context, service_id):
         """Deletes the specified service."""
@@ -675,7 +587,10 @@ class HostAPI(compute_api.HostAPI):
         """Get a compute node from a particular cell by its integer ID.
         compute_id should be in the format of 'path!to!cell@ID'.
         """
-        return self.cells_rpcapi.compute_node_get(context, compute_id)
+        try:
+            return self.cells_rpcapi.compute_node_get(context, compute_id)
+        except exception.CellRoutingInconsistency:
+            raise exception.ComputeHostNotFound(host=compute_id)
 
     def compute_node_get_all(self, context):
         return self.cells_rpcapi.compute_node_get_all(context)

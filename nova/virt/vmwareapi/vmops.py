@@ -32,6 +32,7 @@ from oslo_utils import strutils
 from oslo_utils import units
 from oslo_utils import uuidutils
 from oslo_vmware import exceptions as vexc
+from oslo_vmware.objects import datastore as ds_obj
 
 from nova.api.metadata import base as instance_metadata
 from nova import compute
@@ -178,7 +179,8 @@ class VMwareVMOps(object):
 
     def _extend_virtual_disk(self, instance, requested_size, name, dc_ref):
         service_content = self._session.vim.service_content
-        LOG.debug("Extending root virtual disk to %s", requested_size)
+        LOG.debug("Extending root virtual disk to %s", requested_size,
+                  instance=instance)
         vmdk_extend_task = self._session._call_method(
                 self._session.vim,
                 "ExtendVirtualDisk_Task",
@@ -196,10 +198,10 @@ class VMwareVMOps(object):
                 # Clean up files created during the extend operation
                 files = [name.replace(".vmdk", "-flat.vmdk"), name]
                 for file in files:
-                    ds_path = ds_util.DatastorePath.parse(file)
+                    ds_path = ds_obj.DatastorePath.parse(file)
                     self._delete_datastore_file(ds_path, dc_ref)
 
-        LOG.debug("Extended root virtual disk")
+        LOG.debug("Extended root virtual disk", instance=instance)
 
     def _delete_datastore_file(self, datastore_path, dc_ref):
         try:
@@ -489,7 +491,7 @@ class VMwareVMOps(object):
 
     def _fetch_image_if_missing(self, context, vi):
         image_prepare, image_fetch, image_cache = self._get_image_callbacks(vi)
-        LOG.debug("Processing image %s", vi.ii.image_id)
+        LOG.debug("Processing image %s", vi.ii.image_id, instance=vi.instance)
 
         with lockutils.lock(str(vi.cache_image_path),
                             lock_file_prefix='nova-vmware-fetch_image'):
@@ -498,13 +500,15 @@ class VMwareVMOps(object):
             if not ds_util.file_exists(self._session, ds_browser,
                                        vi.cache_image_folder,
                                        vi.cache_image_path.basename):
-                LOG.debug("Preparing fetch location")
+                LOG.debug("Preparing fetch location", instance=vi.instance)
                 tmp_dir_loc, tmp_image_ds_loc = image_prepare(vi)
-                LOG.debug("Fetch image to %s", tmp_image_ds_loc)
+                LOG.debug("Fetch image to %s", tmp_image_ds_loc,
+                          instance=vi.instance)
                 image_fetch(context, vi, tmp_image_ds_loc)
-                LOG.debug("Caching image")
+                LOG.debug("Caching image", instance=vi.instance)
                 image_cache(vi, tmp_image_ds_loc)
-                LOG.debug("Cleaning up location %s", str(tmp_dir_loc))
+                LOG.debug("Cleaning up location %s", str(tmp_dir_loc),
+                          instance=vi.instance)
                 self._delete_datastore_file(str(tmp_dir_loc), vi.dc_info.ref)
 
     def _create_and_attach_ephemeral_disk(self, instance, vm_ref, dc_info,
@@ -531,8 +535,8 @@ class VMwareVMOps(object):
                 size = eph['size'] * units.Mi
                 at = eph.get('disk_bus', adapter_type)
                 filename = vm_util.get_ephemeral_name(idx)
-                path = str(ds_util.DatastorePath(datastore.name, folder,
-                                                 filename))
+                path = str(ds_obj.DatastorePath(datastore.name, folder,
+                                                filename))
                 self._create_and_attach_ephemeral_disk(instance, vm_ref,
                                                        dc_info, size,
                                                        at, path)
@@ -541,8 +545,8 @@ class VMwareVMOps(object):
         if not ephemerals and instance.ephemeral_gb:
             size = instance.ephemeral_gb * units.Mi
             filename = vm_util.get_ephemeral_name(0)
-            path = str(ds_util.DatastorePath(datastore.name, folder,
-                                             filename))
+            path = str(ds_obj.DatastorePath(datastore.name, folder,
+                                            filename))
             self._create_and_attach_ephemeral_disk(instance, vm_ref,
                                                    dc_info, size,
                                                    adapter_type, path)
@@ -790,7 +794,8 @@ class VMwareVMOps(object):
             vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
                                               instance.uuid)
             if not vmdk.path:
-                LOG.debug("No root disk defined. Unable to snapshot.")
+                LOG.debug("No root disk defined. Unable to snapshot.",
+                          instance=instance)
                 raise error_util.NoRootDiskDefined()
 
             lst_properties = ["datastore", "summary.config.guestId"]
@@ -884,7 +889,7 @@ class VMwareVMOps(object):
             vm_config_pathname = query.get('config.files.vmPathName')
             vm_ds_path = None
             if vm_config_pathname is not None:
-                vm_ds_path = ds_util.DatastorePath.parse(
+                vm_ds_path = ds_obj.DatastorePath.parse(
                         vm_config_pathname)
 
             # Power off the VM if it is in PoweredOn state.
@@ -1108,16 +1113,16 @@ class VMwareVMOps(object):
             root_disk_in_kb = flavor['root_gb'] * units.Mi
             ds_ref = vmdk.device.backing.datastore
             dc_info = self.get_datacenter_ref_and_name(ds_ref)
-            folder = ds_util.DatastorePath.parse(vmdk.path).dirname
-            datastore = ds_util.DatastorePath.parse(vmdk.path).datastore
-            resized_disk = str(ds_util.DatastorePath(datastore, folder,
+            folder = ds_obj.DatastorePath.parse(vmdk.path).dirname
+            datastore = ds_obj.DatastorePath.parse(vmdk.path).datastore
+            resized_disk = str(ds_obj.DatastorePath(datastore, folder,
                                'resized.vmdk'))
             ds_util.disk_copy(self._session, dc_info.ref, vmdk.path,
                               str(resized_disk))
             self._extend_virtual_disk(instance, root_disk_in_kb, resized_disk,
                                       dc_info.ref)
             self._volumeops.detach_disk_from_vm(vm_ref, instance, vmdk.device)
-            original_disk = str(ds_util.DatastorePath(datastore, folder,
+            original_disk = str(ds_obj.DatastorePath(datastore, folder,
                                 'original.vmdk'))
             ds_util.disk_move(self._session, dc_info.ref, vmdk.path,
                               original_disk)
@@ -1197,10 +1202,10 @@ class VMwareVMOps(object):
                                      uuid=instance.uuid)
         ds_ref = vmdk.device.backing.datastore
         dc_info = self.get_datacenter_ref_and_name(ds_ref)
-        folder = ds_util.DatastorePath.parse(vmdk.path).dirname
-        datastore = ds_util.DatastorePath.parse(vmdk.path).datastore
-        original_disk = ds_util.DatastorePath(datastore, folder,
-                                              'original.vmdk')
+        folder = ds_obj.DatastorePath.parse(vmdk.path).dirname
+        datastore = ds_obj.DatastorePath.parse(vmdk.path).datastore
+        original_disk = ds_obj.DatastorePath(datastore, folder,
+                                             'original.vmdk')
         ds_browser = self._get_ds_browser(ds_ref)
         if ds_util.file_exists(self._session, ds_browser,
                                original_disk.parent,
@@ -1228,9 +1233,9 @@ class VMwareVMOps(object):
                                      uuid=instance.uuid)
         ds_ref = vmdk.device.backing.datastore
         dc_info = self.get_datacenter_ref_and_name(ds_ref)
-        folder = ds_util.DatastorePath.parse(vmdk.path).dirname
-        datastore = ds_util.DatastorePath.parse(vmdk.path).datastore
-        original_disk = ds_util.DatastorePath(datastore, folder,
+        folder = ds_obj.DatastorePath.parse(vmdk.path).dirname
+        datastore = ds_obj.DatastorePath.parse(vmdk.path).datastore
+        original_disk = ds_obj.DatastorePath(datastore, folder,
                                              'original.vmdk')
         ds_browser = self._get_ds_browser(ds_ref)
         if ds_util.file_exists(self._session, ds_browser,
@@ -1478,7 +1483,7 @@ class VMwareVMOps(object):
         exists. If this throws and exception 'FileAlreadyExistsException'
         then the folder already exists on the datastore.
         """
-        path = ds_util.DatastorePath(ds_name, folder)
+        path = ds_obj.DatastorePath(ds_name, folder)
         dc_info = self.get_datacenter_ref_and_name(ds_ref)
         try:
             ds_util.mkdir(self._session, path, dc_info.ref)
@@ -1672,7 +1677,8 @@ class VMwareVMOps(object):
 
             if not self._sized_image_exists(sized_disk_ds_loc,
                                             vi.datastore.ref):
-                LOG.debug("Copying root disk of size %sGb", vi.root_gb)
+                LOG.debug("Copying root disk of size %sGb", vi.root_gb,
+                          instance=vi.instance)
                 try:
                     vm_util.copy_virtual_disk(
                             self._session,

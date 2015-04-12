@@ -276,7 +276,8 @@ class API(base_api.NetworkAPI):
         :param fixed_ip: Optional fixed IP to use from the given network.
         :param security_group_ids: Optional list of security group IDs to
             apply to the port.
-        :param available_macs: Optional set of available MAC addresses to use.
+        :param available_macs: Optional set of available MAC addresses,
+            from which one will be used at random.
         :param dhcp_opts: Optional DHCP options.
         :returns: ID of the created port.
         :raises PortLimitExceeded: If neutron fails with an OverQuota error.
@@ -801,8 +802,9 @@ class API(base_api.NetworkAPI):
     @base_api.refresh_cache
     def add_fixed_ip_to_instance(self, context, instance, network_id):
         """Add a fixed ip to the instance from specified network."""
+        neutron = get_client(context)
         search_opts = {'network_id': network_id}
-        data = get_client(context).list_subnets(**search_opts)
+        data = neutron.list_subnets(**search_opts)
         ipam_subnets = data.get('subnets', [])
         if not ipam_subnets:
             raise exception.NetworkNotFoundForInstance(
@@ -812,7 +814,7 @@ class API(base_api.NetworkAPI):
         search_opts = {'device_id': instance.uuid,
                        'device_owner': zone,
                        'network_id': network_id}
-        data = get_client(context).list_ports(**search_opts)
+        data = neutron.list_ports(**search_opts)
         ports = data['ports']
         for p in ports:
             for subnet in ipam_subnets:
@@ -820,8 +822,7 @@ class API(base_api.NetworkAPI):
                 fixed_ips.append({'subnet_id': subnet['id']})
                 port_req_body = {'port': {'fixed_ips': fixed_ips}}
                 try:
-                    get_client(context).update_port(p['id'],
-                                                              port_req_body)
+                    neutron.update_port(p['id'], port_req_body)
                     return self._get_instance_nw_info(context, instance)
                 except Exception as ex:
                     msg = ("Unable to update port %(portid)s on subnet "
@@ -836,11 +837,12 @@ class API(base_api.NetworkAPI):
     @base_api.refresh_cache
     def remove_fixed_ip_from_instance(self, context, instance, address):
         """Remove a fixed ip from the instance."""
+        neutron = get_client(context)
         zone = 'compute:%s' % instance.availability_zone
         search_opts = {'device_id': instance.uuid,
                        'device_owner': zone,
                        'fixed_ips': 'ip_address=%s' % address}
-        data = get_client(context).list_ports(**search_opts)
+        data = neutron.list_ports(**search_opts)
         ports = data['ports']
         for p in ports:
             fixed_ips = p['fixed_ips']
@@ -850,8 +852,7 @@ class API(base_api.NetworkAPI):
                     new_fixed_ips.append(fixed_ip)
             port_req_body = {'port': {'fixed_ips': new_fixed_ips}}
             try:
-                get_client(context).update_port(p['id'],
-                                                          port_req_body)
+                neutron.update_port(p['id'], port_req_body)
             except Exception as ex:
                 msg = ("Unable to update port %(portid)s with"
                        " failure: %(exception)s")
@@ -910,17 +911,8 @@ class API(base_api.NetworkAPI):
             # Add pci_request_id into the requested network
             request_net.pci_request_id = pci_request_id
 
-    def validate_networks(self, context, requested_networks, num_instances):
-        """Validate that the tenant can use the requested networks.
-
-        Return the number of instances than can be successfully allocated
-        with the requested network configuration.
-        """
-        LOG.debug('validate_networks() for %s', requested_networks)
-
-        neutron = get_client(context)
+    def _ports_needed_per_instance(self, context, neutron, requested_networks):
         ports_needed_per_instance = 0
-
         if requested_networks is None or len(requested_networks) == 0:
             nets = self._get_available_networks(context, context.project_id,
                                                 neutron=neutron)
@@ -933,7 +925,6 @@ class API(base_api.NetworkAPI):
                 raise exception.NetworkAmbiguous(msg)
             else:
                 ports_needed_per_instance = 1
-
         else:
             instance_on_net_ids = []
             net_ids_requested = []
@@ -1016,6 +1007,19 @@ class API(base_api.NetworkAPI):
                         for _id in lostid_set:
                             id_str = id_str and id_str + ', ' + _id or _id
                         raise exception.NetworkNotFound(network_id=id_str)
+        return ports_needed_per_instance
+
+    def validate_networks(self, context, requested_networks, num_instances):
+        """Validate that the tenant can use the requested networks.
+
+        Return the number of instances than can be successfully allocated
+        with the requested network configuration.
+        """
+        LOG.debug('validate_networks() for %s', requested_networks)
+
+        neutron = get_client(context)
+        ports_needed_per_instance = self._ports_needed_per_instance(
+            context, neutron, requested_networks)
 
         # Note(PhilD): Ideally Nova would create all required ports as part of
         # network validation, but port creation requires some details
@@ -1500,10 +1504,9 @@ class API(base_api.NetworkAPI):
                           cached value.
         :param admin_client - a neutron client for the admin context.
         :param preexisting_port_ids - List of port_ids that nova didn't
-                                      allocate and therefore shouldn't be
-                                      deleted when an instance is deallocated.
-                                      If value is None or empty the value will
-                                      be populated from existing cached value.
+        allocate and there shouldn't be deleted when an instance is
+        de-allocated. Supplied list will be added to the cached list of
+        preexisting port IDs for this instance.
         """
 
         search_opts = {'tenant_id': instance.project_id,
@@ -1521,8 +1524,10 @@ class API(base_api.NetworkAPI):
                 context, instance, networks, port_ids)
         nw_info = network_model.NetworkInfo()
 
-        if not preexisting_port_ids:
-            preexisting_port_ids = self._get_preexisting_port_ids(instance)
+        if preexisting_port_ids is None:
+            preexisting_port_ids = []
+        preexisting_port_ids = set(
+            preexisting_port_ids + self._get_preexisting_port_ids(instance))
 
         current_neutron_port_map = {}
         for current_neutron_port in current_neutron_ports:

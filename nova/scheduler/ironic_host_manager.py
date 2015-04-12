@@ -26,6 +26,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import timeutils
 
+from nova.compute import hv_type
 from nova.scheduler import host_manager
 
 host_manager_opts = [
@@ -98,16 +99,15 @@ class IronicNodeState(host_manager.HostState):
 class IronicHostManager(host_manager.HostManager):
     """Ironic HostManager class."""
 
-    def __init__(self):
-        super(IronicHostManager, self).__init__()
+    def _load_filters(self):
         if CONF.scheduler_use_baremetal_filters:
-            baremetal_default = CONF.baremetal_scheduler_default_filters
-            CONF.scheduler_default_filters = baremetal_default
+            return CONF.baremetal_scheduler_default_filters
+        return super(IronicHostManager, self)._load_filters()
 
     def host_state_cls(self, host, node, **kwargs):
         """Factory function/property to create a new HostState."""
         compute = kwargs.get('compute')
-        if compute and compute.get('hypervisor_type') == 'ironic':
+        if compute and compute.get('hypervisor_type') == hv_type.IRONIC:
             return IronicNodeState(host, node, **kwargs)
         else:
             return host_manager.HostState(host, node, **kwargs)

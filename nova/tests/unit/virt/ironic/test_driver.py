@@ -87,6 +87,9 @@ class IronicDriverTestCase(test.NoDBTestCase):
         super(IronicDriverTestCase, self).setUp()
         self.flags(**IRONIC_FLAGS)
 
+        # set client log config to exercise the code that manipulates it
+        CONF.set_override('client_log_level', 'DEBUG', group='ironic')
+
         self.driver = ironic_driver.IronicDriver(None)
         self.driver.virtapi = fake.FakeVirtAPI()
         self.ctx = nova_context.get_admin_context()
@@ -278,14 +281,16 @@ class IronicDriverTestCase(test.NoDBTestCase):
         stats = jsonutils.loads(result['stats'])
         self.assertEqual('capability', stats.get('test'))
 
-    def test__node_resource_no_instance_uuid(self):
+    def test__node_resource_available(self):
         node_uuid = uuidutils.generate_uuid()
         props = _get_properties()
         stats = _get_stats()
-        node = ironic_utils.get_test_node(uuid=node_uuid,
-                                          instance_uuid=None,
-                                          power_state=ironic_states.POWER_OFF,
-                                          properties=props)
+        node = ironic_utils.get_test_node(
+            uuid=node_uuid,
+            instance_uuid=None,
+            power_state=ironic_states.POWER_OFF,
+            properties=props,
+            provision_state=ironic_states.AVAILABLE)
 
         result = self.driver._node_resource(node)
         self.assertEqual(props['cpus'], result['vcpus'])
@@ -315,6 +320,29 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(0, result['memory_mb_used'])
         self.assertEqual(0, result['local_gb'])
         self.assertEqual(0, result['local_gb_used'])
+        self.assertEqual(node_uuid, result['hypervisor_hostname'])
+        self.assertEqual(stats, jsonutils.loads(result['stats']))
+
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_node_resources_used')
+    def test__node_resource_used_node_res(self, mock_res_used):
+        mock_res_used.return_value = True
+        node_uuid = uuidutils.generate_uuid()
+        props = _get_properties()
+        stats = _get_stats()
+        node = ironic_utils.get_test_node(
+            uuid=node_uuid,
+            instance_uuid=uuidutils.generate_uuid(),
+            provision_state=ironic_states.ACTIVE,
+            properties=props)
+
+        result = self.driver._node_resource(node)
+        self.assertEqual(props['cpus'], result['vcpus'])
+        self.assertEqual(props['cpus'], result['vcpus_used'])
+        self.assertEqual(props['memory_mb'], result['memory_mb'])
+        self.assertEqual(props['memory_mb'], result['memory_mb_used'])
+        self.assertEqual(props['local_gb'], result['local_gb'])
+        self.assertEqual(props['local_gb'], result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
         self.assertEqual(stats, jsonutils.loads(result['stats']))
 
@@ -438,22 +466,55 @@ class IronicDriverTestCase(test.NoDBTestCase):
             # a node in maintenance /w no instance and power OFF
             {'uuid': uuidutils.generate_uuid(),
              'maintenance': True,
-             'power_state': ironic_states.POWER_OFF},
+             'power_state': ironic_states.POWER_OFF,
+             'provision_state': ironic_states.AVAILABLE},
             # a node in maintenance /w no instance and ERROR power state
             {'uuid': uuidutils.generate_uuid(),
              'maintenance': True,
-             'power_state': ironic_states.ERROR},
+             'power_state': ironic_states.ERROR,
+             'provision_state': ironic_states.AVAILABLE},
             # a node not in maintenance /w no instance and bad power state
             {'uuid': uuidutils.generate_uuid(),
-             'power_state': ironic_states.NOSTATE},
+             'power_state': ironic_states.NOSTATE,
+             'provision_state': ironic_states.AVAILABLE},
+            # a node not in maintenance or bad power state, bad provision state
+            {'uuid': uuidutils.generate_uuid,
+             'power_state': ironic_states.POWER_ON,
+             'provision_state': ironic_states.MANAGEABLE}
         ]
         for n in node_dicts:
             node = ironic_utils.get_test_node(**n)
             self.assertTrue(self.driver._node_resources_unavailable(node))
 
-        avail_node = ironic_utils.get_test_node(
-                        power_state=ironic_states.POWER_OFF)
-        self.assertFalse(self.driver._node_resources_unavailable(avail_node))
+        for ok_state in (ironic_states.AVAILABLE, ironic_states.NOSTATE):
+            # these are both ok and should present as available
+            avail_node = ironic_utils.get_test_node(
+                            power_state=ironic_states.POWER_OFF,
+                            provision_state=ok_state)
+            unavailable = self.driver._node_resources_unavailable(avail_node)
+            self.assertFalse(unavailable)
+
+    def test__node_resources_used(self):
+        node_dicts = [
+            # a node in maintenance /w instance and active
+            {'uuid': uuidutils.generate_uuid(),
+             'instance_uuid': uuidutils.generate_uuid(),
+             'provision_state': ironic_states.ACTIVE},
+            # a node in deploying but no instance yet
+            {'uuid': uuidutils.generate_uuid(),
+             'provision_state': ironic_states.DEPLOYWAIT},
+            # a node that made it to cleaning before losing its instance uuid
+            {'uuid': uuidutils.generate_uuid,
+            'instance_uuid': uuidutils.generate_uuid(),
+            'provision_state': ironic_states.CLEANING},
+        ]
+        for n in node_dicts:
+            node = ironic_utils.get_test_node(**n)
+            self.assertTrue(self.driver._node_resources_used(node))
+
+        unused_node = ironic_utils.get_test_node(
+            power_state=ironic_states.AVAILABLE)
+        self.assertFalse(self.driver._node_resources_used(unused_node))
 
     @mock.patch.object(FAKE_CLIENT.node, 'list')
     def test_get_available_nodes(self, mock_list):
@@ -925,6 +986,24 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid,
                                         provision_state=ironic_states.DELETING)
+        instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
+
+        mock_node.get_by_instance_uuid.return_value = node
+        self.driver.destroy(self.ctx, instance, network_info, None)
+        self.assertFalse(mock_node.set_provision_state.called)
+        mock_node.get_by_instance_uuid.assert_called_with(instance.uuid)
+        mock_cleanup_deploy.assert_called_with(self.ctx, node, instance,
+                                               network_info)
+
+    @mock.patch.object(FAKE_CLIENT, 'node')
+    @mock.patch.object(ironic_driver.IronicDriver, '_cleanup_deploy')
+    def test_destroy_cleaning(self, mock_cleanup_deploy, mock_node):
+        node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+        network_info = 'foo'
+
+        node = ironic_utils.get_test_node(
+            driver='fake', uuid=node_uuid,
+            provision_state=ironic_states.CLEANING)
         instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
 
         mock_node.get_by_instance_uuid.return_value = node

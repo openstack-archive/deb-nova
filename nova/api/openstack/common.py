@@ -25,6 +25,7 @@ import six.moves.urllib.parse as urlparse
 import webob
 from webob import exc
 
+from nova.api.validation import parameter_types
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
@@ -54,10 +55,8 @@ QUOTAS = quota.QUOTAS
 
 CONF.import_opt('enable', 'nova.cells.opts', group='cells')
 
-# NOTE(cyeoh): A common regexp for acceptable names (user supplied)
-# that we want all new extensions to conform to unless there is a very
-# good reason not to.
-VALID_NAME_REGEX = re.compile("^(?! )[\w. _-]+(?<! )$", re.UNICODE)
+VALID_NAME_REGEX = re.compile(parameter_types.valid_name_regex, re.UNICODE)
+
 
 XML_NS_V11 = 'http://docs.openstack.org/compute/api/v1.1'
 
@@ -364,12 +363,10 @@ def get_networks_for_instance_from_nw_info(nw_info):
         label = vif['network']['label']
         if label not in networks:
             networks[label] = {'ips': [], 'floating_ips': []}
-
+        for ip in itertools.chain(ips, floaters):
+            ip['mac_address'] = vif['address']
         networks[label]['ips'].extend(ips)
         networks[label]['floating_ips'].extend(floaters)
-        for ip in itertools.chain(networks[label]['ips'],
-                                  networks[label]['floating_ips']):
-            ip['mac_address'] = vif['address']
     return networks
 
 
@@ -403,15 +400,11 @@ def raise_http_conflict_for_instance_invalid_state(exc, action, server_id):
     """
     attr = exc.kwargs.get('attr')
     state = exc.kwargs.get('state')
-    not_launched = exc.kwargs.get('not_launched')
-    if attr and state:
+    if attr is not None and state is not None:
         msg = _("Cannot '%(action)s' instance %(server_id)s while it is in "
                 "%(attr)s %(state)s") % {'action': action, 'attr': attr,
                                          'state': state,
                                          'server_id': server_id}
-    elif not_launched:
-        msg = _("Cannot '%(action)' instance %(server_id)s which has never "
-                "been active") % {'action': action, 'server_id': server_id}
     else:
         # At least give some meaningful message
         msg = _("Instance %(server_id)s is in an invalid state for "

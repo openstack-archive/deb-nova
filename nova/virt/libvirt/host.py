@@ -27,6 +27,7 @@ the raw libvirt API. These APIs are then used by all
 the other libvirt related classes
 """
 
+import operator
 import os
 import socket
 import threading
@@ -49,6 +50,7 @@ from nova.i18n import _LW
 from nova import rpc
 from nova import utils
 from nova.virt import event as virtevent
+from nova.virt.libvirt import compat
 from nova.virt.libvirt import config as vconfig
 
 libvirt = None
@@ -353,7 +355,6 @@ class Host(object):
                 event = self._event_queue.get(block=False)
                 if isinstance(event, virtevent.LifecycleEvent):
                     # call possibly with delay
-                    self._event_delayed_cleanup(event)
                     self._event_emit_delayed(event)
 
                 elif 'conn' in event and 'reason' in event:
@@ -373,16 +374,6 @@ class Host(object):
                 if self._conn_event_handler is not None:
                     self._conn_event_handler(False, msg)
 
-    def _event_delayed_cleanup(self, event):
-        """Cleanup possible delayed stop events."""
-        if (event.transition == virtevent.EVENT_LIFECYCLE_STARTED or
-            event.transition == virtevent.EVENT_LIFECYCLE_RESUMED):
-            if event.uuid in self._events_delayed.keys():
-                self._events_delayed[event.uuid].cancel()
-                self._events_delayed.pop(event.uuid, None)
-                LOG.debug("Removed pending event for %s due to "
-                          "lifecycle event", event.uuid)
-
     def _event_emit_delayed(self, event):
         """Emit events - possibly delayed."""
         def event_cleanup(gt, *args, **kwargs):
@@ -394,13 +385,24 @@ class Host(object):
             self._events_delayed.pop(event.uuid, None)
 
         if self._lifecycle_delay > 0:
-            if event.uuid not in self._events_delayed.keys():
+            # Cleanup possible delayed stop events.
+            if event.uuid in self._events_delayed.keys():
+                self._events_delayed[event.uuid].cancel()
+                self._events_delayed.pop(event.uuid, None)
+                LOG.debug("Removed pending event for %s due to "
+                          "lifecycle event", event.uuid)
+
+            if event.transition == virtevent.EVENT_LIFECYCLE_STOPPED:
+                # Delay STOPPED event, as they may be followed by a STARTED
+                # event in case the instance is rebooting, when runned with Xen
                 id_ = greenthread.spawn_after(self._lifecycle_delay,
                                               self._event_emit, event)
                 self._events_delayed[event.uuid] = id_
                 # add callback to cleanup self._events_delayed dict after
                 # event was called
                 id_.link(event_cleanup, event)
+            else:
+                self._event_emit(event)
         else:
             self._event_emit(event)
 
@@ -545,18 +547,19 @@ class Host(object):
         libvirt.virEventRegisterDefaultImpl()
         self._init_events()
 
-    def has_min_version(self, lv_ver=None, hv_ver=None, hv_type=None):
+    def _version_check(self, lv_ver=None, hv_ver=None, hv_type=None,
+                       op=operator.lt):
         conn = self.get_connection()
         try:
             if lv_ver is not None:
                 libvirt_version = conn.getLibVersion()
-
-                if libvirt_version < utils.convert_version_to_int(lv_ver):
+                if op(libvirt_version, utils.convert_version_to_int(lv_ver)):
                     return False
 
             if hv_ver is not None:
                 hypervisor_version = conn.getVersion()
-                if hypervisor_version < utils.convert_version_to_int(hv_ver):
+                if op(hypervisor_version,
+                      utils.convert_version_to_int(hv_ver)):
                     return False
 
             if hv_type is not None:
@@ -567,6 +570,14 @@ class Host(object):
             return True
         except Exception:
             return False
+
+    def has_min_version(self, lv_ver=None, hv_ver=None, hv_type=None):
+        return self._version_check(
+            lv_ver=lv_ver, hv_ver=hv_ver, hv_type=hv_type, op=operator.lt)
+
+    def has_version(self, lv_ver=None, hv_ver=None, hv_type=None):
+        return self._version_check(
+            lv_ver=lv_ver, hv_ver=hv_ver, hv_type=hv_type, op=operator.ne)
 
     def get_domain(self, instance):
         """Retrieve libvirt domain object for an instance.
@@ -853,3 +864,6 @@ class Host(object):
         secret = self.find_secret(usage_type, usage_id)
         if secret is not None:
             secret.undefine()
+
+    def get_domain_info(self, virt_dom):
+        return compat.get_domain_info(libvirt, self, virt_dom)

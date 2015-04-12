@@ -294,6 +294,7 @@ class VMOps(object):
     def create_instance(self, instance, network_info, block_device_info,
                         root_vhd_path, eph_vhd_path, vm_gen):
         instance_name = instance.name
+        instance_path = os.path.join(CONF.instances_path, instance_name)
 
         self._vmutils.create_vm(instance_name,
                                 instance.memory_mb,
@@ -301,6 +302,7 @@ class VMOps(object):
                                 CONF.hyperv.limit_cpu_features,
                                 CONF.hyperv.dynamic_memory_ratio,
                                 vm_gen,
+                                instance_path,
                                 [instance.uuid])
 
         self._vmutils.create_scsi_controller(instance_name)
@@ -688,3 +690,8 @@ class VMOps(object):
             if vm_serial_conn:
                 instance_uuid = os.path.basename(vm_serial_conn)
                 self.log_vm_serial_output(instance_name, instance_uuid)
+
+    def copy_vm_dvd_disks(self, vm_name, dest_host):
+        dvd_disk_paths = self._vmutils.get_vm_dvd_disk_paths(vm_name)
+        for path in dvd_disk_paths:
+            self._pathutils.copyfile(path, dest_host)

@@ -272,7 +272,8 @@ class CellsManager(manager.Manager):
         for response in responses:
             services = response.value_or_raise()
             for service in services:
-                cells_utils.add_cell_to_service(service, response.cell_name)
+                service = cells_utils.add_cell_to_service(
+                    service, response.cell_name)
                 ret_services.append(service)
         return ret_services
 
@@ -284,7 +285,7 @@ class CellsManager(manager.Manager):
                                                                cell_name,
                                                                host_name)
         service = response.value_or_raise()
-        cells_utils.add_cell_to_service(service, response.cell_name)
+        service = cells_utils.add_cell_to_service(service, response.cell_name)
         return service
 
     def get_host_uptime(self, ctxt, host_name):
@@ -312,7 +313,7 @@ class CellsManager(manager.Manager):
         response = self.msg_runner.service_update(
             ctxt, cell_name, host_name, binary, params_to_update)
         service = response.value_or_raise()
-        cells_utils.add_cell_to_service(service, response.cell_name)
+        service = cells_utils.add_cell_to_service(service, response.cell_name)
         return service
 
     def service_delete(self, ctxt, cell_service_id):
@@ -365,6 +366,7 @@ class CellsManager(manager.Manager):
                 ret_task_logs.append(task_log)
         return ret_task_logs
 
+    @oslo_messaging.expected_exceptions(exception.CellRoutingInconsistency)
     def compute_node_get(self, ctxt, compute_id):
         """Get a compute node by ID in a specific cell."""
         cell_name, compute_id = cells_utils.split_cell_and_item(
@@ -372,7 +374,7 @@ class CellsManager(manager.Manager):
         response = self.msg_runner.compute_node_get(ctxt, cell_name,
                                                     compute_id)
         node = response.value_or_raise()
-        cells_utils.add_cell_to_compute_node(node, cell_name)
+        node = cells_utils.add_cell_to_compute_node(node, cell_name)
         return node
 
     def compute_node_get_all(self, ctxt, hypervisor_match=None):
@@ -385,8 +387,8 @@ class CellsManager(manager.Manager):
         for response in responses:
             nodes = response.value_or_raise()
             for node in nodes:
-                cells_utils.add_cell_to_compute_node(node,
-                                                     response.cell_name)
+                node = cells_utils.add_cell_to_compute_node(node,
+                                                            response.cell_name)
                 ret_nodes.append(node)
         return ret_nodes
 

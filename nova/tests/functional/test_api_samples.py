@@ -14,7 +14,6 @@
 #    under the License.
 
 import base64
-import copy
 import datetime
 import inspect
 import os
@@ -28,13 +27,13 @@ from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import importutils
 from oslo_utils import timeutils
+import testtools
 
 from nova.api.metadata import password
 from nova.api.openstack.compute.contrib import fping
 from nova.api.openstack.compute import extensions
+from nova.cells import utils as cells_utils
 # Import extensions to pull in osapi_compute_extension CONF option used below.
-from nova.cells import rpcapi as cells_rpcapi
-from nova.cells import state
 from nova.cloudpipe import pipelib
 from nova.compute import api as compute_api
 from nova.compute import cells_api as cells_api
@@ -45,12 +44,10 @@ from nova.conductor import manager as conductor_manager
 from nova.console import manager as console_manager  # noqa - only for cfg
 from nova import context
 from nova import db
-from nova.db.sqlalchemy import models
 from nova import exception
 from nova.network import api as network_api
 from nova.network.neutronv2 import api as neutron_api  # noqa - only for cfg
 from nova import objects
-import nova.quota
 from nova.servicegroup import api as service_group_api
 from nova import test
 from nova.tests.functional import api_samples_test_base
@@ -63,7 +60,6 @@ from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_instance
 from nova.tests.unit import fake_network
 from nova.tests.unit import fake_network_cache_model
-from nova.tests.unit import fake_server_actions
 from nova.tests.unit import fake_utils
 from nova.tests.unit.image import fake
 from nova.tests.unit.objects import test_network
@@ -137,6 +133,14 @@ class ApiSamplesTrap(ApiSampleTestBaseV2):
         # in the tree but that don't (yet) have tests. This list should
         # NOT be allowed to grow, and should shrink to zero (and be
         # removed) soon.
+
+        # TODO(gmann): skip this tests as merging of sample tests for v2
+        # and v2.1 are in progress. After merging all tests, this tests
+        # need to implement in different way.
+        raise testtools.TestCase.skipException('Merging of v2 and v2.1 '
+                                               'sample tests is in progress. '
+                                               'This test will be enabled '
+                                               'after all tests gets merged.')
         do_not_approve_additions = []
         do_not_approve_additions.append('os-create-server-ext')
         do_not_approve_additions.append('os-baremetal-ext-status')
@@ -364,42 +368,6 @@ class FlavorsSampleJsonTest(ApiSampleTestBaseV2):
         self._verify_response('flavors-list-resp', subs, response, 200)
 
 
-class HostsSampleJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = "nova.api.openstack.compute.contrib.hosts.Hosts"
-
-    def test_host_startup(self):
-        response = self._do_get('os-hosts/%s/startup' % self.compute.host)
-        subs = self._get_regexes()
-        self._verify_response('host-get-startup', subs, response, 200)
-
-    def test_host_reboot(self):
-        response = self._do_get('os-hosts/%s/reboot' % self.compute.host)
-        subs = self._get_regexes()
-        self._verify_response('host-get-reboot', subs, response, 200)
-
-    def test_host_shutdown(self):
-        response = self._do_get('os-hosts/%s/shutdown' % self.compute.host)
-        subs = self._get_regexes()
-        self._verify_response('host-get-shutdown', subs, response, 200)
-
-    def test_host_maintenance(self):
-        response = self._do_put('os-hosts/%s' % self.compute.host,
-                                'host-put-maintenance-req', {})
-        subs = self._get_regexes()
-        self._verify_response('host-put-maintenance-resp', subs, response, 200)
-
-    def test_host_get(self):
-        response = self._do_get('os-hosts/%s' % self.compute.host)
-        subs = self._get_regexes()
-        self._verify_response('host-get-resp', subs, response, 200)
-
-    def test_hosts_list(self):
-        response = self._do_get('os-hosts')
-        subs = self._get_regexes()
-        self._verify_response('hosts-list-resp', subs, response, 200)
-
-
 class FlavorsSampleAllExtensionJsonTest(FlavorsSampleJsonTest):
     all_extensions = True
 
@@ -591,49 +559,6 @@ class UserDataJsonTest(ApiSampleTestBaseV2):
         self._verify_response('userdata-post-resp', subs, response, 202)
 
 
-class FlavorsExtraDataJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ('nova.api.openstack.compute.contrib.flavorextradata.'
-                      'Flavorextradata')
-
-    def _get_flags(self):
-        f = super(FlavorsExtraDataJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        # Flavorextradata extension also needs Flavormanage to be loaded.
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.flavormanage.Flavormanage')
-        return f
-
-    def test_flavors_extra_data_get(self):
-        flavor_id = 1
-        response = self._do_get('flavors/%s' % flavor_id)
-        subs = {
-            'flavor_id': flavor_id,
-            'flavor_name': 'm1.tiny'
-        }
-        subs.update(self._get_regexes())
-        self._verify_response('flavors-extra-data-get-resp',
-                              subs, response, 200)
-
-    def test_flavors_extra_data_list(self):
-        response = self._do_get('flavors/detail')
-        subs = self._get_regexes()
-        self._verify_response('flavors-extra-data-list-resp',
-                              subs, response, 200)
-
-    def test_flavors_extra_data_create(self):
-        subs = {
-            'flavor_id': 666,
-            'flavor_name': 'flavortest'
-        }
-        response = self._do_post('flavors',
-                                 'flavors-extra-data-post-req',
-                                 subs)
-        subs.update(self._get_regexes())
-        self._verify_response('flavors-extra-data-post-resp',
-                              subs, response, 200)
-
-
 class FlavorRxtxJsonTest(ApiSampleTestBaseV2):
     ADMIN_API = True
     extension_name = ('nova.api.openstack.compute.contrib.flavor_rxtx.'
@@ -672,46 +597,6 @@ class FlavorRxtxJsonTest(ApiSampleTestBaseV2):
                                  subs)
         subs.update(self._get_regexes())
         self._verify_response('flavor-rxtx-post-resp', subs, response, 200)
-
-
-class FlavorSwapJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ('nova.api.openstack.compute.contrib.flavor_swap.'
-                      'Flavor_swap')
-
-    def _get_flags(self):
-        f = super(FlavorSwapJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        # FlavorSwap extension also needs Flavormanage to be loaded.
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.flavormanage.Flavormanage')
-        return f
-
-    def test_flavor_swap_get(self):
-        flavor_id = 1
-        response = self._do_get('flavors/%s' % flavor_id)
-        subs = {
-            'flavor_id': flavor_id,
-            'flavor_name': 'm1.tiny'
-        }
-        subs.update(self._get_regexes())
-        self._verify_response('flavor-swap-get-resp', subs, response, 200)
-
-    def test_flavor_swap_list(self):
-        response = self._do_get('flavors/detail')
-        subs = self._get_regexes()
-        self._verify_response('flavor-swap-list-resp', subs, response, 200)
-
-    def test_flavor_swap_create(self):
-        subs = {
-            'flavor_id': 100,
-            'flavor_name': 'flavortest'
-        }
-        response = self._do_post('flavors',
-                                 'flavor-swap-post-req',
-                                 subs)
-        subs.update(self._get_regexes())
-        self._verify_response('flavor-swap-post-resp', subs, response, 200)
 
 
 class SecurityGroupsSampleJsonTest(ServersSampleBase):
@@ -784,33 +669,6 @@ class SecurityGroupsSampleJsonTest(ServersSampleBase):
         self.assertEqual(response.content, '')
 
 
-class SecurityGroupDefaultRulesSampleJsonTest(ServersSampleBase):
-    ADMIN_API = True
-    extension_name = ('nova.api.openstack.compute.contrib'
-                      '.security_group_default_rules'
-                      '.Security_group_default_rules')
-
-    def test_security_group_default_rules_create(self):
-        response = self._do_post('os-security-group-default-rules',
-                                 'security-group-default-rules-create-req',
-                                 {})
-        self._verify_response('security-group-default-rules-create-resp',
-                              {}, response, 200)
-
-    def test_security_group_default_rules_list(self):
-        self.test_security_group_default_rules_create()
-        response = self._do_get('os-security-group-default-rules')
-        self._verify_response('security-group-default-rules-list-resp',
-                              {}, response, 200)
-
-    def test_security_group_default_rules_show(self):
-        self.test_security_group_default_rules_create()
-        rule_id = '1'
-        response = self._do_get('os-security-group-default-rules/%s' % rule_id)
-        self._verify_response('security-group-default-rules-show-resp',
-                              {}, response, 200)
-
-
 class SchedulerHintsJsonTest(ApiSampleTestBaseV2):
     extension_name = ("nova.api.openstack.compute.contrib.scheduler_hints."
                      "Scheduler_hints")
@@ -865,166 +723,6 @@ class ExtendedServerAttributesJsonTest(ServersSampleBase):
         subs['instance_name'] = 'instance-\d{8}'
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
         self._verify_response('servers-detail-resp', subs, response, 200)
-
-
-class FloatingIpsJsonTest(ApiSampleTestBaseV2):
-    extension_name = "nova.api.openstack.compute.contrib." \
-        "floating_ips.Floating_ips"
-
-    def setUp(self):
-        super(FloatingIpsJsonTest, self).setUp()
-        pool = CONF.default_floating_pool
-        interface = CONF.public_interface
-
-        self.ip_pool = [
-            {
-                'address': "10.10.10.1",
-                'pool': pool,
-                'interface': interface
-                },
-            {
-                'address': "10.10.10.2",
-                'pool': pool,
-                'interface': interface
-                },
-            {
-                'address': "10.10.10.3",
-                'pool': pool,
-                'interface': interface
-                },
-            ]
-        self.compute.db.floating_ip_bulk_create(
-            context.get_admin_context(), self.ip_pool)
-
-    def tearDown(self):
-        self.compute.db.floating_ip_bulk_destroy(
-            context.get_admin_context(), self.ip_pool)
-        super(FloatingIpsJsonTest, self).tearDown()
-
-    def test_floating_ips_list_empty(self):
-        response = self._do_get('os-floating-ips')
-
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-list-empty-resp',
-                              subs, response, 200)
-
-    def test_floating_ips_list(self):
-        self._do_post('os-floating-ips',
-                      'floating-ips-create-nopool-req',
-                      {})
-        self._do_post('os-floating-ips',
-                      'floating-ips-create-nopool-req',
-                      {})
-
-        response = self._do_get('os-floating-ips')
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-list-resp',
-                              subs, response, 200)
-
-    def test_floating_ips_create_nopool(self):
-        response = self._do_post('os-floating-ips',
-                                 'floating-ips-create-nopool-req',
-                                 {})
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-create-resp',
-                              subs, response, 200)
-
-    def test_floating_ips_create(self):
-        response = self._do_post('os-floating-ips',
-                                 'floating-ips-create-req',
-                                 {"pool": CONF.default_floating_pool})
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-create-resp', subs, response, 200)
-
-    def test_floating_ips_get(self):
-        self.test_floating_ips_create()
-        # NOTE(sdague): the first floating ip will always have 1 as an id,
-        # but it would be better if we could get this from the create
-        response = self._do_get('os-floating-ips/%d' % 1)
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-get-resp', subs, response, 200)
-
-    def test_floating_ips_delete(self):
-        self.test_floating_ips_create()
-        response = self._do_delete('os-floating-ips/%d' % 1)
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.content, "")
-
-
-class ExtendedFloatingIpsJsonTest(FloatingIpsJsonTest):
-    extends_name = ("nova.api.openstack.compute.contrib."
-                         "floating_ips.Floating_ips")
-    extension_name = ("nova.api.openstack.compute.contrib."
-                         "extended_floating_ips.Extended_floating_ips")
-
-
-class FloatingIpsBulkJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = "nova.api.openstack.compute.contrib." \
-        "floating_ips_bulk.Floating_ips_bulk"
-
-    def setUp(self):
-        super(FloatingIpsBulkJsonTest, self).setUp()
-        pool = CONF.default_floating_pool
-        interface = CONF.public_interface
-
-        self.ip_pool = [
-            {
-                'address': "10.10.10.1",
-                'pool': pool,
-                'interface': interface,
-                'host': None
-                },
-            {
-                'address': "10.10.10.2",
-                'pool': pool,
-                'interface': interface,
-                'host': None
-                },
-            {
-                'address': "10.10.10.3",
-                'pool': pool,
-                'interface': interface,
-                'host': "testHost"
-                },
-            ]
-        self.compute.db.floating_ip_bulk_create(
-            context.get_admin_context(), self.ip_pool)
-
-    def tearDown(self):
-        self.compute.db.floating_ip_bulk_destroy(
-            context.get_admin_context(), self.ip_pool)
-        super(FloatingIpsBulkJsonTest, self).tearDown()
-
-    def test_floating_ips_bulk_list(self):
-        response = self._do_get('os-floating-ips-bulk')
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-bulk-list-resp',
-                              subs, response, 200)
-
-    def test_floating_ips_bulk_list_by_host(self):
-        response = self._do_get('os-floating-ips-bulk/testHost')
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-bulk-list-by-host-resp',
-                              subs, response, 200)
-
-    def test_floating_ips_bulk_create(self):
-        response = self._do_post('os-floating-ips-bulk',
-                                 'floating-ips-bulk-create-req',
-                                 {"ip_range": "192.168.1.0/24",
-                                  "pool": CONF.default_floating_pool,
-                                  "interface": CONF.public_interface})
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-bulk-create-resp', subs,
-                              response, 200)
-
-    def test_floating_ips_bulk_delete(self):
-        response = self._do_put('os-floating-ips-bulk/delete',
-                                'floating-ips-bulk-delete-req',
-                                {"ip_range": "192.168.1.0/24"})
-        subs = self._get_regexes()
-        self._verify_response('floating-ips-bulk-delete-resp', subs,
-                              response, 200)
 
 
 class KeyPairsSampleJsonTest(ApiSampleTestBaseV2):
@@ -1277,103 +975,6 @@ class CloudPipeUpdateJsonTest(ApiSampleTestBaseV2):
         self.assertEqual(response.content, "")
 
 
-class AgentsJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = "nova.api.openstack.compute.contrib.agents.Agents"
-
-    def _get_flags(self):
-        f = super(AgentsJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        return f
-
-    def setUp(self):
-        super(AgentsJsonTest, self).setUp()
-
-        fake_agents_list = [{'url': 'http://example.com/path/to/resource',
-                             'hypervisor': 'hypervisor',
-                             'architecture': 'x86',
-                             'os': 'os',
-                             'version': '8.0',
-                             'md5hash': 'add6bb58e139be103324d04d82d8f545',
-                             'id': 1}]
-
-        def fake_agent_build_create(context, values):
-            values['id'] = 1
-            agent_build_ref = models.AgentBuild()
-            agent_build_ref.update(values)
-            return agent_build_ref
-
-        def fake_agent_build_get_all(context, hypervisor):
-            agent_build_all = []
-            for agent in fake_agents_list:
-                if hypervisor and hypervisor != agent['hypervisor']:
-                    continue
-                agent_build_ref = models.AgentBuild()
-                agent_build_ref.update(agent)
-                agent_build_all.append(agent_build_ref)
-            return agent_build_all
-
-        def fake_agent_build_update(context, agent_build_id, values):
-            pass
-
-        def fake_agent_build_destroy(context, agent_update_id):
-            pass
-
-        self.stubs.Set(db, "agent_build_create",
-                       fake_agent_build_create)
-        self.stubs.Set(db, "agent_build_get_all",
-                       fake_agent_build_get_all)
-        self.stubs.Set(db, "agent_build_update",
-                       fake_agent_build_update)
-        self.stubs.Set(db, "agent_build_destroy",
-                       fake_agent_build_destroy)
-
-    def test_agent_create(self):
-        # Creates a new agent build.
-        project = {'url': 'http://example.com/path/to/resource',
-                'hypervisor': 'hypervisor',
-                'architecture': 'x86',
-                'os': 'os',
-                'version': '8.0',
-                'md5hash': 'add6bb58e139be103324d04d82d8f545'
-                }
-        response = self._do_post('os-agents', 'agent-post-req',
-                                 project)
-        project['agent_id'] = 1
-        self._verify_response('agent-post-resp', project, response, 200)
-        return project
-
-    def test_agent_list(self):
-        # Return a list of all agent builds.
-        response = self._do_get('os-agents')
-        project = {'url': 'http://example.com/path/to/resource',
-                'hypervisor': 'hypervisor',
-                'architecture': 'x86',
-                'os': 'os',
-                'version': '8.0',
-                'md5hash': 'add6bb58e139be103324d04d82d8f545',
-                'agent_id': 1
-                }
-        self._verify_response('agents-get-resp', project, response, 200)
-
-    def test_agent_update(self):
-        # Update an existing agent build.
-        agent_id = 1
-        subs = {'version': '7.0',
-                'url': 'http://example.com/path/to/resource',
-                'md5hash': 'add6bb58e139be103324d04d82d8f545'}
-        response = self._do_put('os-agents/%s' % agent_id,
-                                'agent-update-put-req', subs)
-        subs['agent_id'] = 1
-        self._verify_response('agent-update-put-resp', subs, response, 200)
-
-    def test_agent_delete(self):
-        # Deletes an existing agent build.
-        agent_id = 1
-        response = self._do_delete('os-agents/%s' % agent_id)
-        self.assertEqual(response.status_code, 200)
-
-
 class FixedIpJsonTest(ApiSampleTestBaseV2):
     extension_name = "nova.api.openstack.compute.contrib.fixed_ips.Fixed_ips"
 
@@ -1440,10 +1041,8 @@ class FixedIpJsonTest(ApiSampleTestBaseV2):
 
     def test_fixed_ip_reserve(self):
         # Reserve a Fixed IP.
-        project = {'reserve': None}
         response = self._do_post('os-fixed-ips/192.168.1.1/action',
-                                 'fixedip-post-req',
-                                 project)
+                                 'fixedip-post-req', {})
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.content, "")
 
@@ -1455,93 +1054,6 @@ class FixedIpJsonTest(ApiSampleTestBaseV2):
                    'host': 'host',
                    'address': '192.168.1.1'}
         self._verify_response('fixedips-get-resp', project, response, 200)
-
-
-class AggregatesSampleJsonTest(ServersSampleBase):
-    ADMIN_API = True
-    extension_name = "nova.api.openstack.compute.contrib" + \
-                                     ".aggregates.Aggregates"
-    create_subs = {
-            "aggregate_id": '(?P<id>\d+)'
-    }
-
-    def _create_aggregate(self):
-        return self._do_post('os-aggregates', 'aggregate-post-req',
-                             self.create_subs)
-
-    def test_aggregate_create(self):
-        response = self._create_aggregate()
-        subs = self.create_subs
-        subs.update(self._get_regexes())
-        return self._verify_response('aggregate-post-resp',
-                                     subs, response, 200)
-
-    def test_list_aggregates(self):
-        self._create_aggregate()
-        response = self._do_get('os-aggregates')
-        subs = self._get_regexes()
-        self._verify_response('aggregates-list-get-resp', subs, response, 200)
-
-    def test_aggregate_get(self):
-        self._create_aggregate()
-        response = self._do_get('os-aggregates/%s' % 1)
-        subs = self._get_regexes()
-        self._verify_response('aggregates-get-resp', subs, response, 200)
-
-    def test_add_metadata(self):
-        self._create_aggregate()
-        response = self._do_post('os-aggregates/%s/action' % 1,
-                                 'aggregate-metadata-post-req',
-                                 {'action': 'set_metadata'})
-        subs = self._get_regexes()
-        self._verify_response('aggregates-metadata-post-resp', subs,
-                              response, 200)
-
-    def test_add_host(self):
-        self._create_aggregate()
-        subs = {
-            "host_name": self.compute.host,
-        }
-        response = self._do_post('os-aggregates/%s/action' % 1,
-                                 'aggregate-add-host-post-req', subs)
-        subs.update(self._get_regexes())
-        self._verify_response('aggregates-add-host-post-resp', subs,
-                              response, 200)
-
-    def test_remove_host(self):
-        self.test_add_host()
-        subs = {
-            "host_name": self.compute.host,
-        }
-        response = self._do_post('os-aggregates/1/action',
-                                 'aggregate-remove-host-post-req', subs)
-        subs.update(self._get_regexes())
-        self._verify_response('aggregates-remove-host-post-resp',
-                              subs, response, 200)
-
-    def test_update_aggregate(self):
-        self._create_aggregate()
-        response = self._do_put('os-aggregates/%s' % 1,
-                                  'aggregate-update-post-req', {})
-        subs = self._get_regexes()
-        self._verify_response('aggregate-update-post-resp',
-                              subs, response, 200)
-
-
-class CertificatesSamplesJsonTest(ApiSampleTestBaseV2):
-    extension_name = ("nova.api.openstack.compute.contrib.certificates."
-                      "Certificates")
-
-    def test_create_certificates(self):
-        response = self._do_post('os-certificates',
-                                 'certificate-create-req', {})
-        subs = self._get_regexes()
-        self._verify_response('certificate-create-resp', subs, response, 200)
-
-    def test_get_root_certificate(self):
-        response = self._do_get('os-certificates/root')
-        subs = self._get_regexes()
-        self._verify_response('certificate-get-root-resp', subs, response, 200)
 
 
 class UsedLimitsSamplesJsonTest(ApiSampleTestBaseV2):
@@ -2374,44 +1886,6 @@ class DiskConfigJsonTest(ServersSampleBase):
         self._verify_response('image-list-resp', subs, response, 200)
 
 
-class OsNetworksJsonTests(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ("nova.api.openstack.compute.contrib.os_tenant_networks"
-                      ".Os_tenant_networks")
-
-    def setUp(self):
-        super(OsNetworksJsonTests, self).setUp()
-        CONF.set_override("enable_network_quota", True)
-
-        def fake(*args, **kwargs):
-            pass
-
-        self.stubs.Set(nova.quota.QUOTAS, "reserve", fake)
-        self.stubs.Set(nova.quota.QUOTAS, "commit", fake)
-        self.stubs.Set(nova.quota.QUOTAS, "rollback", fake)
-        self.stubs.Set(nova.quota.QuotaEngine, "reserve", fake)
-        self.stubs.Set(nova.quota.QuotaEngine, "commit", fake)
-        self.stubs.Set(nova.quota.QuotaEngine, "rollback", fake)
-
-    def test_list_networks(self):
-        response = self._do_get('os-tenant-networks')
-        subs = self._get_regexes()
-        self._verify_response('networks-list-res', subs, response, 200)
-
-    def test_create_network(self):
-        response = self._do_post('os-tenant-networks', "networks-post-req", {})
-        subs = self._get_regexes()
-        self._verify_response('networks-post-res', subs, response, 200)
-
-    def test_delete_network(self):
-        response = self._do_post('os-tenant-networks', "networks-post-req", {})
-        net = jsonutils.loads(response.content)
-        response = self._do_delete('os-tenant-networks/%s' %
-                                                net["network"]["id"])
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.content, "")
-
-
 class NetworksJsonTests(ApiSampleTestBaseV2):
     ADMIN_API = True
     extension_name = ("nova.api.openstack.compute.contrib"
@@ -2563,193 +2037,6 @@ class NetworksAssociateJsonTests(ApiSampleTestBaseV2):
         self.assertEqual(response.content, "")
 
 
-class FlavorDisabledSampleJsonTests(ApiSampleTestBaseV2):
-    extension_name = ("nova.api.openstack.compute.contrib.flavor_disabled."
-                      "Flavor_disabled")
-
-    def test_show_flavor(self):
-        # Get api sample to show flavor_disabled attr. of a flavor.
-        flavor_id = 1
-        response = self._do_get('flavors/%s' % flavor_id)
-        subs = self._get_regexes()
-        subs['flavor_id'] = flavor_id
-        self._verify_response('flavor-show-get-resp', subs, response, 200)
-
-    def test_detail_flavor(self):
-        # Get api sample to show details of a flavor.
-        response = self._do_get('flavors/detail')
-        subs = self._get_regexes()
-        self._verify_response('flavor-detail-get-resp', subs, response, 200)
-
-
-class QuotaClassesSampleJsonTests(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ("nova.api.openstack.compute.contrib.quota_classes."
-                      "Quota_classes")
-    set_id = 'test_class'
-
-    def test_show_quota_classes(self):
-        # Get api sample to show quota classes.
-        response = self._do_get('os-quota-class-sets/%s' % self.set_id)
-        subs = {'set_id': self.set_id}
-        self._verify_response('quota-classes-show-get-resp', subs,
-                              response, 200)
-
-    def test_update_quota_classes(self):
-        # Get api sample to update quota classes.
-        response = self._do_put('os-quota-class-sets/%s' % self.set_id,
-                                'quota-classes-update-post-req',
-                                {})
-        self._verify_response('quota-classes-update-post-resp',
-                              {}, response, 200)
-
-
-class FakeNode(object):
-    def __init__(self, uuid='058d27fa-241b-445a-a386-08c04f96db43'):
-        self.uuid = uuid
-        self.provision_state = 'active'
-        self.properties = {'cpus': '2',
-                           'memory_mb': '1024',
-                           'local_gb': '10'}
-        self.instance_uuid = '1ea4e53e-149a-4f02-9515-590c9fb2315a'
-
-
-class NodeManager(object):
-    def list(self, detail=False):
-        return [FakeNode(), FakeNode('e2025409-f3ce-4d6a-9788-c565cf3b1b1c')]
-
-    def get(self, id):
-        return FakeNode(id)
-
-    def list_ports(self, id):
-        return []
-
-
-class fake_client(object):
-    node = NodeManager()
-
-
-class BaremetalNodesJsonTest(ApiSampleTestBaseV2):
-    extension_name = ("nova.api.openstack.compute.contrib"
-      ".baremetal_nodes.Baremetal_nodes")
-
-    @mock.patch("nova.api.openstack.compute.contrib.baremetal_nodes"
-                "._get_ironic_client")
-    def test_baremetal_nodes_list(self, mock_get_irc):
-        mock_get_irc.return_value = fake_client()
-
-        response = self._do_get('os-baremetal-nodes')
-        subs = self._get_regexes()
-        self._verify_response('baremetal-node-list-resp', subs, response, 200)
-
-    @mock.patch("nova.api.openstack.compute.contrib.baremetal_nodes"
-                "._get_ironic_client")
-    def test_baremetal_nodes_get(self, mock_get_irc):
-        mock_get_irc.return_value = fake_client()
-
-        response = self._do_get('os-baremetal-nodes/'
-                                '058d27fa-241b-445a-a386-08c04f96db43')
-        subs = self._get_regexes()
-        self._verify_response('baremetal-node-get-resp', subs, response, 200)
-
-
-class CellsSampleJsonTest(ApiSampleTestBaseV2):
-    extension_name = "nova.api.openstack.compute.contrib.cells.Cells"
-
-    def setUp(self):
-        # db_check_interval < 0 makes cells manager always hit the DB
-        self.flags(enable=True, db_check_interval=-1, group='cells')
-        super(CellsSampleJsonTest, self).setUp()
-        self._stub_cells()
-
-    def _stub_cells(self, num_cells=5):
-        self.cells = []
-        self.cells_next_id = 1
-
-        def _fake_cell_get_all(context):
-            return self.cells
-
-        def _fake_cell_get(inst, context, cell_name):
-            for cell in self.cells:
-                if cell['name'] == cell_name:
-                    return cell
-            raise exception.CellNotFound(cell_name=cell_name)
-
-        for x in xrange(num_cells):
-            cell = models.Cell()
-            our_id = self.cells_next_id
-            self.cells_next_id += 1
-            cell.update({'id': our_id,
-                         'name': 'cell%s' % our_id,
-                         'transport_url': 'rabbit://username%s@/' % our_id,
-                         'is_parent': our_id % 2 == 0})
-            self.cells.append(cell)
-
-        self.stubs.Set(db, 'cell_get_all', _fake_cell_get_all)
-        self.stubs.Set(cells_rpcapi.CellsAPI, 'cell_get', _fake_cell_get)
-
-    def test_cells_empty_list(self):
-        # Override this
-        self._stub_cells(num_cells=0)
-        response = self._do_get('os-cells')
-        subs = self._get_regexes()
-        self._verify_response('cells-list-empty-resp', subs, response, 200)
-
-    def test_cells_list(self):
-        response = self._do_get('os-cells')
-        subs = self._get_regexes()
-        self._verify_response('cells-list-resp', subs, response, 200)
-
-    def test_cells_get(self):
-        response = self._do_get('os-cells/cell3')
-        subs = self._get_regexes()
-        self._verify_response('cells-get-resp', subs, response, 200)
-
-
-class CellsCapacitySampleJsonTest(ApiSampleTestBaseV2):
-    extends_name = ("nova.api.openstack.compute.contrib.cells.Cells")
-    extension_name = ("nova.api.openstack.compute.contrib."
-                         "cell_capacities.Cell_capacities")
-
-    def setUp(self):
-        self.flags(enable=True, db_check_interval=-1, group='cells')
-        super(CellsCapacitySampleJsonTest, self).setUp()
-        # (navneetk/kaushikc) : Mock cell capacity to avoid the capacity
-        # being calculated from the compute nodes in the environment
-        self._mock_cell_capacity()
-
-    def test_get_cell_capacity(self):
-        state_manager = state.CellStateManager()
-        my_state = state_manager.get_my_state()
-        response = self._do_get('os-cells/%s/capacities' %
-                my_state.name)
-        subs = self._get_regexes()
-        return self._verify_response('cells-capacities-resp',
-                                        subs, response, 200)
-
-    def test_get_all_cells_capacity(self):
-        response = self._do_get('os-cells/capacities')
-        subs = self._get_regexes()
-        return self._verify_response('cells-capacities-resp',
-                                        subs, response, 200)
-
-    def _mock_cell_capacity(self):
-        self.mox.StubOutWithMock(self.cells.manager.state_manager,
-                                 'get_our_capacities')
-        response = {"ram_free":
-                        {"units_by_mb": {"8192": 0, "512": 13,
-                                         "4096": 1, "2048": 3, "16384": 0},
-                         "total_mb": 7680},
-                    "disk_free":
-                        {"units_by_mb": {"81920": 11, "20480": 46,
-                                         "40960": 23, "163840": 5, "0": 0},
-                         "total_mb": 1052672}
-        }
-        self.cells.manager.state_manager.get_our_capacities(). \
-            AndReturn(response)
-        self.mox.ReplayAll()
-
-
 class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
     extension_name = ('nova.api.openstack.compute.contrib.'
                       'block_device_mapping_v2_boot.'
@@ -2768,26 +2055,6 @@ class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
         self.stubs.Set(cinder.API, 'check_attach',
                        fakes.stub_volume_check_attach)
         return self._post_server()
-
-
-class FloatingIPPoolsSampleJsonTests(ApiSampleTestBaseV2):
-    extension_name = ("nova.api.openstack.compute.contrib.floating_ip_pools."
-                      "Floating_ip_pools")
-
-    def test_list_floatingippools(self):
-        pool_list = ["pool1", "pool2"]
-
-        def fake_get_floating_ip_pools(self, context):
-            return pool_list
-
-        self.stubs.Set(network_api.API, "get_floating_ip_pools",
-                       fake_get_floating_ip_pools)
-        response = self._do_get('os-floating-ip-pools')
-        subs = {
-            'pool1': pool_list[0],
-            'pool2': pool_list[1]
-        }
-        self._verify_response('floatingippools-list-resp', subs, response, 200)
 
 
 class MultinicSampleJsonTest(ServersSampleBase):
@@ -2822,27 +2089,6 @@ class MultinicSampleJsonTest(ServersSampleBase):
         response = self._do_post('servers/%s/action' % (self.uuid),
                                  'multinic-remove-fixed-ip-req', subs)
         self.assertEqual(response.status_code, 202)
-
-
-class InstanceUsageAuditLogJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ("nova.api.openstack.compute.contrib."
-                      "instance_usage_audit_log.Instance_usage_audit_log")
-
-    def test_show_instance_usage_audit_log(self):
-        response = self._do_get('os-instance_usage_audit_log/%s' %
-                                urllib.quote('2012-07-05 10:00:00'))
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        self._verify_response('inst-usage-audit-log-show-get-resp',
-                              subs, response, 200)
-
-    def test_index_instance_usage_audit_log(self):
-        response = self._do_get('os-instance_usage_audit_log')
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        self._verify_response('inst-usage-audit-log-index-get-resp',
-                              subs, response, 200)
 
 
 class FlavorExtraSpecsSampleJsonTests(ApiSampleTestBaseV2):
@@ -3029,150 +2275,6 @@ class EvacuateFindHostSampleJsonTest(ServersSampleBase):
                 orig_sys_metadata=mock.ANY, bdms=mock.ANY, recreate=mock.ANY,
                 on_shared_storage=False, preserve_ephemeral=mock.ANY,
                 host=None)
-
-
-class FloatingIpDNSJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ("nova.api.openstack.compute.contrib.floating_ip_dns."
-                      "Floating_ip_dns")
-
-    domain = 'domain1.example.org'
-    name = 'instance1'
-    scope = 'public'
-    project = 'project1'
-    dns_type = 'A'
-    ip = '192.168.1.1'
-
-    def _create_or_update(self):
-        subs = {'domain': self.domain,
-                'project': self.project,
-                'scope': self.scope}
-        response = self._do_put('os-floating-ip-dns/%s' % self.domain,
-                                'floating-ip-dns-create-or-update-req', subs)
-        self._verify_response('floating-ip-dns-create-or-update-resp', subs,
-                              response, 200)
-
-    def _create_or_update_entry(self):
-        subs = {'ip': self.ip, 'dns_type': self.dns_type}
-        response = self._do_put('os-floating-ip-dns/%s/entries/%s'
-                                % (self.domain, self.name),
-                                'floating-ip-dns-create-or-update-entry-req',
-                                subs)
-        subs.update({'name': self.name, 'domain': self.domain})
-        self._verify_response('floating-ip-dns-create-or-update-entry-resp',
-                              subs, response, 200)
-
-    def test_floating_ip_dns_list(self):
-        self._create_or_update()
-        response = self._do_get('os-floating-ip-dns')
-        subs = {'domain': self.domain,
-                'project': self.project,
-                'scope': self.scope}
-        self._verify_response('floating-ip-dns-list-resp', subs,
-                              response, 200)
-
-    def test_floating_ip_dns_create_or_update(self):
-        self._create_or_update()
-
-    def test_floating_ip_dns_delete(self):
-        self._create_or_update()
-        response = self._do_delete('os-floating-ip-dns/%s' % self.domain)
-        self.assertEqual(response.status_code, 202)
-
-    def test_floating_ip_dns_create_or_update_entry(self):
-        self._create_or_update_entry()
-
-    def test_floating_ip_dns_entry_get(self):
-        self._create_or_update_entry()
-        response = self._do_get('os-floating-ip-dns/%s/entries/%s'
-                                % (self.domain, self.name))
-        subs = {'domain': self.domain,
-                'ip': self.ip,
-                'name': self.name}
-        self._verify_response('floating-ip-dns-entry-get-resp', subs,
-                              response, 200)
-
-    def test_floating_ip_dns_entry_delete(self):
-        self._create_or_update_entry()
-        response = self._do_delete('os-floating-ip-dns/%s/entries/%s'
-                                   % (self.domain, self.name))
-        self.assertEqual(response.status_code, 202)
-
-    def test_floating_ip_dns_entry_list(self):
-        self._create_or_update_entry()
-        response = self._do_get('os-floating-ip-dns/%s/entries/%s'
-                                % (self.domain, self.ip))
-        subs = {'domain': self.domain,
-                'ip': self.ip,
-                'name': self.name}
-        self._verify_response('floating-ip-dns-entry-list-resp', subs,
-                              response, 200)
-
-
-class InstanceActionsSampleJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ('nova.api.openstack.compute.contrib.instance_actions.'
-                      'Instance_actions')
-
-    def setUp(self):
-        super(InstanceActionsSampleJsonTest, self).setUp()
-        self.actions = fake_server_actions.FAKE_ACTIONS
-        self.events = fake_server_actions.FAKE_EVENTS
-        self.instance = test_utils.get_test_instance(obj=True)
-
-        def fake_server_action_get_by_request_id(context, uuid, request_id):
-            return copy.deepcopy(self.actions[uuid][request_id])
-
-        def fake_server_actions_get(context, uuid):
-            return [copy.deepcopy(value) for value in
-                    self.actions[uuid].itervalues()]
-
-        def fake_server_action_events_get(context, action_id):
-            return copy.deepcopy(self.events[action_id])
-
-        def fake_instance_get_by_uuid(context, instance_id):
-            return self.instance
-
-        def fake_get(self, context, instance_uuid, expected_attrs=None,
-                     want_objects=True):
-            return fake_instance.fake_instance_obj(
-                None, **{'uuid': instance_uuid})
-
-        self.stubs.Set(db, 'action_get_by_request_id',
-                       fake_server_action_get_by_request_id)
-        self.stubs.Set(db, 'actions_get', fake_server_actions_get)
-        self.stubs.Set(db, 'action_events_get',
-                       fake_server_action_events_get)
-        self.stubs.Set(db, 'instance_get_by_uuid', fake_instance_get_by_uuid)
-        self.stubs.Set(compute_api.API, 'get', fake_get)
-
-    def test_instance_action_get(self):
-        fake_uuid = fake_server_actions.FAKE_UUID
-        fake_request_id = fake_server_actions.FAKE_REQUEST_ID1
-        fake_action = self.actions[fake_uuid][fake_request_id]
-
-        response = self._do_get('servers/%s/os-instance-actions/%s' %
-                                (fake_uuid, fake_request_id))
-        subs = self._get_regexes()
-        subs['action'] = '(reboot)|(resize)'
-        subs['instance_uuid'] = fake_uuid
-        subs['integer_id'] = '[0-9]+'
-        subs['request_id'] = fake_action['request_id']
-        subs['start_time'] = fake_action['start_time']
-        subs['result'] = '(Success)|(Error)'
-        subs['event'] = '(schedule)|(compute_create)'
-        self._verify_response('instance-action-get-resp', subs, response, 200)
-
-    def test_instance_actions_list(self):
-        fake_uuid = fake_server_actions.FAKE_UUID
-        response = self._do_get('servers/%s/os-instance-actions' % (fake_uuid))
-        subs = self._get_regexes()
-        subs['action'] = '(reboot)|(resize)'
-        subs['integer_id'] = '[0-9]+'
-        subs['request_id'] = ('req-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
-                              '-[0-9a-f]{4}-[0-9a-f]{12}')
-        self._verify_response('instance-actions-list-resp', subs,
-                              response, 200)
 
 
 class ImageSizeSampleJsonTests(ApiSampleTestBaseV2):
@@ -3412,15 +2514,16 @@ class HypervisorsCellsSampleJsonTests(ApiSampleTestBaseV2):
         def fake_compute_node_get(self, context, hyp):
             return fake_hypervisor
 
-        @classmethod
-        def fake_service_get_by_host_and_binary(cls, context, host, binary):
-            return objects.Service(host='fake-mini', disabled=False,
-                                   disabled_reason=None)
+        def fake_service_get_by_compute_host(self, context, host):
+            return cells_utils.ServiceProxy(
+                objects.Service(id=1, host='fake-mini', disabled=False,
+                                disabled_reason=None),
+                'cell1')
 
         self.stubs.Set(cells_api.HostAPI, 'compute_node_get',
                        fake_compute_node_get)
-        self.stubs.Set(objects.Service, 'get_by_host_and_binary',
-                       fake_service_get_by_host_and_binary)
+        self.stubs.Set(cells_api.HostAPI, 'service_get_by_compute_host',
+                       fake_service_get_by_compute_host)
 
         self.stubs.Set(cells_api.HostAPI,
                        'get_host_uptime', fake_get_host_uptime)
@@ -3905,61 +3008,6 @@ class VolumesSampleJsonTest(ServersSampleBase):
         self.assertEqual(response.content, '')
 
 
-class MigrationsSamplesJsonTest(ApiSampleTestBaseV2):
-    ADMIN_API = True
-    extension_name = ("nova.api.openstack.compute.contrib.migrations."
-                      "Migrations")
-
-    def _stub_migrations(self, context, filters):
-        fake_migrations = [
-            {
-                'id': 1234,
-                'source_node': 'node1',
-                'dest_node': 'node2',
-                'source_compute': 'compute1',
-                'dest_compute': 'compute2',
-                'dest_host': '1.2.3.4',
-                'status': 'Done',
-                'instance_uuid': 'instance_id_123',
-                'old_instance_type_id': 1,
-                'new_instance_type_id': 2,
-                'created_at': datetime.datetime(2012, 10, 29, 13, 42, 2),
-                'updated_at': datetime.datetime(2012, 10, 29, 13, 42, 2),
-                'deleted_at': None,
-                'deleted': False
-            },
-            {
-                'id': 5678,
-                'source_node': 'node10',
-                'dest_node': 'node20',
-                'source_compute': 'compute10',
-                'dest_compute': 'compute20',
-                'dest_host': '5.6.7.8',
-                'status': 'Done',
-                'instance_uuid': 'instance_id_456',
-                'old_instance_type_id': 5,
-                'new_instance_type_id': 6,
-                'created_at': datetime.datetime(2013, 10, 22, 13, 42, 2),
-                'updated_at': datetime.datetime(2013, 10, 22, 13, 42, 2),
-                'deleted_at': None,
-                'deleted': False
-            }
-        ]
-        return fake_migrations
-
-    def setUp(self):
-        super(MigrationsSamplesJsonTest, self).setUp()
-        self.stubs.Set(compute_api.API, 'get_migrations',
-                       self._stub_migrations)
-
-    def test_get_migrations(self):
-        response = self._do_get('os-migrations')
-        subs = self._get_regexes()
-
-        self.assertEqual(response.status_code, 200)
-        self._verify_response('migrations-get', subs, response, 200)
-
-
 class PreserveEphemeralOnRebuildJsonTest(ServersSampleBase):
     extension_name = ('nova.api.openstack.compute.contrib.'
                       'preserve_ephemeral_rebuild.'
@@ -4103,14 +3151,6 @@ class ServerGroupQuotas_QuotasSampleJsonTests(QuotasSampleJsonTests):
     extension_name = ("nova.api.openstack.compute.contrib."
                "server_group_quotas.Server_group_quotas")
     extends_name = "nova.api.openstack.compute.contrib.quotas.Quotas"
-
-
-class ServerGroupQuotasQuota_ClassesSampleJsonTests(
-           QuotaClassesSampleJsonTests):
-    extension_name = ("nova.api.openstack.compute.contrib."
-              "server_group_quotas.Server_group_quotas")
-    extends_name = ("nova.api.openstack.compute.contrib.quota_classes."
-                    "Quota_classes")
 
 
 class ServerSortKeysJsonTests(ServersSampleBase):

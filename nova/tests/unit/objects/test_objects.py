@@ -35,6 +35,7 @@ from nova.objects import base
 from nova.objects import fields
 from nova import rpc
 from nova import test
+from nova.tests import fixtures as nova_fixtures
 from nova.tests.unit import fake_notifier
 from nova import utils
 
@@ -345,7 +346,7 @@ class _LocalTest(_BaseTestCase):
     def setUp(self):
         super(_LocalTest, self).setUp()
         # Just in case
-        base.NovaObject.indirection_api = None
+        self.useFixture(nova_fixtures.IndirectionAPIFixture(None))
 
     def assertRemotes(self):
         self.assertEqual(self.remote_object_calls, [])
@@ -392,7 +393,8 @@ class _RemoteTest(_BaseTestCase):
                        fake_object_action)
 
         # Things are remoted by default in this session
-        base.NovaObject.indirection_api = conductor_rpcapi.ConductorAPI()
+        self.useFixture(nova_fixtures.IndirectionAPIFixture(
+                            conductor_rpcapi.ConductorAPI()))
 
         # To make sure local and remote contexts match
         self.stubs.Set(rpc.RequestContextSerializer,
@@ -873,6 +875,24 @@ class _TestObject(object):
         self.assertRaises(exception.ObjectActionError,
                           obj.obj_make_compatible, {}, '1.0')
 
+    def test_obj_make_compatible_doesnt_skip_falsey_sub_objects(self):
+        class MyList(base.ObjectListBase, base.NovaObject):
+            VERSION = '1.2'
+            fields = {'objects': fields.ListOfObjectsField('MyObjElement')}
+
+        mylist = MyList(objects=[])
+
+        class MyOwner(base.NovaObject):
+            VERSION = '1.2'
+            fields = {'mylist': fields.ObjectField('MyList')}
+            obj_relationships = {
+                'mylist': [('1.1', '1.1')],
+            }
+
+        myowner = MyOwner(mylist=mylist)
+        primitive = myowner.obj_to_primitive('1.1')
+        self.assertIn('mylist', primitive['nova_object.data'])
+
     def test_obj_make_compatible_handles_list_of_objects(self):
         subobj = MyOwnedObject(baz=1)
         obj = MyObj(rel_objects=[subobj])
@@ -1216,8 +1236,8 @@ object_data = {
     'InstanceNUMATopology': '1.1-b6fab68a3f0f1dfab4c98a236d29839a',
     'InstancePCIRequest': '1.1-e082d174f4643e5756ba098c47c1510f',
     'InstancePCIRequests': '1.1-4825b599f000538991fdc9972a92c2c6',
-    'KeyPair': '1.2-b476e480f85d307711c89d0aa78b3a3f',
-    'KeyPairList': '1.1-152dc1efcc46014cc10656a0d0ac5bb0',
+    'KeyPair': '1.3-2d7c9ccade5532f7cd185110a9367e6a',
+    'KeyPairList': '1.2-1f84680a0a533374db8a9fac7bd7bbc7',
     'Migration': '1.1-dc2db9e6e625bd3444a5a114438b298d',
     'MigrationList': '1.1-8c5f678edc72a592d591a13b35e54353',
     'MyObj': '1.6-fce707f79d6fee00f0ebbac98816a380',

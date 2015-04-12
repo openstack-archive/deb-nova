@@ -1269,6 +1269,7 @@ class TestNeutronv2(TestNeutronv2Base):
                                                         **self.instance)
         api = neutronapi.API()
         port_data = number == 1 and self.port_data1 or self.port_data2
+        ports = {port['id'] for port in port_data}
         ret_data = copy.deepcopy(port_data)
         if requested_networks:
             if isinstance(requested_networks, objects.NetworkRequestList):
@@ -1291,8 +1292,8 @@ class TestNeutronv2(TestNeutronv2Base):
         if requested_networks:
             for net, fip, port, request_id in requested_networks:
                 self.moxed_client.update_port(port)
-        for port in reversed(port_data):
-            self.moxed_client.delete_port(port['id'])
+        for port in ports:
+            self.moxed_client.delete_port(port)
 
         self.mox.StubOutWithMock(api.db, 'instance_info_cache_update')
         api.db.instance_info_cache_update(self.context,
@@ -1482,7 +1483,8 @@ class TestNeutronv2(TestNeutronv2Base):
         try:
             api.validate_networks(self.context, requested_networks, 1)
         except exception.NetworkNotFound as ex:
-            self.assertIn("my_netid2, my_netid3", six.text_type(ex))
+            self.assertIn("my_netid2", six.text_type(ex))
+            self.assertIn("my_netid3", six.text_type(ex))
 
     def test_validate_networks_duplicate_disable(self):
         """Verify that the correct exception is thrown when duplicate
@@ -2604,19 +2606,24 @@ class TestNeutronv2(TestNeutronv2Base):
             api._get_subnets_from_port(self.context, requested_port
                 ).AndReturn(fake_subnets)
 
+        self.mox.StubOutWithMock(api, '_get_preexisting_port_ids')
+        api._get_preexisting_port_ids(fake_inst).AndReturn(['port5'])
         self.mox.ReplayAll()
         neutronapi.get_client('fake')
         fake_inst.info_cache = objects.InstanceInfoCache.new(
             self.context, 'fake-uuid')
         fake_inst.info_cache.network_info = model.NetworkInfo.hydrate([])
-        nw_infos = api._build_network_info_model(self.context, fake_inst,
-                                                 fake_nets,
-                                                 [fake_ports[2]['id'],
-                                                  fake_ports[0]['id'],
-                                                  fake_ports[1]['id'],
-                                                  fake_ports[3]['id'],
-                                                  fake_ports[4]['id'],
-                                                  fake_ports[5]['id']])
+        nw_infos = api._build_network_info_model(
+            self.context, fake_inst,
+            fake_nets,
+            [fake_ports[2]['id'],
+             fake_ports[0]['id'],
+             fake_ports[1]['id'],
+             fake_ports[3]['id'],
+             fake_ports[4]['id'],
+             fake_ports[5]['id']],
+            preexisting_port_ids=['port3'])
+
         self.assertEqual(len(nw_infos), 6)
         index = 0
         for nw_info in nw_infos:
@@ -2650,6 +2657,13 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertEqual(nw_infos[3]['id'], 'port3')
         self.assertEqual(nw_infos[4]['id'], 'port4')
         self.assertEqual(nw_infos[5]['id'], 'port5')
+
+        self.assertFalse(nw_infos[0]['preserve_on_delete'])
+        self.assertFalse(nw_infos[1]['preserve_on_delete'])
+        self.assertFalse(nw_infos[2]['preserve_on_delete'])
+        self.assertTrue(nw_infos[3]['preserve_on_delete'])
+        self.assertFalse(nw_infos[4]['preserve_on_delete'])
+        self.assertTrue(nw_infos[5]['preserve_on_delete'])
 
     def test_get_subnets_from_port(self):
         api = neutronapi.API()

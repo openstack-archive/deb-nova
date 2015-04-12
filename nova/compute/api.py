@@ -1480,31 +1480,6 @@ class API(base.Base):
                        shutdown_terminate=shutdown_terminate,
                        check_server_group_quota=check_server_group_quota)
 
-    @wrap_check_policy
-    def update(self, context, instance, **kwargs):
-        """Updates the instance in the datastore.
-
-        :param context: The security context
-        :param instance: The instance to update
-        :param kwargs: All additional keyword args are treated
-                       as data fields of the instance to be
-                       updated
-
-        :returns: A reference to the updated instance
-        """
-        refs = self._update(context, instance, **kwargs)
-        return refs[1]
-
-    def _update(self, context, instance, **kwargs):
-        # Update the instance record and send a state update notification
-        # if task or vm state changed
-        old_ref, instance_ref = self.db.instance_update_and_get_original(
-                                  context, instance.uuid, kwargs)
-        notifications.send_update(context, old_ref,
-                                  instance_ref, service="api")
-
-        return dict(old_ref.iteritems()), dict(instance_ref.iteritems())
-
     def _check_auto_disk_config(self, instance=None, image=None,
                                 **extra_instance_updates):
         auto_disk_config = extra_instance_updates.get("auto_disk_config")
@@ -2120,8 +2095,17 @@ class API(base.Base):
         :returns: A dict containing image metadata
         """
         props_copy = dict(extra_properties, backup_type=backup_type)
-        image_meta = self._create_image(context, instance, name,
-                                       'backup', extra_properties=props_copy)
+
+        if self.is_volume_backed_instance(context, instance):
+            # TODO(flwang): The log level will be changed to INFO after
+            # string freeze (Liberty).
+            LOG.debug("It's not supported to backup volume backed instance.",
+                      context=context, instance=instance)
+            raise exception.InvalidRequest()
+        else:
+            image_meta = self._create_image(context, instance,
+                                            name, 'backup',
+                                            extra_properties=props_copy)
 
         # NOTE(comstud): Any changes to this method should also be made
         # to the backup_instance() method in nova/cells/messaging.py
@@ -2874,7 +2858,8 @@ class API(base.Base):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type,
                 connect_info['host'], connect_info['port'],
-                connect_info['internal_access_path'], instance.uuid)
+                connect_info['internal_access_path'], instance.uuid,
+                access_url=connect_info['access_url'])
 
         return {'url': connect_info['access_url']}
 
@@ -2894,7 +2879,8 @@ class API(base.Base):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type,
                 connect_info['host'], connect_info['port'],
-                connect_info['internal_access_path'], instance.uuid)
+                connect_info['internal_access_path'], instance.uuid,
+                access_url=connect_info['access_url'])
 
         return {'url': connect_info['access_url']}
 
@@ -2914,7 +2900,8 @@ class API(base.Base):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type,
                 connect_info['host'], connect_info['port'],
-                connect_info['internal_access_path'], instance.uuid)
+                connect_info['internal_access_path'], instance.uuid,
+                access_url=connect_info['access_url'])
 
         return {'url': connect_info['access_url']}
 
@@ -2935,7 +2922,8 @@ class API(base.Base):
         self.consoleauth_rpcapi.authorize_console(context,
                 connect_info['token'], console_type,
                 connect_info['host'], connect_info['port'],
-                connect_info['internal_access_path'], instance.uuid)
+                connect_info['internal_access_path'], instance.uuid,
+                access_url=connect_info['access_url'])
         return {'url': connect_info['access_url']}
 
     @check_instance_host
@@ -3741,11 +3729,6 @@ class KeypairAPI(base.Base):
         notify.info(context, 'keypair.%s' % event_suffix, payload)
 
     def _validate_new_key_pair(self, context, user_id, key_name, key_type):
-        if key_type not in [keypair_obj.KEYPAIR_TYPE_SSH,
-                            keypair_obj.KEYPAIR_TYPE_X509]:
-            raise exception.InvalidKeypair(
-                reason=_('Specified Keypair type "%s" is invalid') % key_type)
-
         safe_chars = "_- " + string.digits + string.ascii_letters
         clean_value = "".join(x for x in key_name if x in safe_chars)
         if clean_value != key_name:

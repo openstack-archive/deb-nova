@@ -543,12 +543,17 @@ class NetworkManager(manager.Manager):
                 if isinstance(requested_networks, objects.NetworkRequestList):
                     requested_networks = requested_networks.as_tuples()
 
-                fixed_ips = [ip for (net_id, ip) in requested_networks]
+                network_ids = set([net_id for (net_id, ip)
+                                   in requested_networks])
+                fixed_ips = [ip for (net_id, ip) in requested_networks if ip]
             else:
                 fixed_ip_list = objects.FixedIPList.get_by_instance_uuid(
                     read_deleted_context, instance_uuid)
+                network_ids = set([str(fixed_ip.network_id) for fixed_ip
+                               in fixed_ip_list])
                 fixed_ips = [str(ip.address) for ip in fixed_ip_list]
         except exception.FixedIpNotFoundForInstance:
+            network_ids = set([])
             fixed_ips = []
         LOG.debug("Network deallocation for instance",
                   context=context, instance_uuid=instance_uuid)
@@ -558,8 +563,7 @@ class NetworkManager(manager.Manager):
                     instance=instance)
 
         if CONF.update_dns_entries:
-            network_ids = [fixed_ip.network_id for fixed_ip in fixed_ips]
-            self.network_rpcapi.update_dns(context, network_ids)
+            self.network_rpcapi.update_dns(context, list(network_ids))
 
         # deallocate vifs (mac addresses)
         objects.VirtualInterface.delete_by_instance_uuid(
@@ -1223,6 +1227,40 @@ class NetworkManager(manager.Manager):
             raise exception.AddressOutOfRange(address=ip, cidr=str(subnet))
         return index
 
+    def _validate_cidr(self, context, nets, subnets_v4, fixed_net_v4):
+        used_subnets = [net.cidr for net in nets]
+
+        def find_next(subnet):
+            next_subnet = subnet.next()
+            while next_subnet in subnets_v4:
+                next_subnet = next_subnet.next()
+            if next_subnet in fixed_net_v4:
+                return next_subnet
+
+        for subnet in list(subnets_v4):
+            if subnet in used_subnets:
+                next_subnet = find_next(subnet)
+                if next_subnet:
+                    subnets_v4.remove(subnet)
+                    subnets_v4.append(next_subnet)
+                    subnet = next_subnet
+                else:
+                    raise exception.CidrConflict(cidr=subnet,
+                                                 other=subnet)
+            for used_subnet in used_subnets:
+                if subnet in used_subnet:
+                    raise exception.CidrConflict(cidr=subnet,
+                                                 other=used_subnet)
+                if used_subnet in subnet:
+                    next_subnet = find_next(subnet)
+                    if next_subnet:
+                        subnets_v4.remove(subnet)
+                        subnets_v4.append(next_subnet)
+                        subnet = next_subnet
+                    else:
+                        raise exception.CidrConflict(cidr=subnet,
+                                                     other=used_subnet)
+
     def _do_create_networks(self, context,
                             label, cidr, multi_host, num_networks,
                             network_size, cidr_v6, gateway, gateway_v6, bridge,
@@ -1267,43 +1305,15 @@ class NetworkManager(manager.Manager):
             except exception.NoNetworksFound:
                 nets = []
             num_used_nets = len(nets)
-            used_subnets = [net.cidr for net in nets]
-
-            def find_next(subnet):
-                next_subnet = subnet.next()
-                while next_subnet in subnets_v4:
-                    next_subnet = next_subnet.next()
-                if next_subnet in fixed_net_v4:
-                    return next_subnet
-
-            for subnet in list(subnets_v4):
-                if subnet in used_subnets:
-                    next_subnet = find_next(subnet)
-                    if next_subnet:
-                        subnets_v4.remove(subnet)
-                        subnets_v4.append(next_subnet)
-                        subnet = next_subnet
-                    else:
-                        raise exception.CidrConflict(cidr=subnet,
-                                                     other=subnet)
-                for used_subnet in used_subnets:
-                    if subnet in used_subnet:
-                        raise exception.CidrConflict(cidr=subnet,
-                                                     other=used_subnet)
-                    if used_subnet in subnet:
-                        next_subnet = find_next(subnet)
-                        if next_subnet:
-                            subnets_v4.remove(subnet)
-                            subnets_v4.append(next_subnet)
-                            subnet = next_subnet
-                        else:
-                            raise exception.CidrConflict(cidr=subnet,
-                                                         other=used_subnet)
+            self._validate_cidr(context, nets, subnets_v4, fixed_net_v4)
 
         networks = objects.NetworkList(context=context, objects=[])
         subnets = itertools.izip_longest(subnets_v4, subnets_v6)
         for index, (subnet_v4, subnet_v6) in enumerate(subnets):
             net = objects.Network(context=context)
+            uuid = kwargs.get('uuid')
+            if uuid:
+                net.uuid = uuid
             net.bridge = bridge
             net.bridge_interface = bridge_interface
             net.multi_host = multi_host

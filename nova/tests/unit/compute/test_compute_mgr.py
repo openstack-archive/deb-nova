@@ -1664,6 +1664,44 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                                                             events[1])
         do_test()
 
+    def test_cancel_all_events(self):
+        inst = objects.Instance(uuid='uuid')
+        fake_eventlet_event = mock.MagicMock()
+        self.compute.instance_events._events = {
+            inst.uuid: {
+                'foo-bar': fake_eventlet_event,
+            }
+        }
+        self.compute.instance_events.cancel_all_events()
+        self.assertTrue(fake_eventlet_event.send.called)
+        event = fake_eventlet_event.send.call_args_list[0][0][0]
+        self.assertEqual('foo', event.name)
+        self.assertEqual('bar', event.tag)
+        self.assertEqual('failed', event.status)
+
+    def test_cleanup_cancels_all_events(self):
+        with mock.patch.object(self.compute, 'instance_events') as mock_ev:
+            self.compute.cleanup_host()
+            mock_ev.cancel_all_events.assert_called_once_with()
+
+    def test_cleanup_blocks_new_events(self):
+        instance = objects.Instance(uuid='uuid')
+        self.compute.instance_events.cancel_all_events()
+        callback = mock.MagicMock()
+        body = mock.MagicMock()
+        with self.compute.virtapi.wait_for_instance_event(
+                instance, ['foo-bar'], error_callback=callback):
+            body()
+        self.assertTrue(body.called)
+        callback.assert_called_once_with('foo-bar', instance)
+
+    def test_pop_events_fails_gracefully(self):
+        inst = objects.Instance(uuid='uuid')
+        event = mock.MagicMock()
+        self.compute.instance_events._events = None
+        self.assertIsNone(
+            self.compute.instance_events.pop_instance_event(inst, event))
+
     def test_retry_reboot_pending_soft(self):
         instance = objects.Instance(self.context)
         instance.uuid = 'foo'
@@ -2365,22 +2403,26 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertEqual(args[1], self.compute.host)
         self.assertEqual(args[2], mock.sentinel.inst_uuid)
 
+    @mock.patch.object(nova.context.RequestContext, 'elevated')
     @mock.patch.object(nova.objects.InstanceList, 'get_by_host')
     @mock.patch.object(nova.scheduler.client.SchedulerClient,
                        'sync_instance_info')
-    def test_sync_scheduler_instance_info(self, mock_sync, mock_get_by_host):
+    def test_sync_scheduler_instance_info(self, mock_sync, mock_get_by_host,
+            mock_elevated):
         inst1 = objects.Instance(uuid='fake1')
         inst2 = objects.Instance(uuid='fake2')
         inst3 = objects.Instance(uuid='fake3')
+        exp_uuids = [inst.uuid for inst in [inst1, inst2, inst3]]
         mock_get_by_host.return_value = objects.InstanceList(
                 objects=[inst1, inst2, inst3])
+        fake_elevated = context.get_admin_context()
+        mock_elevated.return_value = fake_elevated
         self.compute._sync_scheduler_instance_info(self.context)
-        self.assertEqual(mock_sync.call_count, 1)
-        args = mock_sync.call_args[0]
-        exp_uuids = [inst.uuid for inst in [inst1, inst2, inst3]]
-        self.assertIsInstance(args[0], self.context.__class__)
-        self.assertEqual(args[1], self.compute.host)
-        self.assertEqual(args[2], exp_uuids)
+        mock_get_by_host.assert_called_once_with(
+                fake_elevated, self.compute.host, expected_attrs=[],
+                use_slave=True)
+        mock_sync.assert_called_once_with(fake_elevated, self.compute.host,
+                                          exp_uuids)
 
     @mock.patch.object(nova.scheduler.client.SchedulerClient,
                        'sync_instance_info')
@@ -2401,6 +2443,14 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertFalse(mock_update.called)
         self.assertFalse(mock_delete.called)
         self.assertFalse(mock_sync.called)
+
+    def test_refresh_instance_security_rules_takes_non_object(self):
+        inst = fake_instance.fake_db_instance()
+        with mock.patch.object(self.compute.driver,
+                               'refresh_instance_security_rules') as mock_r:
+            self.compute.refresh_instance_security_rules(self.context, inst)
+            self.assertIsInstance(mock_r.call_args_list[0][0][0],
+                                  objects.Instance)
 
 
 class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
@@ -2424,7 +2474,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                                                        'fake-node']]}}
 
         def fake_network_info():
-            return network_model.NetworkInfo()
+            return network_model.NetworkInfo([{'address': '1.2.3.4'}])
 
         self.network_info = network_model.NetworkInfoAsyncWrapper(
                 fake_network_info)
@@ -2992,7 +3042,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     side_effect=[self.instance, self.instance]),
                 mock.patch.object(self.compute,
                     '_build_networks_for_instance',
-                    return_value=self.network_info),
+                    return_value=network_model.NetworkInfo()),
                 mock.patch.object(self.compute,
                     '_notify_about_instance_usage'),
                 mock.patch.object(self.compute,
@@ -3037,7 +3087,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
 
             _shutdown_instance.assert_called_once_with(self.context,
                     self.instance, self.block_device_mapping,
-                    self.requested_networks, try_deallocate_networks=False)
+                    self.requested_networks, try_deallocate_networks=True)
 
     @mock.patch('nova.compute.manager.ComputeManager._get_power_state')
     def test_spawn_waits_for_network_and_saves_info_cache(self, gps):
@@ -3198,7 +3248,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(self.compute, '_shutdown_instance')
         self.compute._build_networks_for_instance(self.context, self.instance,
                 self.requested_networks, self.security_groups).AndReturn(
-                        network_model.NetworkInfo())
+                        network_model.NetworkInfo([{'address': '1.2.3.4'}]))
         self.compute._shutdown_instance(self.context, self.instance,
                 self.block_device_mapping, self.requested_networks,
                 try_deallocate_networks=False)
@@ -3529,7 +3579,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
             self.assertEqual([mock.call(), mock.call()],
                              migration_obj_as_admin.mock_calls)
 
-    def test_revert_resize_instance_destroy_disks(self):
+    def _test_revert_resize_instance_destroy_disks(self, is_shared=False):
 
         # This test asserts that _is_instance_storage_shared() is called from
         # revert_resize() and the return value is passed to driver.destroy().
@@ -3561,20 +3611,27 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
 
             self.migration.source_compute = self.instance['host']
 
-            # inform compute that this instance uses shared storage
-            _is_instance_storage_shared.return_value = True
+            # Inform compute that instance uses non-shared or shared storage
+            _is_instance_storage_shared.return_value = is_shared
 
             self.compute.revert_resize(context=self.context,
                                        migration=self.migration,
                                        instance=self.instance,
                                        reservations=None)
 
-            _is_instance_storage_shared.assert_called_once_with(self.context,
-                                                                self.instance)
+            _is_instance_storage_shared.assert_called_once_with(
+                self.context, self.instance,
+                host=self.migration.source_compute)
 
-            # since shared storage is used, we should not be instructed to
-            # destroy disks here
+            # If instance storage is shared, driver destroy method
+            # should not destroy disks otherwise it should destroy disks.
             destroy.assert_called_once_with(self.context, self.instance,
-                                            mock.ANY, mock.ANY, False)
+                                            mock.ANY, mock.ANY, not is_shared)
 
         do_test()
+
+    def test_revert_resize_instance_destroy_disks_shared_storage(self):
+        self._test_revert_resize_instance_destroy_disks(is_shared=True)
+
+    def test_revert_resize_instance_destroy_disks_non_shared_storage(self):
+        self._test_revert_resize_instance_destroy_disks(is_shared=False)

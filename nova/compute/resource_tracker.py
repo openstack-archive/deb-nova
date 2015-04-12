@@ -248,7 +248,8 @@ class ResourceTracker(object):
                 image_meta = utils.get_image_from_system_metadata(
                         instance['system_metadata'])
 
-            if instance_type['id'] == itype['id']:
+            if (instance_type is not None and
+                instance_type['id'] == itype['id']):
                 numa_topology = hardware.numa_get_constraints(
                     itype, image_meta)
                 usage = self._get_usage_dict(
@@ -282,6 +283,64 @@ class ResourceTracker(object):
     @property
     def disabled(self):
         return self.compute_node is None
+
+    def _init_compute_node(self, context, resources):
+        """Initialise the compute node if it does not already exist.
+
+        The resource tracker will be inoperable if compute_node
+        is not defined. The compute_node will remain undefined if
+        we fail to create it or if there is no associated service
+        registered.
+
+        If this method has to create a compute node it needs initial
+        values - these come from resources.
+
+        :param context: security context
+        :param resources: initial values
+        """
+
+        # if there is already a compute node we don't
+        # need to do anything
+        if self.compute_node:
+            return
+
+        # TODO(pmurray): this lookup should be removed when the service_id
+        # field in the compute node goes away. At the moment it is deprecated
+        # but still a required field, so it has to be assigned below.
+        service = self._get_service(context)
+        if not service:
+            # no service record, disable resource
+            return
+
+        # now try to get the compute node record from the
+        # database. If we get one we are done.
+        self.compute_node = self._get_compute_node(context)
+        if self.compute_node:
+            return
+
+        # there was no local copy and none in the database
+        # so we need to create a new compute node. This needs
+        # to be initialised with resource values.
+        cn = {}
+        cn.update(resources)
+        # TODO(pmurray) service_id is deprecated but is still a required field.
+        # This should be removed when the field is changed.
+        cn['service_id'] = service.id
+        cn['host'] = self.host
+        # initialize load stats from existing instances:
+        self._write_ext_resources(cn)
+        # NOTE(pmurray): the stats field is stored as a json string. The
+        # json conversion will be done automatically by the ComputeNode object
+        # so this can be removed when using ComputeNode.
+        cn['stats'] = jsonutils.dumps(cn['stats'])
+        # pci_passthrough_devices may be in resources but are not
+        # stored in compute nodes
+        cn.pop('pci_passthrough_devices', None)
+
+        self.compute_node = self.conductor_api.compute_node_create(context, cn)
+        LOG.info(_LI('Compute_service record created for '
+                     '%(host)s:%(node)s'),
+                 {'host': self.host, 'node': self.nodename})
 
     def _get_host_metrics(self, context, nodename):
         """Get the metrics from monitors and
@@ -319,7 +378,7 @@ class ResourceTracker(object):
         if not resources:
             # The virt driver does not support this function
             LOG.info(_LI("Virt driver does not support "
-                 "'get_available_resource'  Compute tracking is disabled."))
+                 "'get_available_resource'. Compute tracking is disabled."))
             self.compute_node = None
             return
         resources['host_ip'] = CONF.my_ip
@@ -340,10 +399,20 @@ class ResourceTracker(object):
 
         self._report_hypervisor_resource_view(resources)
 
-        return self._update_available_resource(context, resources)
+        self._update_available_resource(context, resources)
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def _update_available_resource(self, context, resources):
+
+        # initialise the compute node object, creating it
+        # if it does not already exist.
+        self._init_compute_node(context, resources)
+
+        # if we could not init the compute node the tracker will be
+        # disabled and we should quit now
+        if self.disabled:
+            return
+
         if 'pci_passthrough_devices' in resources:
             devs = []
             for dev in jsonutils.loads(resources.pop(
@@ -370,9 +439,8 @@ class ResourceTracker(object):
         self._update_usage_from_instances(context, resources, instances)
 
         # Grab all in-progress migrations:
-        capi = self.conductor_api
-        migrations = capi.migration_get_in_progress_by_host_and_node(context,
-                self.host, self.nodename)
+        migrations = objects.MigrationList.get_in_progress_by_host_and_node(
+                context, self.host, self.nodename)
 
         self._update_usage_from_migrations(context, resources, migrations)
 
@@ -387,57 +455,26 @@ class ResourceTracker(object):
         # from deleted instances.
         if self.pci_tracker:
             self.pci_tracker.clean_usage(instances, migrations, orphans)
-            resources['pci_stats'] = jsonutils.dumps(self.pci_tracker.stats)
+            resources['pci_device_pools'] = self.pci_tracker.stats
         else:
-            resources['pci_stats'] = jsonutils.dumps([])
+            resources['pci_device_pools'] = []
 
         self._report_final_resource_view(resources)
 
         metrics = self._get_host_metrics(context, self.nodename)
         resources['metrics'] = jsonutils.dumps(metrics)
-        self._sync_compute_node(context, resources)
 
-    def _sync_compute_node(self, context, resources):
-        """Create or update the compute node DB record."""
-        if not self.compute_node:
-            # we need a copy of the ComputeNode record:
-            service = self._get_service(context)
-            if not service:
-                # no service record, disable resource
-                return
+        # TODO(sbauza): Juno compute nodes are missing the host field and
+        # the Juno ResourceTracker does not set this field, even if
+        # the ComputeNode object can show it.
+        # Unfortunately, as we're not yet using ComputeNode.save(), we need
+        # to add this field in the resources dict until the RT is using
+        # the ComputeNode.save() method for populating the table.
+        # tl;dr: To be removed once RT is using ComputeNode.save()
+        resources['host'] = self.host
 
-            cn = self._get_compute_node(context)
-            if cn:
-                self.compute_node = cn
-                if self.pci_tracker:
-                    self.pci_tracker.set_compute_node_id(cn['id'])
-
-        if not self.compute_node:
-            # Need to create the ComputeNode record:
-            resources['service_id'] = service.id
-            resources['host'] = self.host
-            self._create(context, resources)
-            if self.pci_tracker:
-                self.pci_tracker.set_compute_node_id(self.compute_node['id'])
-            LOG.info(_LI('Compute_service record created for '
-                         '%(host)s:%(node)s'),
-                     {'host': self.host, 'node': self.nodename})
-
-        else:
-            # just update the record:
-
-            # TODO(sbauza): Juno compute nodes are missing the host field and
-            # the Juno ResourceTracker does not set this field, even if
-            # the ComputeNode object can show it.
-            # Unfortunately, as we're not yet using ComputeNode.save(), we need
-            # to add this field in the resources dict until the RT is using
-            # the ComputeNode.save() method for populating the table.
-            # tl;dr: To be removed once RT is using ComputeNode.save()
-            resources['host'] = self.host
-
-            self._update(context, resources)
-            LOG.info(_LI('Compute_service record updated for '
-                         '%(host)s:%(node)s'),
+        self._update(context, resources)
+        LOG.info(_LI('Compute_service record updated for %(host)s:%(node)s'),
                      {'host': self.host, 'node': self.nodename})
 
     def _get_compute_node(self, context):
@@ -454,20 +491,6 @@ class ResourceTracker(object):
         resources['stats'] = {}
         resources['stats'].update(self.stats)
         self.ext_resources_handler.write_resources(resources)
-
-    def _create(self, context, values):
-        """Create the compute node in the DB."""
-        # initialize load stats from existing instances:
-        self._write_ext_resources(values)
-        # NOTE(pmurray): the stats field is stored as a json string. The
-        # json conversion will be done automatically by the ComputeNode object
-        # so this can be removed when using ComputeNode.
-        values['stats'] = jsonutils.dumps(values['stats'])
-
-        self.compute_node = self.conductor_api.compute_node_create(context,
-                                                                   values)
-        # NOTE(sbauza): We don't want to miss the first creation event
-        self._update_resource_stats(context, values)
 
     def _get_service(self, context):
         try:
@@ -532,7 +555,7 @@ class ResourceTracker(object):
         else:
             tcpu = 0
             ucpu = 0
-        pci_stats = resources.get('pci_stats')
+        pci_device_pools = resources.get('pci_device_pools')
         LOG.info(_LI("Final resource view: "
                      "name=%(node)s "
                      "phys_ram=%(phys_ram)sMB "
@@ -549,7 +572,7 @@ class ResourceTracker(object):
                   'used_disk': resources['local_gb_used'],
                   'total_vcpus': tcpu,
                   'used_vcpus': ucpu,
-                  'pci_stats': pci_stats})
+                  'pci_stats': pci_device_pools})
 
     def _resource_change(self, resources):
         """Check to see if any resouces have changed."""
@@ -614,13 +637,13 @@ class ResourceTracker(object):
         """Update usage for a single migration.  The record may
         represent an incoming or outbound migration.
         """
-        uuid = migration['instance_uuid']
+        uuid = migration.instance_uuid
         LOG.info(_LI("Updating from migration %s") % uuid)
 
-        incoming = (migration['dest_compute'] == self.host and
-                    migration['dest_node'] == self.nodename)
-        outbound = (migration['source_compute'] == self.host and
-                    migration['source_node'] == self.nodename)
+        incoming = (migration.dest_compute == self.host and
+                    migration.dest_node == self.nodename)
+        outbound = (migration.source_compute == self.host and
+                    migration.source_node == self.nodename)
         same_node = (incoming and outbound)
 
         record = self.tracked_instances.get(uuid, None)
@@ -630,24 +653,24 @@ class ResourceTracker(object):
             # same node resize. record usage for whichever instance type the
             # instance is *not* in:
             if (instance['instance_type_id'] ==
-                    migration['old_instance_type_id']):
+                    migration.old_instance_type_id):
                 itype = self._get_instance_type(context, instance, 'new_',
-                        migration['new_instance_type_id'])
+                        migration.new_instance_type_id)
             else:
                 # instance record already has new flavor, hold space for a
                 # possible revert to the old instance type:
                 itype = self._get_instance_type(context, instance, 'old_',
-                        migration['old_instance_type_id'])
+                        migration.old_instance_type_id)
 
         elif incoming and not record:
             # instance has not yet migrated here:
             itype = self._get_instance_type(context, instance, 'new_',
-                    migration['new_instance_type_id'])
+                    migration.new_instance_type_id)
 
         elif outbound and not record:
             # instance migrated, but record usage for a possible revert:
             itype = self._get_instance_type(context, instance, 'old_',
-                    migration['old_instance_type_id'])
+                    migration.old_instance_type_id)
 
         if image_meta is None:
             image_meta = utils.get_image_from_system_metadata(
@@ -668,10 +691,9 @@ class ResourceTracker(object):
                 self.pci_tracker.update_pci_for_migration(context, instance)
             self._update_usage(context, resources, usage)
             if self.pci_tracker:
-                resources['pci_stats'] = jsonutils.dumps(
-                        self.pci_tracker.stats)
+                resources['pci_device_pools'] = self.pci_tracker.stats
             else:
-                resources['pci_stats'] = jsonutils.dumps([])
+                resources['pci_device_pools'] = []
             self.tracked_migrations[uuid] = (migration, itype)
 
     def _update_usage_from_migrations(self, context, resources, migrations):
@@ -683,14 +705,13 @@ class ResourceTracker(object):
         # do some defensive filtering against bad migrations records in the
         # database:
         for migration in migrations:
-
-            instance = migration['instance']
+            instance = migration.instance
 
             if not instance:
                 # migration referencing deleted instance
                 continue
 
-            uuid = instance['uuid']
+            uuid = instance.uuid
 
             # skip migration if instance isn't in a resize state:
             if not self._instance_in_resize_state(instance):
@@ -700,11 +721,11 @@ class ResourceTracker(object):
 
             # filter to most recently updated migration for each instance:
             m = filtered.get(uuid, None)
-            if not m or migration['updated_at'] >= m['updated_at']:
+            if not m or migration.updated_at >= m.updated_at:
                 filtered[uuid] = migration
 
         for migration in filtered.values():
-            instance = migration['instance']
+            instance = migration.instance
             try:
                 self._update_usage_from_migration(context, instance, None,
                                                   resources, migration)
@@ -741,9 +762,9 @@ class ResourceTracker(object):
 
         resources['current_workload'] = self.stats.calculate_workload()
         if self.pci_tracker:
-            resources['pci_stats'] = jsonutils.dumps(self.pci_tracker.stats)
+            resources['pci_device_pools'] = self.pci_tracker.stats
         else:
-            resources['pci_stats'] = jsonutils.dumps([])
+            resources['pci_device_pools'] = []
 
     def _update_usage_from_instances(self, context, resources, instances):
         """Calculate resource usage based on instance utilization.  This is

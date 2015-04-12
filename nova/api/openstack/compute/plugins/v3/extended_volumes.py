@@ -16,9 +16,7 @@
 from nova.api.openstack import api_version_request
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
-from nova import compute
 from nova import objects
-from nova import volume
 
 ALIAS = "os-extended-volumes"
 soft_authorize = extensions.os_compute_soft_authorizer(ALIAS)
@@ -27,18 +25,16 @@ soft_authorize = extensions.os_compute_soft_authorizer(ALIAS)
 class ExtendedVolumesController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(ExtendedVolumesController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API(skip_policy_check=True)
-        self.volume_api = volume.API()
+        self.api_version_2_3 = api_version_request.APIVersionRequest('2.3')
 
     def _extend_server(self, context, server, instance, requested_version):
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
         volumes_attached = []
-        api_version = api_version_request.APIVersionRequest('2.3')
         for bdm in bdms:
             if bdm.get('volume_id'):
                 volume_attached = {'id': bdm['volume_id']}
-                if requested_version >= api_version:
+                if requested_version >= self.api_version_2_3:
                     volume_attached['delete_on_termination'] = (
                         bdm['delete_on_termination'])
                 volumes_attached.append(volume_attached)

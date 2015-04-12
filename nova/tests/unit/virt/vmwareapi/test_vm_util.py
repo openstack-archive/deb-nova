@@ -20,6 +20,7 @@ import contextlib
 import mock
 from oslo_utils import uuidutils
 from oslo_vmware import exceptions as vexc
+from oslo_vmware.objects import datastore as ds_obj
 from oslo_vmware import pbm
 
 from nova import exception
@@ -28,8 +29,8 @@ from nova import test
 from nova.tests.unit import fake_instance
 from nova.tests.unit.virt.vmwareapi import fake
 from nova.tests.unit.virt.vmwareapi import stubs
+from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import driver
-from nova.virt.vmwareapi import ds_util
 from nova.virt.vmwareapi import vm_util
 
 
@@ -282,6 +283,36 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual("lsiLogic", vmdk_adapter_type)
         vmdk_adapter_type = vm_util.get_vmdk_adapter_type("dummyAdapter")
         self.assertEqual("dummyAdapter", vmdk_adapter_type)
+
+    def test_get_scsi_adapter_type(self):
+        vm = fake.VirtualMachine()
+        devices = vm.get("config.hardware.device").VirtualDevice
+        scsi_controller = fake.VirtualLsiLogicController()
+        ide_controller = fake.VirtualIDEController()
+        devices.append(scsi_controller)
+        devices.append(ide_controller)
+        fake._update_object("VirtualMachine", vm)
+        # return the scsi type, not ide
+        hardware_device = vm.get("config.hardware.device")
+        self.assertEqual(constants.DEFAULT_ADAPTER_TYPE,
+                         vm_util.get_scsi_adapter_type(hardware_device))
+
+    def test_get_scsi_adapter_type_with_error(self):
+        vm = fake.VirtualMachine()
+        devices = vm.get("config.hardware.device").VirtualDevice
+        scsi_controller = fake.VirtualLsiLogicController()
+        ide_controller = fake.VirtualIDEController()
+        devices.append(scsi_controller)
+        devices.append(ide_controller)
+        fake._update_object("VirtualMachine", vm)
+        # the controller is not suitable since the device under this controller
+        # has exceeded SCSI_MAX_CONNECT_NUMBER
+        for i in range(0, constants.SCSI_MAX_CONNECT_NUMBER):
+            scsi_controller.device.append('device' + str(i))
+        hardware_device = vm.get("config.hardware.device")
+        self.assertRaises(exception.StorageError,
+                          vm_util.get_scsi_adapter_type,
+                          hardware_device)
 
     def test_find_allocated_slots(self):
         disk1 = fake.VirtualDisk(200, 0)
@@ -1096,7 +1127,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual('vmx-08', result.version)
 
     def test_vm_create_spec_with_profile_spec(self):
-        datastore = ds_util.Datastore('fake-ds-ref', 'fake-ds-name')
+        datastore = ds_obj.Datastore('fake-ds-ref', 'fake-ds-name')
         extra_specs = vm_util.ExtraSpecs()
         create_spec = vm_util.get_vm_create_spec(fake.FakeFactory(),
                                             self._instance,

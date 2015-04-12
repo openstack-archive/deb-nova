@@ -97,6 +97,7 @@ def fake_instance_get_active_by_window_joined(context, begin, end,
             return [get_fake_db_instance(START,
                                          STOP,
                                          x,
+                                         project_id if project_id else
                                          "faketenant_%s" % (x / SERVERS))
                                          for x in xrange(TENANTS * SERVERS)]
 
@@ -104,7 +105,7 @@ def fake_instance_get_active_by_window_joined(context, begin, end,
 @mock.patch.object(db, 'instance_get_active_by_window_joined',
                    fake_instance_get_active_by_window_joined)
 class SimpleTenantUsageTestV21(test.TestCase):
-    policy_rule_prefix = "compute_extension:v3:os-simple-tenant-usage"
+    policy_rule_prefix = "os_compute_api:os-simple-tenant-usage"
     controller = simple_tenant_usage_v21.SimpleTenantUsageController()
 
     def setUp(self):
@@ -194,7 +195,7 @@ class SimpleTenantUsageTestV21(test.TestCase):
             self.assertIsNone(usages[i].get('server_usages'))
 
     def _test_verify_show(self, start, stop):
-        tenant_id = 0
+        tenant_id = 1
         req = fakes.HTTPRequest.blank('?start=%s&end=%s' %
                     (start.isoformat(), stop.isoformat()))
         req.environ['nova.context'] = self.user_context
@@ -203,9 +204,9 @@ class SimpleTenantUsageTestV21(test.TestCase):
 
         usage = res_dict['tenant_usage']
         servers = usage['server_usages']
-        self.assertEqual(len(usage['server_usages']), SERVERS)
+        self.assertEqual(len(usage['server_usages']), TENANTS * SERVERS)
         uuids = ['00000000-0000-0000-0000-00000000000000%02d' %
-                    (x + (tenant_id * SERVERS)) for x in xrange(SERVERS)]
+                    x for x in xrange(SERVERS)]
         for j in xrange(SERVERS):
             delta = STOP - START
             uptime = delta.days * 24 * 3600 + delta.seconds

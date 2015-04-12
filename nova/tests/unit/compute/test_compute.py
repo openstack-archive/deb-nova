@@ -4285,6 +4285,8 @@ class ComputeTestCase(BaseTestCase):
         self._stub_out_resize_network_methods()
         instance = self._create_fake_instance_obj()
         for operation in actions:
+            if 'revert_resize' in operation:
+                migration.source_compute = 'fake-mini'
 
             def fake_migration_save(*args, **kwargs):
                 raise test.TestingException()
@@ -6634,7 +6636,7 @@ class ComputeTestCase(BaseTestCase):
                 evacuated_instance).AndReturn({'filename': 'tmpfilename'})
         self.compute.compute_rpcapi.check_instance_shared_storage(fake_context,
                 evacuated_instance,
-                {'filename': 'tmpfilename'}).AndReturn(False)
+                {'filename': 'tmpfilename'}, host=None).AndReturn(False)
         self.compute.driver.check_instance_shared_storage_cleanup(fake_context,
                 {'filename': 'tmpfilename'})
         self.compute.driver.destroy(fake_context, evacuated_instance,
@@ -7281,6 +7283,18 @@ class ComputeAPITestCase(BaseTestCase):
                 raise exception.ImageNotFound(image_id=image_id)
 
         self.fake_show = fake_show
+
+        # Mock out build_instances and rebuild_instance since nothing in these
+        # tests should need those to actually run. We do this to avoid
+        # possible races with other tests that actually test those methods
+        # and mock things out within them, like conductor tests.
+        self.build_instances_mock = mock.Mock(autospec=True)
+        self.compute_api.compute_task_api.build_instances = \
+            self.build_instances_mock
+
+        self.rebuild_instance_mock = mock.Mock(autospec=True)
+        self.compute_api.compute_task_api.rebuild_instance = \
+            self.rebuild_instance_mock
 
     def _run_instance(self, params=None):
         instance = self._create_fake_instance_obj(params, services=True)
@@ -8965,7 +8979,8 @@ class ComputeAPITestCase(BaseTestCase):
                                  'authorize_console')
         self.compute_api.consoleauth_rpcapi.authorize_console(
             self.context, 'fake_token', fake_console_type, 'fake_console_host',
-            'fake_console_port', 'fake_access_path', 'fake_uuid')
+            'fake_console_port', 'fake_access_path', 'fake_uuid',
+            access_url='fake_console_url')
 
         self.mox.ReplayAll()
 
@@ -9004,7 +9019,8 @@ class ComputeAPITestCase(BaseTestCase):
                                  'authorize_console')
         self.compute_api.consoleauth_rpcapi.authorize_console(
             self.context, 'fake_token', fake_console_type, 'fake_console_host',
-            'fake_console_port', 'fake_access_path', 'fake_uuid')
+            'fake_console_port', 'fake_access_path', 'fake_uuid',
+            access_url='fake_console_url')
 
         self.mox.ReplayAll()
 
@@ -9043,7 +9059,8 @@ class ComputeAPITestCase(BaseTestCase):
                                  'authorize_console')
         self.compute_api.consoleauth_rpcapi.authorize_console(
             self.context, 'fake_token', fake_console_type, 'fake_console_host',
-            'fake_console_port', 'fake_access_path', 'fake_uuid')
+            'fake_console_port', 'fake_access_path', 'fake_uuid',
+            access_url='fake_console_url')
 
         self.mox.ReplayAll()
 
@@ -9083,7 +9100,8 @@ class ComputeAPITestCase(BaseTestCase):
             self.compute_api.consoleauth_rpcapi.authorize_console(
                     self.context, 'fake_token', fake_console_type,
                     'fake_serial_host', 'fake_tcp_port',
-                    'fake_access_path', 'fake_uuid')
+                    'fake_access_path', 'fake_uuid',
+                    access_url='fake_access_url')
 
             console = self.compute_api.get_serial_console(self.context,
                                                           fake_instance,
@@ -9846,8 +9864,12 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertEqual(migrations[0].id, migration['id'])
 
 
-class ComputeAPIIpFilterTestCase(BaseTestCase):
+class ComputeAPIIpFilterTestCase(test.NoDBTestCase):
     '''Verifies the IP filtering in the compute API.'''
+
+    def setUp(self):
+        super(ComputeAPIIpFilterTestCase, self).setUp()
+        self.compute_api = compute.API()
 
     def _get_ip_filtering_instances(self):
         '''Utility function to get instances for the IP filtering tests.'''
