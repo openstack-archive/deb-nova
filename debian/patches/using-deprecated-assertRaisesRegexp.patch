@@ -1,0 +1,40 @@
+Description: Using the old, deprecated, assertRaisesRegexp()
+ Nova is using the new assertRaisesRegex() definition, but Debian only has
+ the older assertRaisesRegexp(). This patch goes backward in the unit tests.
+ Hoping a better fix may be find soonish in Debian.
+ .
+ Thanks to S. Bauza for his help on this issue.
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: not-needed
+Last-Update: 2015-04-13
+
+--- nova-2015.1~rc1.orig/nova/tests/unit/compute/test_claims.py
++++ nova-2015.1~rc1/nova/tests/unit/compute/test_claims.py
+@@ -177,14 +177,14 @@ class ClaimTestCase(test.NoDBTestCase):
+ 
+     def test_disk_insufficient(self, mock_get):
+         limits = {'disk_gb': 45}
+-        self.assertRaisesRegex(
++        self.assertRaisesRegexp(
+                 exception.ComputeResourcesUnavailable,
+                 "disk",
+                 self._claim, limits=limits, root_gb=10, ephemeral_gb=40)
+ 
+     def test_disk_and_memory_insufficient(self, mock_get):
+         limits = {'disk_gb': 45, 'memory_mb': 8192}
+-        self.assertRaisesRegex(
++        self.assertRaisesRegexp(
+                 exception.ComputeResourcesUnavailable,
+                 "memory.*disk",
+                 self._claim, limits=limits, root_gb=10, ephemeral_gb=40,
+--- nova-2015.1~rc1.orig/nova/tests/unit/objects/test_objects.py
++++ nova-2015.1~rc1/nova/tests/unit/objects/test_objects.py
+@@ -514,7 +514,7 @@ class _TestObject(object):
+         class Foo(base.NovaObject):
+             fields = {'foobar': fields.Field(fields.Integer())}
+         obj = Foo()
+-        with self.assertRaisesRegex(NotImplementedError, ".*foobar.*"):
++        with self.assertRaisesRegexp(NotImplementedError, ".*foobar.*"):
+             obj.foobar
+ 
+     def test_loaded_in_primitive(self):
