@@ -22,9 +22,14 @@ override_dh_auto_clean:
 	rm -f debian/nova-common.config debian/nova-common.postinst debian/nova-compute-xen.postinst \
 		debian/nova-api.config debian/nova-api.postinst
 	rm -f debian/*.init debian/*.service debian/*.upstart
+	rm -rf build etc/nova/nova.conf.sample
 
 override_dh_auto_build:
 	dh_auto_build
+
+	set -e ; for i in build/* ; do \
+		PYTHONPATH=$$i bash tools/config/generate_sample.sh -b . -p nova -o etc/nova ; \
+	done
 
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.postinst
