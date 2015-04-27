@@ -180,6 +180,33 @@ class _TestInstancePCIRequests(object):
         self.assertFalse(backported.requests[0].obj_attr_is_set('request_id'))
         self.assertFalse(backported.requests[1].obj_attr_is_set('request_id'))
 
+    def test_obj_from_db(self):
+        req = objects.InstancePCIRequests.obj_from_db(None, FAKE_UUID, None)
+        self.assertEqual(FAKE_UUID, req.instance_uuid)
+        self.assertEqual(0, len(req.requests))
+        db_req = jsonutils.dumps(fake_pci_requests)
+        req = objects.InstancePCIRequests.obj_from_db(None, FAKE_UUID, db_req)
+        self.assertEqual(FAKE_UUID, req.instance_uuid)
+        self.assertEqual(2, len(req.requests))
+        self.assertEqual('alias_1', req.requests[0].alias_name)
+
+    def test_from_request_spec_instance_props(self):
+        requests = objects.InstancePCIRequests(
+            requests=[objects.InstancePCIRequest(count=1,
+                                                 request_id=FAKE_UUID,
+                                                 spec=[{'vendor_id': '8086',
+                                                        'device_id': '1502'}])
+                      ],
+            instance_uuid=FAKE_UUID)
+        result = jsonutils.to_primitive(requests)
+        result = objects.InstancePCIRequests.from_request_spec_instance_props(
+                                                                        result)
+        self.assertEqual(1, len(result.requests))
+        self.assertEqual(1, result.requests[0].count)
+        self.assertEqual(FAKE_UUID, result.requests[0].request_id)
+        self.assertEqual([{'vendor_id': '8086', 'device_id': '1502'}],
+                          result.requests[0].spec)
+
 
 class TestInstancePCIRequests(test_objects._LocalTest,
                               _TestInstancePCIRequests):
