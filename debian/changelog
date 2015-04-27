@@ -1,6 +1,7 @@
-nova (2015.1~rc1-1) UNRELEASED; urgency=medium
+nova (2015.1~rc2-1) unstable; urgency=medium
 
   * New upstream release.
+  * Uploading to unstable.
   * Reviewed (build-)depends for this release.
   * Removed the nova-baremetal package, since there's now Ironic.
   * Added a nova-conmpute-ironic package.
