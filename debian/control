@@ -366,6 +366,7 @@ Conflicts: nova-compute-kvm,
            nova-compute-qemu,
            nova-compute-uml,
            nova-compute-xen,
+           nova-baremetal,
 Description: OpenStack Compute - compute node (Ironic)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public

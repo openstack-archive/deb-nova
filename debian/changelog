@@ -1,3 +1,10 @@
+nova (2015.1.0-2) unstable; urgency=medium
+
+  * Added conflicts: nova-baremetal for the nova-compute-ironic
+    (Closes: #784294).
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 07 May 2015 23:38:56 +0200
+
 nova (2015.1.0-1) unstable; urgency=medium
 
   * New upstream release.
