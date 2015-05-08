@@ -23,6 +23,7 @@ override_dh_auto_clean:
 		debian/nova-api.config debian/nova-api.postinst
 	rm -f debian/*.init debian/*.service debian/*.upstart
 	rm -rf build etc/nova/nova.conf.sample
+	rm -rf .testrepository subunit.log instances keys
 
 override_dh_auto_build:
 	dh_auto_build
