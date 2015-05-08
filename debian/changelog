@@ -1,3 +1,10 @@
+nova (2015.1.0-3) UNRELEASED; urgency=medium
+
+  [ gustavo panizzo ]
+  * Add a missing rootwrap filter, needed to use unprivileged lxc.
+
+ -- gustavo panizzo <gfa@zumbi.com.ar>  Fri, 08 May 2015 17:39:24 +0800
+
 nova (2015.1.0-2) unstable; urgency=medium
 
   * Added conflicts: nova-baremetal for the nova-compute-ironic

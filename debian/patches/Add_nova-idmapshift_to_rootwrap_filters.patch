@@ -1,0 +1,29 @@
+Description: This patch adds the rootwrapper filter for nova-idmapshift
+ binary, it is used when unprivileged lxc domains are created.
+ .
+Author: gustavo panizzo <gfa@zumbi.com.ar>
+Forwarded: https://review.openstack.org/#/c/180451/
+Last-Update: 2015-05-06
+Change-Id: I96572a495628cc072392e1d7248699450b3e0aeb
+Closes-Bug: #1452143
+---
+ etc/nova/rootwrap.d/compute.filters | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/etc/nova/rootwrap.d/compute.filters b/etc/nova/rootwrap.d/compute.filters
+index acb5b25..d6ded57 100644
+--- a/etc/nova/rootwrap.d/compute.filters
++++ b/etc/nova/rootwrap.d/compute.filters
+@@ -159,6 +159,9 @@ brctl: CommandFilter, brctl, root
+ # nova/virt/xenapi/vm_utils.py: 'mkswap'
+ mkswap: CommandFilter, mkswap, root
+ 
++# nova/virt/libvirt/utils.py: 'nova-idmapshift'
++nova-idmapshift: CommandFilter, nova-idmapshift, root
++
+ # nova/virt/xenapi/vm_utils.py: 'mkfs'
+ # nova/utils.py: 'mkfs', fs, path, label
+ mkfs: CommandFilter, mkfs, root
+-- 
+2.1.4
+
