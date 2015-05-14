@@ -470,6 +470,7 @@ Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          debconf,
          nova-common (= ${binary:Version}),
+         iptables,
          ${misc:Depends},
          ${ostack-lsb-base},
          ${python:Depends},
