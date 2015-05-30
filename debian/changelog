@@ -1,9 +1,12 @@
-nova (2015.1.0-3) UNRELEASED; urgency=medium
+nova (2015.1.0-3) unstable; urgency=medium
 
   [ gustavo panizzo ]
   * Add a missing rootwrap filter, needed to use unprivileged lxc.
 
- -- gustavo panizzo <gfa@zumbi.com.ar>  Fri, 08 May 2015 17:39:24 +0800
+  [ Thomas Goirand ]
+  * Added bridge-utils dependency in nova-common (Closes: #786488).
+
+ -- Thomas Goirand <zigo@debian.org>  Sat, 30 May 2015 16:08:33 +0200
 
 nova (2015.1.0-2) unstable; urgency=medium
 

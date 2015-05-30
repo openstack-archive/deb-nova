@@ -164,6 +164,7 @@ Package: nova-common
 Architecture: all
 Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
+         bridge-utils,
          dbconfig-common,
          iproute2 | iproute,
          python-amqplib,
