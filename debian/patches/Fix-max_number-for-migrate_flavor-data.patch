@@ -1,0 +1,31 @@
+Author: Joshua Hesketh <josh@nitrotech.org>
+ The max_number was not being set correctly due to mapping from
+ --max-number onto max_number in the params not being set up.
+ .
+ Also the migrate_flavor_data db API doesn't require a max-number to
+ process. If None is given all instances will have their flavor data
+ migrated. Support this option by not requiring the --max-number
+ param from the cli.
+Subject: Fix max_number for migrate_flavor data
+Date: Tue, 21 Apr 2015 14:16:32 +0000 (+1000)
+X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=3d7ab0fe93c0dc5d81f2ecd8cd91b524ceecd469
+Change-Id: Ic2ded8d498b34cb1212fb6fa1c8f1a60f0581a76
+Origin: upstream, https://review.openstack.org/#/c/175890/
+Last-Update: 2015-06-03
+
+diff --git a/nova/cmd/manage.py b/nova/cmd/manage.py
+index b2c0e3d..8ccbf69 100644
+--- a/nova/cmd/manage.py
++++ b/nova/cmd/manage.py
+@@ -958,9 +958,9 @@ class DbCommands(object):
+             print(_('There were no records found where '
+                     'instance_uuid was NULL.'))
+ 
+-    @args('--max-number', metavar='<number>',
++    @args('--max-number', metavar='<number>', dest='max_number',
+           help='Maximum number of instances to consider')
+-    def migrate_flavor_data(self, max_number):
++    def migrate_flavor_data(self, max_number=None):
+         if max_number is not None:
+             max_number = int(max_number)
+             if max_number < 0:

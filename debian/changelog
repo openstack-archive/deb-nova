@@ -1,3 +1,12 @@
+nova (2015.1.0-4) unstable; urgency=medium
+
+  * Added hotfix from upstream:
+    - Fix_loading_things_in_instance_extra_for_old_instances.patch
+    - Create-instance_extra-entry-if-it-doesn_t-update.patch
+    - Fix-max_number-for-migrate_flavor-data.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 03 Jun 2015 11:08:32 +0200
+
 nova (2015.1.0-3) unstable; urgency=medium
 
   [ gustavo panizzo ]

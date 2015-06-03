@@ -1,0 +1,109 @@
+Subject: Fix loading things in instance_extra for old instances
+ If we don't have db_inst['extra'] then we can't load those things. We
+ should just set them to None instead of exploding.
+Author: Dan Smith <dansmith@redhat.com>
+Date: Wed, 13 May 2015 18:52:10 +0000 (-0700)
+X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=1bfb65d5ac8f7180edf3c4ecea09c8e15982bf27
+Change-Id: I2ace62158faaa0b6a7df3c32f2cb9f235d178013
+Bug-Ubuntu: https://bugs.launchpad.net/nova/+bug/1446082
+Origin: https://review.openstack.org/#/c/182787/
+Last-Update: 2015-06-03
+
+--- nova-2015.1.0.orig/nova/objects/instance.py
++++ nova-2015.1.0/nova/objects/instance.py
+@@ -445,8 +445,9 @@ class Instance(base.NovaPersistentObject
+         if flavor_implied:
+             # This instance is from before flavors were migrated out of
+             # system_metadata. Make sure that we honor that.
+-            if db_inst['extra']['flavor'] is not None:
+-                self._flavor_from_db(db_inst['extra']['flavor'])
++            instance_extra = db_inst.get('extra') or {}
++            if instance_extra.get('flavor') is not None:
++                self._flavor_from_db(instance_extra['flavor'])
+                 sysmeta = self.system_metadata
+                 flavors.save_flavor_info(sysmeta, self.flavor)
+                 del self.flavor
+@@ -488,6 +489,13 @@ class Instance(base.NovaPersistentObject
+             else:
+                 instance[field] = db_inst[field]
+ 
++        # NOTE(danms): We can be called with a dict instead of a
++        # SQLAlchemy object, so we have to be careful here
++        if hasattr(db_inst, '__dict__'):
++            have_extra = 'extra' in db_inst.__dict__ and db_inst['extra']
++        else:
++            have_extra = 'extra' in db_inst and db_inst['extra']
++
+         if 'metadata' in expected_attrs:
+             instance['metadata'] = utils.instance_meta(db_inst)
+         if 'system_metadata' in expected_attrs:
+@@ -497,13 +505,23 @@ class Instance(base.NovaPersistentObject
+                 objects.InstanceFault.get_latest_for_instance(
+                     context, instance.uuid))
+         if 'numa_topology' in expected_attrs:
+-            instance._load_numa_topology(
+-                db_inst.get('extra').get('numa_topology'))
++            if have_extra:
++                instance._load_numa_topology(
++                    db_inst['extra'].get('numa_topology'))
++            else:
++                instance.numa_topology = None
+         if 'pci_requests' in expected_attrs:
+-            instance._load_pci_requests(
+-                db_inst.get('extra').get('pci_requests'))
++            if have_extra:
++                instance._load_pci_requests(
++                    db_inst['extra'].get('pci_requests'))
++            else:
++                instance.pci_requests = None
+         if 'vcpu_model' in expected_attrs:
+-            instance._load_vcpu_model(db_inst.get('extra').get('vcpu_model'))
++            if have_extra:
++                instance._load_vcpu_model(
++                    db_inst['extra'].get('vcpu_model'))
++            else
++                instance.vcpu_model = None
+         if 'info_cache' in expected_attrs:
+             if db_inst['info_cache'] is None:
+                 instance.info_cache = None
+--- nova-2015.1.0.orig/nova/tests/unit/objects/test_instance.py
++++ nova-2015.1.0/nova/tests/unit/objects/test_instance.py
+@@ -1158,6 +1158,38 @@ class _TestInstanceObject(object):
+         self.assertTrue(inst.obj_attr_is_set('flavor'))
+         self.assertEqual(flavor.flavorid, inst.flavor.flavorid)
+ 
++    def test_without_extra_record(self):
++        flavor = flavors.get_default_flavor()
++        db_inst = fake_instance.fake_db_instance()
++        db_inst['system_metadata'] = flavors.save_flavor_info({}, flavor)
++        del db_inst['extra']
++        with mock.patch('nova.db.instance_get_by_uuid') as mock_get:
++            mock_get.return_value = db_inst
++            inst = objects.Instance.get_by_uuid(
++                self.context, uuid='foo',
++                expected_attrs=['numa_topology', 'pci_requests', 'vcpu_model',
++                                'flavor'])
++            for field in ('numa_topology', 'pci_requests', 'vcpu_model'):
++                self.assertTrue(inst.obj_attr_is_set(field))
++                self.assertIsNone(getattr(inst, field))
++            self.assertTrue(inst.obj_attr_is_set('flavor'))
++
++    def test_with_null_extra_record(self):
++        flavor = flavors.get_default_flavor()
++        db_inst = fake_instance.fake_db_instance()
++        db_inst['system_metadata'] = flavors.save_flavor_info({}, flavor)
++        db_inst['extra'] = None
++        with mock.patch('nova.db.instance_get_by_uuid') as mock_get:
++            mock_get.return_value = db_inst
++            inst = objects.Instance.get_by_uuid(
++                self.context, uuid='foo',
++                expected_attrs=['numa_topology', 'pci_requests', 'vcpu_model',
++                                'flavor'])
++            for field in ('numa_topology', 'pci_requests', 'vcpu_model'):
++                self.assertTrue(inst.obj_attr_is_set(field))
++                self.assertIsNone(getattr(inst, field))
++            self.assertTrue(inst.obj_attr_is_set('flavor'))
++
+ 
+ class TestInstanceObject(test_objects._LocalTest,
+                          _TestInstanceObject):
