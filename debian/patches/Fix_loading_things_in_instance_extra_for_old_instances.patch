@@ -61,7 +61,7 @@ Last-Update: 2015-06-03
 +            if have_extra:
 +                instance._load_vcpu_model(
 +                    db_inst['extra'].get('vcpu_model'))
-+            else
++            else:
 +                instance.vcpu_model = None
          if 'info_cache' in expected_attrs:
              if db_inst['info_cache'] is None:
