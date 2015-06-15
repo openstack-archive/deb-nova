@@ -1,3 +1,11 @@
+nova (2015.1.0-5) unstable; urgency=medium
+
+  * Renames service_neutron_metadata_proxy as service_metadata_proxy, as per
+    upstream deprecation. Thanks to Mathieu Rohon for the bug report
+    (Closes: #788815).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 15 Jun 2015 15:05:13 +0200
+
 nova (2015.1.0-4) unstable; urgency=medium
 
   * Added hotfix from upstream:
