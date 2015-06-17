@@ -331,8 +331,11 @@ Recommends: guestmount
 Conflicts: nova-compute-kvm,
            nova-compute-lxc,
            nova-compute-qemu,
+           nova-compute-uml,
            nova-compute-xen,
            nova-baremetal,
+Breaks: nova-compute-uml,
+Replaces: nova-compute-uml,
 Description: OpenStack Compute - compute node (Ironic)
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
  the ubiquitous cloud computing platform that will meet the needs of public

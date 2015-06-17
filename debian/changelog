@@ -1,3 +1,10 @@
+nova (2015.1.0-7) unstable; urgency=medium
+
+  * Still needs Breaks: + Replaces: of nova-compute-uml in nova-compute-ironic,
+    as per Andreas Beckmann <anbe@debian.org> advice (Closes: #788992).
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 17 Jun 2015 14:38:44 +0200
+
 nova (2015.1.0-6) unstable; urgency=medium
 
   * Removes nova-compute-uml (is there anyone using it?).
