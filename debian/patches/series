@@ -6,3 +6,4 @@ Add_nova-idmapshift_to_rootwrap_filters.patch
 Fix_loading_things_in_instance_extra_for_old_instances.patch
 Create-instance_extra-entry-if-it-doesn_t-update.patch
 Fix-max_number-for-migrate_flavor-data.patch
+accepts-sqla-higher-than-1.patch

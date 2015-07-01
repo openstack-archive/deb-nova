@@ -1,3 +1,9 @@
+nova (2015.1.0-8) unstable; urgency=medium
+
+  * Allow running with SQLA 1.0.6.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 01 Jul 2015 03:17:58 +0000
+
 nova (2015.1.0-7) unstable; urgency=medium
 
   * Still needs Breaks: + Replaces: of nova-compute-uml in nova-compute-ironic,
