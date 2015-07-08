@@ -15,6 +15,7 @@
 
 import datetime
 
+import six
 from webob import exc
 
 from nova.api.openstack import api_version_request as api_version
@@ -91,7 +92,7 @@ def fake_get_all_flavors_sorted_list(context, inactive=False,
         return sorted(INSTANCE_TYPES.values(), key=lambda item: item[sort_key])
 
     res = {}
-    for k, v in INSTANCE_TYPES.iteritems():
+    for k, v in six.iteritems(INSTANCE_TYPES):
         if filters['is_public'] and _has_flavor_access(k, context.project_id):
             res.update({k: v})
             continue
@@ -125,7 +126,7 @@ class FlavorAccessTestV21(test.NoDBTestCase):
     api_version = "2.1"
     FlavorAccessController = flavor_access_v21.FlavorAccessController
     FlavorActionController = flavor_access_v21.FlavorActionController
-    _prefix = "/v3"
+    _prefix = "/v2/fake"
     validation_ex = exception.ValidationError
 
     def setUp(self):
@@ -166,7 +167,7 @@ class FlavorAccessTestV21(test.NoDBTestCase):
 
     def test_list_flavor_with_admin_default_proj1(self):
         expected = {'flavors': [{'id': '0'}, {'id': '1'}]}
-        req = fakes.HTTPRequest.blank(self._prefix + '/fake/flavors',
+        req = fakes.HTTPRequest.blank(self._prefix + '/flavors',
                                       use_admin_context=True)
         req.environ['nova.context'].project_id = 'proj1'
         result = self.flavor_controller.index(req)
@@ -344,7 +345,6 @@ class FlavorAccessTestV20(FlavorAccessTestV21):
     api_version = "2.0"
     FlavorAccessController = flavor_access_v2.FlavorAccessController
     FlavorActionController = flavor_access_v2.FlavorActionController
-    _prefix = "/v2/fake"
     validation_ex = exc.HTTPBadRequest
 
     def setUp(self):

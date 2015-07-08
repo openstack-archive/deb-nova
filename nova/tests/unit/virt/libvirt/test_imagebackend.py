@@ -13,6 +13,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import base64
 import contextlib
 import inspect
 import os
@@ -35,6 +36,7 @@ from nova.openstack.common import imageutils
 from nova import test
 from nova.tests.unit import fake_processutils
 from nova.tests.unit.virt.libvirt import fake_libvirt_utils
+from nova.virt.image import model as imgmodel
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import imagebackend
@@ -42,6 +44,18 @@ from nova.virt.libvirt import rbd_utils
 
 CONF = cfg.CONF
 CONF.import_opt('fixed_key', 'nova.keymgr.conf_key_mgr', group='keymgr')
+
+
+class FakeSecret(object):
+
+    def value(self):
+        return base64.b64decode("MTIzNDU2Cg==")
+
+
+class FakeConn(object):
+
+    def secretLookupByUUIDString(self, uuid):
+        return FakeSecret()
 
 
 class _ImageTestCase(object):
@@ -258,7 +272,8 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
         fn = self.prepare_mocks()
         fn(max_size=self.SIZE, target=self.TEMPLATE_PATH, image_id=None)
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, self.PATH)
-        imagebackend.disk.extend(self.PATH, self.SIZE, use_cow=False)
+        image = imgmodel.LocalFileImage(self.PATH, imgmodel.FORMAT_RAW)
+        imagebackend.disk.extend(image, self.SIZE)
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
@@ -292,6 +307,13 @@ class RawTestCase(_ImageTestCase, test.NoDBTestCase):
         image = self.image_class(self.INSTANCE, self.NAME)
         driver_format = image.resolve_driver_format()
         self.assertEqual(driver_format, 'raw')
+
+    def test_get_model(self):
+        image = self.image_class(self.INSTANCE, self.NAME)
+        model = image.get_model(FakeConn())
+        self.assertEqual(imgmodel.LocalFileImage(self.PATH,
+                                                 imgmodel.FORMAT_RAW),
+                         model)
 
 
 class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
@@ -413,7 +435,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         imagebackend.Image.verify_base_size(self.TEMPLATE_PATH, self.SIZE)
         imagebackend.libvirt_utils.create_cow_image(self.TEMPLATE_PATH,
                                                     self.PATH)
-        imagebackend.disk.extend(self.PATH, self.SIZE, use_cow=True)
+        image = imgmodel.LocalFileImage(self.PATH, imgmodel.FORMAT_QCOW2)
+        imagebackend.disk.extend(image, self.SIZE)
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
@@ -460,7 +483,9 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         imagebackend.Image.verify_base_size(self.TEMPLATE_PATH, self.SIZE)
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH,
                                               self.QCOW2_BASE)
-        imagebackend.disk.extend(self.QCOW2_BASE, self.SIZE, use_cow=True)
+        image = imgmodel.LocalFileImage(self.QCOW2_BASE,
+                                        imgmodel.FORMAT_QCOW2)
+        imagebackend.disk.extend(image, self.SIZE)
 
         os.path.exists(self.PATH).AndReturn(True)
         self.mox.ReplayAll()
@@ -501,6 +526,13 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         image = self.image_class(self.INSTANCE, self.NAME)
         driver_format = image.resolve_driver_format()
         self.assertEqual(driver_format, 'qcow2')
+
+    def test_get_model(self):
+        image = self.image_class(self.INSTANCE, self.NAME)
+        model = image.get_model(FakeConn())
+        self.assertEqual(imgmodel.LocalFileImage(self.PATH,
+                                                 imgmodel.FORMAT_QCOW2),
+                        model)
 
 
 class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
@@ -1080,6 +1112,12 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.assertEqual(fake_processutils.fake_execute_get_log(), [])
 
+    def test_get_model(self):
+        image = self.image_class(self.INSTANCE, self.NAME)
+        model = image.get_model(FakeConn())
+        self.assertEqual(imgmodel.LocalBlockImage(self.PATH),
+                         model)
+
 
 class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
     POOL = "FakePool"
@@ -1253,9 +1291,6 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         def fake_fetch(target, *args, **kwargs):
             return
 
-        def fake_resize(rbd_name, size):
-            return
-
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(image, 'check_image_exists', lambda: True)
 
@@ -1300,6 +1335,32 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
                               image.create_image, mock.MagicMock(),
                               self.TEMPLATE_PATH, 1)
             driver_mock.size.assert_called_once_with(image.rbd_name)
+
+    @mock.patch.object(rbd_utils.RBDDriver, "get_mon_addrs")
+    def test_get_model(self, mock_mon_addrs):
+        pool = "FakePool"
+        user = "FakeUser"
+
+        self.flags(images_rbd_pool=pool, group='libvirt')
+        self.flags(rbd_user=user, group='libvirt')
+        self.flags(rbd_secret_uuid="3306a5c4-8378-4b3c-aa1f-7b48d3a26172",
+                   group='libvirt')
+
+        def get_mon_addrs():
+            hosts = ["server1", "server2"]
+            ports = ["1899", "1920"]
+            return hosts, ports
+        mock_mon_addrs.side_effect = get_mon_addrs
+
+        image = self.image_class(self.INSTANCE, self.NAME)
+        model = image.get_model(FakeConn())
+        self.assertEqual(imgmodel.RBDImage(
+            self.INSTANCE["uuid"] + "_fake.vm",
+            "FakePool",
+            "FakeUser",
+            "MTIzNDU2Cg==",
+            ["server1:1899", "server2:1920"]),
+                         model)
 
 
 class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
@@ -1442,12 +1503,3 @@ class BackendTestCase(test.NoDBTestCase):
 
     def test_image_default(self):
         self._test_image('default', imagebackend.Raw, imagebackend.Qcow2)
-
-
-class UtilTestCase(test.NoDBTestCase):
-    def test_get_hw_disk_discard(self):
-        self.assertEqual('unmap', imagebackend.get_hw_disk_discard("unmap"))
-        self.assertEqual('ignore', imagebackend.get_hw_disk_discard("ignore"))
-        self.assertIsNone(imagebackend.get_hw_disk_discard(None))
-        self.assertRaises(RuntimeError, imagebackend.get_hw_disk_discard,
-                          "fake")

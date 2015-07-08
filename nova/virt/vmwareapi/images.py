@@ -27,6 +27,7 @@ from oslo_log import log as logging
 from oslo_utils import strutils
 from oslo_utils import units
 from oslo_vmware import rw_handles
+import six
 
 from nova import exception
 from nova.i18n import _, _LE, _LI
@@ -68,7 +69,8 @@ class VMwareImage(object):
             disk_type (str): type of disk in thin, thick, etc
             container_format (str): container format (bare or ova)
             file_type (str): vmdk or iso
-            linked_clone(bool): use linked clone, or don't
+            linked_clone (bool): use linked clone, or don't
+            vif_model (str): virtual machine network interface
         """
         self.image_id = image_id
         self.file_size = file_size
@@ -146,7 +148,7 @@ class VMwareImage(object):
             'hw_vif_model': 'vif_model'
         }
 
-        for k, v in props_map.iteritems():
+        for k, v in six.iteritems(props_map):
             if k in properties:
                 props[v] = properties[k]
 

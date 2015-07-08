@@ -25,6 +25,7 @@ import mock
 from mox3 import mox
 from oslo_config import cfg
 from oslo_utils import units
+import six
 
 from nova.api.metadata import base as instance_metadata
 from nova import context
@@ -141,6 +142,7 @@ class HyperVAPIBaseTestCase(test.NoDBTestCase):
         self._mox.StubOutWithMock(fake.PathUtils, 'copyfile')
         self._mox.StubOutWithMock(fake.PathUtils, 'rmtree')
         self._mox.StubOutWithMock(fake.PathUtils, 'copy')
+        self._mox.StubOutWithMock(fake.PathUtils, 'move_folder_files')
         self._mox.StubOutWithMock(fake.PathUtils, 'remove')
         self._mox.StubOutWithMock(fake.PathUtils, 'rename')
         self._mox.StubOutWithMock(fake.PathUtils, 'makedirs')
@@ -404,7 +406,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
                                      target_lun, target_portal, True)
 
         vmutils.VMUtils.create_nic(mox.Func(self._check_vm_name),
-                mox.IsA(str), mox.IsA(unicode)).InAnyOrder()
+                mox.IsA(str), mox.IsA(six.text_type)).InAnyOrder()
 
         if setup_vif_mocks_func:
             setup_vif_mocks_func()
@@ -464,7 +466,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             fake.PathUtils.copyfile(mox.IsA(str), mox.IsA(str))
 
             m = vhdutils.VHDUtils.get_internal_vhd_size_by_file_size(
-                mox.IsA(unicode), mox.IsA(object))
+                mox.IsA(six.text_type), mox.IsA(object))
             m.AndReturn(1025)
 
             vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object),
@@ -511,7 +513,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
 
             if not (cow and vhd_format == constants.DISK_FORMAT_VHD):
                 m = vhdutils.VHDUtils.get_internal_vhd_size_by_file_size(
-                    mox.IsA(unicode), mox.IsA(object))
+                    mox.IsA(six.text_type), mox.IsA(object))
                 m.AndReturn(1025)
                 vhdutils.VHDUtils.resize_vhd(mox.IsA(str), mox.IsA(object),
                                              is_file_max_size=False)
@@ -830,7 +832,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             m.AndReturn(self._test_instance_dir)
 
             m = pathutils.PathUtils.get_instance_migr_revert_dir(
-                self._instance.name, remove_dir=True)
+                self._instance.name, remove_dir=True, create_dir=True)
             m.AndReturn(fake_revert_path)
 
             if same_host:
@@ -844,10 +846,12 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
                                                     remove_dir=True)
                 m.AndReturn(self._test_instance_dir)
             else:
-                fake.PathUtils.rename(mox.IsA(str), mox.IsA(str))
+                fake.PathUtils.move_folder_files(mox.IsA(str),
+                                                 mox.IsA(str))
                 destroy_disks = True
                 if same_host:
-                    fake.PathUtils.rename(mox.IsA(str), mox.IsA(str))
+                    fake.PathUtils.move_folder_files(mox.IsA(str),
+                                                     mox.IsA(str))
                     destroy_disks = False
 
                 self._setup_destroy_mocks(False)
@@ -950,7 +954,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         m.AndReturn(self._test_instance_dir)
 
         self._mox.StubOutWithMock(fake.PathUtils, 'exists')
-        m = fake.PathUtils.exists(mox.IsA(unicode))
+        m = fake.PathUtils.exists(mox.IsA(six.text_type))
         m.AndReturn(True)
 
         fake_parent_vhd_path = (os.path.join('FakeParentPath', '%s.vhd' %
@@ -960,15 +964,16 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
         m.AndReturn({'ParentPath': fake_parent_vhd_path,
                      'MaxInternalSize': 1})
         m = vhdutils.VHDUtils.get_internal_vhd_size_by_file_size(
-            mox.IsA(unicode), mox.IsA(object))
+            mox.IsA(six.text_type), mox.IsA(object))
         m.AndReturn(1025)
 
-        vhdutils.VHDUtils.reconnect_parent_vhd(mox.IsA(str), mox.IsA(unicode))
+        vhdutils.VHDUtils.reconnect_parent_vhd(mox.IsA(str),
+                                               mox.IsA(six.text_type))
 
-        m = vhdutils.VHDUtils.get_vhd_info(mox.IsA(unicode))
+        m = vhdutils.VHDUtils.get_vhd_info(mox.IsA(six.text_type))
         m.AndReturn({'MaxInternalSize': 1024})
 
-        m = fake.PathUtils.exists(mox.IsA(unicode))
+        m = fake.PathUtils.exists(mox.IsA(six.text_type))
         m.AndReturn(True)
 
         m = fake.PathUtils.get_instance_dir(mox.IsA(str))

@@ -18,15 +18,16 @@ from nova.objects import fields
 
 
 # TODO(berrange): Remove NovaObjectDictCompat
+@base.NovaObjectRegistry.register
 class HVSpec(base.NovaObject,
              base.NovaObjectDictCompat):
     # Version 1.0: Initial version
     VERSION = '1.0'
 
     fields = {
-        'arch': fields.StringField(),
-        'hv_type': fields.StringField(),
-        'vm_mode': fields.StringField(),
+        'arch': fields.ArchitectureField(),
+        'hv_type': fields.HVTypeField(),
+        'vm_mode': fields.VMModeField(),
         }
 
     # NOTE(pmurray): for backward compatibility, the supported instance

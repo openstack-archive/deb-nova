@@ -39,13 +39,16 @@ import netaddr
 from oslo_concurrency import lockutils
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_context import context as common_context
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_utils import encodeutils
 from oslo_utils import excutils
 from oslo_utils import importutils
 from oslo_utils import timeutils
+from oslo_utils import units
 import six
+from six.moves import range
 
 from nova import exception
 from nova.i18n import _, _LE, _LW
@@ -100,9 +103,9 @@ workarounds_opts = [
                      'https://bugs.launchpad.net/nova/+bug/1415106'),
     cfg.BoolOpt('disable_libvirt_livesnapshot',
                 default=True,
-                help='When using libvirt 1.2.2 fails live snapshots '
+                help='When using libvirt 1.2.2 live snapshots fail '
                      'intermittently under load.  This config option provides '
-                     'mechanism to disable livesnapshot while this is '
+                     'a mechanism to enable live snapshot while this is '
                      'resolved.  See '
                      'https://bugs.launchpad.net/nova/+bug/1334398'),
     cfg.BoolOpt('destroy_after_evacuate',
@@ -111,6 +114,26 @@ workarounds_opts = [
                      'they have previously been evacuated. This can result in '
                       'data loss if undesired. See '
                       'https://launchpad.net/bugs/1419785'),
+    cfg.BoolOpt('handle_virt_lifecycle_events',
+                default=True,
+                help="Whether or not to handle events raised from the compute "
+                     "driver's 'emit_event' method. These are lifecycle "
+                     "events raised from compute drivers that implement the "
+                     "method. An example of a lifecycle event is an instance "
+                     "starting or stopping. If the instance is going through "
+                     "task state changes due to an API operation, like "
+                     "resize, the events are ignored. However, this is an "
+                     "advanced feature which allows the hypervisor to signal "
+                     "to the compute service that an unexpected state change "
+                     "has occurred in an instance and the instance can be "
+                     "shutdown automatically - which can inherently race in "
+                     "reboot operations or when the compute service or host "
+                     "is rebooted, either planned or due to an unexpected "
+                     "outage. Care should be taken when using this and "
+                     "sync_power_state_interval is negative since then if any "
+                     "instances are out of sync between the hypervisor and "
+                     "the Nova database they will have to be synchronized "
+                     "manually. See https://bugs.launchpad.net/bugs/1444630"),
     ]
 CONF = cfg.CONF
 CONF.register_opts(monkey_patch_opts)
@@ -206,6 +229,14 @@ def execute(*cmd, **kwargs):
     return processutils.execute(*cmd, **kwargs)
 
 
+def ssh_execute(dest, *cmd, **kwargs):
+    """Convenience wrapper to execute ssh command."""
+    ssh_cmd = ['ssh', '-o', 'BatchMode=yes']
+    ssh_cmd.append(dest)
+    ssh_cmd.extend(cmd)
+    return execute(*ssh_cmd, **kwargs)
+
+
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
     if 'run_as_root' in kwargs and 'root_helper' not in kwargs:
@@ -220,7 +251,7 @@ def novadir():
 
 def generate_uid(topic, size=8):
     characters = '01234567890abcdefghijklmnopqrstuvwxyz'
-    choices = [random.choice(characters) for _x in xrange(size)]
+    choices = [random.choice(characters) for _x in range(size)]
     return '%s-%s' % (topic, ''.join(choices))
 
 
@@ -355,7 +386,7 @@ def generate_password(length=None, symbolgroups=DEFAULT_PASSWORD_SYMBOLS):
 
     # then fill with random characters from all symbol groups
     symbols = ''.join(symbolgroups)
-    password.extend([r.choice(symbols) for _i in xrange(length)])
+    password.extend([r.choice(symbols) for _i in range(length)])
 
     # finally shuffle to ensure first x characters aren't from a
     # predictable group
@@ -395,7 +426,7 @@ def utf8(value):
     http://github.com/facebook/tornado/blob/master/tornado/escape.py
 
     """
-    if isinstance(value, unicode):
+    if isinstance(value, six.text_type):
         return value.encode('utf-8')
     assert isinstance(value, str)
     return value
@@ -571,7 +602,7 @@ def make_dev_path(dev, partition=None, base='/dev'):
 
 def sanitize_hostname(hostname):
     """Return a hostname which conforms to RFC-952 and RFC-1123 specs."""
-    if isinstance(hostname, unicode):
+    if isinstance(hostname, six.text_type):
         hostname = hostname.encode('latin-1', 'ignore')
 
     hostname = re.sub('[ _]', '-', hostname)
@@ -807,7 +838,7 @@ def metadata_to_dict(metadata):
 
 def dict_to_metadata(metadata):
     result = []
-    for key, value in metadata.iteritems():
+    for key, value in six.iteritems(metadata):
         result.append(dict(key=key, value=value))
     return result
 
@@ -944,13 +975,50 @@ def validate_integer(value, name, min_value=None, max_value=None):
     return value
 
 
+def spawn(func, *args, **kwargs):
+    """Passthrough method for eventlet.spawn.
+
+    This utility exists so that it can be stubbed for testing without
+    interfering with the service spawns.
+
+    It will also grab the context from the threadlocal store and add it to
+    the store on the new thread.  This allows for continuity in logging the
+    context when using this method to spawn a new thread.
+    """
+    _context = common_context.get_current()
+
+    @functools.wraps(func)
+    def context_wrapper(*args, **kwargs):
+        # NOTE: If update_store is not called after spawn it won't be
+        # available for the logger to pull from threadlocal storage.
+        if _context is not None:
+            _context.update_store()
+        return func(*args, **kwargs)
+
+    return eventlet.spawn(context_wrapper, *args, **kwargs)
+
+
 def spawn_n(func, *args, **kwargs):
     """Passthrough method for eventlet.spawn_n.
 
     This utility exists so that it can be stubbed for testing without
     interfering with the service spawns.
+
+    It will also grab the context from the threadlocal store and add it to
+    the store on the new thread.  This allows for continuity in logging the
+    context when using this method to spawn a new thread.
     """
-    eventlet.spawn_n(func, *args, **kwargs)
+    _context = common_context.get_current()
+
+    @functools.wraps(func)
+    def context_wrapper(*args, **kwargs):
+        # NOTE: If update_store is not called after spawn_n it won't be
+        # available for the logger to pull from threadlocal storage.
+        if _context is not None:
+            _context.update_store()
+        func(*args, **kwargs)
+
+    eventlet.spawn_n(context_wrapper, *args, **kwargs)
 
 
 def is_none_string(val):
@@ -1032,8 +1100,8 @@ def get_system_metadata_from_image(image_meta, flavor=None):
     system_meta = {}
     prefix_format = SM_IMAGE_PROP_PREFIX + '%s'
 
-    for key, value in image_meta.get('properties', {}).iteritems():
-        new_value = safe_truncate(unicode(value), 255)
+    for key, value in six.iteritems(image_meta.get('properties', {})):
+        new_value = safe_truncate(six.text_type(value), 255)
         system_meta[prefix_format % key] = new_value
 
     for key in SM_INHERITABLE_KEYS:
@@ -1060,7 +1128,7 @@ def get_image_from_system_metadata(system_meta):
     if not isinstance(system_meta, dict):
         system_meta = metadata_to_dict(system_meta)
 
-    for key, value in system_meta.iteritems():
+    for key, value in six.iteritems(system_meta):
         if value is None:
             continue
 
@@ -1072,13 +1140,33 @@ def get_image_from_system_metadata(system_meta):
         if key in SM_INHERITABLE_KEYS:
             image_meta[key] = value
         else:
-            # Skip properties that are non-inheritable
-            if key in CONF.non_inheritable_image_properties:
-                continue
             properties[key] = value
 
     image_meta['properties'] = properties
 
+    return image_meta
+
+
+def get_image_metadata_from_volume(volume):
+    properties = volume.get('volume_image_metadata', {})
+    image_meta = {'properties': properties}
+    # NOTE(yjiang5): restore the basic attributes
+    # NOTE(mdbooth): These values come from volume_glance_metadata
+    # in cinder. This is a simple key/value table, and all values
+    # are strings. We need to convert them to ints to avoid
+    # unexpected type errors.
+    image_meta['min_ram'] = int(properties.get('min_ram', 0))
+    image_meta['min_disk'] = int(properties.get('min_disk', 0))
+    # Volume size is no longer related to the original image size,
+    # so we take it from the volume directly. Cinder creates
+    # volumes in Gb increments, and stores size in Gb, whereas
+    # glance reports size in bytes. As we're returning glance
+    # metadata here, we need to convert it.
+    image_meta['size'] = volume.get('size', 0) * units.Gi
+    # NOTE(yjiang5): Always set the image status as 'active'
+    # and depends on followed volume_api.check_attach() to
+    # verify it. This hack should be harmless with that check.
+    image_meta['status'] = 'active'
     return image_meta
 
 

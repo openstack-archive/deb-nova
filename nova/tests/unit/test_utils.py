@@ -23,15 +23,22 @@ import StringIO
 import struct
 import tempfile
 
+import eventlet
 import mock
 from mox3 import mox
 import netaddr
 from oslo_concurrency import processutils
 from oslo_config import cfg
+from oslo_context import context as common_context
+from oslo_context import fixture as context_fixture
 from oslo_utils import encodeutils
 from oslo_utils import timeutils
+from oslo_utils import units
+import six
+
 
 import nova
+from nova import context
 from nova import exception
 from nova import test
 from nova import utils
@@ -217,6 +224,13 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.flags(disable_rootwrap=True, group='workarounds')
         cmd = utils._get_root_helper()
         self.assertEqual('sudo', cmd)
+
+    def test_ssh_execute(self):
+        expected_args = ('ssh', '-o', 'BatchMode=yes',
+                         'remotehost', 'ls', '-l')
+        with mock.patch('nova.utils.execute') as mock_method:
+            utils.ssh_execute('remotehost', 'ls', '-l')
+        mock_method.assert_called_once_with(*expected_args)
 
 
 class VPNPingTestCase(test.NoDBTestCase):
@@ -813,7 +827,7 @@ class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
         sys_meta = utils.get_system_metadata_from_image(image)
 
         # Verify that we inherit all the image properties
-        for key, expected in image["properties"].iteritems():
+        for key, expected in six.iteritems(image["properties"]):
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertEqual(sys_meta[sys_key], expected)
 
@@ -870,7 +884,7 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         # Verify that we inherit the rest of metadata as properties
         self.assertIn("properties", image)
 
-        for key, value in image["properties"].iteritems():
+        for key, value in six.iteritems(image["properties"]):
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertEqual(image["properties"][key], sys_meta[sys_key])
 
@@ -887,16 +901,30 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         for key in utils.SM_INHERITABLE_KEYS:
             self.assertNotIn(key, image)
 
-    def test_non_inheritable_image_properties(self):
-        sys_meta = self.get_system_metadata()
-        sys_meta["%soo1" % utils.SM_IMAGE_PROP_PREFIX] = "bar"
 
-        self.flags(non_inheritable_image_properties=["foo1"])
+class GetImageMetadataFromVolumeTestCase(test.NoDBTestCase):
+    def test_inherit_image_properties(self):
+        properties = {"fake_prop": "fake_value"}
+        volume = {"volume_image_metadata": properties}
+        image_meta = utils.get_image_metadata_from_volume(volume)
+        self.assertEqual(properties, image_meta["properties"])
 
-        image = utils.get_image_from_system_metadata(sys_meta)
+    def test_image_size(self):
+        volume = {"size": 10}
+        image_meta = utils.get_image_metadata_from_volume(volume)
+        self.assertEqual(10 * units.Gi, image_meta["size"])
 
-        # Verify that the foo1 key has not been inherited
-        self.assertNotIn("foo1", image)
+    def test_image_status(self):
+        volume = {}
+        image_meta = utils.get_image_metadata_from_volume(volume)
+        self.assertEqual("active", image_meta["status"])
+
+    def test_values_conversion(self):
+        properties = {"min_ram": "5", "min_disk": "7"}
+        volume = {"volume_image_metadata": properties}
+        image_meta = utils.get_image_metadata_from_volume(volume)
+        self.assertEqual(5, image_meta["min_ram"])
+        self.assertEqual(7, image_meta["min_disk"])
 
 
 class VersionTestCase(test.NoDBTestCase):
@@ -1013,3 +1041,68 @@ class SafeTruncateTestCase(test.NoDBTestCase):
         truncated_msg = utils.safe_truncate(msg, 255)
         byte_message = encodeutils.safe_encode(truncated_msg)
         self.assertEqual(254, len(byte_message))
+
+
+class SpawnNTestCase(test.NoDBTestCase):
+    def setUp(self):
+        super(SpawnNTestCase, self).setUp()
+        self.useFixture(context_fixture.ClearRequestContext())
+        self.spawn_name = 'spawn_n'
+
+    def test_spawn_n_no_context(self):
+        self.assertIsNone(common_context.get_current())
+
+        def _fake_spawn(func, *args, **kwargs):
+            # call the method to ensure no error is raised
+            func(*args, **kwargs)
+            self.assertEqual('test', args[0])
+
+        def fake(arg):
+            pass
+
+        with mock.patch.object(eventlet, self.spawn_name, _fake_spawn):
+            getattr(utils, self.spawn_name)(fake, 'test')
+        self.assertIsNone(common_context.get_current())
+
+    def test_spawn_n_context(self):
+        self.assertIsNone(common_context.get_current())
+        ctxt = context.RequestContext('user', 'project')
+
+        def _fake_spawn(func, *args, **kwargs):
+            # call the method to ensure no error is raised
+            func(*args, **kwargs)
+            self.assertEqual(ctxt, args[0])
+            self.assertEqual('test', kwargs['kwarg1'])
+
+        def fake(context, kwarg1=None):
+            pass
+
+        with mock.patch.object(eventlet, self.spawn_name, _fake_spawn):
+            getattr(utils, self.spawn_name)(fake, ctxt, kwarg1='test')
+        self.assertEqual(ctxt, common_context.get_current())
+
+    def test_spawn_n_context_different_from_passed(self):
+        self.assertIsNone(common_context.get_current())
+        ctxt = context.RequestContext('user', 'project')
+        ctxt_passed = context.RequestContext('user', 'project',
+                overwrite=False)
+        self.assertEqual(ctxt, common_context.get_current())
+
+        def _fake_spawn(func, *args, **kwargs):
+            # call the method to ensure no error is raised
+            func(*args, **kwargs)
+            self.assertEqual(ctxt_passed, args[0])
+            self.assertEqual('test', kwargs['kwarg1'])
+
+        def fake(context, kwarg1=None):
+            pass
+
+        with mock.patch.object(eventlet, self.spawn_name, _fake_spawn):
+            getattr(utils, self.spawn_name)(fake, ctxt_passed, kwarg1='test')
+        self.assertEqual(ctxt, common_context.get_current())
+
+
+class SpawnTestCase(SpawnNTestCase):
+    def setUp(self):
+        super(SpawnTestCase, self).setUp()
+        self.spawn_name = 'spawn'

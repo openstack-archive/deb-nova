@@ -16,6 +16,7 @@
 """
 CellState Manager
 """
+import collections
 import copy
 import datetime
 import functools
@@ -27,6 +28,7 @@ from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
 from oslo_utils import units
+import six
 
 from nova.cells import rpc_driver
 from nova import context
@@ -75,7 +77,7 @@ class CellState(object):
 
     def update_db_info(self, cell_db_info):
         """Update cell credentials from db."""
-        self.db_info = {k: v for k, v in cell_db_info.iteritems()
+        self.db_info = {k: v for k, v in six.iteritems(cell_db_info)
                         if k != 'name'}
 
     def update_capabilities(self, cell_metadata):
@@ -259,7 +261,10 @@ class CellStateManager(base.Base):
             ctxt = context.get_admin_context()
 
         reserve_level = CONF.cells.reserve_percent / 100.0
-        compute_hosts = {}
+
+        def _defaultdict_int():
+            return collections.defaultdict(int)
+        compute_hosts = collections.defaultdict(_defaultdict_int)
 
         def _get_compute_hosts():
             service_refs = {service.host: service
@@ -273,11 +278,13 @@ class CellStateManager(base.Base):
                 if not service or service['disabled']:
                     continue
 
-                compute_hosts[host] = {
-                        'free_ram_mb': compute['free_ram_mb'],
-                        'free_disk_mb': compute['free_disk_gb'] * 1024,
-                        'total_ram_mb': compute['memory_mb'],
-                        'total_disk_mb': compute['local_gb'] * 1024}
+                chost = compute_hosts[host]
+                chost['free_ram_mb'] += compute['free_ram_mb']
+                free_disk = compute['free_disk_gb'] * 1024
+                chost['free_disk_mb'] += free_disk
+                chost['total_ram_mb'] += compute['memory_mb']
+                total_disk = compute['local_gb'] * 1024
+                chost['total_disk_mb'] += total_disk
 
         _get_compute_hosts()
         if not compute_hosts:
@@ -328,9 +335,9 @@ class CellStateManager(base.Base):
     def get_cell_info_for_neighbors(self):
         """Return cell information for all neighbor cells."""
         cell_list = [cell.get_cell_info()
-                for cell in self.child_cells.itervalues()]
+                for cell in six.itervalues(self.child_cells)]
         cell_list.extend([cell.get_cell_info()
-                for cell in self.parent_cells.itervalues()])
+                for cell in six.itervalues(self.parent_cells)])
         return cell_list
 
     @sync_before

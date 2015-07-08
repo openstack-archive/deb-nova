@@ -394,7 +394,7 @@ class IptablesManager(object):
             elif ip_version == 6:
                 tables = self.ipv6
 
-            for table, chains in builtin_chains[ip_version].iteritems():
+            for table, chains in six.iteritems(builtin_chains[ip_version]):
                 for chain in chains:
                     tables[table].add_chain(chain)
                     tables[table].add_rule(chain, '-j $%s' % (chain,),
@@ -426,11 +426,11 @@ class IptablesManager(object):
         self.apply()
 
     def dirty(self):
-        for table in self.ipv4.itervalues():
+        for table in six.itervalues(self.ipv4):
             if table.dirty:
                 return True
         if CONF.use_ipv6:
-            for table in self.ipv6.itervalues():
+            for table in six.itervalues(self.ipv6):
                 if table.dirty:
                     return True
         return False
@@ -461,7 +461,7 @@ class IptablesManager(object):
                                                 run_as_root=True,
                                                 attempts=5)
             all_lines = all_tables.split('\n')
-            for table_name, table in tables.iteritems():
+            for table_name, table in six.iteritems(tables):
                 start, end = self._find_table(all_lines, table_name)
                 all_lines[start:end] = self._modify_rules(
                         all_lines[start:end], table, table_name)
@@ -485,7 +485,7 @@ class IptablesManager(object):
 
     def _modify_rules(self, current_lines, table, table_name):
         unwrapped_chains = table.unwrapped_chains
-        chains = table.chains
+        chains = sorted(table.chains)
         remove_chains = table.remove_chains
         rules = table.rules
         remove_rules = table.remove_rules

@@ -23,10 +23,10 @@ import datetime
 import functools
 import sys
 import threading
-import time
 import uuid
 
 from oslo_config import cfg
+from oslo_db import api as oslo_db_api
 from oslo_db import exception as db_exc
 from oslo_db import options as oslo_db_options
 from oslo_db.sqlalchemy import session as db_session
@@ -35,8 +35,8 @@ from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
-import retrying
 import six
+from six.moves import range
 from sqlalchemy import and_
 from sqlalchemy import Boolean
 from sqlalchemy.exc import NoSuchTableError
@@ -262,24 +262,6 @@ def require_aggregate_exists(f):
     return wrapper
 
 
-def _retry_on_deadlock(f):
-    """Decorator to retry a DB API call if Deadlock was received."""
-    @functools.wraps(f)
-    def wrapped(*args, **kwargs):
-        while True:
-            try:
-                return f(*args, **kwargs)
-            except db_exc.DBDeadlock:
-                LOG.warning(_LW("Deadlock detected when running "
-                                "'%(func_name)s': Retrying..."),
-                            dict(func_name=f.__name__))
-                # Retry!
-                time.sleep(0.5)
-                continue
-    functools.update_wrapper(wrapped, f)
-    return wrapped
-
-
 def model_query(context, model,
                 args=None,
                 session=None,
@@ -339,10 +321,18 @@ def model_query(context, model,
 
 
 def convert_objects_related_datetimes(values, *datetime_keys):
+    if not datetime_keys:
+        datetime_keys = ('created_at', 'deleted_at', 'updated_at')
+
     for key in datetime_keys:
         if key in values and values[key]:
             if isinstance(values[key], six.string_types):
-                values[key] = timeutils.parse_strtime(values[key])
+                try:
+                    values[key] = timeutils.parse_strtime(values[key])
+                except ValueError:
+                    # Try alternate parsing since parse_strtime will fail
+                    # with say converting '2015-05-28T19:59:38+00:00'
+                    values[key] = timeutils.parse_isotime(values[key])
             # NOTE(danms): Strip UTC timezones from datetimes, since they're
             # stored that way in the database
             values[key] = values[key].replace(tzinfo=None)
@@ -483,7 +473,6 @@ def service_get_all_by_topic(context, topic):
                 all()
 
 
-@require_admin_context
 def service_get_by_host_and_topic(context, host, topic):
     return model_query(context, models.Service, read_deleted="no").\
                 filter_by(disabled=False).\
@@ -499,7 +488,6 @@ def service_get_all_by_binary(context, binary):
                 all()
 
 
-@require_admin_context
 def service_get_by_host_and_binary(context, host, binary):
     result = model_query(context, models.Service, read_deleted="no").\
                     filter_by(host=host).\
@@ -518,7 +506,6 @@ def service_get_all_by_host(context, host):
                 all()
 
 
-@require_admin_context
 def service_get_by_compute_host(context, host, use_slave=False):
     result = model_query(context, models.Service, read_deleted="no",
                          use_slave=use_slave).\
@@ -548,11 +535,17 @@ def service_create(context, values):
     return service_ref
 
 
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def service_update(context, service_id, values):
     session = get_session()
     with session.begin():
         service_ref = _service_get(context, service_id, session=session)
+        # Only servicegroup.drivers.db.DbDriver._report_state() updates
+        # 'report_count', so if that value changes then store the timestamp
+        # as the last time we got a state report.
+        if 'report_count' in values:
+            if values['report_count'] > service_ref.report_count:
+                service_ref.last_seen_up = timeutils.utcnow()
         service_ref.update(values)
 
     return service_ref
@@ -575,7 +568,6 @@ def _compute_node_get(context, compute_id, session=None):
     return result
 
 
-@require_admin_context
 def compute_nodes_get_by_service_id(context, service_id):
     result = model_query(context, models.ComputeNode, read_deleted='no').\
         filter_by(service_id=service_id).\
@@ -587,7 +579,6 @@ def compute_nodes_get_by_service_id(context, service_id):
     return result
 
 
-@require_admin_context
 def compute_node_get_by_host_and_nodename(context, host, nodename):
     result = model_query(context, models.ComputeNode, read_deleted='no').\
         filter_by(host=host, hypervisor_hostname=nodename).\
@@ -599,7 +590,6 @@ def compute_node_get_by_host_and_nodename(context, host, nodename):
     return result
 
 
-@require_admin_context
 def compute_node_get_all_by_host(context, host, use_slave=False):
     result = model_query(context, models.ComputeNode, read_deleted='no',
                          use_slave=use_slave).\
@@ -612,12 +602,10 @@ def compute_node_get_all_by_host(context, host, use_slave=False):
     return result
 
 
-@require_admin_context
 def compute_node_get_all(context):
     return model_query(context, models.ComputeNode, read_deleted='no').all()
 
 
-@require_admin_context
 def compute_node_search_by_hypervisor(context, hypervisor_match):
     field = models.ComputeNode.hypervisor_hostname
     return model_query(context, models.ComputeNode).\
@@ -625,13 +613,11 @@ def compute_node_search_by_hypervisor(context, hypervisor_match):
             all()
 
 
-@require_admin_context
 def compute_node_create(context, values):
     """Creates a new ComputeNode and populates the capacity fields
     with the most recent data.
     """
-    datetime_keys = ('created_at', 'deleted_at', 'updated_at')
-    convert_objects_related_datetimes(values, *datetime_keys)
+    convert_objects_related_datetimes(values)
 
     compute_node_ref = models.ComputeNode()
     compute_node_ref.update(values)
@@ -640,8 +626,7 @@ def compute_node_create(context, values):
     return compute_node_ref
 
 
-@require_admin_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def compute_node_update(context, compute_id, values):
     """Updates the ComputeNode record with the most recent data."""
 
@@ -652,14 +637,12 @@ def compute_node_update(context, compute_id, values):
         # changes in data.  This ensures that we invalidate the
         # scheduler cache of compute node data in case of races.
         values['updated_at'] = timeutils.utcnow()
-        datetime_keys = ('created_at', 'deleted_at', 'updated_at')
-        convert_objects_related_datetimes(values, *datetime_keys)
+        convert_objects_related_datetimes(values)
         compute_ref.update(values)
 
     return compute_ref
 
 
-@require_admin_context
 def compute_node_delete(context, compute_id):
     """Delete a ComputeNode record."""
     session = get_session()
@@ -772,9 +755,8 @@ def floating_ip_get_pools(context):
 
 
 @require_context
-@_retry_on_deadlock
-@retrying.retry(stop_max_attempt_number=5, retry_on_exception=
-                lambda e: isinstance(e, exception.FloatingIpAllocateFailed))
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
+                           retry_on_request=True)
 def floating_ip_allocate_address(context, project_id, pool,
                                  auto_assigned=False):
     nova.context.authorize_project_context(context, project_id)
@@ -803,7 +785,7 @@ def floating_ip_allocate_address(context, project_id, pool,
         if not rows_update:
             LOG.debug('The row was updated in a concurrent transaction, '
                       'we will fetch another one')
-            raise exception.FloatingIpAllocateFailed()
+            raise db_exc.RetryRequest(exception.FloatingIpAllocateFailed())
 
     return floating_ip_ref['address']
 
@@ -850,31 +832,31 @@ def floating_ip_bulk_destroy(context, ips):
         for ip_block in _ip_range_splitter(ips):
             # Find any floating IPs that were not auto_assigned and
             # thus need quota released.
-            query = model_query(context, models.FloatingIp).\
+            query = model_query(context, models.FloatingIp, session=session).\
                 filter(models.FloatingIp.address.in_(ip_block)).\
                 filter_by(auto_assigned=False)
-            rows = query.all()
-            for row in rows:
+            for row in query.all():
                 # The count is negative since we release quota by
                 # reserving negative quota.
                 project_id_to_quota_count[row['project_id']] -= 1
             # Delete the floating IPs.
-            model_query(context, models.FloatingIp).\
+            model_query(context, models.FloatingIp, session=session).\
                 filter(models.FloatingIp.address.in_(ip_block)).\
                 soft_delete(synchronize_session='fetch')
-        # Delete the quotas, if needed.
-        for project_id, count in project_id_to_quota_count.iteritems():
-            try:
-                reservations = quota.QUOTAS.reserve(context,
-                                                    project_id=project_id,
-                                                    floating_ips=count)
-                quota.QUOTAS.commit(context,
-                                    reservations,
-                                    project_id=project_id)
-            except Exception:
-                with excutils.save_and_reraise_exception():
-                    LOG.exception(_LE("Failed to update usages bulk "
-                                      "deallocating floating IP"))
+
+    # Delete the quotas, if needed.
+    # Quota update happens in a separate transaction, so previous must have
+    # been committed first.
+    for project_id, count in project_id_to_quota_count.iteritems():
+        try:
+            reservations = quota.QUOTAS.reserve(context,
+                                                project_id=project_id,
+                                                floating_ips=count)
+            quota.QUOTAS.commit(context, reservations, project_id=project_id)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_LE("Failed to update usages bulk "
+                                  "deallocating floating IP"))
 
 
 @require_context
@@ -899,38 +881,43 @@ def _floating_ip_count_by_project(context, project_id, session=None):
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def floating_ip_fixed_ip_associate(context, floating_address,
                                    fixed_address, host):
     session = get_session()
     with session.begin():
-        floating_ip_ref = _floating_ip_get_by_address(context,
-                                                      floating_address,
-                                                      session=session)
         fixed_ip_ref = model_query(context, models.FixedIp, session=session).\
                          filter_by(address=fixed_address).\
                          options(joinedload('network')).\
                          first()
-        if floating_ip_ref.fixed_ip_id == fixed_ip_ref["id"]:
-            return None
-        floating_ip_ref.fixed_ip_id = fixed_ip_ref["id"]
-        floating_ip_ref.host = host
+        if not fixed_ip_ref:
+            raise exception.FixedIpNotFoundForAddress(address=fixed_address)
+        rows = model_query(context, models.FloatingIp, session=session).\
+                    filter_by(address=floating_address).\
+                    filter(models.FloatingIp.project_id ==
+                           context.project_id).\
+                    filter(or_(models.FloatingIp.fixed_ip_id ==
+                               fixed_ip_ref['id'],
+                               models.FloatingIp.fixed_ip_id.is_(None))).\
+                    update({'fixed_ip_id': fixed_ip_ref['id'], 'host': host})
+
+        if not rows:
+            raise exception.FloatingIpAssociateFailed(address=floating_address)
 
         return fixed_ip_ref
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def floating_ip_deallocate(context, address):
-    session = get_session()
-    with session.begin():
-        return model_query(context, models.FloatingIp, session=session).\
-            filter_by(address=address).\
-            filter(models.FloatingIp.project_id != null()).\
-            update({'project_id': None,
-                    'host': None,
-                    'auto_assigned': False},
-                   synchronize_session=False)
+    return model_query(context, models.FloatingIp).\
+        filter_by(address=address).\
+        filter(and_(models.FloatingIp.project_id != null()),
+                    models.FloatingIp.fixed_ip_id == null()).\
+        update({'project_id': None,
+                'host': None,
+                'auto_assigned': False},
+               synchronize_session=False)
 
 
 @require_context
@@ -967,7 +954,6 @@ def _floating_ip_get_all(context, session=None):
                        session=session)
 
 
-@require_admin_context
 def floating_ip_get_all(context):
     floating_ip_refs = _floating_ip_get_all(context).\
                        options(joinedload('fixed_ip')).\
@@ -977,7 +963,6 @@ def floating_ip_get_all(context):
     return floating_ip_refs
 
 
-@require_admin_context
 def floating_ip_get_all_by_host(context, host):
     floating_ip_refs = _floating_ip_get_all(context).\
                        filter_by(host=host).\
@@ -1122,9 +1107,8 @@ def dnsdomain_get_all(context):
 
 
 @require_admin_context
-@_retry_on_deadlock
-@retrying.retry(stop_max_attempt_number=5, retry_on_exception=
-                lambda exc: isinstance(exc, exception.FixedIpAssociateFailed))
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
+                           retry_on_request=True)
 def fixed_ip_associate(context, address, instance_uuid, network_id=None,
                        reserved=False):
     """Keyword arguments:
@@ -1167,15 +1151,15 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
         if not rows_updated:
             LOG.debug('The row was updated in a concurrent transaction, '
                       'we will fetch another row')
-            raise exception.FixedIpAssociateFailed(net=network_id)
+            raise db_exc.RetryRequest(
+                exception.FixedIpAssociateFailed(net=network_id))
 
     return fixed_ip_ref
 
 
 @require_admin_context
-@_retry_on_deadlock
-@retrying.retry(stop_max_attempt_number=5, retry_on_exception=
-                lambda exc: isinstance(exc, exception.FixedIpAssociateFailed))
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
+                           retry_on_request=True)
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
                             host=None):
     if instance_uuid and not uuidutils.is_uuid_like(instance_uuid):
@@ -1217,7 +1201,8 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
         if not rows_updated:
             LOG.debug('The row was updated in a concurrent transaction, '
                       'we will fetch another row')
-            raise exception.FixedIpAssociateFailed(net=network_id)
+            raise db_exc.RetryRequest(
+                exception.FixedIpAssociateFailed(net=network_id))
 
     return fixed_ip_ref
 
@@ -1305,7 +1290,6 @@ def fixed_ip_get(context, id, get_network=False):
     return result
 
 
-@require_admin_context
 def fixed_ip_get_all(context):
     result = model_query(context, models.FixedIp, read_deleted="yes").all()
     if not result:
@@ -1390,7 +1374,6 @@ def fixed_ip_get_by_instance(context, instance_uuid):
     return result
 
 
-@require_admin_context
 def fixed_ip_get_by_host(context, host):
     session = get_session()
     with session.begin():
@@ -1702,7 +1685,7 @@ def _instance_data_get_for_user(context, project_id, user_id, session=None):
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def instance_destroy(context, instance_uuid, constraint=None):
     session = get_session()
     with session.begin():
@@ -2182,7 +2165,7 @@ def _regex_instance_filter(query, filters):
 
     model = models.Instance
     db_regexp_op = _get_regexp_op_for_connection(CONF.database.connection)
-    for filter_name in filters.iterkeys():
+    for filter_name in filters:
         try:
             column_attr = getattr(model, filter_name)
         except AttributeError:
@@ -2371,7 +2354,6 @@ def _instance_get_all_query(context, project_only=False,
     return query
 
 
-@require_admin_context
 def instance_get_all_by_host(context, host,
                              columns_to_join=None,
                              use_slave=False):
@@ -2397,7 +2379,6 @@ def _instance_get_all_uuids_by_host(context, host, session=None):
     return uuids
 
 
-@require_admin_context
 def instance_get_all_by_host_and_node(context, host, node,
                                       columns_to_join=None):
     if columns_to_join is None:
@@ -2506,7 +2487,7 @@ def _instance_metadata_update_in_place(context, instance, metadata_type, model,
         instance[metadata_type].append(newitem)
 
 
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def _instance_update(context, instance_uuid, values, copy_old_instance=False,
                      columns_to_join=None):
     session = get_session()
@@ -2613,6 +2594,8 @@ def instance_info_cache_update(context, instance_uuid, values):
     :param instance_uuid: = uuid of info cache's instance
     :param values: = dict containing column values to update
     """
+    convert_objects_related_datetimes(values)
+
     session = get_session()
     with session.begin():
         info_cache = model_query(context, models.InstanceInfoCache,
@@ -2661,9 +2644,16 @@ def _instance_extra_create(context, values):
 
 
 def instance_extra_update_by_uuid(context, instance_uuid, values):
-    return model_query(context, models.InstanceExtra).\
+    rows_updated = model_query(context, models.InstanceExtra).\
         filter_by(instance_uuid=instance_uuid).\
         update(values)
+    if not rows_updated:
+        LOG.debug("Created instance_extra for %s" % instance_uuid)
+        create_values = copy.copy(values)
+        create_values["instance_uuid"] = instance_uuid
+        _instance_extra_create(context, create_values)
+        rows_updated = 1
+    return rows_updated
 
 
 def instance_extra_get_by_instance_uuid(context, instance_uuid,
@@ -2735,7 +2725,6 @@ def key_pair_count_by_user(context, user_id):
 ###################
 
 
-@require_admin_context
 def network_associate(context, project_id, network_id=None, force=False):
     """Associate a project with a network.
 
@@ -2796,7 +2785,6 @@ def network_count_reserved_ips(context, network_id):
                     count()
 
 
-@require_admin_context
 def network_create_safe(context, values):
     network_ref = models.Network()
     network_ref['uuid'] = str(uuid.uuid4())
@@ -2935,7 +2923,6 @@ def _get_associated_fixed_ips_query(network_id, host=None):
     return query
 
 
-@require_admin_context
 def network_get_associated_fixed_ips(context, network_id, host=None):
     # FIXME(sirp): since this returns fixed_ips, this would be better named
     # fixed_ip_get_all_by_network.
@@ -2992,7 +2979,6 @@ def network_get_by_cidr(context, cidr):
     return result
 
 
-@require_admin_context
 def network_get_all_by_host(context, host):
     session = get_session()
     fixed_host_filter = or_(models.FixedIp.host == host,
@@ -3016,9 +3002,8 @@ def network_get_all_by_host(context, host):
 
 
 @require_admin_context
-@_retry_on_deadlock
-@retrying.retry(stop_max_attempt_number=5, retry_on_exception=
-                lambda e: isinstance(e, exception.NetworkSetHostFailed))
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
+                           retry_on_request=True)
 def network_set_host(context, network_id, host_id):
     network_ref = _network_get_query(context).\
         filter_by(id=network_id).\
@@ -3038,7 +3023,8 @@ def network_set_host(context, network_id, host_id):
     if not rows_updated:
         LOG.debug('The row was updated in a concurrent transaction, '
                   'we will fetch another row')
-        raise exception.NetworkSetHostFailed(network_id=network_id)
+        raise db_exc.RetryRequest(
+            exception.NetworkSetHostFailed(network_id=network_id))
 
 
 @require_context
@@ -3079,8 +3065,6 @@ def quota_get(context, project_id, resource, user_id=None):
 
 @require_context
 def quota_get_all_by_project_and_user(context, project_id, user_id):
-    nova.context.authorize_project_context(context, project_id)
-
     user_quotas = model_query(context, models.ProjectUserQuota,
                               (models.ProjectUserQuota.resource,
                                models.ProjectUserQuota.hard_limit)).\
@@ -3097,8 +3081,6 @@ def quota_get_all_by_project_and_user(context, project_id, user_id):
 
 @require_context
 def quota_get_all_by_project(context, project_id):
-    nova.context.authorize_project_context(context, project_id)
-
     rows = model_query(context, models.Quota, read_deleted="no").\
                    filter_by(project_id=project_id).\
                    all()
@@ -3112,8 +3094,6 @@ def quota_get_all_by_project(context, project_id):
 
 @require_context
 def quota_get_all(context, project_id):
-    nova.context.authorize_project_context(context, project_id)
-
     result = model_query(context, models.ProjectUserQuota).\
                    filter_by(project_id=project_id).\
                    all()
@@ -3121,7 +3101,6 @@ def quota_get_all(context, project_id):
     return result
 
 
-@require_admin_context
 def quota_create(context, project_id, resource, limit, user_id=None):
     per_user = user_id and resource not in PER_PROJECT_QUOTAS
     quota_ref = models.ProjectUserQuota() if per_user else models.Quota()
@@ -3137,7 +3116,6 @@ def quota_create(context, project_id, resource, limit, user_id=None):
     return quota_ref
 
 
-@require_admin_context
 def quota_update(context, project_id, resource, limit, user_id=None):
     per_user = user_id and resource not in PER_PROJECT_QUOTAS
     model = models.ProjectUserQuota if per_user else models.Quota
@@ -3243,7 +3221,6 @@ def quota_usage_get(context, project_id, resource, user_id=None):
 
 
 def _quota_usage_get_all(context, project_id, user_id=None):
-    nova.context.authorize_project_context(context, project_id)
     query = model_query(context, models.QuotaUsage, read_deleted="no").\
                    filter_by(project_id=project_id)
     result = {'project_id': project_id}
@@ -3291,7 +3268,6 @@ def _quota_usage_create(project_id, user_id, resource, in_use,
     return quota_usage_ref
 
 
-@require_admin_context
 def quota_usage_update(context, project_id, user_id, resource, **kwargs):
     updates = {}
 
@@ -3480,7 +3456,7 @@ def _calculate_overquota(project_quotas, user_quotas, deltas,
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def quota_reserve(context, resources, project_quotas, user_quotas, deltas,
                   expire, until_refresh, max_age, project_id=None,
                   user_id=None):
@@ -3641,7 +3617,7 @@ def _quota_reservations_query(session, context, reservations):
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def reservation_commit(context, reservations, project_id=None, user_id=None):
     session = get_session()
     with session.begin():
@@ -3658,7 +3634,7 @@ def reservation_commit(context, reservations, project_id=None, user_id=None):
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def reservation_rollback(context, reservations, project_id=None, user_id=None):
     session = get_session()
     with session.begin():
@@ -3673,7 +3649,6 @@ def reservation_rollback(context, reservations, project_id=None, user_id=None):
         reservation_query.soft_delete(synchronize_session=False)
 
 
-@require_admin_context
 def quota_destroy_all_by_project_and_user(context, project_id, user_id):
     session = get_session()
     with session.begin():
@@ -3696,7 +3671,6 @@ def quota_destroy_all_by_project_and_user(context, project_id, user_id):
                 soft_delete(synchronize_session=False)
 
 
-@require_admin_context
 def quota_destroy_all_by_project(context, project_id):
     session = get_session()
     with session.begin():
@@ -3722,7 +3696,7 @@ def quota_destroy_all_by_project(context, project_id):
 
 
 @require_admin_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def reservation_expire(context):
     session = get_session()
     with session.begin():
@@ -3866,6 +3840,8 @@ def _from_legacy_values(values, legacy, allow_updates=False):
 def block_device_mapping_create(context, values, legacy=True):
     _scrub_empty_str_values(values, ['volume_size'])
     values = _from_legacy_values(values, legacy)
+    convert_objects_related_datetimes(values)
+
     bdm_ref = models.BlockDeviceMapping()
     bdm_ref.update(values)
     bdm_ref.save()
@@ -3876,6 +3852,8 @@ def block_device_mapping_create(context, values, legacy=True):
 def block_device_mapping_update(context, bdm_id, values, legacy=True):
     _scrub_empty_str_values(values, ['volume_size'])
     values = _from_legacy_values(values, legacy, allow_updates=True)
+    convert_objects_related_datetimes(values)
+
     query = _block_device_mapping_get_query(context).filter_by(id=bdm_id)
     query.update(values)
     return query.first()
@@ -3884,6 +3862,7 @@ def block_device_mapping_update(context, bdm_id, values, legacy=True):
 def block_device_mapping_update_or_create(context, values, legacy=True):
     _scrub_empty_str_values(values, ['volume_size'])
     values = _from_legacy_values(values, legacy, allow_updates=True)
+    convert_objects_related_datetimes(values)
 
     session = get_session()
     with session.begin():
@@ -4306,7 +4285,6 @@ def security_group_default_rule_get(context, security_group_rule_default_id):
     return result
 
 
-@require_admin_context
 def security_group_default_rule_destroy(context,
                                         security_group_rule_default_id):
     session = get_session()
@@ -4320,7 +4298,6 @@ def security_group_default_rule_destroy(context,
                                         rule_id=security_group_rule_default_id)
 
 
-@require_admin_context
 def security_group_default_rule_create(context, values):
     security_group_default_rule_ref = models.SecurityGroupIngressDefaultRule()
     security_group_default_rule_ref.update(values)
@@ -4462,6 +4439,15 @@ def migration_get_all_by_filters(context, filters):
         host = filters["host"]
         query = query.filter(or_(models.Migration.source_compute == host,
                                  models.Migration.dest_compute == host))
+    elif "source_compute" in filters:
+        host = filters['source_compute']
+        query = query.filter(models.Migration.source_compute == host)
+    if "migration_type" in filters:
+        migtype = filters["migration_type"]
+        query = query.filter(models.Migration.migration_type == migtype)
+    if "hidden" in filters:
+        hidden = filters["hidden"]
+        query = query.filter(models.Migration.hidden == hidden)
     return query.all()
 
 
@@ -4846,7 +4832,7 @@ def flavor_extra_specs_delete(context, flavor_id, key):
 @require_context
 def flavor_extra_specs_update_or_create(context, flavor_id, specs,
                                                max_retries=10):
-    for attempt in xrange(max_retries):
+    for attempt in range(max_retries):
         try:
             session = get_session()
             with session.begin():
@@ -4885,7 +4871,6 @@ def flavor_extra_specs_update_or_create(context, flavor_id, specs,
 ####################
 
 
-@require_admin_context
 def cell_create(context, values):
     cell = models.Cell()
     cell.update(values)
@@ -4901,7 +4886,6 @@ def _cell_get_by_name_query(context, cell_name, session=None):
                        session=session).filter_by(name=cell_name)
 
 
-@require_admin_context
 def cell_update(context, cell_name, values):
     session = get_session()
     with session.begin():
@@ -4913,12 +4897,10 @@ def cell_update(context, cell_name, values):
     return cell
 
 
-@require_admin_context
 def cell_delete(context, cell_name):
     return _cell_get_by_name_query(context, cell_name).soft_delete()
 
 
-@require_admin_context
 def cell_get(context, cell_name):
     result = _cell_get_by_name_query(context, cell_name).first()
     if not result:
@@ -4926,7 +4908,6 @@ def cell_get(context, cell_name):
     return result
 
 
-@require_admin_context
 def cell_get_all(context):
     return model_query(context, models.Cell, read_deleted="no").all()
 
@@ -4957,7 +4938,7 @@ def instance_metadata_get(context, instance_uuid):
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def instance_metadata_delete(context, instance_uuid, key):
     _instance_metadata_get_query(context, instance_uuid).\
         filter_by(key=key).\
@@ -4965,7 +4946,7 @@ def instance_metadata_delete(context, instance_uuid, key):
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def instance_metadata_update(context, instance_uuid, metadata, delete):
     all_keys = metadata.keys()
     session = get_session()
@@ -5104,9 +5085,11 @@ def agent_build_update(context, agent_build_id, values):
 
 @require_context
 def bw_usage_get(context, uuid, start_period, mac, use_slave=False):
+    values = {'start_period': start_period}
+    values = convert_objects_related_datetimes(values, 'start_period')
     return model_query(context, models.BandwidthUsage, read_deleted="yes",
                        use_slave=use_slave).\
-                           filter_by(start_period=start_period).\
+                           filter_by(start_period=values['start_period']).\
                            filter_by(uuid=uuid).\
                            filter_by(mac=mac).\
                            first()
@@ -5114,17 +5097,19 @@ def bw_usage_get(context, uuid, start_period, mac, use_slave=False):
 
 @require_context
 def bw_usage_get_by_uuids(context, uuids, start_period, use_slave=False):
+    values = {'start_period': start_period}
+    values = convert_objects_related_datetimes(values, 'start_period')
     return (
         model_query(context, models.BandwidthUsage, read_deleted="yes",
                     use_slave=use_slave).
         filter(models.BandwidthUsage.uuid.in_(uuids)).
-        filter_by(start_period=start_period).
+        filter_by(start_period=values['start_period']).
         all()
     )
 
 
 @require_context
-@_retry_on_deadlock
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
                     last_ctr_in, last_ctr_out, last_refreshed=None):
 
@@ -5137,14 +5122,18 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
     # creating records.  Optimize accordingly, trying to update existing
     # records.  Fall back to creation when no rows are updated.
     with session.begin():
-        values = {'last_refreshed': last_refreshed,
+        ts_values = {'last_refreshed': last_refreshed,
+                     'start_period': start_period}
+        ts_keys = ('start_period', 'last_refreshed')
+        ts_values = convert_objects_related_datetimes(ts_values, *ts_keys)
+        values = {'last_refreshed': ts_values['last_refreshed'],
                   'last_ctr_in': last_ctr_in,
                   'last_ctr_out': last_ctr_out,
                   'bw_in': bw_in,
                   'bw_out': bw_out}
         rows = model_query(context, models.BandwidthUsage,
                               session=session, read_deleted="yes").\
-                      filter_by(start_period=start_period).\
+                      filter_by(start_period=ts_values['start_period']).\
                       filter_by(uuid=uuid).\
                       filter_by(mac=mac).\
                       update(values, synchronize_session=False)
@@ -5152,10 +5141,10 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
             return
 
         bwusage = models.BandwidthUsage()
-        bwusage.start_period = start_period
+        bwusage.start_period = ts_values['start_period']
         bwusage.uuid = uuid
         bwusage.mac = mac
-        bwusage.last_refreshed = last_refreshed
+        bwusage.last_refreshed = ts_values['last_refreshed']
         bwusage.bw_in = bw_in
         bwusage.bw_out = bw_out
         bwusage.last_ctr_in = last_ctr_in
@@ -5420,21 +5409,6 @@ def aggregate_metadata_get_by_host(context, host, key=None):
     return dict(metadata)
 
 
-def aggregate_metadata_get_by_metadata_key(context, aggregate_id, key):
-    query = model_query(context, models.Aggregate)
-    query = query.join("_metadata")
-    query = query.filter(models.Aggregate.id == aggregate_id)
-    query = query.options(contains_eager("_metadata"))
-    query = query.filter(models.AggregateMetadata.key == key)
-    rows = query.all()
-
-    metadata = collections.defaultdict(set)
-    for agg in rows:
-        for kv in agg._metadata:
-            metadata[kv['key']].add(kv['value'])
-    return dict(metadata)
-
-
 def aggregate_get_by_metadata_key(context, key):
     """Return rows that match metadata key.
 
@@ -5549,7 +5523,7 @@ def aggregate_metadata_delete(context, aggregate_id, key):
 def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False,
                            max_retries=10):
     all_keys = metadata.keys()
-    for attempt in xrange(max_retries):
+    for attempt in range(max_retries):
         try:
             session = get_session()
             with session.begin():
@@ -5655,7 +5629,7 @@ def instance_fault_get_by_instance_uuids(context, instance_uuids):
         output[instance_uuid] = []
 
     for row in rows:
-        data = dict(row.iteritems())
+        data = dict(row)
         output[row['instance_uuid']].append(data)
 
     return output
@@ -5710,6 +5684,15 @@ def _action_get_by_request_id(context, instance_uuid, request_id,
     return result
 
 
+def _action_get_last_created_by_instance_uuid(context, instance_uuid,
+                                              session=None):
+    result = (model_query(context, models.InstanceAction, session=session).
+                     filter_by(instance_uuid=instance_uuid).
+                     order_by(desc("created_at"), desc("id")).
+                     first())
+    return result
+
+
 def action_event_start(context, values):
     """Start an event on an instance action."""
     convert_objects_related_datetimes(values, 'start_time')
@@ -5717,6 +5700,15 @@ def action_event_start(context, values):
     with session.begin():
         action = _action_get_by_request_id(context, values['instance_uuid'],
                                            values['request_id'], session)
+        # When nova-compute restarts, the context is generated again in
+        # init_host workflow, the request_id was different with the request_id
+        # recorded in InstanceAction, so we can't get the original record
+        # according to request_id. Try to get the last created action so that
+        # init_instance can continue to finish the recovery action, like:
+        # powering_off, unpausing, and so on.
+        if not action and not context.project_id:
+            action = _action_get_last_created_by_instance_uuid(
+                context, values['instance_uuid'], session)
 
         if not action:
             raise exception.InstanceActionNotFound(
@@ -5738,6 +5730,15 @@ def action_event_finish(context, values):
     with session.begin():
         action = _action_get_by_request_id(context, values['instance_uuid'],
                                            values['request_id'], session)
+        # When nova-compute restarts, the context is generated again in
+        # init_host workflow, the request_id was different with the request_id
+        # recorded in InstanceAction, so we can't get the original record
+        # according to request_id. Try to get the last created action so that
+        # init_instance can continue to finish the recovery action, like:
+        # powering_off, unpausing, and so on.
+        if not action and not context.project_id:
+            action = _action_get_last_created_by_instance_uuid(
+                context, values['instance_uuid'], session)
 
         if not action:
             raise exception.InstanceActionNotFound(
@@ -5995,7 +5996,7 @@ def archive_deleted_rows(context, max_rows=None):
     """
     # The context argument is only used for the decorator.
     tablenames = []
-    for model_class in models.__dict__.itervalues():
+    for model_class in six.itervalues(models.__dict__):
         if hasattr(model_class, "__tablename__"):
             tablenames.append(model_class.__tablename__)
     rows_archived = 0
@@ -6007,13 +6008,14 @@ def archive_deleted_rows(context, max_rows=None):
     return rows_archived
 
 
-def _augment_flavor_to_migrate(flavor_to_migrate, db_flavor):
+def _augment_flavor_to_migrate(flavor_to_migrate, full_flavor):
     """Make sure that extra_specs on the flavor to migrate is updated."""
     if not flavor_to_migrate.obj_attr_is_set('extra_specs'):
         flavor_to_migrate.extra_specs = {}
-    for key in db_flavor['extra_specs']:
+    for key in full_flavor['extra_specs']:
         if key not in flavor_to_migrate.extra_specs:
-            flavor_to_migrate.extra_specs[key] = db_flavor['extra_specs'][key]
+            flavor_to_migrate.extra_specs[key] = \
+                    full_flavor.extra_specs[key]
 
 
 def _augment_flavors_to_migrate(instance, flavor_cache):
@@ -6023,19 +6025,49 @@ def _augment_flavors_to_migrate(instance, flavor_cache):
     :param flavor_cache:  Dict to persist flavors we look up from the DB
     """
 
+    # NOTE(danms): Avoid circular import
+    from nova import objects
+
+    deleted_ctx = instance._context.elevated(read_deleted='yes')
+
     for flavorprop in ['flavor', 'old_flavor', 'new_flavor']:
         flavor = getattr(instance, flavorprop)
         if flavor is None:
             continue
         flavorid = flavor.flavorid
         if flavorid not in flavor_cache:
-            flavor_cache[flavorid] = flavor_get_by_flavor_id(
-                instance._context, flavorid, 'yes')
+            try:
+                flavor_cache[flavorid] = objects.Flavor.get_by_flavor_id(
+                    deleted_ctx, flavorid)
+            except exception.FlavorNotFound:
+                LOG.warn(_LW('Flavor %(flavorid)s not found for instance '
+                             'during migration; extra_specs will not be '
+                             'available'),
+                         {'flavorid': flavorid}, instance=instance)
+                continue
         _augment_flavor_to_migrate(flavor, flavor_cache[flavorid])
 
 
+def _load_missing_flavor(instance, flavor_cache):
+    # NOTE(danms): Avoid circular import
+    from nova import objects
+
+    deleted_ctx = instance._context.elevated(read_deleted='yes')
+
+    flavor_cache_by_id = {flavor.id: flavor
+                          for flavor in flavor_cache.values()}
+    if instance.instance_type_id in flavor_cache_by_id:
+        instance.flavor = flavor_cache_by_id[instance.instance_type_id]
+    else:
+        instance.flavor = objects.Flavor.get_by_id(deleted_ctx,
+                                                   instance.instance_type_id)
+        flavor_cache[instance.flavor.flavorid] = instance.flavor
+    instance.old_flavor = None
+    instance.new_flavor = None
+
+
 @require_admin_context
-def migrate_flavor_data(context, max_count, flavor_cache):
+def migrate_flavor_data(context, max_count, flavor_cache, force=False):
     # NOTE(danms): This is only ever run in nova-manage, and we need to avoid
     # a circular import
     from nova import objects
@@ -6062,19 +6094,36 @@ def migrate_flavor_data(context, max_count, flavor_cache):
         # middle of some other operation. This is just a guess and not
         # a lock. There is still a race here, although it's the same
         # race as the normal code, since we use expected_task_state below.
-        if instance.task_state is not None:
-            continue
-        if instance.vm_state in [vm_states.RESCUED, vm_states.RESIZED]:
-            continue
+        if not force:
+            if instance.task_state is not None:
+                continue
+            if instance.vm_state in [vm_states.RESCUED, vm_states.RESIZED]:
+                continue
 
-        _augment_flavors_to_migrate(instance, flavor_cache)
+        # NOTE(danms): If we have a really old instance with no flavor
+        # information at all, flavor will not have been set during load.
+        # If that's the case, look up the flavor by id (which implies that
+        # old_ and new_flavor are None). No need to augment with extra_specs
+        # since we're doing the lookup from scratch.
+        if not instance.obj_attr_is_set('flavor'):
+            try:
+                _load_missing_flavor(instance, flavor_cache)
+            except exception.FlavorNotFound:
+                LOG.error(_LE('Unable to lookup flavor for legacy instance; '
+                              'migration is not possible without manual '
+                              'intervention'),
+                          instance=instance)
+                continue
+        else:
+            _augment_flavors_to_migrate(instance, flavor_cache)
         if instance.obj_what_changed():
             if db_instance.get('extra') is None:
                 _instance_extra_create(context,
                                        {'instance_uuid': db_instance['uuid']})
                 LOG.debug(
                     'Created instance_extra for %s' % db_instance['uuid'])
-            instance.save(expected_task_state=[None])
+            instance.save(expected_task_state=[instance.task_state],
+                          expected_vm_state=[instance.vm_state])
             count_hit += 1
 
     return count_all, count_hit
@@ -6355,35 +6404,6 @@ def _instance_group_policies_add(context, id, policies, set_delete=False,
             session.add(policy_ref)
 
         return policies
-
-
-def instance_group_policies_add(context, group_uuid, policies,
-                                set_delete=False):
-    id = _instance_group_id(context, group_uuid)
-    return _instance_group_policies_add(context, id, policies,
-                                        set_delete=set_delete)
-
-
-def instance_group_policy_delete(context, group_uuid, policy):
-    id = _instance_group_id(context, group_uuid)
-    count = _instance_group_get_query(context,
-                                      models.InstanceGroupPolicy,
-                                      models.InstanceGroupPolicy.group_id,
-                                      id).\
-                            filter_by(policy=policy).\
-                            soft_delete()
-    if count == 0:
-        raise exception.InstanceGroupPolicyNotFound(group_uuid=group_uuid,
-                                                    policy=policy)
-
-
-def instance_group_policies_get(context, group_uuid):
-    id = _instance_group_id(context, group_uuid)
-    policies = model_query(context,
-                           models.InstanceGroupPolicy,
-                           (models.InstanceGroupPolicy.policy,)).\
-                    filter_by(group_id=id).all()
-    return [policy[0] for policy in policies]
 
 
 ####################

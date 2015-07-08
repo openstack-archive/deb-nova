@@ -21,7 +21,6 @@ Test suite for VMwareAPI.
 
 import collections
 import contextlib
-import copy
 import datetime
 
 from eventlet import greenthread
@@ -34,14 +33,13 @@ from oslo_utils import uuidutils
 from oslo_vmware import exceptions as vexc
 from oslo_vmware.objects import datastore as ds_obj
 from oslo_vmware import pbm
-from oslo_vmware import vim
 from oslo_vmware import vim_util as oslo_vim_util
-import suds
 
 from nova import block_device
 from nova.compute import api as compute_api
 from nova.compute import power_state
 from nova.compute import task_states
+from nova.compute import vm_states
 from nova import context
 from nova import exception
 from nova.image import glance
@@ -84,33 +82,6 @@ class fake_service_content(object):
     def __init__(self):
         self.ServiceContent = vmwareapi_fake.DataObject()
         self.ServiceContent.fake = 'fake'
-
-
-class VMwareSudsTest(test.NoDBTestCase):
-
-    def setUp(self):
-        super(VMwareSudsTest, self).setUp()
-
-        def new_client_init(self, url, **kwargs):
-            return
-
-        mock.patch.object(suds.client.Client,
-                          '__init__', new=new_client_init).start()
-        self.vim = self._vim_create()
-        self.addCleanup(mock.patch.stopall)
-
-    def _mock_getattr(self, attr_name):
-        self.assertEqual("RetrieveServiceContent", attr_name)
-        return lambda obj, **kwargs: fake_service_content()
-
-    def _vim_create(self):
-        with mock.patch.object(vim.Vim, '__getattr__', self._mock_getattr):
-            return vim.Vim()
-
-    def test_exception_with_deepcopy(self):
-        self.assertIsNotNone(self.vim)
-        self.assertRaises(vexc.VimException,
-                          copy.deepcopy, self.vim)
 
 
 def _fake_create_session(inst):
@@ -207,8 +178,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                    host_password='test_pass',
                    api_retry_count=1,
                    use_linked_clone=False, group='vmware')
-        self.flags(vnc_enabled=False,
-                   image_cache_subdirectory_name='vmware_base',
+        self.flags(enabled=False, group='vnc')
+        self.flags(image_cache_subdirectory_name='vmware_base',
                    my_ip='')
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -220,7 +191,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._set_exception_vars()
         self.node_name = self.conn._resources.keys()[0]
         self.node_name2 = self.conn._resources.keys()[1]
-        if cluster_name2 in self.node_name2:
+        if self.conn._resources[self.node_name2]['name'] == cluster_name2:
             self.ds = 'ds1'
         else:
             self.ds = 'ds2'
@@ -306,11 +277,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def test_driver_capabilities(self):
         self.assertTrue(self.conn.capabilities['has_imagecache'])
         self.assertFalse(self.conn.capabilities['supports_recreate'])
-
-    def test_configuration_linked_clone(self):
-        self.flags(use_linked_clone=None, group='vmware')
-        self.assertRaises(vexc.UseLinkedCloneConfigurationFault,
-                          self.conn._validate_configuration)
+        self.assertTrue(
+            self.conn.capabilities['supports_migrate_to_same_host'])
 
     @mock.patch.object(pbm, 'get_profile_id_by_name')
     def test_configuration_pbm(self, get_profile_mock):
@@ -382,7 +350,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                   'kernel_id': "fake_kernel_uuid",
                   'ramdisk_id': "fake_ramdisk_uuid",
                   'mac_address': "de:ad:be:ef:be:ef",
-                  'flavor': instance_type,
+                  'flavor': objects.Flavor(**self.type_data),
                   'node': node,
                   'memory_mb': self.type_data['memory_mb'],
                   'root_gb': self.type_data['root_gb'],
@@ -397,7 +365,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.uuid = uuid
         self.instance = fake_instance.fake_instance_obj(
                 self.context, **values)
-        self.instance.flavor = objects.Flavor(**self.type_data)
 
     def _create_vm(self, node=None, num_instances=1, uuid=None,
                    instance_type='m1.large', powered_on=True,
@@ -690,6 +657,49 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm()
         self.assertTrue(self.cd_attach_called)
 
+    @mock.patch.object(vmops.VMwareVMOps, 'power_off')
+    @mock.patch.object(driver.VMwareVCDriver, 'detach_volume')
+    @mock.patch.object(vmops.VMwareVMOps, 'destroy')
+    def test_destroy_with_attached_volumes(self,
+                                           mock_destroy,
+                                           mock_detach_volume,
+                                           mock_power_off):
+        self._create_vm()
+        connection_info = {'data': 'fake-data', 'serial': 'volume-fake-id'}
+        bdm = [{'connection_info': connection_info,
+                'disk_bus': 'fake-bus',
+                'device_name': 'fake-name',
+                'mount_device': '/dev/sdb'}]
+        bdi = {'block_device_mapping': bdm, 'root_device_name': '/dev/sda'}
+        self.assertNotEqual(vm_states.STOPPED, self.instance.vm_state)
+        self.conn.destroy(self.context, self.instance, self.network_info,
+                          block_device_info=bdi)
+        mock_power_off.assert_called_once_with(self.instance)
+        self.assertEqual(vm_states.STOPPED, self.instance.vm_state)
+        mock_detach_volume.assert_called_once_with(
+            connection_info, self.instance, 'fake-name')
+        mock_destroy.assert_called_once_with(self.instance, True)
+
+    @mock.patch.object(driver.VMwareVCDriver, 'detach_volume',
+                       side_effect=exception.StorageError(reason='oh man'))
+    @mock.patch.object(vmops.VMwareVMOps, 'destroy')
+    def test_destroy_with_attached_volumes_with_exception(self,
+                                                          mock_destroy,
+                                                          mock_detach_volume):
+        self._create_vm()
+        connection_info = {'data': 'fake-data', 'serial': 'volume-fake-id'}
+        bdm = [{'connection_info': connection_info,
+                'disk_bus': 'fake-bus',
+                'device_name': 'fake-name',
+                'mount_device': '/dev/sdb'}]
+        bdi = {'block_device_mapping': bdm, 'root_device_name': '/dev/sda'}
+        self.assertRaises(exception.StorageError,
+                          self.conn.destroy, self.context, self.instance,
+                          self.network_info, block_device_info=bdi)
+        mock_detach_volume.assert_called_once_with(
+            connection_info, self.instance, 'fake-name')
+        self.assertFalse(mock_destroy.called)
+
     def test_spawn(self):
         self._create_vm()
         info = self._get_info()
@@ -701,33 +711,10 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm(uuid=uuid)
         self.assertIsNotNone(vm_util.vm_ref_cache_get(uuid))
 
-    def _spawn_power_state(self, power_on):
-        self._spawn = self.conn._vmops.spawn
-        self._power_on = power_on
-
-        def _fake_spawn(context, instance, image_meta, injected_files,
-            admin_password, network_info, block_device_info=None,
-            power_on=True):
-            return self._spawn(context, instance, image_meta,
-                               injected_files, admin_password, network_info,
-                               block_device_info=block_device_info,
-                               power_on=self._power_on)
-
-        with (
-            mock.patch.object(self.conn._vmops, 'spawn', _fake_spawn)
-        ):
-            self._create_vm(powered_on=power_on)
-            info = self._get_info()
-            if power_on:
-                self._check_vm_info(info, power_state.RUNNING)
-            else:
-                self._check_vm_info(info, power_state.SHUTDOWN)
-
-    def test_spawn_no_power_on(self):
-        self._spawn_power_state(False)
-
     def test_spawn_power_on(self):
-        self._spawn_power_state(True)
+        self._create_vm()
+        info = self._get_info()
+        self._check_vm_info(info, power_state.RUNNING)
 
     def test_spawn_root_size_0(self):
         self._create_vm(instance_type='m1.micro')
@@ -2308,3 +2295,51 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.conn._update_pbm_location()
         self.assertEqual('fira', self.conn._session._pbm_wsdl_loc)
         self.assertIsNone(self.conn._session._pbm)
+
+    def test_nodename(self):
+        test_mor = "domain-26"
+        self.assertEqual("%s.%s" % (test_mor,
+                                    vmwareapi_fake._FAKE_VCENTER_UUID),
+                         self.conn._create_nodename(test_mor),
+                         "VC driver failed to create the proper node name")
+
+    def test_normalize_nodename_old(self):
+        test_mor = "domain-26"
+        sample_cluster_names = ["Cluster1",
+                                "Cluster:2",
+                                "Cluster:3)",
+                                "(Cluster:4",
+                                "(Cluster:5)",
+                                "Test Cluster"]
+
+        for cluster_name in sample_cluster_names:
+            old_format = "%s(%s)" % (test_mor, cluster_name)
+            self.assertEqual(self.conn._create_nodename(test_mor),
+                             self.conn._normalize_nodename(old_format),
+                             'VC driver failed to normalize cluster name %s' %
+                                 cluster_name)
+
+    def test_normalize_nodename_new(self):
+        # Assert that _normalize_nodename doesn't touch the new format
+        test_mor = "domain-26"
+        nodename = "%s.%s" % (test_mor, vmwareapi_fake._FAKE_VCENTER_UUID)
+        self.assertEqual(nodename, self.conn._normalize_nodename(nodename))
+
+    @mock.patch.object(driver.LOG, 'warning')
+    def test_min_version(self, mock_warning):
+        self.conn._check_min_version()
+        self.assertFalse(mock_warning.called)
+
+    @mock.patch.object(driver.LOG, 'warning')
+    @mock.patch.object(oslo_vim_util, 'get_vc_version',
+                       return_value='5.0.0')
+    def test_invalid_min_version(self, mock_version, mock_warning):
+        self.conn._check_min_version()
+        # assert that the min version is in a warning message
+        expected_arg = {'version': constants.MIN_VC_VERSION}
+        version_arg_found = False
+        for call in mock_warning.call_args_list:
+            if call[0][1] == expected_arg:
+                version_arg_found = True
+                break
+        self.assertTrue(version_arg_found)

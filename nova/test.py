@@ -233,7 +233,7 @@ class TestCase(testtools.TestCase):
         # registry.
         objects_base.NovaObject.indirection_api = None
         self._base_test_obj_backup = copy.copy(
-            objects_base.NovaObject._obj_classes)
+            objects_base.NovaObjectRegistry._registry._obj_classes)
         self.addCleanup(self._restore_obj_registry)
 
         # NOTE(mnaser): All calls to utils.is_neutron() are cached in
@@ -251,7 +251,8 @@ class TestCase(testtools.TestCase):
         self.useFixture(nova_fixtures.PoisonFunctions())
 
     def _restore_obj_registry(self):
-        objects_base.NovaObject._obj_classes = self._base_test_obj_backup
+        objects_base.NovaObjectRegistry._registry._obj_classes = \
+                self._base_test_obj_backup
 
     def _clear_attrs(self):
         # Delete attributes that don't start with _ so they don't pin
@@ -269,7 +270,7 @@ class TestCase(testtools.TestCase):
     def flags(self, **kw):
         """Override flag variables for a test."""
         group = kw.pop('group', None)
-        for k, v in kw.iteritems():
+        for k, v in six.iteritems(kw):
             CONF.set_override(k, v, group)
 
     def start_service(self, name, host=None, **kwargs):
@@ -292,16 +293,16 @@ class TestCase(testtools.TestCase):
         def inner(expected, observed):
             if isinstance(expected, dict) and isinstance(observed, dict):
                 self.assertEqual(len(expected), len(observed))
-                expected_keys = sorted(expected.iterkeys())
-                observed_keys = sorted(expected.iterkeys())
+                expected_keys = sorted(expected)
+                observed_keys = sorted(expected)
                 self.assertEqual(expected_keys, observed_keys)
 
                 expected_values_iter = iter(sort(expected.values()))
                 observed_values_iter = iter(sort(observed.values()))
 
                 for i in range(len(expected)):
-                    inner(expected_values_iter.next(),
-                        observed_values_iter.next())
+                    inner(next(expected_values_iter),
+                          next(observed_values_iter))
             elif (isinstance(expected, (list, tuple, set)) and
                       isinstance(observed, (list, tuple, set))):
                 self.assertEqual(len(expected), len(observed))
@@ -310,8 +311,8 @@ class TestCase(testtools.TestCase):
                 observed_values_iter = iter(sort(observed))
 
                 for i in range(len(expected)):
-                    inner(expected_values_iter.next(),
-                        observed_values_iter.next())
+                    inner(next(expected_values_iter),
+                          next(observed_values_iter))
             else:
                 self.assertEqual(expected, observed)
 
@@ -320,7 +321,11 @@ class TestCase(testtools.TestCase):
     def assertPublicAPISignatures(self, baseinst, inst):
         def get_public_apis(inst):
             methods = {}
-            for (name, value) in inspect.getmembers(inst, inspect.ismethod):
+
+            def findmethods(object):
+                return inspect.ismethod(object) or inspect.isfunction(object)
+
+            for (name, value) in inspect.getmembers(inst, findmethods):
                 if name.startswith("_"):
                     continue
                 methods[name] = value
@@ -384,3 +389,35 @@ class BaseHookTestCase(NoDBTestCase):
     def assert_has_hook(self, expected_name, func):
         self.assertTrue(hasattr(func, '__hook_name__'))
         self.assertEqual(expected_name, func.__hook_name__)
+
+
+class MatchType(object):
+    """Matches any instance of a specified type
+
+    The MatchType class is a helper for use with the
+    mock.assert_called_with() method that lets you
+    assert that a particular parameter has a specific
+    data type. It enables strict check than the built
+    in mock.ANY helper, and is the equivalent of the
+    mox.IsA() function from the legacy mox library
+
+    Example usage could be:
+
+      mock_some_method.assert_called_once_with(
+            "hello",
+            MatchType(objects.Instance),
+            mock.ANY,
+            "world",
+            MatchType(objects.KeyPair))
+    """
+    def __init__(self, wanttype):
+        self.wanttype = wanttype
+
+    def __eq__(self, other):
+        return type(other) == self.wanttype
+
+    def __ne__(self, other):
+        return type(other) != self.wanttype
+
+    def __repr__(self):
+        return "<MatchType:" + str(self.wanttype) + ">"

@@ -25,6 +25,9 @@ class HvTypeTest(test.NoDBTestCase):
     def test_valid_constant(self):
         self.assertTrue(hv_type.is_valid(hv_type.QEMU))
 
+    def test_valid_docker(self):
+        self.assertTrue(hv_type.is_valid("docker"))
+
     def test_valid_bogus(self):
         self.assertFalse(hv_type.is_valid("acmehypervisor"))
 
@@ -36,9 +39,6 @@ class HvTypeTest(test.NoDBTestCase):
 
     def test_canonicalize_xapi(self):
         self.assertEqual(hv_type.XEN, hv_type.canonicalize("xapi"))
-
-    def test_canonicalize_powervm(self):
-        self.assertEqual(hv_type.PHYP, hv_type.canonicalize("POWERVM"))
 
     def test_canonicalize_invalid(self):
         self.assertRaises(exception.InvalidHypervisorVirtType,

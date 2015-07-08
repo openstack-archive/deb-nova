@@ -173,7 +173,7 @@ class FakeLibvirtTests(test.NoDBTestCase):
         self.assertEqual(1, dom.isActive())
         dom.destroy()
         try:
-            dom = conn.lookupByName('testname')
+            conn.lookupByName('testname')
         except libvirt.libvirtError as e:
             self.assertEqual(e.get_error_code(), libvirt.VIR_ERR_NO_DOMAIN)
             self.assertEqual(e.get_error_domain(), libvirt.VIR_FROM_QEMU)
@@ -384,3 +384,36 @@ class FakeLibvirtTests(test.NoDBTestCase):
                               conn.host_info.cpu_threads)
         self.assertEqual(conn.compareCPU(xml, 0),
                          libvirt.VIR_CPU_COMPARE_IDENTICAL)
+
+    def test_numa_topology_generation(self):
+        topology = """<topology>
+  <cells num="2">
+    <cell id="0">
+      <memory unit="KiB">7870000</memory>
+      <pages size="4" unit="KiB">1967500</pages>
+      <cpus num="4">
+        <cpu id="0" socket_id="0" core_id="0" siblings="0-1"/>
+        <cpu id="1" socket_id="0" core_id="0" siblings="0-1"/>
+        <cpu id="2" socket_id="0" core_id="1" siblings="2-3"/>
+        <cpu id="3" socket_id="0" core_id="1" siblings="2-3"/>
+      </cpus>
+    </cell>
+    <cell id="1">
+      <memory unit="KiB">7870000</memory>
+      <pages size="4" unit="KiB">1967500</pages>
+      <cpus num="4">
+        <cpu id="4" socket_id="1" core_id="0" siblings="4-5"/>
+        <cpu id="5" socket_id="1" core_id="0" siblings="4-5"/>
+        <cpu id="6" socket_id="1" core_id="1" siblings="6-7"/>
+        <cpu id="7" socket_id="1" core_id="1" siblings="6-7"/>
+      </cpus>
+    </cell>
+  </cells>
+</topology>
+"""
+        host_topology = libvirt.HostInfo._gen_numa_topology(
+                                               cpu_nodes=2, cpu_sockets=1,
+                                               cpu_cores=2, cpu_threads=2,
+                                               kb_mem=15740000)
+        self.assertEqual(host_topology.to_xml(),
+                         topology)

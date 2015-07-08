@@ -14,7 +14,6 @@
 #    under the License.
 
 import copy
-
 import mock
 import netaddr
 from webob import exc
@@ -30,6 +29,8 @@ from nova import exception
 from nova import objects
 from nova import test
 from nova.tests.unit.api.openstack import fakes
+from nova.tests.unit import fake_instance
+
 
 TEST_HYPERS = [
     dict(id=1,
@@ -154,7 +155,8 @@ def fake_instance_get_all_by_host(context, host):
     results = []
     for inst in TEST_SERVERS:
         if inst['host'] == host:
-            results.append(inst)
+            inst_obj = fake_instance.fake_instance_obj(context, **inst)
+            results.append(inst_obj)
     return results
 
 
@@ -195,7 +197,7 @@ class HypervisorsTestV21(test.NoDBTestCase):
     def setUp(self):
         super(HypervisorsTestV21, self).setUp()
         self._set_up_controller()
-
+        self.rule_hyp_show = "os_compute_api:os-hypervisors"
         self.stubs.Set(self.controller.host_api, 'compute_node_get_all',
                        fake_compute_node_get_all)
         self.stubs.Set(self.controller.host_api, 'service_get_by_compute_host',
@@ -207,8 +209,6 @@ class HypervisorsTestV21(test.NoDBTestCase):
                        fake_compute_node_get)
         self.stubs.Set(db, 'compute_node_statistics',
                        fake_compute_node_statistics)
-        self.stubs.Set(db, 'instance_get_all_by_host',
-                       fake_instance_get_all_by_host)
 
     def test_view_hypervisor_nodetail_noservers(self):
         result = self.controller._view_hypervisor(
@@ -339,18 +339,24 @@ class HypervisorsTestV21(test.NoDBTestCase):
         req = self._get_request(True)
         self.assertRaises(exc.HTTPNotFound, self.controller.search, req, 'a')
 
-    def test_servers(self):
+    @mock.patch.object(objects.InstanceList, 'get_by_host',
+                       side_effect=fake_instance_get_all_by_host)
+    def test_servers(self, mock_get):
         req = self._get_request(True)
         result = self.controller.servers(req, 'hyper')
 
         expected_dict = copy.deepcopy(self.INDEX_HYPER_DICTS)
         expected_dict[0].update({'servers': [
-                                     dict(name="inst1", uuid="uuid1"),
-                                     dict(name="inst3", uuid="uuid3")]})
+                                     dict(uuid="uuid1"),
+                                     dict(uuid="uuid3")]})
         expected_dict[1].update({'servers': [
-                                     dict(name="inst2", uuid="uuid2"),
-                                     dict(name="inst4", uuid="uuid4")]})
+                                     dict(uuid="uuid2"),
+                                     dict(uuid="uuid4")]})
 
+        for output in result['hypervisors']:
+            servers = output['servers']
+            for server in servers:
+                del server['name']
         self.assertEqual(result, dict(hypervisors=expected_dict))
 
     def test_servers_non_id(self):
@@ -435,11 +441,42 @@ class HypervisorsTestV2(HypervisorsTestV21):
     del INDEX_HYPER_DICTS[0]['status']
     del INDEX_HYPER_DICTS[1]['status']
 
+    def setUp(self):
+        super(HypervisorsTestV2, self).setUp()
+        self.rule_hyp_show = "compute_extension:hypervisors"
+        self.rule = {self.rule_hyp_show: ""}
+
     def _set_up_controller(self):
         self.context = context.get_admin_context()
         self.ext_mgr = extensions.ExtensionManager()
         self.ext_mgr.extensions = {}
         self.controller = hypervisors_v2.HypervisorsController(self.ext_mgr)
+
+    def test_index_non_admin_back_compatible_db(self):
+        self.policy.set_rules(self.rule)
+        req = self._get_request(False)
+        self.assertRaises(exception.AdminRequired,
+                          self.controller.index, req)
+
+    def test_detail_non_admin_back_compatible_db(self):
+        self.policy.set_rules(self.rule)
+        req = self._get_request(False)
+        self.assertRaises(exception.AdminRequired,
+                          self.controller.detail, req)
+
+    def test_search_non_admin_back_compatible_db(self):
+        self.policy.set_rules(self.rule)
+        req = self._get_request(False)
+        self.assertRaises(exception.AdminRequired,
+                          self.controller.search, req,
+                          self.TEST_HYPERS_OBJ[0].id)
+
+    def test_servers_non_admin_back_compatible_db(self):
+        self.policy.set_rules(self.rule)
+        req = self._get_request(False)
+        self.assertRaises(exception.AdminRequired,
+                          self.controller.servers, req,
+                          self.TEST_HYPERS_OBJ[0].id)
 
 
 class CellHypervisorsTestV21(HypervisorsTestV21):

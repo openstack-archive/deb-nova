@@ -32,9 +32,9 @@ from oslo_serialization import jsonutils
 from oslo_utils import excutils
 from oslo_utils import strutils
 from oslo_utils import timeutils
-from oslo_utils import units
 from oslo_utils import uuidutils
 import six
+from six.moves import range
 
 from nova import availability_zones
 from nova import block_device
@@ -87,10 +87,6 @@ compute_opts = [
     cfg.BoolOpt('allow_resize_to_same_host',
                 default=False,
                 help='Allow destination machine to match source for resize. '
-                     'Useful when testing in single-host environments.'),
-    cfg.BoolOpt('allow_migrate_to_same_host',
-                default=False,
-                help='Allow migrate machine to the same host. '
                      'Useful when testing in single-host environments.'),
     cfg.StrOpt('default_schedule_zone',
                help='Availability zone to use when user doesn\'t specify one'),
@@ -424,7 +420,6 @@ class API(base.Base):
             # Convert to the appropriate exception message
             if allowed <= 0:
                 msg = _("Cannot run any more instances of this type.")
-                allowed = 0
             elif min_count <= allowed <= max_count:
                 # We're actually OK, but still need reservations
                 return self._check_num_instances_quota(context, instance_type,
@@ -479,7 +474,7 @@ class API(base.Base):
         # Because metadata is stored in the DB, we hard-code the size limits
         # In future, we may support more variable length strings, so we act
         #  as if this is quota-controlled for forwards compatibility
-        for k, v in metadata.iteritems():
+        for k, v in six.iteritems(metadata):
             try:
                 utils.check_string_length(v)
                 utils.check_string_length(k, min_length=1)
@@ -702,6 +697,23 @@ class API(base.Base):
 
         return image_defined_bdms
 
+    def _get_flavor_defined_bdms(self, instance_type, block_device_mapping):
+        flavor_defined_bdms = []
+
+        have_ephemeral_bdms = any(filter(
+            block_device.new_format_is_ephemeral, block_device_mapping))
+        have_swap_bdms = any(filter(
+            block_device.new_format_is_swap, block_device_mapping))
+
+        if instance_type.get('ephemeral_gb') and not have_ephemeral_bdms:
+            flavor_defined_bdms.append(
+                block_device.create_blank_bdm(instance_type['ephemeral_gb']))
+        if instance_type.get('swap') and not have_swap_bdms:
+            flavor_defined_bdms.append(
+                block_device.create_blank_bdm(instance_type['swap'], 'swap'))
+
+        return flavor_defined_bdms
+
     def _check_and_transform_bdm(self, context, base_options, instance_type,
                                  image_meta, min_count, max_count,
                                  block_device_mapping, legacy_bdm):
@@ -735,8 +747,8 @@ class API(base.Base):
             # mappings - we need to get rid of the inserted image
             # NOTE (gibi): another case is when a server is booted with an
             # image to bdm mapping where the image only contains a bdm to a
-            # snapshot. In this case the outher image to bdm mapping
-            # contains an unnecessasry device with boot_index == 0.
+            # snapshot. In this case the other image to bdm mapping
+            # contains an unnecessary device with boot_index == 0.
             # Also in this case the image_ref is None as we are booting from
             # an image to volume bdm.
             def not_image_and_root_bdm(bdm):
@@ -754,6 +766,9 @@ class API(base.Base):
                 msg = _('Cannot attach one or more volumes to multiple'
                         ' instances')
                 raise exception.InvalidRequest(msg)
+
+        block_device_mapping += self._get_flavor_defined_bdms(
+            instance_type, block_device_mapping)
 
         return block_device_obj.block_device_make_list_from_dicts(
                 context, block_device_mapping)
@@ -914,7 +929,7 @@ class API(base.Base):
         LOG.debug("Going to run %s instances..." % num_instances)
         instances = []
         try:
-            for i in xrange(num_instances):
+            for i in range(num_instances):
                 instance = objects.Instance(context=context)
                 instance.update(base_options)
                 instance = self.create_db_entry_for_new_instance(
@@ -1007,26 +1022,7 @@ class API(base.Base):
                 if not volume.get('bootable', True):
                     raise exception.InvalidBDMVolumeNotBootable(id=volume_id)
 
-                properties = volume.get('volume_image_metadata', {})
-                image_meta = {'properties': properties}
-                # NOTE(yjiang5): restore the basic attributes
-                # NOTE(mdbooth): These values come from volume_glance_metadata
-                # in cinder. This is a simple key/value table, and all values
-                # are strings. We need to convert them to ints to avoid
-                # unexpected type errors.
-                image_meta['min_ram'] = int(properties.get('min_ram', 0))
-                image_meta['min_disk'] = int(properties.get('min_disk', 0))
-                # Volume size is no longer related to the original image size,
-                # so we take it from the volume directly. Cinder creates
-                # volumes in Gb increments, and stores size in Gb, whereas
-                # glance reports size in bytes. As we're returning glance
-                # metadata here, we need to convert it.
-                image_meta['size'] = volume.get('size', 0) * units.Gi
-                # NOTE(yjiang5): Always set the image status as 'active'
-                # and depends on followed volume_api.check_attach() to
-                # verify it. This hack should be harmless with that check.
-                image_meta['status'] = 'active'
-                return image_meta
+                return utils.get_image_metadata_from_volume(volume)
         return {}
 
     @staticmethod
@@ -1101,7 +1097,7 @@ class API(base.Base):
 
         # max_net_count is the maximum number of instances requested by the
         # user adjusted for any network quota constraints, including
-        # considertaion of connections to each requested network
+        # consideration of connections to each requested network
         if max_net_count == 0:
             raise exception.PortLimitExceeded()
         elif max_net_count < max_count:
@@ -1739,8 +1735,9 @@ class API(base.Base):
             orig_host = instance.host
             try:
                 if instance.vm_state == vm_states.SHELVED_OFFLOADED:
-                    instance.host = instance._system_metadata.get(
-                        'shelved_host')
+                    sysmeta = getattr(instance,
+                                      obj_base.get_attrname('system_metadata'))
+                    instance.host = sysmeta.get('shelved_host')
                 self.network_api.deallocate_for_instance(elevated,
                                                          instance)
             finally:
@@ -1990,7 +1987,7 @@ class API(base.Base):
                 'system_metadata': _remap_system_metadata_filter}
 
         # copy from search_opts, doing various remappings as necessary
-        for opt, value in search_opts.iteritems():
+        for opt, value in six.iteritems(search_opts):
             # Do remappings.
             # Values not in the filter_mapping table are copied as-is.
             # If remapping is None, option is not copied
@@ -2170,9 +2167,14 @@ class API(base.Base):
             'user_id': str(context.user_id),
             'image_type': image_type,
         }
-        image_ref = instance.image_ref
-        sent_meta = compute_utils.get_image_metadata(
-            context, self.image_api, image_ref, instance)
+        sent_meta = utils.get_image_from_system_metadata(
+            instance.system_metadata)
+
+        # Delete properties that are non-inheritable
+        image_props = sent_meta.get("properties", {})
+        for key in image_props.keys():
+            if key in CONF.non_inheritable_image_properties:
+                del image_props[key]
 
         sent_meta['name'] = name
         sent_meta['is_public'] = False
@@ -2553,6 +2555,9 @@ class API(base.Base):
         mig.old_instance_type_id = current_instance_type['id']
         mig.new_instance_type_id = new_instance_type['id']
         mig.status = 'finished'
+        mig.migration_type = (
+            mig.old_instance_type_id != mig.new_instance_type_id and
+            'resize' or 'migration')
         mig.create()
 
     @wrap_check_policy
@@ -2643,10 +2648,6 @@ class API(base.Base):
         if not CONF.allow_resize_to_same_host:
             filter_properties['ignore_hosts'].append(instance.host)
 
-        # Here when flavor_id is None, the process is considered as migrate.
-        if (not flavor_id and not CONF.allow_migrate_to_same_host):
-            filter_properties['ignore_hosts'].append(instance.host)
-
         if self.cell_type == 'api':
             # Commit reservations early and create migration record.
             self._resize_cells_support(context, quotas, instance,
@@ -2682,7 +2683,6 @@ class API(base.Base):
 
         self._record_action_start(context, instance, instance_actions.SHELVE)
 
-        image_id = None
         if not self.is_volume_backed_instance(context, instance):
             name = '%s-shelved' % instance.display_name
             image_meta = self._create_image(context, instance, name,
@@ -2954,15 +2954,21 @@ class API(base.Base):
         instance.locked_by = 'owner' if is_owner else 'admin'
         instance.save()
 
+    def is_expected_locked_by(self, context, instance):
+        is_owner = instance.project_id == context.project_id
+        expect_locked_by = 'owner' if is_owner else 'admin'
+        locked_by = instance.locked_by
+        if locked_by and locked_by != expect_locked_by:
+            return False
+        return True
+
     @wrap_check_policy
     def unlock(self, context, instance):
         """Unlock the given instance."""
         # If the instance was locked by someone else, check
         # that we're allowed to override the lock
-        is_owner = instance.project_id == context.project_id
-        expect_locked_by = 'owner' if is_owner else 'admin'
-        locked_by = instance.locked_by
-        if locked_by and locked_by != expect_locked_by:
+        if not self.skip_policy_check and not self.is_expected_locked_by(
+            context, instance):
             check_policy(context, 'unlock_override', instance)
 
         context = context.elevated()
@@ -3009,8 +3015,7 @@ class API(base.Base):
             volume = self.volume_api.get(context, volume_id)
             self.volume_api.check_attach(context, volume, instance=instance)
             self.volume_api.reserve_volume(context, volume_id)
-            self.compute_rpcapi.attach_volume(context, instance=instance,
-                    volume_id=volume_id, mountpoint=device, bdm=volume_bdm)
+            self.compute_rpcapi.attach_volume(context, instance, volume_bdm)
         except Exception:
             with excutils.save_and_reraise_exception():
                 volume_bdm.destroy()
@@ -3120,8 +3125,7 @@ class API(base.Base):
     @wrap_check_policy
     def get_instance_metadata(self, context, instance):
         """Get all metadata associated with an instance."""
-        rv = self.db.instance_metadata_get(context, instance.uuid)
-        return dict(rv.iteritems())
+        return self.db.instance_metadata_get(context, instance.uuid)
 
     def get_all_instance_metadata(self, context, search_filts):
         return self._get_all_instance_metadata(
@@ -3412,7 +3416,7 @@ class HostAPI(base.Base):
                                                set_zones=set_zones)
         ret_services = []
         for service in services:
-            for key, val in filters.iteritems():
+            for key, val in six.iteritems(filters):
                 if service[key] != val:
                     break
             else:
@@ -3450,7 +3454,7 @@ class HostAPI(base.Base):
 
     def instance_get_all_by_host(self, context, host_name):
         """Return all instances on the given host."""
-        return self.db.instance_get_all_by_host(context, host_name)
+        return objects.InstanceList.get_by_host(context, host_name)
 
     def task_log_get_all(self, context, task_name, period_beginning,
                          period_ending, host=None, state=None):
@@ -3586,34 +3590,17 @@ class AggregateAPI(base.Base):
         """
         if 'availability_zone' in metadata:
             _hosts = hosts or aggregate.hosts
-            zones, not_zones = availability_zones.get_availability_zones(
-                context, with_hosts=True)
-            for host in _hosts:
-                # NOTE(sbauza): Host can only be in one AZ, so let's take only
-                #               the first element
-                host_azs = [az for (az, az_hosts) in zones
-                            if host in az_hosts
-                            and az != CONF.internal_service_availability_zone]
-                host_az = host_azs.pop()
-                if host_azs:
-                    LOG.warning(_LW("More than 1 AZ for host %s"), host)
-                if host_az == CONF.default_availability_zone:
-                    # NOTE(sbauza): Aggregate with AZ set to default AZ can
-                    #               exist, we need to check
-                    host_aggs = objects.AggregateList.get_by_host(
-                        context, host, key='availability_zone')
-                    default_aggs = [agg for agg in host_aggs
-                                    if agg['metadata'].get(
-                                        'availability_zone'
-                                    ) == CONF.default_availability_zone]
-                else:
-                    default_aggs = []
-                if (host_az != aggregate.metadata.get('availability_zone') and
-                        (host_az != CONF.default_availability_zone or
-                            len(default_aggs) != 0)):
-                                self._check_az_for_host(
-                                    metadata, host_az, aggregate.id,
-                                    action_name=action_name)
+            host_aggregates = objects.AggregateList.get_by_metadata_key(
+                context, 'availability_zone', hosts=_hosts)
+            conflicting_azs = [
+                agg.availability_zone for agg in host_aggregates
+                if agg.availability_zone != metadata['availability_zone']
+                and agg.id != aggregate.id]
+            if conflicting_azs:
+                msg = _("One or more hosts already in availability zone(s) "
+                        "%s") % conflicting_azs
+                self._raise_invalid_aggregate_exc(action_name, aggregate.id,
+                                                  msg)
 
     def _raise_invalid_aggregate_exc(self, action_name, aggregate_id, reason):
         if action_name == AGGREGATE_ACTION_ADD:
@@ -3631,27 +3618,6 @@ class AggregateAPI(base.Base):
 
         raise exception.NovaException(
             _("Unexpected aggregate action %s") % action_name)
-
-    def _check_az_for_host(self, aggregate_meta, host_az, aggregate_id,
-                           action_name=AGGREGATE_ACTION_ADD):
-        # NOTE(mtreinish) The availability_zone key returns a set of
-        # zones so loop over each zone. However there should only
-        # ever be one zone in the set because an aggregate can only
-        # have a single availability zone set at one time.
-        if isinstance(aggregate_meta["availability_zone"], six.string_types):
-            azs = set([aggregate_meta["availability_zone"]])
-        else:
-            azs = aggregate_meta["availability_zone"]
-
-        for aggregate_az in azs:
-            # NOTE(mtreinish) Ensure that the aggregate_az is not none
-            # if it is none then that is just a regular aggregate and
-            # it is valid to have a host in multiple aggregates.
-            if aggregate_az and aggregate_az != host_az:
-                msg = _("Host already in availability zone "
-                        "%s") % host_az
-                self._raise_invalid_aggregate_exc(action_name,
-                    aggregate_id, msg)
 
     def _update_az_cache_for_host(self, context, host_name, aggregate_meta):
         # Update the availability_zone cache to avoid getting wrong
@@ -3672,11 +3638,9 @@ class AggregateAPI(base.Base):
         # validates the host; ComputeHostNotFound is raised if invalid
         objects.Service.get_by_compute_host(context, host_name)
 
-        metadata = self.db.aggregate_metadata_get_by_metadata_key(
-            context, aggregate_id, 'availability_zone')
         aggregate = objects.Aggregate.get_by_id(context, aggregate_id)
-        self.is_safe_to_update_az(context, metadata, hosts=[host_name],
-                                  aggregate=aggregate)
+        self.is_safe_to_update_az(context, aggregate.metadata,
+                                  hosts=[host_name], aggregate=aggregate)
 
         aggregate.add_host(host_name)
         self.scheduler_client.update_aggregates(context, [aggregate])
@@ -3780,7 +3744,7 @@ class KeypairAPI(base.Base):
         self._notify(context, 'create.start', key_name)
 
         private_key, public_key, fingerprint = self._generate_key_pair(
-            context, user_id, key_type)
+            user_id, key_type)
 
         keypair = objects.KeyPair(context)
         keypair.user_id = user_id
@@ -3800,11 +3764,11 @@ class KeypairAPI(base.Base):
         elif key_type == keypair_obj.KEYPAIR_TYPE_X509:
             return crypto.generate_x509_fingerprint(public_key)
 
-    def _generate_key_pair(self, context, user_id, key_type):
+    def _generate_key_pair(self, user_id, key_type):
         if key_type == keypair_obj.KEYPAIR_TYPE_SSH:
             return crypto.generate_key_pair()
         elif key_type == keypair_obj.KEYPAIR_TYPE_X509:
-            return crypto.generate_winrm_x509_cert(user_id, context.project_id)
+            return crypto.generate_winrm_x509_cert(user_id)
 
     @wrap_exception()
     def delete_key_pair(self, context, user_id, key_name):

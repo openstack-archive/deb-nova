@@ -21,6 +21,7 @@ import re
 
 from oslo_config import cfg
 from oslo_log import log as logging
+import six
 import six.moves.urllib.parse as urlparse
 import webob
 from webob import exc
@@ -33,6 +34,7 @@ from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
+from nova import objects
 from nova import quota
 
 osapi_opts = [
@@ -150,8 +152,8 @@ def task_and_vm_state_from_status(statuses):
     vm_states = set()
     task_states = set()
     lower_statuses = [status.lower() for status in statuses]
-    for state, task_map in _STATE_MAP.iteritems():
-        for task_state, mapped_state in task_map.iteritems():
+    for state, task_map in six.iteritems(_STATE_MAP):
+        for task_state, mapped_state in six.iteritems(task_map):
             status_string = mapped_state
             if status_string.lower() in lower_statuses:
                 vm_states.add(state)
@@ -333,7 +335,7 @@ def check_img_metadata_properties_quota(context, metadata):
 
     #  check the key length.
     if isinstance(metadata, dict):
-        for key, value in metadata.iteritems():
+        for key, value in six.iteritems(metadata):
             if len(key) == 0:
                 expl = _("Image metadata key cannot be blank")
                 raise webob.exc.HTTPBadRequest(explanation=expl)
@@ -349,7 +351,7 @@ def dict_to_query_str(params):
     # TODO(throughnothing): we should just use urllib.urlencode instead of this
     # But currently we don't work with urlencoded url's
     param_str = ""
-    for key, val in params.iteritems():
+    for key, val in six.iteritems(params):
         param_str = param_str + '='.join([str(key), str(val)]) + '&'
 
     return param_str.rstrip('&')
@@ -535,11 +537,23 @@ def get_instance(compute_api, context, instance_id, expected_attrs=None):
         raise exc.HTTPNotFound(explanation=e.format_message())
 
 
+def raise_feature_not_supported(msg=None):
+    if msg is None:
+        msg = _("The requested functionality is not supported.")
+    raise webob.exc.HTTPNotImplemented(explanation=msg)
+
+
+def get_flavor(context, flavor_id):
+    try:
+        return objects.Flavor.get_by_flavor_id(context, flavor_id)
+    except exception.FlavorNotFound as error:
+        raise exc.HTTPNotFound(explanation=error.format_message())
+
+
 def check_cells_enabled(function):
     @functools.wraps(function)
     def inner(*args, **kwargs):
         if not CONF.cells.enable:
-            msg = _("Cells is not enabled.")
-            raise webob.exc.HTTPNotImplemented(explanation=msg)
+            raise_feature_not_supported()
         return function(*args, **kwargs)
     return inner

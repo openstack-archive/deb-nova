@@ -28,6 +28,7 @@ import sys
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
+import six
 import webob.exc
 
 from nova.i18n import _, _LE
@@ -55,7 +56,7 @@ class ConvertedException(webob.exc.WSGIHTTPException):
 
 def _cleanse_dict(original):
     """Strip all admin_password, new_pass, rescue_pass keys from a dict."""
-    return {k: v for k, v in original.iteritems() if "_pass" not in k}
+    return {k: v for k, v in six.iteritems(original) if "_pass" not in k}
 
 
 def wrap_exception(notifier=None, get_notifier=None):
@@ -122,15 +123,16 @@ class NovaException(Exception):
                 # kwargs doesn't match a variable in the message
                 # log the issue and the kwargs
                 LOG.exception(_LE('Exception in string format operation'))
-                for name, value in kwargs.iteritems():
+                for name, value in six.iteritems(kwargs):
                     LOG.error("%s: %s" % (name, value))    # noqa
 
                 if CONF.fatal_exception_format_errors:
-                    raise exc_info[0], exc_info[1], exc_info[2]
+                    six.reraise(*exc_info)
                 else:
                     # at least get the core message out if something happened
                     message = self.msg_fmt
 
+        self.message = message
         super(NovaException, self).__init__(message)
 
     def format_message(self):
@@ -274,7 +276,7 @@ class VolumeUnattached(Invalid):
 class VolumeNotCreated(NovaException):
     msg_fmt = _("Volume %(volume_id)s did not finish being created"
                 " even after we waited %(seconds)s seconds or %(attempts)s"
-                " attempts.")
+                " attempts. And its status is %(volume_status)s.")
 
 
 class InvalidKeypair(Invalid):
@@ -318,11 +320,6 @@ class InvalidIpProtocol(Invalid):
 
 class InvalidContentType(Invalid):
     msg_fmt = _("Invalid content type %(content_type)s.")
-
-
-class InvalidUnicodeParameter(Invalid):
-    msg_fmt = _("Invalid Parameter: "
-                "Unicode is not supported by the current database.")
 
 
 class InvalidAPIVersionString(Invalid):
@@ -567,6 +564,10 @@ class AgentBuildExists(NovaException):
 class VolumeNotFound(NotFound):
     ec2_code = 'InvalidVolume.NotFound'
     msg_fmt = _("Volume %(volume_id)s could not be found.")
+
+
+class BDMNotFound(NotFound):
+    msg_fmt = _("No Block Device Mapping with id %(id)s.")
 
 
 class VolumeBDMNotFound(NotFound):
@@ -879,6 +880,10 @@ class FloatingIpAllocateFailed(NovaException):
     msg_fmt = _("Floating IP allocate failed.")
 
 
+class FloatingIpAssociateFailed(NovaException):
+    msg_fmt = _("Floating IP %(address)s association has failed.")
+
+
 class CannotDisassociateAutoAssignedFloatingIP(NovaException):
     ec2_code = "UnsupportedOperation"
     msg_fmt = _("Cannot disassociate auto assigned floating ip")
@@ -1153,16 +1158,8 @@ class ClassNotFound(NotFound):
     msg_fmt = _("Class %(class_name)s could not be found: %(exception)s")
 
 
-class NotAllowed(NovaException):
-    msg_fmt = _("Action not allowed.")
-
-
 class InstanceTagNotFound(NotFound):
     msg_fmt = _("Instance %(instance_id)s has no tag '%(tag)s'")
-
-
-class ImageRotationNotAllowed(NovaException):
-    msg_fmt = _("Rotation is not allowed for snapshots")
 
 
 class RotationRequiredForBackup(NovaException):
@@ -1357,14 +1354,6 @@ class InvalidAssociation(NotFound):
     msg_fmt = _("Invalid association.")
 
 
-class NodeNotFound(NotFound):
-    msg_fmt = _("Node %(node_id)s could not be found.")
-
-
-class NodeNotFoundByUUID(NotFound):
-    msg_fmt = _("Node with UUID %(node_uuid)s could not be found.")
-
-
 class MarkerNotFound(NotFound):
     msg_fmt = _("Marker %(marker)s could not be found.")
 
@@ -1409,8 +1398,13 @@ class ConfigDriveMountFailed(NovaException):
 
 
 class ConfigDriveUnknownFormat(NovaException):
-    msg_fmt = _("Unknown config drive format %(format)s. Select one of "
-                "iso9660 or vfat.")
+    msg_fmt = _("Unknown config drive format %(format)s for %(os_type)s "
+                "os type. Valid options are: iso9660, vfat or None.")
+
+
+class ConfigDriveUnsupportedFormat(NovaException):
+    msg_fmt = _("Unsupported config drive format %(format)s "
+                "for %(image_type)s image type. Image path: %(image_path)")
 
 
 class InterfaceAttachFailed(Invalid):
@@ -1521,11 +1515,8 @@ class OrphanedObjectError(NovaException):
 
 
 class IncompatibleObjectVersion(NovaException):
-    msg_fmt = _('Version %(objver)s of %(objname)s is not supported')
-
-
-class ReadOnlyFieldError(NovaException):
-    msg_fmt = _('Cannot modify readonly field %(field)s')
+    msg_fmt = _('Version %(objver)s of %(objname)s is not supported. The '
+                'maximum supported version is: %(supported)s')
 
 
 class ObjectActionError(NovaException):
@@ -1559,11 +1550,6 @@ class InstanceGroupNotFound(NotFound):
 
 class InstanceGroupIdExists(NovaException):
     msg_fmt = _("Instance group %(group_uuid)s already exists.")
-
-
-class InstanceGroupMetadataNotFound(NotFound):
-    msg_fmt = _("Instance group %(group_uuid)s has no metadata with "
-                "key %(metadata_key)s.")
 
 
 class InstanceGroupMemberNotFound(NotFound):
@@ -1663,10 +1649,6 @@ class MissingParameter(NovaException):
 
 class PciConfigInvalidWhitelist(Invalid):
     msg_fmt = _("Invalid PCI devices Whitelist config %(reason)s")
-
-
-class PciTrackerInvalidNodeId(Invalid):
-    msg_fmt = _("Cannot change %(node_id)s to %(new_node_id)s")
 
 
 # Cannot be templated, msg needs to be constructed when raised.
@@ -1874,3 +1856,23 @@ class NUMATopologyUnsupported(Invalid):
 
 class MemoryPagesUnsupported(Invalid):
     msg_fmt = _("Host does not support guests with custom memory page sizes")
+
+
+class EnumFieldInvalid(Invalid):
+    msg_fmt = _('%(typename)s in %(fieldname)s is not an instance of Enum')
+
+
+class EnumFieldUnset(Invalid):
+    msg_fmt = _('%(fieldname)s missing field type')
+
+
+class InvalidImageFormat(Invalid):
+    msg_fmt = _("Invalid image format '%(format)s'")
+
+
+class UnsupportedImageModel(Invalid):
+    msg_fmt = _("Image model '%(image)s' is not supported")
+
+
+class DatabaseMigrationError(NovaException):
+    msg_fmt = _("Database migration failed: %(reason)s")

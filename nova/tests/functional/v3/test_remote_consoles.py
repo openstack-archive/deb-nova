@@ -13,15 +13,30 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_config import cfg
+
 from nova.tests.functional.v3 import test_servers
+
+CONF = cfg.CONF
+CONF.import_opt('osapi_compute_extension',
+                'nova.api.openstack.compute.extensions')
 
 
 class ConsolesSampleJsonTests(test_servers.ServersSampleBase):
     extension_name = "os-remote-consoles"
+    extra_extensions_to_load = ["os-access-ips"]
+    _api_version = 'v2'
+
+    def _get_flags(self):
+        f = super(ConsolesSampleJsonTests, self)._get_flags()
+        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
+        f['osapi_compute_extension'].append(
+            'nova.api.openstack.compute.contrib.consoles.Consoles')
+        return f
 
     def setUp(self):
         super(ConsolesSampleJsonTests, self).setUp()
-        self.flags(vnc_enabled=True)
+        self.flags(enabled=True, group='vnc')
         self.flags(enabled=True, group='spice')
         self.flags(enabled=True, group='rdp')
         self.flags(enabled=True, group='serial_console')

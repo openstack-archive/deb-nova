@@ -30,6 +30,7 @@ from nova.compute import flavors
 from nova.compute import vm_states
 from nova import context
 from nova import db
+from nova import exception
 from nova import objects
 from nova import quota
 from nova import test
@@ -149,6 +150,96 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
                        lambda *a, **kw: None)
         self.compute_api.delete(self.context, inst)
 
+    def test_delete_instance_no_cell_constraint_failure_does_not_loop(self):
+        with mock.patch.object(self.compute_api.cells_rpcapi,
+                'instance_delete_everywhere'):
+            inst = self._create_fake_instance_obj()
+            inst.cell_name = None
+
+            inst.destroy = mock.MagicMock()
+            inst.destroy.side_effect = exception.ObjectActionError(action='',
+                    reason='')
+            inst.refresh = mock.MagicMock()
+
+            self.assertRaises(exception.ObjectActionError,
+                    self.compute_api.delete, self.context, inst)
+            inst.destroy.assert_called_once_with()
+
+    def test_delete_instance_no_cell_constraint_failure_corrects_itself(self):
+
+        def add_cell_name(context, instance, delete_type):
+            instance.cell_name = 'fake_cell_name'
+
+        @mock.patch.object(compute_api.API, 'delete')
+        @mock.patch.object(self.compute_api.cells_rpcapi,
+                'instance_delete_everywhere', side_effect=add_cell_name)
+        def _test(mock_delete_everywhere, mock_compute_delete):
+            inst = self._create_fake_instance_obj()
+            inst.cell_name = None
+
+            inst.destroy = mock.MagicMock()
+            inst.destroy.side_effect = exception.ObjectActionError(action='',
+                    reason='')
+            inst.refresh = mock.MagicMock()
+
+            self.compute_api.delete(self.context, inst)
+            inst.destroy.assert_called_once_with()
+
+            mock_compute_delete.assert_called_once_with(self.context, inst)
+
+        _test()
+
+    def test_delete_instance_no_cell_destroy_fails_already_deleted(self):
+        # If the instance.destroy() is reached during _local_delete,
+        # it will raise ObjectActionError if the instance has already
+        # been deleted by a instance_destroy_at_top, and instance.refresh()
+        # will raise InstanceNotFound
+        instance = objects.Instance(uuid='fake-uuid', cell_name=None)
+        actionerror = exception.ObjectActionError(action='destroy', reason='')
+        notfound = exception.InstanceNotFound(instance_id=instance.uuid)
+
+        @mock.patch.object(compute_api.API, 'delete')
+        @mock.patch.object(self.compute_api.cells_rpcapi,
+                           'instance_delete_everywhere')
+        @mock.patch.object(compute_api.API, '_local_delete',
+                           side_effect=actionerror)
+        @mock.patch.object(instance, 'refresh', side_effect=notfound)
+        def _test(mock_refresh, mock_local_delete, mock_delete_everywhere,
+                  mock_compute_delete):
+            self.compute_api.delete(self.context, instance)
+            mock_delete_everywhere.assert_called_once_with(self.context,
+                                                           instance, 'hard')
+            mock_local_delete.assert_called_once_with(self.context,
+                    instance, mock.ANY, 'delete', self.compute_api._do_delete)
+            mock_refresh.assert_called_once_with()
+            self.assertFalse(mock_compute_delete.called)
+
+        _test()
+
+    def test_delete_instance_no_cell_instance_not_found_already_deleted(self):
+        # If anything in _local_delete accesses the instance causing a db
+        # lookup before instance.destroy() is reached, if the instance has
+        # already been deleted by a instance_destroy_at_top,
+        # InstanceNotFound will be raised
+        instance = objects.Instance(uuid='fake-uuid', cell_name=None)
+        notfound = exception.InstanceNotFound(instance_id=instance.uuid)
+
+        @mock.patch.object(compute_api.API, 'delete')
+        @mock.patch.object(self.compute_api.cells_rpcapi,
+                           'instance_delete_everywhere')
+        @mock.patch.object(compute_api.API, '_local_delete',
+                           side_effect=notfound)
+        def _test(mock_local_delete, mock_delete_everywhere,
+                  mock_compute_delete):
+            self.compute_api.delete(self.context, instance)
+            mock_delete_everywhere.assert_called_once_with(self.context,
+                                                           instance, 'hard')
+            mock_local_delete.assert_called_once_with(self.context,
+                    instance, mock.ANY, 'delete', self.compute_api._do_delete)
+            self.assertFalse(mock_compute_delete.called)
+
+        _test()
+
     def test_soft_delete_instance_no_cell(self):
         cells_rpcapi = self.compute_api.cells_rpcapi
         self.mox.StubOutWithMock(cells_rpcapi,
@@ -186,6 +277,9 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         bdms = db.block_device_mapping_get_all_by_instance(
             self.context, instance['uuid'])
         self.assertEqual(0, len(bdms))
+
+    def test_create_bdm_from_flavor(self):
+        self.skipTest("Test is incompatible with cells.")
 
     @mock.patch('nova.cells.messaging._TargetedMessage')
     def test_rebuild_sig(self, mock_msg):

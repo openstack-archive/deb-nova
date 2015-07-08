@@ -398,6 +398,11 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         remote_display_vnc_port.key = 'RemoteDisplay.vnc.port'
         expected.extraConfig.append(remote_display_vnc_port)
 
+        remote_display_vnc_keymap = fake_factory.create('ns0:OptionValue')
+        remote_display_vnc_keymap.value = 'en-us'
+        remote_display_vnc_keymap.key = 'RemoteDisplay.vnc.keyMap'
+        expected.extraConfig.append(remote_display_vnc_keymap)
+
         self.assertEqual(expected, result)
 
     def _create_fake_vms(self):
@@ -722,6 +727,47 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         expected.numCPUs = 2
         self.assertEqual(expected, result)
 
+    def test_get_vm_create_spec_with_metadata(self):
+        extra_specs = vm_util.ExtraSpecs()
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
+                                            self._instance,
+                                            'fake-datastore', [],
+                                            extra_specs,
+                                            metadata='fake-metadata')
+
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.name = self._instance.uuid
+        expected.instanceUuid = self._instance.uuid
+        expected.deviceChange = []
+        expected.numCPUs = 2
+
+        expected.version = None
+        expected.memoryMB = 2048
+        expected.guestId = 'otherGuest'
+        expected.annotation = 'fake-metadata'
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create("ns0:OptionValue")
+        extra_config.value = self._instance.uuid
+        extra_config.key = 'nvp.vm-uuid'
+        expected.extraConfig.append(extra_config)
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+        expected.managedBy.type = 'instance'
+
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.afterPowerOn = True
+        expected.tools.afterResume = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.beforeGuestStandby = True
+
+        self.assertEqual(expected, result)
+
     def test_create_vm(self):
 
         method_list = ['CreateVM_Task', 'get_dynamic_property']
@@ -799,7 +845,7 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         result = vm_util.convert_vif_model(network_model.VIF_MODEL_E1000E)
         self.assertEqual(expected, result)
         types = ["VirtualE1000", "VirtualE1000e", "VirtualPCNet32",
-                 "VirtualVmxnet"]
+                 "VirtualVmxnet", "VirtualVmxnet3"]
         for type in types:
             self.assertEqual(type,
                              vm_util.convert_vif_model(type))
@@ -1221,6 +1267,59 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
                           vm_util.find_rescue_device,
                           devices,
                           self._instance)
+
+    def test_validate_cpu_limits(self):
+        cpu_limits = vm_util.CpuLimits(cpu_shares_level='high',
+                                       cpu_shares_share=1948)
+        self.assertRaises(exception.InvalidInput,
+                          cpu_limits.validate)
+        cpu_limits = vm_util.CpuLimits(cpu_shares_level='fira')
+        self.assertRaises(exception.InvalidInput,
+                          cpu_limits.validate)
+
+    def test_get_vm_create_spec_with_console_delay(self):
+        extra_specs = vm_util.ExtraSpecs()
+        self.flags(console_delay_seconds=2, group='vmware')
+        fake_factory = fake.FakeFactory()
+        result = vm_util.get_vm_create_spec(fake_factory,
+                                            self._instance,
+                                            'fake-datastore', [],
+                                            extra_specs)
+
+        expected = fake_factory.create('ns0:VirtualMachineConfigSpec')
+        expected.name = self._instance.uuid
+        expected.instanceUuid = self._instance.uuid
+        expected.deviceChange = []
+        expected.numCPUs = 2
+
+        expected.version = None
+        expected.memoryMB = 2048
+        expected.guestId = constants.DEFAULT_OS_TYPE
+        expected.extraConfig = []
+
+        extra_config = fake_factory.create("ns0:OptionValue")
+        extra_config.value = self._instance.uuid
+        extra_config.key = 'nvp.vm-uuid'
+        expected.extraConfig.append(extra_config)
+        extra_config = fake_factory.create("ns0:OptionValue")
+        extra_config.value = 2000000
+        extra_config.key = 'keyboard.typematicMinDelay'
+        expected.extraConfig.append(extra_config)
+        expected.files = fake_factory.create('ns0:VirtualMachineFileInfo')
+        expected.files.vmPathName = '[fake-datastore]'
+
+        expected.managedBy = fake_factory.create('ns0:ManagedByInfo')
+        expected.managedBy.extensionKey = 'org.openstack.compute'
+        expected.managedBy.type = 'instance'
+
+        expected.tools = fake_factory.create('ns0:ToolsConfigInfo')
+        expected.tools.afterPowerOn = True
+        expected.tools.afterResume = True
+        expected.tools.beforeGuestReboot = True
+        expected.tools.beforeGuestShutdown = True
+        expected.tools.beforeGuestStandby = True
+
+        self.assertEqual(expected, result)
 
 
 @mock.patch.object(driver.VMwareAPISession, 'vim', stubs.fake_vim_prop)

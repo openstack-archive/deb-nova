@@ -164,6 +164,20 @@ class ConductorAPI(object):
     existing methods in 2.x after that point should be done such
     that they can handle the version_cap being set to 2.1.
 
+    * Remove get_ec2_ids()
+    * Remove service_get_all_by()
+    * Remove service_create()
+    * Remove service_destroy()
+    * Remove service_update()
+    * Remove migration_get_in_progress_by_host_and_node()
+    * Remove aggregate_metadata_get_by_host()
+    * Remove block_device_mapping_update_or_create()
+    * Remove block_device_mapping_get_all_by_instance()
+    * Remove instance_get_all_by_host()
+    * Remove compute_node_update()
+    * Remove compute_node_delete()
+    * Remove security_groups_trigger_handler()
+
     """
 
     VERSION_ALIASES = {
@@ -193,35 +207,9 @@ class ConductorAPI(object):
                           updates=updates_p,
                           service=service)
 
-    def migration_get_in_progress_by_host_and_node(self, context,
-                                                   host, node):
-        cctxt = self.client.prepare()
-        return cctxt.call(context,
-                          'migration_get_in_progress_by_host_and_node',
-                          host=host, node=node)
-
-    def aggregate_metadata_get_by_host(self, context, host, key):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'aggregate_metadata_get_by_host',
-                          host=host,
-                          key=key)
-
     def provider_fw_rule_get_all(self, context):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'provider_fw_rule_get_all')
-
-    def block_device_mapping_update_or_create(self, context, values,
-                                              create=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'block_device_mapping_update_or_create',
-                          values=values, create=create)
-
-    def block_device_mapping_get_all_by_instance(self, context, instance,
-                                                 legacy=True):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'block_device_mapping_get_all_by_instance',
-                          instance=instance_p, legacy=legacy)
 
     def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
                          wr_bytes, instance, last_refreshed=None,
@@ -235,59 +223,9 @@ class ConductorAPI(object):
                           instance=instance_p, last_refreshed=last_refreshed,
                           update_totals=update_totals)
 
-    def service_get_all_by(self, context, topic=None, host=None, binary=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'service_get_all_by',
-                          topic=topic, host=host, binary=binary)
-
-    def instance_get_all_by_host(self, context, host, node=None,
-                                 columns_to_join=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_get_all_by_host',
-                          host=host, node=node,
-                          columns_to_join=columns_to_join)
-
-    def service_create(self, context, values):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'service_create', values=values)
-
-    def service_destroy(self, context, service_id):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'service_destroy', service_id=service_id)
-
     def compute_node_create(self, context, values):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'compute_node_create', values=values)
-
-    def compute_node_update(self, context, node, values):
-        node_p = jsonutils.to_primitive(node)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'compute_node_update',
-                          node=node_p, values=values)
-
-    def compute_node_delete(self, context, node):
-        node_p = jsonutils.to_primitive(node)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'compute_node_delete', node=node_p)
-
-    def service_update(self, context, service, values):
-        service_p = jsonutils.to_primitive(service)
-
-        # (NOTE:jichenjc)If we're calling this periodically, it makes no
-        # sense for the RPC timeout to be more than the service
-        # report interval. Select 5 here is only find a reaonable long
-        # interval as threshold.
-        timeout = CONF.report_interval
-        if timeout and timeout > 5:
-            timeout -= 1
-
-        if timeout:
-            cctxt = self.client.prepare(timeout=timeout)
-        else:
-            cctxt = self.client.prepare()
-
-        return cctxt.call(context, 'service_update',
-                          service=service_p, values=values)
 
     def task_log_get(self, context, task_name, begin, end, host, state=None):
         cctxt = self.client.prepare()
@@ -310,22 +248,10 @@ class ConductorAPI(object):
                           task_name=task_name, begin=begin, end=end,
                           host=host, errors=errors, message=message)
 
-    def security_groups_trigger_handler(self, context, event, args):
-        args_p = jsonutils.to_primitive(args)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'security_groups_trigger_handler',
-                          event=event, args=args_p)
-
     def security_groups_trigger_members_refresh(self, context, group_ids):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'security_groups_trigger_members_refresh',
                           group_ids=group_ids)
-
-    def get_ec2_ids(self, context, instance):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'get_ec2_ids',
-                          instance=instance_p)
 
     def object_class_action(self, context, objname, objmethod, objver,
                             args, kwargs):

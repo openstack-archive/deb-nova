@@ -12,15 +12,34 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_config import cfg
+
 from nova import db
 from nova import exception
 from nova.tests.functional.v3 import test_servers
 from nova.tests.unit.objects import test_network
 from nova.tests.unit import utils as test_utils
 
+CONF = cfg.CONF
+CONF.import_opt('osapi_compute_extension',
+                'nova.api.openstack.compute.extensions')
+
 
 class FixedIpTest(test_servers.ServersSampleBase):
     extension_name = "os-fixed-ips"
+    # TODO(park): Overriding '_api_version' till all functional tests
+    # are merged between v2 and v2.1. After that base class variable
+    # itself can be changed to 'v2'
+    _api_version = 'v2'
+
+    request_api_version = None
+
+    def _get_flags(self):
+        f = super(FixedIpTest, self)._get_flags()
+        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
+        f['osapi_compute_extension'].append(
+            'nova.api.openstack.compute.contrib.fixed_ips.Fixed_ips')
+        return f
 
     def setUp(self):
         super(FixedIpTest, self).setUp()
@@ -81,15 +100,29 @@ class FixedIpTest(test_servers.ServersSampleBase):
     def test_fixed_ip_reserve(self):
         # Reserve a Fixed IP.
         response = self._do_post('os-fixed-ips/192.168.1.1/action',
-                                 'fixedip-post-req', {})
+                                 'fixedip-post-req', {},
+                                 api_version=self.request_api_version)
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.content, "")
 
-    def test_get_fixed_ip(self):
+    def _test_get_fixed_ip(self, **kwargs):
         # Return data about the given fixed ip.
-        response = self._do_get('os-fixed-ips/192.168.1.1')
+        response = self._do_get('os-fixed-ips/192.168.1.1',
+                                api_version=self.request_api_version)
         project = {'cidr': '192.168.1.0/24',
                    'hostname': 'openstack',
                    'host': 'host',
                    'address': '192.168.1.1'}
+        project.update(**kwargs)
         self._verify_response('fixedips-get-resp', project, response, 200)
+
+    def test_get_fixed_ip(self):
+        self._test_get_fixed_ip()
+
+
+class FixedIpV24Test(FixedIpTest):
+    _api_version = 'v3'
+    request_api_version = '2.4'
+
+    def test_get_fixed_ip(self):
+        self._test_get_fixed_ip(reserved=False)

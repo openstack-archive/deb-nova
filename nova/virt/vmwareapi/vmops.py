@@ -33,6 +33,7 @@ from oslo_utils import units
 from oslo_utils import uuidutils
 from oslo_vmware import exceptions as vexc
 from oslo_vmware.objects import datastore as ds_obj
+from oslo_vmware import vim_util as vutil
 
 from nova.api.metadata import base as instance_metadata
 from nova import compute
@@ -43,6 +44,7 @@ from nova import context as nova_context
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova import utils
+from nova import version
 from nova.virt import configdrive
 from nova.virt import diagnostics
 from nova.virt import driver
@@ -58,7 +60,7 @@ from nova.virt.vmwareapi import vm_util
 
 vmops_opts = [
     cfg.StrOpt('cache_prefix',
-               help='The prefix for Where cached images are stored. This is '
+               help='The prefix for where cached images are stored. This is '
                     'NOT the full path - just a folder prefix. '
                     'This should only be used when a datastore cache should '
                     'be shared between compute nodes. Note: this should only '
@@ -71,7 +73,7 @@ CONF.register_opts(vmops_opts, 'vmware')
 
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('remove_unused_base_images', 'nova.virt.imagecache')
-CONF.import_opt('vnc_enabled', 'nova.vnc')
+CONF.import_opt('enabled', 'nova.vnc', group='vnc')
 CONF.import_opt('my_ip', 'nova.netconf')
 
 LOG = logging.getLogger(__name__)
@@ -241,8 +243,37 @@ class VMwareVMOps(object):
             datastore.ref,
             str(uploaded_iso_path))
 
-    def build_virtual_machine(self, instance, image_info, dc_info, datastore,
-                              network_info, extra_specs):
+    def _get_instance_metadata(self, context, instance):
+        flavor = instance.flavor
+        return ('name:%s\n'
+                'userid:%s\n'
+                'username:%s\n'
+                'projectid:%s\n'
+                'projectname:%s\n'
+                'flavor:name:%s\n'
+                'flavor:memory_mb:%s\n'
+                'flavor:vcpus:%s\n'
+                'flavor:ephemeral_gb:%s\n'
+                'flavor:root_gb:%s\n'
+                'flavor:swap:%s\n'
+                'imageid:%s\n'
+                'package:%s\n') % (instance.display_name,
+                                   context.user_id,
+                                   context.user_name,
+                                   context.project_id,
+                                   context.project_name,
+                                   flavor.name,
+                                   flavor.memory_mb,
+                                   flavor.vcpus,
+                                   flavor.ephemeral_gb,
+                                   flavor.root_gb,
+                                   flavor.swap,
+                                   instance.image_ref,
+                                   version.version_string_with_package())
+
+    def build_virtual_machine(self, instance, image_info,
+                              dc_info, datastore, network_info, extra_specs,
+                              metadata):
         vif_infos = vmwarevif.get_vif_info(self._session,
                                            self._cluster,
                                            utils.is_neutron(),
@@ -262,7 +293,8 @@ class VMwareVMOps(object):
                                                  vif_infos,
                                                  extra_specs,
                                                  image_info.os_type,
-                                                 profile_spec=profile_spec)
+                                                 profile_spec=profile_spec,
+                                                 metadata=metadata)
         # Create the VM
         vm_ref = vm_util.create_vm(self._session, instance, dc_info.vmFolder,
                                    config_spec, self._root_resource_pool)
@@ -277,6 +309,7 @@ class VMwareVMOps(object):
             value = flavor.extra_specs.get('quota:' + key)
             if value:
                 setattr(extra_specs.cpu_limits, key, type(value))
+        extra_specs.cpu_limits.validate()
         hw_version = flavor.extra_specs.get('vmware:hw_version')
         extra_specs.hw_version = hw_version
         if CONF.vmware.pbm_enabled:
@@ -533,7 +566,7 @@ class VMwareVMOps(object):
             ephemerals = driver.block_device_info_get_ephemerals(bdi)
             for idx, eph in enumerate(ephemerals):
                 size = eph['size'] * units.Mi
-                at = eph.get('disk_bus', adapter_type)
+                at = eph.get('disk_bus') or adapter_type
                 filename = vm_util.get_ephemeral_name(idx)
                 path = str(ds_obj.DatastorePath(datastore.name, folder,
                                                 filename))
@@ -552,8 +585,7 @@ class VMwareVMOps(object):
                                                    adapter_type, path)
 
     def spawn(self, context, instance, image_meta, injected_files,
-              admin_password, network_info, block_device_info=None,
-              power_on=True):
+              admin_password, network_info, block_device_info=None):
 
         client_factory = self._session.vim.client.factory
         image_info = images.VMwareImage.from_image(instance.image_ref,
@@ -563,6 +595,7 @@ class VMwareVMOps(object):
         vi = self._get_vm_config_info(instance, image_info,
                                       extra_specs.storage_policy)
 
+        metadata = self._get_instance_metadata(context, instance)
         # Creates the virtual machine. The virtual machine reference returned
         # is unique within Virtual Center.
         vm_ref = self.build_virtual_machine(instance,
@@ -570,7 +603,8 @@ class VMwareVMOps(object):
                                             vi.dc_info,
                                             vi.datastore,
                                             network_info,
-                                            extra_specs)
+                                            extra_specs,
+                                            metadata)
 
         # Cache the vm_ref. This saves a remote call to the VC. This uses the
         # instance uuid.
@@ -583,7 +617,7 @@ class VMwareVMOps(object):
                                 vm_ref=vm_ref)
 
         # Set the vnc configuration of the instance, vnc port starts from 5900
-        if CONF.vnc_enabled:
+        if CONF.vnc.enabled:
             self._get_and_set_vnc_config(client_factory, instance, vm_ref)
 
         block_device_mapping = []
@@ -637,8 +671,7 @@ class VMwareVMOps(object):
                     instance, vm_ref, vi.dc_info, vi.datastore,
                     injected_files, admin_password)
 
-        if power_on:
-            vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
+        vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
 
     def _is_bdm_valid(self, block_device_mapping):
         """Checks if the block device mapping is valid."""
@@ -656,7 +689,7 @@ class VMwareVMOps(object):
 
     def _create_config_drive(self, instance, injected_files, admin_password,
                              data_store_name, dc_name, upload_folder, cookies):
-        if CONF.config_drive_format != 'iso9660':
+        if CONF.config_drive_format not in ('iso9660', None):
             reason = (_('Invalid config_drive_format "%s"') %
                       CONF.config_drive_format)
             raise exception.InstancePowerOnFailure(reason=reason)
@@ -946,10 +979,6 @@ class VMwareVMOps(object):
         2. Un-register.
         3. Delete the contents of the folder holding the VM related data.
         """
-        if instance.task_state == task_states.RESIZE_REVERTING:
-            return
-
-        # If there is a rescue VM then we need to destroy that one too.
         LOG.debug("Destroying instance", instance=instance)
         self._destroy_instance(instance, destroy_disks=destroy_disks)
         LOG.debug("Instance destroyed", instance=instance)
@@ -1018,7 +1047,7 @@ class VMwareVMOps(object):
         vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
                                      uuid=instance.uuid)
         ds_ref = vmdk.device.backing.datastore
-        datastore = ds_util.get_datastore_by_ref(self._session, ds_ref)
+        datastore = ds_obj.get_datastore_by_ref(self._session, ds_ref)
         dc_info = self.get_datacenter_ref_and_name(datastore.ref)
 
         # Get the image details of the instance
@@ -1097,14 +1126,16 @@ class VMwareVMOps(object):
         instance.progress = progress
         instance.save()
 
-    def _resize_vm(self, vm_ref, flavor):
+    def _resize_vm(self, context, instance, vm_ref, flavor):
         """Resizes the VM according to the flavor."""
         client_factory = self._session.vim.client.factory
         extra_specs = self._get_extra_specs(flavor)
+        metadata = self._get_instance_metadata(context, instance)
         vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
                                                     int(flavor['vcpus']),
                                                     int(flavor['memory_mb']),
-                                                    extra_specs)
+                                                    extra_specs,
+                                                    metadata=metadata)
         vm_util.reconfigure_vm(self._session, vm_ref, vm_resize_spec)
 
     def _resize_disk(self, instance, vm_ref, vmdk, flavor):
@@ -1141,7 +1172,7 @@ class VMwareVMOps(object):
         vmdk = vm_util.get_vmdk_info(self._session, vm_ref,
                                      uuid=instance.uuid)
         ds_ref = vmdk.device.backing.datastore
-        datastore = ds_util.get_datastore_by_ref(self._session, ds_ref)
+        datastore = ds_obj.get_datastore_by_ref(self._session, ds_ref)
         dc_info = self.get_datacenter_ref_and_name(ds_ref)
         folder = ds_obj.DatastorePath.parse(vmdk.path).dirname
         self._create_ephemeral(block_device_info, instance, vm_ref,
@@ -1158,7 +1189,8 @@ class VMwareVMOps(object):
 
         # Checks if the migration needs a disk resize down.
         if (flavor['root_gb'] < instance.root_gb or
-            flavor['root_gb'] < vmdk.capacity_in_bytes / units.Gi):
+            (flavor['root_gb'] != 0 and
+             flavor['root_gb'] < vmdk.capacity_in_bytes / units.Gi)):
             reason = _("Unable to shrink disk.")
             raise exception.InstanceFaultRollback(
                 exception.ResizeError(reason=reason))
@@ -1177,7 +1209,7 @@ class VMwareVMOps(object):
                                        total_steps=RESIZE_TOTAL_STEPS)
 
         # 2. Reconfigure the VM properties
-        self._resize_vm(vm_ref, flavor)
+        self._resize_vm(context, instance, vm_ref, flavor)
 
         self._update_instance_progress(context, instance,
                                        step=2,
@@ -1222,10 +1254,12 @@ class VMwareVMOps(object):
         client_factory = self._session.vim.client.factory
         # Reconfigure the VM properties
         extra_specs = self._get_extra_specs(instance.flavor)
+        metadata = self._get_instance_metadata(context, instance)
         vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
                                                     int(instance.vcpus),
                                                     int(instance.memory_mb),
-                                                    extra_specs)
+                                                    extra_specs,
+                                                    metadata=metadata)
         vm_util.reconfigure_vm(self._session, vm_ref, vm_resize_spec)
 
         # Reconfigure the disks if necessary
@@ -1527,7 +1561,6 @@ class VMwareVMOps(object):
         lst_vm_names = []
 
         while retrieve_result:
-            token = vm_util._get_token(retrieve_result)
             for vm in retrieve_result.objects:
                 vm_name = None
                 conn_state = None
@@ -1540,12 +1573,9 @@ class VMwareVMOps(object):
                 if (conn_state not in ["orphaned", "inaccessible"] and
                     uuidutils.is_uuid_like(vm_name)):
                     lst_vm_names.append(vm_name)
-            if token:
-                retrieve_result = self._session._call_method(vim_util,
-                                                 "continue_to_get_objects",
-                                                 token)
-            else:
-                break
+            retrieve_result = self._session._call_method(vutil,
+                                                         'continue_retrieval',
+                                                         retrieve_result)
         return lst_vm_names
 
     def instance_exists(self, instance):
@@ -1753,7 +1783,6 @@ class VMwareVMOps(object):
         """Updates the datastore/datacenter cache."""
 
         while dcs:
-            token = vm_util._get_token(dcs)
             for dco in dcs.objects:
                 dc_ref = dco.obj
                 ds_refs = []
@@ -1771,13 +1800,8 @@ class VMwareVMOps(object):
                 for ds_ref in ds_refs:
                     self._datastore_dc_mapping[ds_ref] = DcInfo(ref=dc_ref,
                             name=name, vmFolder=vmFolder)
-
-            if token:
-                dcs = self._session._call_method(vim_util,
-                                                 "continue_to_get_objects",
-                                                 token)
-            else:
-                break
+            dcs = self._session._call_method(vutil, 'continue_retrieval',
+                                             dcs)
 
     def get_datacenter_ref_and_name(self, ds_ref):
         """Get the datacenter name and the reference."""
@@ -1820,6 +1844,6 @@ class VMwareVMOps(object):
 
         # NOTE: VM can move hosts in some situations. Debug for admins.
         LOG.debug("VM %(uuid)s is currently on host %(host_name)s",
-                  {'uuid': instance.name, 'host_name': host_name},
+                  {'uuid': instance.uuid, 'host_name': host_name},
                   instance=instance)
         return ctype.ConsoleVNC(**vnc_console)

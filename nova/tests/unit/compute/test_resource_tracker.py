@@ -15,6 +15,7 @@
 
 """Tests for compute resource tracking."""
 
+import copy
 import uuid
 
 import mock
@@ -222,9 +223,6 @@ class BaseTestCase(test.TestCase):
         self.stubs.Set(db, 'instance_extra_get_by_instance_uuid',
                        self._fake_instance_extra_get_by_instance_uuid)
         self.stubs.Set(self.conductor.db,
-                       'instance_update_and_get_original',
-                       self._fake_instance_update_and_get_original)
-        self.stubs.Set(self.conductor.db,
                        'flavor_get', self._fake_flavor_get)
 
         self.host = 'fakehost'
@@ -283,6 +281,7 @@ class BaseTestCase(test.TestCase):
             'updated_at': None,
             'deleted_at': None,
             'deleted': False,
+            'last_seen_up': None,
         }
         return service
 
@@ -294,6 +293,8 @@ class BaseTestCase(test.TestCase):
         return sys_meta
 
     def _fake_instance(self, stash=True, flavor=None, **kwargs):
+        # NOTE(danms): Remove this when all the compute_node stuff is
+        # converted to objects
 
         # Default to an instance ready to resize to or from the same
         # instance_type
@@ -381,6 +382,83 @@ class BaseTestCase(test.TestCase):
         self._numa_topologies[instance_uuid] = extra
         return instance
 
+    def _fake_instance_obj(self, stash=True, flavor=None, **kwargs):
+
+        # Default to an instance ready to resize to or from the same
+        # instance_type
+        flavor = flavor or self._fake_flavor_create()
+        if not isinstance(flavor, objects.Flavor):
+            flavor = objects.Flavor(**flavor)
+
+        instance_uuid = str(uuid.uuid1())
+        instance = objects.Instance(context=self.context, uuid=instance_uuid,
+                                    flavor=flavor)
+        instance.update({
+            'vm_state': vm_states.RESIZED,
+            'task_state': None,
+            'ephemeral_key_uuid': None,
+            'os_type': 'Linux',
+            'project_id': '123456',
+            'host': None,
+            'node': None,
+            'instance_type_id': flavor['id'],
+            'memory_mb': flavor['memory_mb'],
+            'vcpus': flavor['vcpus'],
+            'root_gb': flavor['root_gb'],
+            'ephemeral_gb': flavor['ephemeral_gb'],
+            'launched_on': None,
+            'system_metadata': {},
+            'availability_zone': None,
+            'vm_mode': None,
+            'reservation_id': None,
+            'display_name': None,
+            'default_swap_device': None,
+            'power_state': None,
+            'scheduled_at': None,
+            'access_ip_v6': None,
+            'access_ip_v4': None,
+            'key_name': None,
+            'updated_at': None,
+            'cell_name': None,
+            'locked': None,
+            'locked_by': None,
+            'launch_index': None,
+            'architecture': None,
+            'auto_disk_config': None,
+            'terminated_at': None,
+            'ramdisk_id': None,
+            'user_data': None,
+            'cleaned': None,
+            'deleted_at': None,
+            'id': 333,
+            'disable_terminate': None,
+            'hostname': None,
+            'display_description': None,
+            'key_data': None,
+            'deleted': None,
+            'default_ephemeral_device': None,
+            'progress': None,
+            'launched_at': None,
+            'config_drive': None,
+            'kernel_id': None,
+            'user_id': None,
+            'shutdown_terminate': None,
+            'created_at': None,
+            'image_ref': None,
+            'root_device_name': None,
+        })
+
+        if stash:
+            instance.old_flavor = flavor
+            instance.new_flavor = flavor
+
+        instance.numa_topology = kwargs.pop('numa_topology', None)
+
+        instance.update(kwargs)
+
+        self._instances[instance_uuid] = instance
+        return instance
+
     def _fake_flavor_create(self, **kwargs):
         instance_type = {
             'id': 1,
@@ -417,14 +495,6 @@ class BaseTestCase(test.TestCase):
 
     def _fake_flavor_get(self, ctxt, id_):
         return self._instance_types[id_]
-
-    def _fake_instance_update_and_get_original(self, context, instance_uuid,
-                                               values, columns_to_join=None):
-        instance = self._instances[instance_uuid]
-        instance.update(values)
-        # the test doesn't care what the original instance values are, it's
-        # only used in the subsequent notification:
-        return (instance, instance)
 
     def _fake_compute_node_update(self, ctx, compute_node_id, values,
             prune_stats=False):
@@ -472,20 +542,23 @@ class UnsupportedDriverTestCase(BaseTestCase):
 
     def test_disabled_claim(self):
         # basic claim:
-        instance = self._fake_instance()
-        claim = self.tracker.instance_claim(self.context, instance)
+        instance = self._fake_instance_obj()
+        with mock.patch.object(instance, 'save'):
+            claim = self.tracker.instance_claim(self.context, instance)
         self.assertEqual(0, claim.memory_mb)
 
     def test_disabled_instance_claim(self):
         # instance variation:
-        instance = self._fake_instance()
-        claim = self.tracker.instance_claim(self.context, instance)
+        instance = self._fake_instance_obj()
+        with mock.patch.object(instance, 'save'):
+            claim = self.tracker.instance_claim(self.context, instance)
         self.assertEqual(0, claim.memory_mb)
 
-    def test_disabled_instance_context_claim(self):
+    @mock.patch('nova.objects.Instance.save')
+    def test_disabled_instance_context_claim(self, mock_save):
         # instance context manager variation:
-        instance = self._fake_instance()
-        claim = self.tracker.instance_claim(self.context, instance)
+        instance = self._fake_instance_obj()
+        self.tracker.instance_claim(self.context, instance)
         with self.tracker.instance_claim(self.context, instance) as claim:
             self.assertEqual(0, claim.memory_mb)
 
@@ -495,7 +568,7 @@ class UnsupportedDriverTestCase(BaseTestCase):
         self.tracker.update_usage(self.context, instance)
 
     def test_disabled_resize_claim(self):
-        instance = self._fake_instance()
+        instance = self._fake_instance_obj()
         instance_type = self._fake_flavor_create()
         claim = self.tracker.resize_claim(self.context, instance,
                 instance_type)
@@ -505,7 +578,7 @@ class UnsupportedDriverTestCase(BaseTestCase):
                 claim.migration['new_instance_type_id'])
 
     def test_disabled_resize_context_claim(self):
-        instance = self._fake_instance()
+        instance = self._fake_instance_obj()
         instance_type = self._fake_flavor_create()
         with self.tracker.resize_claim(self.context, instance, instance_type) \
                                        as claim:
@@ -732,16 +805,20 @@ class SchedulerClientTrackerTestCase(BaseTrackerTestCase):
                 side_effect=self._fake_compute_node_update)
 
     def test_update_resource(self):
-        self.tracker._write_ext_resources = mock.Mock()
-        values = {'stats': {}, 'foo': 'bar', 'baz_count': 0}
-        self.tracker._update(self.context, values)
-
-        expected = {'stats': '{}', 'foo': 'bar', 'baz_count': 0,
-                    'id': 1}
+        # change a compute node value to simulate a change
+        self.tracker.compute_node['local_gb_used'] += 1
+        expected = copy.deepcopy(self.tracker.compute_node)
+        self.tracker._update(self.context)
         self.tracker.scheduler_client.update_resource_stats.\
             assert_called_once_with(self.context,
                                     ("fakehost", "fakenode"),
                                     expected)
+
+    def test_no_update_resource(self):
+        self.tracker._update(self.context)
+        update = self.tracker.scheduler_client.update_resource_stats
+        self.assertFalse(update.called, "update_resource_stats should not be "
+                                        "called when there is no change")
 
 
 class TrackerPciStatsTestCase(BaseTrackerTestCase):
@@ -840,7 +917,7 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
         instance_topology = self._instance_topology(claim_mem / 2)
 
-        instance = self._fake_instance(
+        instance = self._fake_instance_obj(
                 flavor=flavor, task_state=None,
                 numa_topology=instance_topology)
         self.tracker.update_usage(self.context, instance)
@@ -850,8 +927,9 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
         self._assert(0, 'current_workload')
         self._assert(FAKE_VIRT_NUMA_TOPOLOGY, 'numa_topology')
 
-        claim = self.tracker.instance_claim(self.context, instance,
-                self.limits)
+        with mock.patch.object(instance, 'save'):
+            claim = self.tracker.instance_claim(self.context, instance,
+                                                self.limits)
         self.assertNotEqual(0, claim.memory_mb)
         self._assert(claim_mem, 'memory_mb_used')
         self._assert(claim_gb, 'local_gb_used')
@@ -875,12 +953,13 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
         claim_topology = self._claim_topology(claim_mem_total / 2)
 
         instance_topology = self._instance_topology(claim_mem_total / 2)
-        instance = self._fake_instance(memory_mb=claim_mem,
+        instance = self._fake_instance_obj(memory_mb=claim_mem,
                 root_gb=claim_disk, ephemeral_gb=0,
                 numa_topology=instance_topology)
 
-        claim = self.tracker.instance_claim(self.context, instance,
-                self.limits)
+        with mock.patch.object(instance, 'save'):
+            claim = self.tracker.instance_claim(self.context, instance,
+                                                self.limits)
         self.assertIsNotNone(claim)
 
         self.assertEqual(claim_mem_total, self.compute["memory_mb_used"])
@@ -920,11 +999,12 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
                   'vcpu': vcpus,
                   'numa_topology': FAKE_VIRT_NUMA_TOPOLOGY_OVERHEAD}
 
-        instance = self._fake_instance(memory_mb=memory_mb,
+        instance = self._fake_instance_obj(memory_mb=memory_mb,
                 root_gb=root_gb, ephemeral_gb=ephemeral_gb,
                 numa_topology=instance_topology)
 
-        self.tracker.instance_claim(self.context, instance, limits)
+        with mock.patch.object(instance, 'save'):
+            self.tracker.instance_claim(self.context, instance, limits)
         self.assertEqual(memory_mb + FAKE_VIRT_MEMORY_OVERHEAD,
                 self.tracker.compute_node['memory_mb_used'])
         self.assertEqualNUMAHostTopology(
@@ -936,18 +1016,19 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_additive_claims(self, mock_get):
+    @mock.patch('nova.objects.Instance.save')
+    def test_additive_claims(self, mock_save, mock_get):
         self.limits['vcpu'] = 2
         claim_topology = self._claim_topology(2, cpus=2)
 
         flavor = self._fake_flavor_create(
                 memory_mb=1, root_gb=1, ephemeral_gb=0)
         instance_topology = self._instance_topology(1)
-        instance = self._fake_instance(
+        instance = self._fake_instance_obj(
                 flavor=flavor, numa_topology=instance_topology)
         with self.tracker.instance_claim(self.context, instance, self.limits):
             pass
-        instance = self._fake_instance(
+        instance = self._fake_instance_obj(
                 flavor=flavor, numa_topology=instance_topology)
         with self.tracker.instance_claim(self.context, instance, self.limits):
             pass
@@ -966,8 +1047,10 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_context_claim_with_exception(self, mock_get):
-        instance = self._fake_instance(memory_mb=1, root_gb=1, ephemeral_gb=1)
+    @mock.patch('nova.objects.Instance.save')
+    def test_context_claim_with_exception(self, mock_save, mock_get):
+        instance = self._fake_instance_obj(memory_mb=1, root_gb=1,
+                                           ephemeral_gb=1)
         try:
             with self.tracker.instance_claim(self.context, instance):
                 # <insert exciting things that utilize resources>
@@ -986,13 +1069,15 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_instance_context_claim(self, mock_get):
+    @mock.patch('nova.objects.Instance.save')
+    @mock.patch('nova.objects.InstanceList.get_by_host_and_node')
+    def test_instance_context_claim(self, mock_get_all, mock_save, mock_get):
         flavor = self._fake_flavor_create(
                 memory_mb=1, root_gb=2, ephemeral_gb=3)
         claim_topology = self._claim_topology(1)
 
         instance_topology = self._instance_topology(1)
-        instance = self._fake_instance(
+        instance = self._fake_instance_obj(
                 flavor=flavor, numa_topology=instance_topology)
         with self.tracker.instance_claim(self.context, instance):
             # <insert exciting things that utilize resources>
@@ -1011,6 +1096,7 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
         # after exiting claim context, build is marked as finished.  usage
         # totals should be same:
+        mock_get_all.return_value = [instance]
         self.tracker.update_available_resource(self.context)
         self.assertEqual(flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD,
                          self.tracker.compute_node['memory_mb_used'])
@@ -1028,9 +1114,10 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
     def test_update_load_stats_for_instance(self, mock_get):
-        instance = self._fake_instance(task_state=task_states.SCHEDULING)
-        with self.tracker.instance_claim(self.context, instance):
-            pass
+        instance = self._fake_instance_obj(task_state=task_states.SCHEDULING)
+        with mock.patch.object(instance, 'save'):
+            with self.tracker.instance_claim(self.context, instance):
+                pass
 
         self.assertEqual(1, self.tracker.compute_node['current_workload'])
 
@@ -1043,12 +1130,13 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_cpu_stats(self, mock_get):
+    @mock.patch('nova.objects.Instance.save')
+    def test_cpu_stats(self, mock_save, mock_get):
         limits = {'disk_gb': 100, 'memory_mb': 100}
         self.assertEqual(0, self.tracker.compute_node['vcpus_used'])
 
         vcpus = 1
-        instance = self._fake_instance(vcpus=vcpus)
+        instance = self._fake_instance_obj(vcpus=vcpus)
 
         # should not do anything until a claim is made:
         self.tracker.update_usage(self.context, instance)
@@ -1065,7 +1153,7 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
         add_vcpus = 10
         vcpus += add_vcpus
-        instance = self._fake_instance(vcpus=add_vcpus)
+        instance = self._fake_instance_obj(vcpus=add_vcpus)
         with self.tracker.instance_claim(self.context, instance, limits):
             pass
         self.assertEqual(vcpus, self.tracker.compute_node['vcpus_used'])
@@ -1096,13 +1184,41 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
                                                     "fakehost",
                                                     "fakenode")
 
+    @mock.patch('nova.compute.claims.Claim')
+    @mock.patch('nova.objects.Instance.save')
+    def test_claim_saves_numa_topology(self, mock_save, mock_claim):
+        def fake_save():
+            self.assertEqual(set(['numa_topology', 'host', 'node',
+                                  'launched_on']),
+                             inst.obj_what_changed())
+
+        mock_save.side_effect = fake_save
+        inst = objects.Instance(host=None, node=None, memory_mb=1024)
+        inst.obj_reset_changes()
+        numa = objects.InstanceNUMATopology()
+        claim = mock.MagicMock()
+        claim.claimed_numa_topology = numa
+        mock_claim.return_value = claim
+        with mock.patch.object(self.tracker, '_update_usage_from_instance'):
+            self.tracker.instance_claim(self.context, inst)
+        mock_save.assert_called_once_with()
+
+    def test_set_instance_host_and_node(self):
+        inst = objects.Instance()
+        with mock.patch.object(inst, 'save') as mock_save:
+            self.tracker._set_instance_host_and_node(self.context, inst)
+            mock_save.assert_called_once_with()
+        self.assertEqual(self.tracker.host, inst.host)
+        self.assertEqual(self.tracker.nodename, inst.node)
+        self.assertEqual(self.tracker.host, inst.launched_on)
+
 
 class ResizeClaimTestCase(BaseTrackerTestCase):
 
     def setUp(self):
         super(ResizeClaimTestCase, self).setUp()
 
-        self.instance = self._fake_instance()
+        self.instance = self._fake_instance_obj()
         self.instance_type = self._fake_flavor_create()
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
@@ -1140,7 +1256,7 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
               2 * FAKE_VIRT_VCPUS)
         self.tracker.resize_claim(self.context, self.instance,
                 self.instance_type, limits)
-        instance2 = self._fake_instance()
+        instance2 = self._fake_instance_obj()
         self.tracker.resize_claim(self.context, instance2, self.instance_type,
                 limits)
 
@@ -1182,39 +1298,18 @@ class ResizeClaimTestCase(BaseTrackerTestCase):
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
     def test_set_instance_host_and_node(self, mock_get):
-        instance = self._fake_instance()
+        instance = self._fake_instance_obj()
         self.assertIsNone(instance['host'])
         self.assertIsNone(instance['launched_on'])
         self.assertIsNone(instance['node'])
 
-        claim = self.tracker.instance_claim(self.context, instance)
+        with mock.patch.object(instance, 'save'):
+            claim = self.tracker.instance_claim(self.context, instance)
         self.assertNotEqual(0, claim.memory_mb)
 
         self.assertEqual('fakehost', instance['host'])
         self.assertEqual('fakehost', instance['launched_on'])
         self.assertEqual('fakenode', instance['node'])
-
-
-class NoInstanceTypesInSysMetadata(ResizeClaimTestCase):
-    """Make sure we handle the case where the following are true:
-
-    #) Compute node C gets upgraded to code that looks for instance types in
-       system metadata. AND
-    #) C already has instances in the process of migrating that do not have
-       stashed instance types.
-
-    bug 1164110
-    """
-    def setUp(self):
-        super(NoInstanceTypesInSysMetadata, self).setUp()
-        self.instance = self._fake_instance(stash=False)
-
-    def test_get_instance_type_stash_false(self):
-        with (mock.patch.object(objects.Flavor, 'get_by_id',
-                                return_value=self.instance_type)):
-            flavor = self.tracker._get_instance_type(self.context,
-                                                     self.instance, "new_")
-            self.assertEqual(self.instance_type, flavor)
 
 
 class OrphanTestCase(BaseTrackerTestCase):

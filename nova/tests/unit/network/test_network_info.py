@@ -14,6 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_config import cfg
+
 from nova import exception
 from nova.network import model
 from nova import test
@@ -132,7 +134,7 @@ class FixedIPTests(test.NoDBTestCase):
 
     def test_add_floating_ip_repeatedly_only_one_instance(self):
         fixed_ip = model.FixedIP(address='192.168.1.100')
-        for i in xrange(10):
+        for i in range(10):
             fixed_ip.add_floating_ip('192.168.1.101')
         self.assertEqual(fixed_ip['floating_ips'], ['192.168.1.101'])
 
@@ -197,7 +199,7 @@ class SubnetTests(test.NoDBTestCase):
         subnet = fake_network_cache_model.new_subnet()
         route1 = fake_network_cache_model.new_route()
         route2 = fake_network_cache_model.new_route({'cidr': '1.1.1.1/24'})
-        for i in xrange(10):
+        for i in range(10):
             subnet.add_route(route2)
         self.assertEqual(subnet['routes'], [route1, route2])
 
@@ -212,7 +214,7 @@ class SubnetTests(test.NoDBTestCase):
 
     def test_add_dns_a_lot(self):
         subnet = fake_network_cache_model.new_subnet()
-        for i in xrange(10):
+        for i in range(10):
             subnet.add_dns(fake_network_cache_model.new_ip(
                     dict(address='9.9.9.9')))
         self.assertEqual(subnet['dns'],
@@ -234,7 +236,7 @@ class SubnetTests(test.NoDBTestCase):
 
     def test_add_ip_a_lot(self):
         subnet = fake_network_cache_model.new_subnet()
-        for i in xrange(10):
+        for i in range(10):
             subnet.add_ip(fake_network_cache_model.new_fixed_ip(
                         dict(address='192.168.1.102')))
         self.assertEqual(subnet['ips'],
@@ -291,7 +293,7 @@ class NetworkTests(test.NoDBTestCase):
 
     def test_add_subnet_a_lot(self):
         network = fake_network_cache_model.new_network()
-        for i in xrange(10):
+        for i in range(10):
             network.add_subnet(fake_network_cache_model.new_subnet(
                     dict(cidr='0.0.0.0')))
         self.assertEqual(network['subnets'],
@@ -566,7 +568,7 @@ class NetworkInfoTests(test.NoDBTestCase):
 
         nwinfo = model.NetworkInfo(vifs)
         return netutils.get_injected_network_template(
-                nwinfo, use_ipv6=use_ipv6, libvirt_virt_type=libvirt_virt_type)
+            nwinfo, use_ipv6=use_ipv6, libvirt_virt_type=libvirt_virt_type)
 
     def test_injection_dynamic(self):
         expected = None
@@ -638,6 +640,33 @@ iface eth0 inet static
     gateway 10.10.0.1
 """
         template = self._setup_injected_network_scenario(dns=False)
+        self.assertEqual(expected, template)
+
+    def test_injection_static_overriden_template(self):
+        cfg.CONF.set_override(
+            'injected_network_template',
+            'nova/tests/unit/network/interfaces-override.template')
+        expected = """\
+# Injected by Nova on instance boot
+#
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet static
+    address 10.10.0.2
+    netmask 255.255.255.0
+    broadcast 10.10.0.255
+    gateway 10.10.0.1
+    dns-nameservers 1.2.3.4 2.3.4.5
+    post-up ip route add 0.0.0.0/24 via 192.168.1.1 dev eth0
+    pre-down ip route del 0.0.0.0/24 via 192.168.1.1 dev eth0
+"""
+        template = self._setup_injected_network_scenario()
         self.assertEqual(expected, template)
 
     def test_injection_static_ipv6(self):

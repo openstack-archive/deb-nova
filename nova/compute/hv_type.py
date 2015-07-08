@@ -29,6 +29,7 @@ from nova import exception
 # even if not currently supported by OpenStack.
 BAREMETAL = "baremetal"
 BHYVE = "bhyve"
+DOCKER = "docker"
 FAKE = "fake"
 HYPERV = "hyperv"
 IRONIC = "ironic"
@@ -49,6 +50,7 @@ ZVM = "zvm"
 ALL = (
     BAREMETAL,
     BHYVE,
+    DOCKER,
     FAKE,
     HYPERV,
     IRONIC,
@@ -93,9 +95,6 @@ def canonicalize(name):
 
     if newname == "xapi":
         newname = XEN
-    elif newname == "powervm":
-        # TODO(mriedem): Remove the translation shim in the 2015.2 'L' release.
-        newname = PHYP
 
     if not is_valid(newname):
         raise exception.InvalidHypervisorVirtType(hv_type=name)

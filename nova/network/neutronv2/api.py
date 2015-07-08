@@ -100,15 +100,6 @@ neutron_opts = [
                 default=600,
                 help='Number of seconds before querying neutron for'
                      ' extensions'),
-    cfg.BoolOpt('allow_duplicate_networks',
-                default=False,
-                help='DEPRECATED: Allow an instance to have multiple vNICs '
-                     'attached to the same Neutron network. This option is '
-                     'deprecated in the 2015.1 release and will be removed '
-                     'in the 2015.2 release where the default behavior will '
-                     'be to always allow multiple ports from the same network '
-                     'to be attached to an instance.',
-                deprecated_for_removal=True),
    ]
 
 NEUTRON_GROUP = 'neutron'
@@ -368,6 +359,165 @@ class API(base_api.NetworkAPI):
                 LOG.exception(_LE("Unable to clear device ID "
                                   "for port '%s'"), port_id)
 
+    def _process_requested_networks(self, context, instance, neutron,
+                                    requested_networks, hypervisor_macs=None):
+        """Processes and validates requested networks for allocation.
+
+        Iterates over the list of NetworkRequest objects, validating the
+        request and building sets of ports, networks and MAC addresses to
+        use for allocating ports for the instance.
+
+        :param instance: allocate networks on this instance
+        :type instance: nova.objects.Instance
+        :param neutron: neutron client session
+        :type neutron: neutronclient.v2_0.client.Client
+        :param requested_networks: list of NetworkRequests
+        :type requested_networks: nova.objects.NetworkRequestList
+        :param hypervisor_macs: None or a set of MAC addresses that the
+            instance should use. hypervisor_macs are supplied by the hypervisor
+            driver (contrast with requested_networks which is user supplied).
+            NB: NeutronV2 currently assigns hypervisor supplied MAC addresses
+            to arbitrary networks, which requires openflow switches to
+            function correctly if more than one network is being used with
+            the bare metal hypervisor (which is the only one known to limit
+            MAC addresses).
+        :type hypervisor_macs: set
+        :returns: tuple of:
+            - ports: dict mapping of port id to port dict
+            - net_ids: list of requested network ids
+            - ordered_networks: list of nova.objects.NetworkRequest objects
+                for requested networks (either via explicit network request
+                or the network for an explicit port request)
+            - available_macs: set of available MAC addresses to use if creating
+                a port later; this is the set of hypervisor_macs after removing
+                any MAC addresses from explicitly requested ports.
+        :raises nova.exception.PortNotFound: If a requested port is not found
+            in Neutron.
+        :raises nova.exception.PortNotUsable: If a requested port is not owned
+            by the same tenant that the instance is created under. This error
+            can also be raised if hypervisor_macs is not None and a requested
+            port's MAC address is not in that set.
+        :raises nova.exception.PortInUse: If a requested port is already
+            attached to another instance.
+        """
+
+        available_macs = None
+        if hypervisor_macs is not None:
+            # Make a copy we can mutate: records macs that have not been used
+            # to create a port on a network. If we find a mac with a
+            # pre-allocated port we also remove it from this set.
+            available_macs = set(hypervisor_macs)
+
+        ports = {}
+        net_ids = []
+        ordered_networks = []
+        if requested_networks:
+            for request in requested_networks:
+
+                # Process a request to use a pre-existing neutron port.
+                if request.port_id:
+                    # Make sure the port exists.
+                    port = self._show_port(context, request.port_id,
+                                           neutron_client=neutron)
+                    # Make sure the instance has access to the port.
+                    if port['tenant_id'] != instance.project_id:
+                        raise exception.PortNotUsable(port_id=request.port_id,
+                                                      instance=instance.uuid)
+
+                    # Make sure the port isn't already attached to another
+                    # instance.
+                    if port.get('device_id'):
+                        raise exception.PortInUse(port_id=request.port_id)
+
+                    if hypervisor_macs is not None:
+                        if port['mac_address'] not in hypervisor_macs:
+                            LOG.debug("Port %(port)s mac address %(mac)s is "
+                                      "not in the set of hypervisor macs: "
+                                      "%(hyper_macs)s",
+                                      {'port': request.port_id,
+                                       'mac': port['mac_address'],
+                                       'hyper_macs': hypervisor_macs},
+                                      instance=instance)
+                            raise exception.PortNotUsable(
+                                port_id=request.port_id,
+                                instance=instance.uuid)
+                        # Don't try to use this MAC if we need to create a
+                        # port on the fly later. Identical MACs may be
+                        # configured by users into multiple ports so we
+                        # discard rather than popping.
+                        available_macs.discard(port['mac_address'])
+
+                    # If requesting a specific port, automatically process
+                    # the network for that port as if it were explicitly
+                    # requested.
+                    request.network_id = port['network_id']
+                    ports[request.port_id] = port
+
+                # Process a request to use a specific neutron network.
+                if request.network_id:
+                    net_ids.append(request.network_id)
+                    ordered_networks.append(request)
+
+        return ports, net_ids, ordered_networks, available_macs
+
+    def _process_security_groups(self, instance, neutron, security_groups):
+        """Processes and validates requested security groups for allocation.
+
+        Iterates over the list of requested security groups, validating the
+        request and filtering out the list of security group IDs to use for
+        port allocation.
+
+        :param instance: allocate networks on this instance
+        :type instance: nova.objects.Instance
+        :param neutron: neutron client session
+        :type neutron: neutronclient.v2_0.client.Client
+        :param security_groups: list of requested security group name or IDs
+            to use when allocating new ports for the instance
+        :return: list of security group IDs to use when allocating new ports
+        :raises nova.exception.NoUniqueMatch: If multiple security groups
+            are requested with the same name.
+        :raises nova.exception.SecurityGroupNotFound: If a requested security
+            group is not in the tenant-filtered list of available security
+            groups in Neutron.
+        """
+        security_group_ids = []
+        # TODO(arosen) Should optimize more to do direct query for security
+        # group if len(security_groups) == 1
+        if len(security_groups):
+            search_opts = {'tenant_id': instance.project_id}
+            user_security_groups = neutron.list_security_groups(
+                **search_opts).get('security_groups')
+
+            for security_group in security_groups:
+                name_match = None
+                uuid_match = None
+                for user_security_group in user_security_groups:
+                    if user_security_group['name'] == security_group:
+                        # If there was a name match in a previous iteration
+                        # of the loop, we have a conflict.
+                        if name_match:
+                            raise exception.NoUniqueMatch(
+                                _("Multiple security groups found matching"
+                                  " '%s'. Use an ID to be more specific.") %
+                                   security_group)
+
+                        name_match = user_security_group['id']
+
+                    if user_security_group['id'] == security_group:
+                        uuid_match = user_security_group['id']
+
+                # If a user names the security group the same as
+                # another's security groups uuid, the name takes priority.
+                if name_match:
+                    security_group_ids.append(name_match)
+                elif uuid_match:
+                    security_group_ids.append(uuid_match)
+                else:
+                    raise exception.SecurityGroupNotFound(
+                        security_group_id=security_group)
+
+        return security_group_ids
+
     def allocate_for_instance(self, context, instance, **kwargs):
         """Allocate network resources for the instance.
 
@@ -391,12 +541,6 @@ class API(base_api.NetworkAPI):
             See nova/virt/driver.py:dhcp_options_for_instance for an example.
         """
         hypervisor_macs = kwargs.get('macs', None)
-        available_macs = None
-        if hypervisor_macs is not None:
-            # Make a copy we can mutate: records macs that have not been used
-            # to create a port on a network. If we find a mac with a
-            # pre-allocated port we also remove it from this set.
-            available_macs = set(hypervisor_macs)
 
         # The neutron client and port_client (either the admin context or
         # tenant context) are read here. The reason for this is that there are
@@ -418,37 +562,9 @@ class API(base_api.NetworkAPI):
                 reason=msg % instance.uuid)
         requested_networks = kwargs.get('requested_networks')
         dhcp_opts = kwargs.get('dhcp_options', None)
-        ports = {}
-        net_ids = []
-        ordered_networks = []
-        if requested_networks:
-            for request in requested_networks:
-                if request.port_id:
-                    try:
-                        port = neutron.show_port(request.port_id)['port']
-                    except neutron_client_exc.PortNotFoundClient:
-                        raise exception.PortNotFound(port_id=request.port_id)
-                    if port['tenant_id'] != instance.project_id:
-                        raise exception.PortNotUsable(port_id=request.port_id,
-                                                      instance=instance.uuid)
-                    if port.get('device_id'):
-                        raise exception.PortInUse(port_id=request.port_id)
-                    if hypervisor_macs is not None:
-                        if port['mac_address'] not in hypervisor_macs:
-                            raise exception.PortNotUsable(
-                                port_id=request.port_id,
-                                instance=instance.uuid)
-                        else:
-                            # Don't try to use this MAC if we need to create a
-                            # port on the fly later. Identical MACs may be
-                            # configured by users into multiple ports so we
-                            # discard rather than popping.
-                            available_macs.discard(port['mac_address'])
-                    request.network_id = port['network_id']
-                    ports[request.port_id] = port
-                if request.network_id:
-                    net_ids.append(request.network_id)
-                    ordered_networks.append(request)
+        ports, net_ids, ordered_networks, available_macs = (
+            self._process_requested_networks(context,
+                instance, neutron, requested_networks, hypervisor_macs))
 
         nets = self._get_available_networks(context, instance.project_id,
                                             net_ids, neutron=neutron)
@@ -485,39 +601,8 @@ class API(base_api.NetworkAPI):
         self._check_external_network_attach(context, nets)
 
         security_groups = kwargs.get('security_groups', [])
-        security_group_ids = []
-
-        # TODO(arosen) Should optimize more to do direct query for security
-        # group if len(security_groups) == 1
-        if len(security_groups):
-            search_opts = {'tenant_id': instance.project_id}
-            user_security_groups = neutron.list_security_groups(
-                **search_opts).get('security_groups')
-
-        for security_group in security_groups:
-            name_match = None
-            uuid_match = None
-            for user_security_group in user_security_groups:
-                if user_security_group['name'] == security_group:
-                    if name_match:
-                        raise exception.NoUniqueMatch(
-                            _("Multiple security groups found matching"
-                              " '%s'. Use an ID to be more specific.") %
-                               security_group)
-
-                    name_match = user_security_group['id']
-                if user_security_group['id'] == security_group:
-                    uuid_match = user_security_group['id']
-
-            # If a user names the security group the same as
-            # another's security groups uuid, the name takes priority.
-            if not name_match and not uuid_match:
-                raise exception.SecurityGroupNotFound(
-                    security_group_id=security_group)
-            elif name_match:
-                security_group_ids.append(name_match)
-            elif uuid_match:
-                security_group_ids.append(uuid_match)
+        security_group_ids = self._process_security_groups(
+                                    instance, neutron, security_groups)
 
         preexisting_port_ids = []
         created_port_ids = []
@@ -723,13 +808,43 @@ class API(base_api.NetworkAPI):
         return get_client(context).list_ports(**search_opts)
 
     def show_port(self, context, port_id):
-        """Return the port for the client given the port id."""
+        """Return the port for the client given the port id.
+
+        :param context - Request context.
+        :param port_id - The id of port to be queried.
+        :returns: A dict containing port data keyed by 'port'.
+                  e.g. {'port': {'port_id': 'abcd',
+                                 'fixed_ip_address': '1.2.3.4'}}
+
+        """
+        return dict(port=self._show_port(context, port_id))
+
+    def _show_port(self, context, port_id, neutron_client=None, fields=None):
+        """Return the port for the client given the port id.
+
+        :param context - Request context.
+        :param port_id - The id of port to be queried.
+        :param neutron_client - A neutron client.
+        :param fields - The condition fields to query port data.
+        :returns: A dict of port data.
+                  e.g. {'port_id': 'abcd', 'fixed_ip_address': '1.2.3.4'}}
+        """
+        if not neutron_client:
+            neutron_client = get_client(context)
         try:
-            return get_client(context).show_port(port_id)
+            if fields:
+                result = neutron_client.show_port(port_id, fields=fields)
+            else:
+                result = neutron_client.show_port(port_id)
+            return result.get('port')
         except neutron_client_exc.PortNotFoundClient:
             raise exception.PortNotFound(port_id=port_id)
         except neutron_client_exc.Unauthorized:
             raise exception.Forbidden()
+        except neutron_client_exc.NeutronClientException as exc:
+            msg = (_("Failed to access port %(port_id)s: %(reason)s"),
+                   {'port_id': port_id, 'reason': exc})
+            raise exception.NovaException(message=msg)
 
     def get_instance_nw_info(self, context, instance, networks=None,
                              port_ids=None, use_slave=False,
@@ -869,9 +984,8 @@ class API(base_api.NetworkAPI):
         Return vnic type and the attached physical network name.
         """
         phynet_name = None
-        vnic_type = None
-        port = neutron.show_port(port_id,
-            fields=['binding:vnic_type', 'network_id']).get('port')
+        port = self._show_port(context, port_id, neutron_client=neutron,
+                               fields=['binding:vnic_type', 'network_id'])
         vnic_type = port.get('binding:vnic_type',
                              network_model.VNIC_TYPE_NORMAL)
         if vnic_type != network_model.VNIC_TYPE_NORMAL:
@@ -926,7 +1040,6 @@ class API(base_api.NetworkAPI):
             else:
                 ports_needed_per_instance = 1
         else:
-            instance_on_net_ids = []
             net_ids_requested = []
 
             # TODO(danms): Remove me when all callers pass an object
@@ -937,17 +1050,8 @@ class API(base_api.NetworkAPI):
 
             for request in requested_networks:
                 if request.port_id:
-                    try:
-                        port = neutron.show_port(request.port_id).get('port')
-                    except neutron_client_exc.NeutronClientException as e:
-                        if e.status_code == 404:
-                            port = None
-                        else:
-                            with excutils.save_and_reraise_exception():
-                                LOG.exception(_LE("Failed to access port %s"),
-                                              request.port_id)
-                    if not port:
-                        raise exception.PortNotFound(port_id=request.port_id)
+                    port = self._show_port(context, request.port_id,
+                                           neutron_client=neutron)
                     if port.get('device_id', None):
                         raise exception.PortInUse(port_id=request.port_id)
                     if not port.get('fixed_ips'):
@@ -980,12 +1084,6 @@ class API(base_api.NetworkAPI):
                             raise exception.FixedIpAlreadyInUse(
                                                     address=request.address,
                                                     instance_uuid=i_uuid)
-
-                if (not CONF.neutron.allow_duplicate_networks and
-                    request.network_id in instance_on_net_ids):
-                        raise exception.NetworkDuplicated(
-                            network_id=request.network_id)
-                instance_on_net_ids.append(request.network_id)
 
             # Now check to see if all requested networks exist
             if net_ids_requested:
@@ -1095,7 +1193,8 @@ class API(base_api.NetworkAPI):
         client.update_floatingip(fip['id'], {'floatingip': param})
 
         if fip['port_id']:
-            port = client.show_port(fip['port_id'])['port']
+            port = self._show_port(context, fip['port_id'],
+                                   neutron_client=client)
             orig_instance_uuid = port['device_id']
 
             msg_dict = dict(address=floating_address,
@@ -1169,10 +1268,10 @@ class API(base_api.NetworkAPI):
         pool = client.show_network(network_id)['network']
         return {pool['id']: pool}
 
-    def _setup_port_dict(self, client, port_id):
+    def _setup_port_dict(self, context, client, port_id):
         if not port_id:
             return {}
-        port = client.show_port(port_id)['port']
+        port = self._show_port(context, port_id, neutron_client=client)
         return {port['id']: port}
 
     def _setup_pools_dict(self, client):
@@ -1197,7 +1296,7 @@ class API(base_api.NetworkAPI):
                     LOG.exception(_LE('Unable to access floating IP %s'), id)
         pool_dict = self._setup_net_dict(client,
                                          fip['floating_network_id'])
-        port_dict = self._setup_port_dict(client, fip['port_id'])
+        port_dict = self._setup_port_dict(context, client, fip['port_id'])
         return self._format_floating_ip_model(fip, pool_dict, port_dict)
 
     def _get_floating_ip_pools(self, client, project_id=None):
@@ -1243,7 +1342,7 @@ class API(base_api.NetworkAPI):
         fip = self._get_floating_ip_by_address(client, address)
         pool_dict = self._setup_net_dict(client,
                                          fip['floating_network_id'])
-        port_dict = self._setup_port_dict(client, fip['port_id'])
+        port_dict = self._setup_port_dict(context, client, fip['port_id'])
         return self._format_floating_ip_model(fip, pool_dict, port_dict)
 
     def get_floating_ips_by_project(self, context):
@@ -1261,7 +1360,7 @@ class API(base_api.NetworkAPI):
         fip = self._get_floating_ip_by_address(client, address)
         if not fip['port_id']:
             return None
-        port = client.show_port(fip['port_id'])['port']
+        port = self._show_port(context, fip['port_id'], neutron_client=client)
         return port['device_id']
 
     def get_vifs_by_instance(self, context, instance):
@@ -1533,6 +1632,11 @@ class API(base_api.NetworkAPI):
         for current_neutron_port in current_neutron_ports:
             current_neutron_port_map[current_neutron_port['id']] = (
                 current_neutron_port)
+
+        # In that case we should repopulate ports from the state of
+        # Neutron.
+        if not port_ids:
+            port_ids = current_neutron_port_map.keys()
 
         for port_id in port_ids:
             current_neutron_port = current_neutron_port_map.get(port_id)

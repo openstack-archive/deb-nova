@@ -268,15 +268,19 @@ class DsUtilTestCase(test.NoDBTestCase):
                     args[1] == fake_ds_list):
                 # Start a new iterator over given datastores
                 datastores_i[0] = iter(datastores)
-                return datastores_i[0].next()
+                return next(datastores_i[0])
 
             # Continue returning results from the current iterator.
-            if (module == ds_util.vim_util and
-                    method == 'continue_to_get_objects'):
+            if (module == ds_util.vutil and
+                    method == 'continue_retrieval'):
                 try:
-                    return datastores_i[0].next()
+                    return next(datastores_i[0])
                 except StopIteration:
                     return None
+
+            if (method == 'continue_retrieval' or
+                method == 'cancel_retrieval'):
+                return
 
             # Sentinel that get_datastore's use of vim has changed
             self.fail('Unexpected vim call in get_datastore: %s' % method)

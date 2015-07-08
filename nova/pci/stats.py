@@ -17,9 +17,11 @@
 import copy
 
 from oslo_log import log as logging
+import six
 
 from nova import exception
 from nova.i18n import _LE
+from nova.objects import pci_device_pool
 from nova.pci import utils
 from nova.pci import whitelist
 
@@ -241,10 +243,21 @@ class PciDeviceStats(object):
         # 'devices' shouldn't be part of stats
         pools = []
         for pool in self.pools:
-            tmp = {k: v for k, v in pool.iteritems() if k != 'devices'}
+            tmp = {k: v for k, v in six.iteritems(pool) if k != 'devices'}
             pools.append(tmp)
         return iter(pools)
 
     def clear(self):
         """Clear all the stats maintained."""
         self.pools = []
+
+    def __eq__(self, other):
+        return cmp(self.pools, other.pools) == 0
+
+    def __ne__(self, other):
+        return not (self == other)
+
+    def to_device_pools_obj(self):
+        """Return the contents of the pools as a PciDevicePoolList object."""
+        stats = [x for x in self]
+        return pci_device_pool.from_pci_stats(stats)

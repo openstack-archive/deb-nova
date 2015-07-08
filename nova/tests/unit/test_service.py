@@ -26,10 +26,9 @@ from oslo_concurrency import processutils
 from oslo_config import cfg
 import testtools
 
-from nova import context
-from nova import db
 from nova import exception
 from nova import manager
+from nova import objects
 from nova.openstack.common import service as _service
 from nova import rpc
 from nova import service
@@ -64,7 +63,7 @@ class ExtendedService(service.Service):
         return 'service'
 
 
-class ServiceManagerTestCase(test.TestCase):
+class ServiceManagerTestCase(test.NoDBTestCase):
     """Test cases for Services."""
 
     def test_message_gets_to_manager(self):
@@ -72,53 +71,26 @@ class ServiceManagerTestCase(test.TestCase):
                                'test',
                                'test',
                                'nova.tests.unit.test_service.FakeManager')
-        serv.start()
-        self.assertEqual(serv.test_method(), 'manager')
+        self.assertEqual('manager', serv.test_method())
 
     def test_override_manager_method(self):
         serv = ExtendedService('test',
                                'test',
                                'test',
                                'nova.tests.unit.test_service.FakeManager')
-        serv.start()
-        self.assertEqual(serv.test_method(), 'service')
+        self.assertEqual('service', serv.test_method())
 
     def test_service_with_min_down_time(self):
-        CONF.set_override('service_down_time', 10)
-        CONF.set_override('report_interval', 10)
-        serv = service.Service('test',
-                               'test',
-                               'test',
-                               'nova.tests.unit.test_service.FakeManager')
-        serv.start()
-        self.assertEqual(CONF.service_down_time, 25)
+        # TODO(hanlind): This really tests code in the servicegroup api.
+        self.flags(service_down_time=10, report_interval=10)
+        service.Service('test',
+                        'test',
+                        'test',
+                        'nova.tests.unit.test_service.FakeManager')
+        self.assertEqual(25, CONF.service_down_time)
 
 
-class ServiceFlagsTestCase(test.TestCase):
-    def test_service_enabled_on_create_based_on_flag(self):
-        self.flags(enable_new_services=True)
-        host = 'foo'
-        binary = 'nova-fake'
-        app = service.Service.create(host=host, binary=binary)
-        app.start()
-        app.stop()
-        ref = db.service_get(context.get_admin_context(), app.service_id)
-        db.service_destroy(context.get_admin_context(), app.service_id)
-        self.assertFalse(ref['disabled'])
-
-    def test_service_disabled_on_create_based_on_flag(self):
-        self.flags(enable_new_services=False)
-        host = 'foo'
-        binary = 'nova-fake'
-        app = service.Service.create(host=host, binary=binary)
-        app.start()
-        app.stop()
-        ref = db.service_get(context.get_admin_context(), app.service_id)
-        db.service_destroy(context.get_admin_context(), app.service_id)
-        self.assertTrue(ref['disabled'])
-
-
-class ServiceTestCase(test.TestCase):
+class ServiceTestCase(test.NoDBTestCase):
     """Test cases for Services."""
 
     def setUp(self):
@@ -126,8 +98,6 @@ class ServiceTestCase(test.TestCase):
         self.host = 'foo'
         self.binary = 'nova-fake'
         self.topic = 'fake'
-        self.mox.StubOutWithMock(db, 'service_create')
-        self.mox.StubOutWithMock(db, 'service_get_by_host_and_binary')
         self.flags(use_local=True, group='conductor')
 
     def test_create(self):
@@ -140,21 +110,11 @@ class ServiceTestCase(test.TestCase):
         self.assertTrue(app)
 
     def _service_start_mocks(self):
-        service_create = {'host': self.host,
-                          'binary': self.binary,
-                          'topic': self.topic,
-                          'report_count': 0}
-        service_ref = {'host': self.host,
-                          'binary': self.binary,
-                          'topic': self.topic,
-                          'report_count': 0,
-                          'id': 1}
-
-        db.service_get_by_host_and_binary(mox.IgnoreArg(),
-                self.host, self.binary).AndRaise(exception.NotFound())
-        db.service_create(mox.IgnoreArg(),
-                service_create).AndReturn(service_ref)
-        return service_ref
+        self.mox.StubOutWithMock(objects.Service, 'create')
+        self.mox.StubOutWithMock(objects.Service, 'get_by_host_and_binary')
+        objects.Service.get_by_host_and_binary(mox.IgnoreArg(), self.host,
+                                               self.binary)
+        objects.Service.create()
 
     def test_init_and_start_hooks(self):
         self.manager_mock = self.mox.CreateMock(FakeManager)
@@ -193,23 +153,23 @@ class ServiceTestCase(test.TestCase):
         self.mox.StubOutWithMock(self.manager_mock, 'init_host')
         self.mox.StubOutWithMock(self.manager_mock, 'pre_start_hook')
         self.mox.StubOutWithMock(self.manager_mock, 'post_start_hook')
+        self.mox.StubOutWithMock(objects.Service, 'create')
+        self.mox.StubOutWithMock(objects.Service, 'get_by_host_and_binary')
 
         FakeManager(host=self.host).AndReturn(self.manager_mock)
 
         # init_host is called before any service record is created
         self.manager_mock.init_host()
 
-        db.service_get_by_host_and_binary(
-            mox.IgnoreArg(), self.host, self.binary).AndRaise(
-                exception.NotFound)
-        db.service_create(mox.IgnoreArg(), mox.IgnoreArg()
-                          ).AndRaise(ex)
+        objects.Service.get_by_host_and_binary(mox.IgnoreArg(), self.host,
+                                               self.binary)
+        objects.Service.create().AndRaise(ex)
 
         class TestException(Exception):
             pass
 
-        db.service_get_by_host_and_binary(
-            mox.IgnoreArg(), self.host, self.binary).AndRaise(TestException)
+        objects.Service.get_by_host_and_binary(
+            mox.IgnoreArg(), self.host, self.binary).AndRaise(TestException())
 
         self.mox.ReplayAll()
 
@@ -264,10 +224,9 @@ class ServiceTestCase(test.TestCase):
         serv.stop()
 
     @mock.patch('nova.servicegroup.API')
-    @mock.patch('nova.conductor.api.LocalAPI.service_get_by_host_and_binary')
+    @mock.patch('nova.objects.service.Service.get_by_host_and_binary')
     def test_parent_graceful_shutdown_with_cleanup_host(
             self, mock_svc_get_by_host_and_binary, mock_API):
-        mock_svc_get_by_host_and_binary.return_value = {'id': 'some_value'}
         mock_manager = mock.Mock()
 
         serv = service.Service(self.host,
@@ -285,11 +244,10 @@ class ServiceTestCase(test.TestCase):
         serv.manager.cleanup_host.assert_called_with()
 
     @mock.patch('nova.servicegroup.API')
-    @mock.patch('nova.conductor.api.LocalAPI.service_get_by_host_and_binary')
+    @mock.patch('nova.objects.service.Service.get_by_host_and_binary')
     @mock.patch.object(rpc, 'get_server')
     def test_service_stop_waits_for_rpcserver(
             self, mock_rpc, mock_svc_get_by_host_and_binary, mock_API):
-        mock_svc_get_by_host_and_binary.return_value = {'id': 'some_value'}
         serv = service.Service(self.host,
                                self.binary,
                                self.topic,
@@ -377,14 +335,24 @@ class TestWSGIService(test.TestCase):
                          CONF.wsgi_default_pool_size)
 
 
-class TestLauncher(test.TestCase):
+class TestLauncher(test.NoDBTestCase):
 
-    def setUp(self):
-        super(TestLauncher, self).setUp()
-        self.stubs.Set(wsgi.Loader, "load_app", mox.MockAnything())
-        self.service = service.WSGIService("test_service")
+    @mock.patch.object(_service, 'launch')
+    def test_launch_app(self, mock_launch):
+        service._launcher = None
+        service.serve(mock.sentinel.service)
+        mock_launch.assert_called_once_with(mock.sentinel.service,
+                                            workers=None)
 
-    def test_launch_app(self):
-        service.serve(self.service)
-        self.assertNotEqual(0, self.service.port)
-        service._launcher.stop()
+    @mock.patch.object(_service, 'launch')
+    def test_launch_app_with_workers(self, mock_launch):
+        service._launcher = None
+        service.serve(mock.sentinel.service, workers=mock.sentinel.workers)
+        mock_launch.assert_called_once_with(mock.sentinel.service,
+                                            workers=mock.sentinel.workers)
+
+    @mock.patch.object(_service, 'launch')
+    def test_launch_app_more_than_once_raises(self, mock_launch):
+        service._launcher = None
+        service.serve(mock.sentinel.service)
+        self.assertRaises(RuntimeError, service.serve, mock.sentinel.service)

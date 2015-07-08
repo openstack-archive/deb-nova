@@ -46,33 +46,6 @@ class MemcachedServiceGroupTestCase(test.NoDBTestCase):
         self.assertTrue(self.servicegroup_api.service_is_up(service_ref))
         self.mc_client.get.assert_called_once_with('compute:fake-host')
 
-    @mock.patch('nova.conductor.api.LocalAPI.service_get_all_by_topic')
-    def test_get_all(self, ga_mock):
-        service_refs = [
-            {
-                'host': 'fake-host1',
-                'topic': 'compute'
-            },
-            {
-                'host': 'fake-host2',
-                'topic': 'compute'
-            },
-            {
-                'host': 'fake-host3',
-                'topic': 'compute'
-            },
-        ]
-        ga_mock.return_value = service_refs
-        self.mc_client.get.side_effect = [
-            None,
-            True,  # fake host 2 is enabled, all others disabled
-            None
-        ]
-
-        services = self.servicegroup_api.get_all('compute')
-        self.assertEqual(['fake-host2'], services)
-        ga_mock.assert_called_once_with(mock.ANY, 'compute')
-
     def test_join(self):
         service = mock.MagicMock(report_interval=1)
 

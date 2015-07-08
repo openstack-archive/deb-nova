@@ -13,11 +13,27 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_config import cfg
+
 from nova.tests.functional.v3 import test_servers
+
+CONF = cfg.CONF
+CONF.import_opt('osapi_compute_extension',
+                'nova.api.openstack.compute.extensions')
 
 
 class DeferredDeleteSampleJsonTests(test_servers.ServersSampleBase):
     extension_name = "os-deferred-delete"
+    extra_extensions_to_load = ["os-access-ips"]
+    _api_version = 'v2'
+
+    def _get_flags(self):
+        f = super(DeferredDeleteSampleJsonTests, self)._get_flags()
+        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
+        f['osapi_compute_extension'].append(
+            'nova.api.openstack.compute.contrib.deferred_delete.'
+            'Deferred_delete')
+        return f
 
     def setUp(self):
         super(DeferredDeleteSampleJsonTests, self).setUp()
@@ -25,7 +41,7 @@ class DeferredDeleteSampleJsonTests(test_servers.ServersSampleBase):
 
     def test_restore(self):
         uuid = self._post_server()
-        response = self._do_delete('servers/%s' % uuid)
+        self._do_delete('servers/%s' % uuid)
 
         response = self._do_post('servers/%s/action' % uuid,
                                  'restore-post-req', {})
@@ -34,7 +50,7 @@ class DeferredDeleteSampleJsonTests(test_servers.ServersSampleBase):
 
     def test_force_delete(self):
         uuid = self._post_server()
-        response = self._do_delete('servers/%s' % uuid)
+        self._do_delete('servers/%s' % uuid)
 
         response = self._do_post('servers/%s/action' % uuid,
                                  'force-delete-post-req', {})

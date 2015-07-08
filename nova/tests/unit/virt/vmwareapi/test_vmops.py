@@ -19,6 +19,8 @@ from oslo_utils import units
 from oslo_utils import uuidutils
 from oslo_vmware import exceptions as vexc
 from oslo_vmware.objects import datastore as ds_obj
+from oslo_vmware import vim_util as vutil
+import six
 
 from nova.compute import power_state
 from nova import context
@@ -30,6 +32,7 @@ from nova.tests.unit import fake_instance
 import nova.tests.unit.image.fake
 from nova.tests.unit.virt.vmwareapi import fake as vmwareapi_fake
 from nova.tests.unit.virt.vmwareapi import stubs
+from nova import version
 from nova.virt import hardware
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import driver
@@ -53,10 +56,10 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         super(VMwareVMOpsTestCase, self).setUp()
         vmwareapi_fake.reset()
         stubs.set_stubs(self.stubs)
+        self.flags(enabled=True, group='vnc')
         self.flags(image_cache_subdirectory_name='vmware_base',
                    my_ip='',
-                   flat_injected=True,
-                   vnc_enabled=True)
+                   flat_injected=True)
         self._context = context.RequestContext('fake_user', 'fake_project')
         self._session = driver.VMwareAPISession()
 
@@ -72,6 +75,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 vmFolder='fake_vm_folder')
         cluster = vmwareapi_fake.create_cluster('fake_cluster', fake_ds_ref)
         self._instance_values = {
+            'display_name': 'fake_display_name',
             'name': 'fake_name',
             'uuid': 'fake_uuid',
             'vcpus': 1,
@@ -141,6 +145,20 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                   ovs_interfaceid=None,
                                   rxtx_cap=3)
                 ])
+        self._metadata = (
+            "name:fake_display_name\n"
+            "userid:fake_user\n"
+            "username:None\n"
+            "projectid:fake_project\n"
+            "projectname:None\n"
+            "flavor:name:m1.micro\n"
+            "flavor:memory_mb:6\n"
+            "flavor:vcpus:28\n"
+            "flavor:ephemeral_gb:8128\n"
+            "flavor:root_gb:496\n"
+            "flavor:swap:33550336\n"
+            "imageid:70a599e0-31e7-49b7-b260-868f441e862b\n"
+            "package:%s\n" % version.version_string_with_package())
 
     def test_get_machine_id_str(self):
         result = vmops.VMwareVMOps._get_machine_id_str(self.network_info)
@@ -177,8 +195,9 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         ops._create_folder_if_missing(ds_name, ds_ref, 'folder')
         mock_mkdir.assert_called_with(ops._session, path, dc)
 
-    def test_get_valid_vms_from_retrieve_result(self):
-        ops = vmops.VMwareVMOps(mock.Mock(), mock.Mock(), mock.Mock())
+    @mock.patch.object(vutil, 'continue_retrieval', return_value=None)
+    def test_get_valid_vms_from_retrieve_result(self, _mock_cont):
+        ops = vmops.VMwareVMOps(self._session, mock.Mock(), mock.Mock())
         fake_objects = vmwareapi_fake.FakeRetrieveResult()
         fake_objects.add_object(vmwareapi_fake.VirtualMachine(
             name=uuidutils.generate_uuid()))
@@ -189,8 +208,10 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         vms = ops._get_valid_vms_from_retrieve_result(fake_objects)
         self.assertEqual(3, len(vms))
 
-    def test_get_valid_vms_from_retrieve_result_with_invalid(self):
-        ops = vmops.VMwareVMOps(mock.Mock(), mock.Mock(), mock.Mock())
+    @mock.patch.object(vutil, 'continue_retrieval', return_value=None)
+    def test_get_valid_vms_from_retrieve_result_with_invalid(self,
+                                                             _mock_cont):
+        ops = vmops.VMwareVMOps(self._session, mock.Mock(), mock.Mock())
         fake_objects = vmwareapi_fake.FakeRetrieveResult()
         fake_objects.add_object(vmwareapi_fake.VirtualMachine(
             name=uuidutils.generate_uuid()))
@@ -258,8 +279,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         self.assertEqual(50, self._instance.progress)
 
     @mock.patch.object(vm_util, 'get_vm_ref', return_value='fake_ref')
-    @mock.patch.object(driver.VMwareAPISession, '_call_method')
-    def test_get_info(self, mock_call, mock_get_vm_ref):
+    def test_get_info(self, mock_get_vm_ref):
         props = ['summary.config.numCpu', 'summary.config.memorySizeMB',
                  'runtime.powerState']
         prop_cpu = vmwareapi_fake.Prop(props[0], 4)
@@ -269,22 +289,25 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         obj_content = vmwareapi_fake.ObjectContent(None, prop_list=prop_list)
         result = vmwareapi_fake.FakeRetrieveResult()
         result.add_object(obj_content)
-        mock_call.return_value = result
-        info = self._vmops.get_info(self._instance)
-        mock_call.assert_called_once_with(vim_util,
-            'get_object_properties', None, 'fake_ref', 'VirtualMachine',
-            props)
-        mock_get_vm_ref.assert_called_once_with(self._session,
-            self._instance)
-        expected = hardware.InstanceInfo(state=power_state.RUNNING,
-                                         max_mem_kb=128 * 1024,
-                                         mem_kb=128 * 1024,
-                                         num_cpu=4)
-        self.assertEqual(expected, info)
+
+        def mock_call_method(module, method, *args, **kwargs):
+            if method == 'continue_retrieval':
+                return
+            return result
+
+        with mock.patch.object(self._session, '_call_method',
+                               mock_call_method):
+            info = self._vmops.get_info(self._instance)
+            mock_get_vm_ref.assert_called_once_with(self._session,
+                self._instance)
+            expected = hardware.InstanceInfo(state=power_state.RUNNING,
+                                             max_mem_kb=128 * 1024,
+                                             mem_kb=128 * 1024,
+                                             num_cpu=4)
+            self.assertEqual(expected, info)
 
     @mock.patch.object(vm_util, 'get_vm_ref', return_value='fake_ref')
-    @mock.patch.object(driver.VMwareAPISession, '_call_method')
-    def test_get_info_when_ds_unavailable(self, mock_call, mock_get_vm_ref):
+    def test_get_info_when_ds_unavailable(self, mock_get_vm_ref):
         props = ['summary.config.numCpu', 'summary.config.memorySizeMB',
                  'runtime.powerState']
         prop_state = vmwareapi_fake.Prop(props[2], 'poweredOff')
@@ -293,15 +316,19 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         obj_content = vmwareapi_fake.ObjectContent(None, prop_list=prop_list)
         result = vmwareapi_fake.FakeRetrieveResult()
         result.add_object(obj_content)
-        mock_call.return_value = result
-        info = self._vmops.get_info(self._instance)
-        mock_call.assert_called_once_with(vim_util,
-            'get_object_properties', None, 'fake_ref', 'VirtualMachine',
-            props)
-        mock_get_vm_ref.assert_called_once_with(self._session,
-            self._instance)
-        self.assertEqual(hardware.InstanceInfo(state=power_state.SHUTDOWN),
-                         info)
+
+        def mock_call_method(module, method, *args, **kwargs):
+            if method == 'continue_retrieval':
+                return
+            return result
+
+        with mock.patch.object(self._session, '_call_method',
+                               mock_call_method):
+            info = self._vmops.get_info(self._instance)
+            mock_get_vm_ref.assert_called_once_with(self._session,
+                self._instance)
+            self.assertEqual(hardware.InstanceInfo(state=power_state.SHUTDOWN),
+                             info)
 
     def _test_get_datacenter_ref_and_name(self, ds_ref_exists=False):
         instance_ds_ref = mock.Mock()
@@ -312,21 +339,27 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             ds_ref.value = "ds-1"
         else:
             ds_ref = None
+        self._continue_retrieval = True
+        self._fake_object1 = vmwareapi_fake.FakeRetrieveResult()
+        self._fake_object2 = vmwareapi_fake.FakeRetrieveResult()
 
         def fake_call_method(module, method, *args, **kwargs):
-            fake_object1 = vmwareapi_fake.FakeRetrieveResult()
-            fake_object1.add_object(vmwareapi_fake.Datacenter(
+            self._fake_object1.add_object(vmwareapi_fake.Datacenter(
                 ds_ref=ds_ref))
             if not ds_ref:
                 # Token is set for the fake_object1, so it will continue to
                 # fetch the next object.
-                setattr(fake_object1, 'token', 'token-0')
-                if method == "continue_to_get_objects":
-                    fake_object2 = vmwareapi_fake.FakeRetrieveResult()
-                    fake_object2.add_object(vmwareapi_fake.Datacenter())
-                    return fake_object2
-
-            return fake_object1
+                setattr(self._fake_object1, 'token', 'token-0')
+                if self._continue_retrieval:
+                    if self._continue_retrieval:
+                        self._continue_retrieval = False
+                        self._fake_object2.add_object(
+                            vmwareapi_fake.Datacenter())
+                        return self._fake_object2
+                    return
+            if method == "continue_retrieval":
+                return
+            return self._fake_object1
 
         with mock.patch.object(self._session, '_call_method',
                                side_effect=fake_call_method) as fake_call:
@@ -334,14 +367,17 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
             if ds_ref:
                 self.assertEqual(1, len(_vcvmops._datastore_dc_mapping))
-                fake_call.assert_called_once_with(vim_util, "get_objects",
-                    "Datacenter", ["name", "datastore", "vmFolder"])
+                calls = [mock.call(vim_util, "get_objects", "Datacenter",
+                                   ["name", "datastore", "vmFolder"]),
+                         mock.call(vutil, 'continue_retrieval',
+                                   self._fake_object1)]
+                fake_call.assert_has_calls(calls)
                 self.assertEqual("ha-datacenter", dc_info.name)
             else:
                 calls = [mock.call(vim_util, "get_objects", "Datacenter",
                                    ["name", "datastore", "vmFolder"]),
-                         mock.call(vim_util, "continue_to_get_objects",
-                                   "token-0")]
+                         mock.call(vutil, 'continue_retrieval',
+                                   self._fake_object2)]
                 fake_call.assert_has_calls(calls)
                 self.assertIsNone(dc_info)
 
@@ -359,7 +395,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     @mock.patch.object(vm_util, 'get_vm_boot_spec')
     @mock.patch.object(vm_util, 'reconfigure_vm')
     @mock.patch.object(vm_util, 'power_on_instance')
-    @mock.patch.object(ds_util, 'get_datastore_by_ref')
+    @mock.patch.object(ds_obj, 'get_datastore_by_ref')
     def test_rescue(self, mock_get_ds_by_ref, mock_power_on, mock_reconfigure,
                     mock_get_boot_spec, mock_find_rescue,
                     mock_get_values, mock_get_vm_ref, mock_disk_copy,
@@ -557,11 +593,25 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                                    self._instance,
                                                    'fake-ref')
             # Validate VM reconfiguration
+            metadata = ('name:fake_display_name\n'
+                        'userid:fake_user\n'
+                        'username:None\n'
+                        'projectid:fake_project\n'
+                        'projectname:None\n'
+                        'flavor:name:m1.small\n'
+                        'flavor:memory_mb:512\n'
+                        'flavor:vcpus:1\n'
+                        'flavor:ephemeral_gb:0\n'
+                        'flavor:root_gb:10\n'
+                        'flavor:swap:0\n'
+                        'imageid:70a599e0-31e7-49b7-b260-868f441e862b\n'
+                        'package:%s\n' % version.version_string_with_package())
             fake_resize_spec.assert_called_once_with(
                 self._session.vim.client.factory,
                 int(self._instance.vcpus),
                 int(self._instance.memory_mb),
-                extra_specs)
+                extra_specs,
+                metadata=metadata)
             fake_reconfigure_vm.assert_called_once_with(self._session,
                                                         'fake-ref',
                                                         'fake-spec')
@@ -602,18 +652,24 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     def test_finish_revert_migration_power_off(self):
         self._test_finish_revert_migration(power_on=False)
 
+    @mock.patch.object(vmops.VMwareVMOps, '_get_instance_metadata')
     @mock.patch.object(vmops.VMwareVMOps, '_get_extra_specs')
     @mock.patch.object(vm_util, 'reconfigure_vm')
     @mock.patch.object(vm_util, 'get_vm_resize_spec',
                        return_value='fake-spec')
     def test_resize_vm(self, fake_resize_spec, fake_reconfigure,
-                       fake_get_extra_specs):
+                       fake_get_extra_specs, fake_get_metadata):
         extra_specs = vm_util.ExtraSpecs()
         fake_get_extra_specs.return_value = extra_specs
-        flavor = {'vcpus': 2, 'memory_mb': 1024}
-        self._vmops._resize_vm('vm-ref', flavor)
+        fake_get_metadata.return_value = self._metadata
+        flavor = objects.Flavor(name='m1.small',
+                                memory_mb=1024,
+                                vcpus=2,
+                                extra_specs={})
+        self._vmops._resize_vm(self._context, self._instance, 'vm-ref', flavor)
         fake_resize_spec.assert_called_once_with(
-            self._session.vim.client.factory, 2, 1024, extra_specs)
+            self._session.vim.client.factory, 2, 1024, extra_specs,
+                metadata=self._metadata)
         fake_reconfigure.assert_called_once_with(self._session,
                                                  'vm-ref', 'fake-spec')
 
@@ -708,6 +764,19 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             fake_disk_delete.assert_called_once_with(
                 self._session, dc_info.ref, '[fake] uuid/original.vmdk')
 
+    def test_migrate_disk_and_power_off(self):
+        self._test_migrate_disk_and_power_off(
+            flavor_root_gb=self._instance.root_gb + 1)
+
+    def test_migrate_disk_and_power_off_zero_disk_flavor(self):
+        self._instance.root_gb = 0
+        self._test_migrate_disk_and_power_off(flavor_root_gb=0)
+
+    def test_migrate_disk_and_power_off_disk_shrink(self):
+        self.assertRaises(exception.InstanceFaultRollback,
+                          self._test_migrate_disk_and_power_off,
+                          flavor_root_gb=self._instance.root_gb - 1)
+
     @mock.patch.object(vmops.VMwareVMOps, "_remove_ephemerals")
     @mock.patch.object(vm_util, 'get_vmdk_info')
     @mock.patch.object(vmops.VMwareVMOps, "_resize_disk")
@@ -715,17 +784,18 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     @mock.patch.object(vm_util, 'power_off_instance')
     @mock.patch.object(vmops.VMwareVMOps, "_update_instance_progress")
     @mock.patch.object(vm_util, 'get_vm_ref', return_value='fake-ref')
-    def test_migrate_disk_and_power_off(self, fake_get_vm_ref, fake_progress,
-                                        fake_power_off, fake_resize_vm,
-                                        fake_resize_disk, fake_get_vmdk_info,
-                                        fake_remove_ephemerals):
+    def _test_migrate_disk_and_power_off(self, fake_get_vm_ref, fake_progress,
+                                         fake_power_off, fake_resize_vm,
+                                         fake_resize_disk, fake_get_vmdk_info,
+                                         fake_remove_ephemerals,
+                                         flavor_root_gb):
         vmdk = vm_util.VmdkInfo('[fake] uuid/root.vmdk',
                                 'fake-adapter',
                                 'fake-disk',
                                 self._instance.root_gb * units.Gi,
                                 'fake-device')
         fake_get_vmdk_info.return_value = vmdk
-        flavor = {'root_gb': self._instance.root_gb + 1}
+        flavor = {'root_gb': flavor_root_gb}
         self._vmops.migrate_disk_and_power_off(self._context,
                                                self._instance,
                                                None,
@@ -737,7 +807,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         fake_power_off.assert_called_once_with(self._session,
                                                self._instance,
                                                'fake-ref')
-        fake_resize_vm.assert_called_once_with('fake-ref', flavor)
+        fake_resize_vm.assert_called_once_with(self._context, self._instance,
+                                               'fake-ref', flavor)
         fake_resize_disk.assert_called_once_with(self._instance, 'fake-ref',
                                                  vmdk, flavor)
         calls = [mock.call(self._context, self._instance, step=i,
@@ -790,7 +861,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 self.assertNotIn('scrubme', args[0])
 
         mock_debug.side_effect = fake_debug
-        self.flags(flat_injected=False, vnc_enabled=False)
+        self.flags(flat_injected=False)
+        self.flags(enabled=False, group='vnc')
 
         # Call spawn(). We don't care what it does as long as it generates
         # the log message, which we check below.
@@ -809,6 +881,27 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         # that we checked it was scrubbed
         self.assertTrue(self.password_logged)
 
+    def _get_metadata(self, is_image_used=True):
+        if is_image_used:
+            image_id = '70a599e0-31e7-49b7-b260-868f441e862b'
+        else:
+            image_id = None
+        return ("name:fake_display_name\n"
+                "userid:fake_user\n"
+                "username:None\n"
+                "projectid:fake_project\n"
+                "projectname:None\n"
+                "flavor:name:m1.small\n"
+                "flavor:memory_mb:512\n"
+                "flavor:vcpus:1\n"
+                "flavor:ephemeral_gb:0\n"
+                "flavor:root_gb:10\n"
+                "flavor:swap:0\n"
+                "imageid:%(image_id)s\n"
+                "package:%(version)s\n" % {
+                    'image_id': image_id,
+                    'version': version.version_string_with_package()})
+
     @mock.patch('nova.virt.vmwareapi.vm_util.power_on_instance')
     @mock.patch.object(vmops.VMwareVMOps, '_use_disk_image_as_linked_clone')
     @mock.patch.object(vmops.VMwareVMOps, '_fetch_image_if_missing')
@@ -826,8 +919,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                          enlist_image, fetch_image,
                                          use_disk_image,
                                          power_on_instance):
+        self._instance.flavor = self._flavor
         extra_specs = get_extra_specs.return_value
-
         connection_info1 = {'data': 'fake-data1', 'serial': 'volume-fake-id1'}
         connection_info2 = {'data': 'fake-data2', 'serial': 'volume-fake-id2'}
         bdm = [{'connection_info': connection_info1,
@@ -837,7 +930,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 'disk_bus': constants.DEFAULT_ADAPTER_TYPE,
                 'mount_device': '/dev/sdc'}]
         bdi = {'block_device_mapping': bdm, 'root_device_name': '/dev/sda'}
-        self.flags(flat_injected=False, vnc_enabled=False)
+        self.flags(flat_injected=False)
+        self.flags(enabled=False, group='vnc')
 
         image_size = (self._instance.root_gb) * units.Gi / 2
         image_info = images.VMwareImage(
@@ -846,7 +940,6 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         vi = get_vm_config_info.return_value
         from_image.return_value = image_info
         build_virtual_machine.return_value = 'fake-vm-ref'
-
         with mock.patch.object(self._vmops, '_volumeops') as volumeops:
             self._vmops.spawn(self._context, self._instance, {},
                               injected_files=None, admin_password=None,
@@ -857,7 +950,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 image_info, extra_specs.storage_policy)
             build_virtual_machine.assert_called_once_with(self._instance,
                 image_info, vi.dc_info, vi.datastore, [],
-                extra_specs)
+                extra_specs, self._get_metadata())
             enlist_image.assert_called_once_with(image_info.image_id,
                                                  vi.datastore, vi.dc_info.ref)
             fetch_image.assert_called_once_with(self._context, vi)
@@ -896,7 +989,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 'connection_info': connection_info3,
                 'disk_bus': constants.ADAPTER_TYPE_LSILOGICSAS}]
         bdi = {'block_device_mapping': bdm}
-        self.flags(flat_injected=False, vnc_enabled=False)
+        self.flags(flat_injected=False)
+        self.flags(enabled=False, group='vnc')
 
         image_info = mock.sentinel.image_info
         vi = get_vm_config_info.return_value
@@ -913,7 +1007,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 image_info, extra_specs.storage_policy)
             build_virtual_machine.assert_called_once_with(self._instance,
                 image_info, vi.dc_info, vi.datastore, [],
-                extra_specs)
+                extra_specs, self._get_metadata(is_image_used=False))
             volumeops.attach_root_volume.assert_called_once_with(
                 connection_info1, self._instance, vi.datastore.ref,
                 constants.ADAPTER_TYPE_IDE)
@@ -938,13 +1032,13 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         self._instance.image_ref = None
         self._instance.flavor = self._flavor
         extra_specs = get_extra_specs.return_value
-
         connection_info = {'data': 'fake-data', 'serial': 'volume-fake-id'}
         bdm = [{'boot_index': 0,
                 'connection_info': connection_info,
                 'disk_bus': 'invalid_adapter_type'}]
         bdi = {'block_device_mapping': bdm}
-        self.flags(flat_injected=False, vnc_enabled=False)
+        self.flags(flat_injected=False)
+        self.flags(enabled=False, group='vnc')
 
         image_info = mock.sentinel.image_info
         vi = get_vm_config_info.return_value
@@ -962,7 +1056,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             self._instance, image_info, extra_specs.storage_policy)
         build_virtual_machine.assert_called_once_with(self._instance,
             image_info, vi.dc_info, vi.datastore, [],
-            extra_specs)
+            extra_specs, self._get_metadata(is_image_used=False))
 
     def test_get_ds_browser(self):
         cache = self._vmops._datastore_browser_mapping
@@ -1179,7 +1273,6 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                    mock_get_datastore,
                    mock_configure_config_drive,
                    block_device_info=None,
-                   power_on=True,
                    extra_specs=None,
                    config_drive=False):
 
@@ -1212,15 +1305,16 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                   return_value='tmp-uuid'),
                 mock.patch.object(images, 'fetch_image'),
                 mock.patch.object(self._vmops, '_get_extra_specs',
-                                  return_value=extra_specs)
+                                  return_value=extra_specs),
+                mock.patch.object(self._vmops, '_get_instance_metadata',
+                                  return_value='fake-metadata')
         ) as (_wait_for_task, _call_method, _generate_uuid, _fetch_image,
-              _get_extra_specs):
+              _get_extra_specs, _get_instance_metadata):
             self._vmops.spawn(self._context, self._instance, image,
                               injected_files='fake_files',
                               admin_password='password',
                               network_info=network_info,
-                              block_device_info=block_device_info,
-                              power_on=power_on)
+                              block_device_info=block_device_info)
 
             mock_is_neutron.assert_called_once_with()
 
@@ -1236,7 +1330,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                     [],
                     extra_specs,
                     'otherGuest',
-                    profile_spec=None)
+                    profile_spec=None,
+                    metadata='fake-metadata')
             mock_create_vm.assert_called_once_with(
                     self._session,
                     self._instance,
@@ -1252,11 +1347,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 self._instance,
                 network_info,
                 vm_ref='fake_vm_ref')
-            if power_on:
-                mock_power_on_instance.assert_called_once_with(
-                    self._session, self._instance, vm_ref='fake_vm_ref')
-            else:
-                self.assertFalse(mock_power_on_instance.called)
+            mock_power_on_instance.assert_called_once_with(
+                self._session, self._instance, vm_ref='fake_vm_ref')
 
             if (block_device_info and
                 'block_device_mapping' in block_device_info):
@@ -1296,9 +1388,9 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             self._verify_spawn_method_calls(_call_method, extras)
 
             dc_ref = 'fake_dc_ref'
-            source_file = unicode('[fake_ds] vmware_base/%s/%s.vmdk' %
+            source_file = six.text_type('[fake_ds] vmware_base/%s/%s.vmdk' %
                           (self._image_id, self._image_id))
-            dest_file = unicode('[fake_ds] vmware_base/%s/%s.%d.vmdk' %
+            dest_file = six.text_type('[fake_ds] vmware_base/%s/%s.%d.vmdk' %
                           (self._image_id, self._image_id,
                           self._instance['root_gb']))
             # TODO(dims): add more tests for copy_virtual_disk after
@@ -1359,9 +1451,6 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         self.flags(force_config_drive=True)
         self._test_spawn(config_drive=True)
 
-    def test_spawn_no_power_on(self):
-        self._test_spawn(power_on=False)
-
     def test_spawn_with_block_device_info(self):
         block_device_info = {
             'block_device_mapping': [{'boot_index': 0,
@@ -1380,13 +1469,23 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         self._test_spawn(block_device_info=block_device_info,
                          config_drive=True)
 
+    def _spawn_with_block_device_info_ephemerals(self, ephemerals):
+        block_device_info = {'ephemerals': ephemerals}
+        self._test_spawn(block_device_info=block_device_info)
+
     def test_spawn_with_block_device_info_ephemerals(self):
         ephemerals = [{'device_type': 'disk',
                        'disk_bus': 'virtio',
                        'device_name': '/dev/vdb',
                        'size': 1}]
-        block_device_info = {'ephemerals': ephemerals}
-        self._test_spawn(block_device_info=block_device_info)
+        self._spawn_with_block_device_info_ephemerals(ephemerals)
+
+    def test_spawn_with_block_device_info_ephemerals_no_disk_bus(self):
+        ephemerals = [{'device_type': 'disk',
+                       'disk_bus': None,
+                       'device_name': '/dev/vdb',
+                       'size': 1}]
+        self._spawn_with_block_device_info_ephemerals(ephemerals)
 
     def _get_fake_vi(self):
         image_info = images.VMwareImage(
@@ -1472,7 +1571,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                                    image, self._dc_info,
                                                    self._ds,
                                                    self.network_info,
-                                                   extra_specs)
+                                                   extra_specs,
+                                                   self._metadata)
 
         vm = vmwareapi_fake._get_object(vm_ref)
 
@@ -1913,3 +2013,30 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
     def test_reboot_vm_hard(self):
         self._test_reboot_vm(reboot_type="HARD")
+
+    def test_get_instance_metadata(self):
+        flavor = objects.Flavor(id=7,
+                                name='m1.small',
+                                memory_mb=6,
+                                vcpus=28,
+                                root_gb=496,
+                                ephemeral_gb=8128,
+                                swap=33550336,
+                                extra_specs={})
+        self._instance.flavor = flavor
+        metadata = self._vmops._get_instance_metadata(
+            self._context, self._instance)
+        expected = ("name:fake_display_name\n"
+                    "userid:fake_user\n"
+                    "username:None\n"
+                    "projectid:fake_project\n"
+                    "projectname:None\n"
+                    "flavor:name:m1.small\n"
+                    "flavor:memory_mb:6\n"
+                    "flavor:vcpus:28\n"
+                    "flavor:ephemeral_gb:8128\n"
+                    "flavor:root_gb:496\n"
+                    "flavor:swap:33550336\n"
+                    "imageid:70a599e0-31e7-49b7-b260-868f441e862b\n"
+                    "package:%s\n" % version.version_string_with_package())
+        self.assertEqual(expected, metadata)

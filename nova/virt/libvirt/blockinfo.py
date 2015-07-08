@@ -73,6 +73,7 @@ import itertools
 import operator
 
 from oslo_config import cfg
+import six
 
 from nova import block_device
 from nova.compute import arch
@@ -80,7 +81,6 @@ from nova.compute import vm_mode
 from nova import exception
 from nova.i18n import _
 from nova.objects import base as obj_base
-from nova.virt import block_device as driver_block_device
 from nova.virt import configdrive
 from nova.virt import driver
 from nova.virt.libvirt import utils as libvirt_utils
@@ -264,7 +264,7 @@ def get_disk_bus_for_device_type(virt_type,
     elif virt_type == "parallels":
         if device_type == "cdrom":
             return "ide"
-        elif device_type == "disk":
+        elif device_type in ("disk", "fs"):
             return "sata"
     else:
         # If virt-type not in list then it is unsupported
@@ -340,11 +340,15 @@ def get_eph_disk(index):
     return 'disk.eph' + str(index)
 
 
-def get_config_drive_type():
+def get_config_drive_type(os_type=None):
     """Determine the type of config drive.
 
-       If config_drive_format is set to iso9660 then the config drive will
-       be 'cdrom', otherwise 'disk'.
+       Config drive will be:
+       'cdrom' in case of config_drive is set to iso9660;
+       'disk' in case of config_drive is set to vfat;
+       'fs' in case of os_type is EXE and virt_type is parallels;
+       Autodetected from (cdrom, disk, fs) in case of config_drive is None;
+       Otherwise, an exception of unknown format will be thrown.
 
        Returns a string indicating the config drive type.
     """
@@ -353,9 +357,22 @@ def get_config_drive_type():
         config_drive_type = 'cdrom'
     elif CONF.config_drive_format == 'vfat':
         config_drive_type = 'disk'
+    elif CONF.config_drive_format is None:
+        if CONF.libvirt.virt_type == 'parallels':
+            if os_type == vm_mode.HVM:
+                config_drive_type = 'cdrom'
+            elif os_type == vm_mode.EXE:
+                config_drive_type = 'fs'
+            else:
+                raise exception.ConfigDriveUnknownFormat(
+                    format=CONF.config_drive_format,
+                    os_type=os_type)
+        else:
+            config_drive_type = 'cdrom'
     else:
         raise exception.ConfigDriveUnknownFormat(
-            format=CONF.config_drive_format)
+            format=CONF.config_drive_format,
+            os_type=os_type)
 
     return config_drive_type
 
@@ -447,24 +464,8 @@ def get_root_info(virt_type, image_meta, root_bdm, disk_bus, cdrom_bus,
                                  root_bdm, {}, disk_bus)
 
 
-def default_device_names(virt_type, context, instance, root_device_name,
-                         ephemerals, swap, block_device_mapping,
+def default_device_names(virt_type, context, instance, block_device_info,
                          image_meta):
-
-    block_device_info = {
-        'root_device_name': root_device_name,
-        'swap': driver_block_device.get_swap(
-            driver_block_device.convert_swap(swap)),
-        'ephemerals': driver_block_device.convert_ephemerals(ephemerals),
-        'block_device_mapping': (
-            driver_block_device.convert_volumes(
-                block_device_mapping) +
-            driver_block_device.convert_snapshots(
-                block_device_mapping) +
-            driver_block_device.convert_blanks(
-                block_device_mapping))
-    }
-
     get_disk_info(virt_type, instance, image_meta, block_device_info)
 
     for driver_bdm in itertools.chain(block_device_info['ephemerals'],
@@ -637,7 +638,7 @@ def get_disk_info(virt_type, instance, image_meta,
 
 
 def get_boot_order(disk_info):
-    boot_mapping = (info for name, info in disk_info['mapping'].iteritems()
+    boot_mapping = (info for name, info in six.iteritems(disk_info['mapping'])
                     if name != 'root' and info.get('boot_index') is not None)
     boot_devs_dup = (BOOT_DEV_FOR_TYPE[dev['type']] for dev in
                      sorted(boot_mapping,

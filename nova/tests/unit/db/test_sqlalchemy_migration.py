@@ -12,7 +12,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import importlib
 import mock
+import uuid
 
 from migrate import exceptions as versioning_exceptions
 from migrate import UniqueConstraint
@@ -20,8 +22,12 @@ from migrate.versioning import api as versioning_api
 from oslo_db.sqlalchemy import utils as db_utils
 import sqlalchemy
 
+from nova.compute import flavors
+from nova import context
 from nova.db.sqlalchemy import api as db_api
 from nova.db.sqlalchemy import migration
+from nova import exception
+from nova import objects
 from nova import test
 
 
@@ -92,13 +98,14 @@ class TestNullInstanceUuidScanDB(test.TestCase):
 
 @mock.patch.object(migration, 'db_version', return_value=2)
 @mock.patch.object(migration, '_find_migrate_repo', return_value='repo')
+@mock.patch.object(migration, '_db_sync_locked', return_value=False)
 @mock.patch.object(versioning_api, 'upgrade')
 @mock.patch.object(versioning_api, 'downgrade')
 @mock.patch.object(migration, 'get_engine', return_value='engine')
 class TestDbSync(test.NoDBTestCase):
 
     def test_version_none(self, mock_get_engine, mock_downgrade, mock_upgrade,
-            mock_find_repo, mock_version):
+            mock_sync_locked, mock_find_repo, mock_version):
         database = 'fake'
         migration.db_sync(database=database)
         mock_version.assert_called_once_with(database)
@@ -108,7 +115,7 @@ class TestDbSync(test.NoDBTestCase):
         self.assertFalse(mock_downgrade.called)
 
     def test_downgrade(self, mock_get_engine, mock_downgrade, mock_upgrade,
-            mock_find_repo, mock_version):
+            mock_sync_locked, mock_find_repo, mock_version):
         database = 'fake'
         migration.db_sync(1, database=database)
         mock_version.assert_called_once_with(database)
@@ -178,3 +185,85 @@ class TestGetEngine(test.NoDBTestCase):
             engine = migration.get_engine('api')
             self.assertEqual('api_engine', engine)
             mock_get_engine.assert_called_once_with()
+
+
+class TestFlavorCheck(test.TestCase):
+    def setUp(self):
+        super(TestFlavorCheck, self).setUp()
+        self.context = context.get_admin_context()
+        self.migration = importlib.import_module(
+            'nova.db.sqlalchemy.migrate_repo.versions.'
+            '291_enforce_flavors_migrated')
+        self.engine = db_api.get_engine()
+
+    def test_upgrade_clean(self):
+        inst = objects.Instance(context=self.context,
+                                uuid=uuid.uuid4(),
+                                user_id=self.context.user_id,
+                                project_id=self.context.project_id,
+                                system_metadata={'foo': 'bar'})
+        inst.create()
+        self.migration.upgrade(self.engine)
+
+    def test_upgrade_dirty(self):
+        inst = objects.Instance(context=self.context,
+                                uuid=uuid.uuid4(),
+                                user_id=self.context.user_id,
+                                project_id=self.context.project_id,
+                                system_metadata={'foo': 'bar',
+                                                 'instance_type_id': 'foo'})
+        inst.create()
+        self.assertRaises(exception.ValidationError,
+                          self.migration.upgrade, self.engine)
+
+    def test_upgrade_flavor_deleted_instances(self):
+        inst = objects.Instance(context=self.context,
+                                uuid=uuid.uuid4(),
+                                user_id=self.context.user_id,
+                                project_id=self.context.project_id,
+                                system_metadata={'foo': 'bar',
+                                                 'instance_type_id': 'foo'})
+        inst.create()
+        inst.destroy()
+        self.migration.upgrade(self.engine)
+
+    def test_upgrade_flavor_deleted_sysmeta(self):
+        flavor = flavors.get_default_flavor()
+        sysmeta = flavors.save_flavor_info({}, flavor)
+        sysmeta['foo'] = 'bar'
+        inst = objects.Instance(context=self.context,
+                                uuid=uuid.uuid4(),
+                                user_id=self.context.user_id,
+                                project_id=self.context.project_id,
+                                system_metadata=sysmeta)
+        inst.create()
+
+        sysmeta = db_api.instance_system_metadata_get(self.context,
+                                                      inst.uuid)
+        sysmeta = {k: v for k, v in sysmeta.items()
+                   if not k.startswith('instance_type_')}
+        db_api.instance_system_metadata_update(self.context, inst.uuid,
+                                               sysmeta, True)
+        inst.refresh()
+
+        self.assertEqual({'foo': 'bar'}, inst.system_metadata)
+        self.migration.upgrade(self.engine)
+
+    def test_upgrade_flavor_already_migrated(self):
+        flavor = flavors.get_default_flavor()
+        sysmeta = flavors.save_flavor_info({}, flavor)
+        sysmeta['foo'] = 'bar'
+        inst = objects.Instance(context=self.context,
+                                uuid=uuid.uuid4(),
+                                user_id=self.context.user_id,
+                                project_id=self.context.project_id,
+                                system_metadata=sysmeta)
+        inst.create()
+        # Trigger the migration by lazy-loading flavor
+        inst.flavor
+        inst.save()
+        self.assertNotIn('instance_type_id', inst.system_metadata)
+        sysmeta = db_api.instance_system_metadata_get(self.context,
+                                                      inst.uuid)
+        self.assertEqual({'foo': 'bar'}, sysmeta)
+        self.migration.upgrade(self.engine)

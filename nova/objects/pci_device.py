@@ -26,7 +26,23 @@ from nova import utils
 LOG = logging.getLogger(__name__)
 
 
+def compare_pci_device_attributes(obj_a, obj_b):
+    pci_ignore_fields = base.NovaPersistentObject.fields.keys()
+    for name in obj_a.obj_fields:
+        if name in pci_ignore_fields:
+            continue
+        is_set_a = obj_a.obj_attr_is_set(name)
+        is_set_b = obj_b.obj_attr_is_set(name)
+        if is_set_a != is_set_b:
+            return False
+        if is_set_a:
+            if getattr(obj_a, name) != getattr(obj_b, name):
+                return False
+    return True
+
+
 # TODO(berrange): Remove NovaObjectDictCompat
+@base.NovaObjectRegistry.register
 class PciDevice(base.NovaPersistentObject, base.NovaObject,
                 base.NovaObjectDictCompat):
 
@@ -127,6 +143,12 @@ class PciDevice(base.NovaPersistentObject, base.NovaObject,
         self.obj_reset_changes()
         self.extra_info = {}
 
+    def __eq__(self, other):
+        return compare_pci_device_attributes(self, other)
+
+    def __ne__(self, other):
+        return not (self == other)
+
     @staticmethod
     def _from_db_object(context, pci_device, db_dev):
         for key in pci_device.fields:
@@ -179,6 +201,7 @@ class PciDevice(base.NovaPersistentObject, base.NovaObject,
                 self._from_db_object(self._context, self, db_pci)
 
 
+@base.NovaObjectRegistry.register
 class PciDeviceList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
     #              PciDevice <= 1.1

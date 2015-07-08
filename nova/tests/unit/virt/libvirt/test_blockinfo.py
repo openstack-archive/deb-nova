@@ -19,6 +19,7 @@ import mock
 
 from nova import block_device
 from nova.compute import arch
+from nova.compute import vm_mode
 from nova import context
 from nova import exception
 from nova import objects
@@ -26,6 +27,7 @@ from nova import test
 from nova.tests.unit import fake_block_device
 import nova.tests.unit.image.fake
 from nova.virt import block_device as driver_block_device
+from nova.virt import driver
 from nova.virt.libvirt import blockinfo
 
 
@@ -679,6 +681,12 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
         config_drive_type = blockinfo.get_config_drive_type()
         self.assertEqual('disk', config_drive_type)
 
+    def test_get_config_drive_type_ploop(self):
+        self.flags(config_drive_format=None)
+        self.flags(virt_type='parallels', group='libvirt')
+        config_drive_type = blockinfo.get_config_drive_type(vm_mode.EXE)
+        self.assertEqual('fs', config_drive_type)
+
     def test_get_config_drive_type_improper_value(self):
         self.flags(config_drive_format='test')
         self.assertRaises(exception.ConfigDriveUnknownFormat,
@@ -891,8 +899,8 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
                 ephemeral_gb=20,
                 instance_type_id=2,
                 config_drive=False,
+                root_device_name = '/dev/vda',
                 system_metadata={})
-        self.root_device_name = '/dev/vda'
         self.virt_type = 'kvm'
         self.flavor = objects.Flavor(swap=4)
         self.patchers = []
@@ -967,11 +975,12 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
 
     def _test_default_device_names(self, eph, swap, bdm):
         image_meta = {}
+        bdms = eph + swap + bdm
+        bdi = driver.get_block_device_info(self.instance, bdms)
         blockinfo.default_device_names(self.virt_type,
                                        self.context,
                                        self.instance,
-                                       self.root_device_name,
-                                       eph, swap, bdm,
+                                       bdi,
                                        image_meta)
 
     def test_only_block_device_mapping(self):

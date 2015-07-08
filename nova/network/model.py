@@ -26,7 +26,7 @@ from nova.i18n import _
 
 def ensure_string_keys(d):
     # http://bugs.python.org/issue4978
-    return {str(k): v for k, v in d.iteritems()}
+    return {str(k): v for k, v in six.iteritems(d)}
 
 # Constants for the 'vif_type' field in VIF class
 VIF_TYPE_OVS = 'ovs'
@@ -80,6 +80,24 @@ VIF_MODEL_E1000 = 'e1000'
 VIF_MODEL_E1000E = 'e1000e'
 VIF_MODEL_NETFRONT = 'netfront'
 VIF_MODEL_SPAPR_VLAN = 'spapr-vlan'
+
+VIF_MODEL_SRIOV = 'sriov'
+VIF_MODEL_VMXNET = 'vmxnet'
+VIF_MODEL_VMXNET3 = 'vmxnet3'
+
+VIF_MODEL_ALL = (
+    VIF_MODEL_VIRTIO,
+    VIF_MODEL_NE2K_PCI,
+    VIF_MODEL_PCNET,
+    VIF_MODEL_RTL8139,
+    VIF_MODEL_E1000,
+    VIF_MODEL_E1000E,
+    VIF_MODEL_NETFRONT,
+    VIF_MODEL_SPAPR_VLAN,
+    VIF_MODEL_SRIOV,
+    VIF_MODEL_VMXNET,
+    VIF_MODEL_VMXNET3,
+)
 
 # Constant for max length of network interface names
 # eg 'bridge' in the Network class or 'devname' in

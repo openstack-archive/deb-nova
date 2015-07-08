@@ -29,6 +29,7 @@ except ImportError:
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+import six
 import webob
 
 from nova.api.metadata import base
@@ -71,6 +72,8 @@ def fake_inst_obj(context):
         reservation_id='r-xxxxxxxx',
         user_data=ENCODE_USER_DATA_STRING,
         image_ref=7,
+        kernel_id=None,
+        ramdisk_id=None,
         vcpus=1,
         fixed_ips=[],
         root_device_name='/dev/sda1',
@@ -274,7 +277,8 @@ class MetadataTestCase(test.TestCase):
         self.assertEqual(
             md.lookup("/ec2/2009-04-04/meta-data/kernel-id"), data)
 
-        inst.kernel_id = None
+    def test_image_type_no_kernel_raises(self):
+        inst = self.instance.obj_clone()
         md = fake_InstanceMetadata(self.stubs, inst)
         self.assertRaises(base.InvalidMetadataPath,
             md.lookup, "/2009-04-04/meta-data/kernel-id")
@@ -460,7 +464,7 @@ class OpenStackMetadataTestCase(test.TestCase):
         mdjson = mdinst.lookup("/openstack/2012-08-10/meta_data.json")
         mddict = jsonutils.loads(mdjson)
 
-        for key, val in extra.iteritems():
+        for key, val in six.iteritems(extra):
             self.assertEqual(mddict[key], val)
 
     def test_password(self):

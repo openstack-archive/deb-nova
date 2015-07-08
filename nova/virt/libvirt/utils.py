@@ -193,17 +193,13 @@ def create_cow_image(backing_file, path, size=None):
         base_details = images.qemu_img_info(backing_file)
     else:
         base_details = None
-    # This doesn't seem to get inherited so force it to...
-    # http://paste.ubuntu.com/1213295/
-    # TODO(harlowja) probably file a bug against qemu-img/qemu
+    # Explicitly inherit the value of 'cluster_size' property of a qcow2
+    # overlay image from its backing file. This can be useful in cases
+    # when people create a base image with a non-default 'cluster_size'
+    # value or cases when images were created with very old QEMU
+    # versions which had a different default 'cluster_size'.
     if base_details and base_details.cluster_size is not None:
         cow_opts += ['cluster_size=%s' % base_details.cluster_size]
-    # For now don't inherit this due the following discussion...
-    # See: http://www.gossamer-threads.com/lists/openstack/dev/10592
-    # if 'preallocation' in base_details:
-    #     cow_opts += ['preallocation=%s' % base_details['preallocation']]
-    if base_details and base_details.encrypted:
-        cow_opts += ['encryption=%s' % base_details.encrypted]
     if size is not None:
         cow_opts += ['size=%s' % size]
     if cow_opts:
@@ -242,7 +238,7 @@ def pick_disk_driver_name(hypervisor_version, is_block_dev=False):
                         return 'qemu'
                     else:
                         raise
-                except processutils.ProcessExecutionError as exc:
+                except processutils.ProcessExecutionError:
                     LOG.debug("xend is not started")
                     # libvirt will try to use libxl toolstack
                     return 'qemu'
@@ -581,7 +577,7 @@ def is_mounted(mount_path, source=None):
 
         utils.execute(*check_cmd)
         return True
-    except processutils.ProcessExecutionError as exc:
+    except processutils.ProcessExecutionError:
         return False
     except OSError as exc:
         # info since it's not required to have this tool.

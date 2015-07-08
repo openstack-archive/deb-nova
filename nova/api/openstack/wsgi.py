@@ -670,7 +670,7 @@ class Resource(wsgi.Application):
                 try:
                     with ResourceExceptionHandler():
                         gen = ext(req=request, **action_args)
-                        response = gen.next()
+                        response = next(gen)
                 except Fault as ex:
                     response = ex
 
@@ -775,7 +775,7 @@ class Resource(wsgi.Application):
         if body:
             msg = _("Action: '%(action)s', calling method: %(meth)s, body: "
                     "%(body)s") % {'action': action,
-                                   'body': unicode(body, 'utf-8'),
+                                   'body': six.text_type(body, 'utf-8'),
                                    'meth': str(meth)}
             LOG.debug(strutils.mask_password(msg))
         else:

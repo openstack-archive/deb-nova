@@ -97,9 +97,6 @@ class TestNovaAPIMigrationsPostgreSQL(NovaAPIModelsSync,
 
 
 class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
-    snake_walk = True
-    downgrade = True
-
     def setUp(self):
         super(NovaAPIMigrationsWalk, self).setUp()
         # NOTE(viktors): We should reduce log output because it causes issues,
@@ -127,7 +124,7 @@ class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
         return self.engine
 
     def test_walk_versions(self):
-        self.walk_versions(self.snake_walk, self.downgrade)
+        self.walk_versions(snake_walk=False, downgrade=False)
 
     def assertColumnExists(self, engine, table_name, column):
         self.assertTrue(db_utils.column_exists(engine, table_name, column),
@@ -157,9 +154,6 @@ class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
         self.assertUniqueConstraintExists(engine, 'cell_mappings',
                 ['uuid'])
 
-    def _post_downgrade_001(self, engine):
-        self.assertTableNotExists(engine, 'cell_mappings')
-
     def _check_002(self, engine, data):
         for column in ['created_at', 'updated_at', 'id', 'instance_uuid',
                 'cell_id', 'project_id']:
@@ -178,8 +172,21 @@ class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
         self.assertEqual(['id'], fk['referred_columns'])
         self.assertEqual(['cell_id'], fk['constrained_columns'])
 
-    def _post_downgrade_002(self, engine):
-        self.assertTableNotExists(engine, 'instance_mappings')
+    def _check_003(self, engine, data):
+        for column in ['created_at', 'updated_at', 'id',
+                'cell_id', 'host']:
+            self.assertColumnExists(engine, 'host_mappings', column)
+
+        self.assertIndexExists(engine, 'host_mappings', 'host_idx')
+        self.assertUniqueConstraintExists(engine, 'host_mappings',
+                ['host'])
+
+        inspector = reflection.Inspector.from_engine(engine)
+        # There should only be one foreign key here
+        fk = inspector.get_foreign_keys('host_mappings')[0]
+        self.assertEqual('cell_mappings', fk['referred_table'])
+        self.assertEqual(['id'], fk['referred_columns'])
+        self.assertEqual(['cell_id'], fk['constrained_columns'])
 
 
 class TestNovaAPIMigrationsWalkSQLite(NovaAPIMigrationsWalk,

@@ -24,6 +24,7 @@ It is used via a single directive in the .rst file
 
 import re
 
+import six
 from six.moves import configparser
 
 from docutils import nodes
@@ -80,8 +81,10 @@ class SupportMatrixImplementation(object):
     STATUS_COMPLETE = "complete"
     STATUS_PARTIAL = "partial"
     STATUS_MISSING = "missing"
+    STATUS_UKNOWN = "unknown"
 
-    STATUS_ALL = [STATUS_COMPLETE, STATUS_PARTIAL, STATUS_MISSING]
+    STATUS_ALL = [STATUS_COMPLETE, STATUS_PARTIAL, STATUS_MISSING,
+                  STATUS_UKNOWN]
 
     def __init__(self, status=STATUS_MISSING, notes=None):
         # One of the status constants detailing the implementation
@@ -111,7 +114,7 @@ class SupportMatrixTarget(object):
 class SupportMatrixDirective(rst.Directive):
 
     option_spec = {
-        'support-matrix': unicode,
+        'support-matrix': six.text_type,
     }
 
     def run(self):
@@ -345,12 +348,14 @@ class SupportMatrixDirective(rst.Directive):
                 impltxt.append(implref)
 
                 status = ""
-                if impl.status == "complete":
+                if impl.status == SupportMatrixImplementation.STATUS_COMPLETE:
                     status = u"\u2714"
-                elif impl.status == "missing":
+                elif impl.status == SupportMatrixImplementation.STATUS_MISSING:
                     status = u"\u2716"
-                elif impl.status == "partial":
+                elif impl.status == SupportMatrixImplementation.STATUS_PARTIAL:
                     status = u"\u2714"
+                elif impl.status == SupportMatrixImplementation.STATUS_UKNOWN:
+                    status = u"?"
 
                 implref.append(nodes.literal(
                     text=status,
@@ -412,11 +417,38 @@ class SupportMatrixDirective(rst.Directive):
                                   ids=[id]),
                 ]
                 if impl.notes is not None:
-                    subitem.append(nodes.paragraph(text=impl.notes))
+                    subitem.append(self._create_notes_paragraph(impl.notes))
                 impls.append(subitem)
 
             item.append(impls)
             details.append(item)
+
+    def _create_notes_paragraph(self, notes):
+        """ Constructs a paragraph which represents the implementation notes
+
+        The paragraph consists of text and clickable URL nodes if links were
+        given in the notes.
+        """
+        para = nodes.paragraph()
+        # links could start with http:// or https://
+        link_idxs = [m.start() for m in re.finditer('https?://', notes)]
+        start_idx = 0
+        for link_idx in link_idxs:
+            # assume the notes start with text (could be empty)
+            para.append(nodes.inline(text=notes[start_idx:link_idx]))
+            # create a URL node until the next text or the end of the notes
+            link_end_idx = notes.find(" ", link_idx)
+            if link_end_idx == -1:
+                # In case the notes end with a link without a blank
+                link_end_idx = len(notes)
+            uri = notes[link_idx:link_end_idx + 1]
+            para.append(nodes.reference("", uri, refuri=uri))
+            start_idx = link_end_idx + 1
+
+        # get all text after the last link (could be empty) or all of the
+        # text if no link was given
+        para.append(nodes.inline(text=notes[start_idx:]))
+        return para
 
 
 def setup(app):

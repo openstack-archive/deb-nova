@@ -51,6 +51,7 @@ from nova.tests.unit import matchers
 from nova.tests.unit.objects import test_flavor
 from nova.tests.unit.objects import test_migration
 from nova.tests.unit.objects import test_service
+from nova import utils
 from nova.volume import cinder
 
 
@@ -1246,7 +1247,6 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def _test_resize(self, flavor_id_passed=True,
                      same_host=False, allow_same_host=False,
-                     allow_mig_same_host=False,
                      project_id=None,
                      extra_kwargs=None,
                      same_flavor=False,
@@ -1254,8 +1254,7 @@ class _ComputeAPIUnitTestMixIn(object):
         if extra_kwargs is None:
             extra_kwargs = {}
 
-        self.flags(allow_resize_to_same_host=allow_same_host,
-                   allow_migrate_to_same_host=allow_mig_same_host)
+        self.flags(allow_resize_to_same_host=allow_same_host)
 
         params = {}
         if project_id is not None:
@@ -1312,8 +1311,6 @@ class _ComputeAPIUnitTestMixIn(object):
             else:
                 filter_properties = {'ignore_hosts': [fake_inst['host']]}
 
-            if not flavor_id_passed and not allow_mig_same_host:
-                filter_properties['ignore_hosts'].append(fake_inst['host'])
             if flavor_id_passed:
                 expected_reservations = fake_quotas.reservations
             else:
@@ -1333,6 +1330,10 @@ class _ComputeAPIUnitTestMixIn(object):
                     self.assertEqual(new_flavor.id,
                                      mig.new_instance_type_id)
                     self.assertEqual('finished', mig.status)
+                    if new_flavor.id != current_flavor.id:
+                        self.assertEqual('resize', mig.migration_type)
+                    else:
+                        self.assertEqual('migration', mig.migration_type)
 
                 self.stubs.Set(objects, 'Migration', _get_migration)
                 self.mox.StubOutWithMock(self.context, 'elevated')
@@ -1719,23 +1720,52 @@ class _ComputeAPIUnitTestMixIn(object):
                                   min_disk=None,
                                   create_fails=False,
                                   instance_vm_state=vm_states.ACTIVE):
+        params = dict(locked=True)
+        instance = self._create_instance_obj(params=params)
+        instance.vm_state = instance_vm_state
+
         # 'cache_in_nova' is for testing non-inheritable properties
         # 'user_id' should also not be carried from sys_meta into
         # image property...since it should be set explicitly by
         # _create_image() in compute api.
-        fake_sys_meta = dict(image_foo='bar', blah='bug?',
-                             image_cache_in_nova='dropped',
-                             cache_in_nova='dropped',
-                             user_id='meow')
-        if with_base_ref:
-            fake_sys_meta['image_base_image_ref'] = 'fake-base-ref'
-        params = dict(system_metadata=fake_sys_meta, locked=True)
-        instance = self._create_instance_obj(params=params)
-        instance.vm_state = instance_vm_state
-        fake_sys_meta.update(instance.system_metadata)
+        fake_image_meta = {
+            'is_public': True,
+            'name': 'base-name',
+            'properties': {
+                'user_id': 'meow',
+                'foo': 'bar',
+                'blah': 'bug?',
+                'cache_in_nova': 'dropped',
+            },
+        }
+        image_type = is_snapshot and 'snapshot' or 'backup'
+        sent_meta = {
+            'is_public': False,
+            'name': 'fake-name',
+            'properties': {
+                'user_id': self.context.user_id,
+                'instance_uuid': instance.uuid,
+                'image_type': image_type,
+                'foo': 'bar',
+                'blah': 'bug?',
+                'cow': 'moo',
+                'cat': 'meow',
+            },
+
+        }
+        if is_snapshot:
+            if min_ram is not None:
+                fake_image_meta['min_ram'] = min_ram
+                sent_meta['min_ram'] = min_ram
+            if min_disk is not None:
+                fake_image_meta['min_disk'] = min_disk
+                sent_meta['min_disk'] = min_disk
+        else:
+            sent_meta['properties']['backup_type'] = 'fake-backup-type'
+
         extra_props = dict(cow='moo', cat='meow')
 
-        self.mox.StubOutWithMock(compute_utils, 'get_image_metadata')
+        self.mox.StubOutWithMock(utils, 'get_image_from_system_metadata')
         self.mox.StubOutWithMock(self.compute_api.image_api,
                                  'create')
         self.mox.StubOutWithMock(instance, 'save')
@@ -1751,40 +1781,12 @@ class _ComputeAPIUnitTestMixIn(object):
             self.compute_api.is_volume_backed_instance(self.context,
                 instance).AndReturn(False)
 
-        image_type = is_snapshot and 'snapshot' or 'backup'
-
-        expected_sys_meta = dict(fake_sys_meta)
-        expected_sys_meta.pop('cache_in_nova')
-        expected_sys_meta.pop('image_cache_in_nova')
-        expected_sys_meta.pop('user_id')
-        expected_sys_meta['foo'] = expected_sys_meta.pop('image_foo')
-        if with_base_ref:
-            expected_sys_meta['base_image_ref'] = expected_sys_meta.pop(
-                    'image_base_image_ref')
-
-        expected_props = {'instance_uuid': instance.uuid,
-                          'user_id': self.context.user_id,
-                          'image_type': image_type}
-        expected_props.update(extra_props)
-        expected_props.update(expected_sys_meta)
-        expected_meta = {'name': 'fake-name',
-                         'is_public': False,
-                         'properties': expected_props}
-        if is_snapshot:
-            if min_ram is not None:
-                expected_meta['min_ram'] = min_ram
-            if min_disk is not None:
-                expected_meta['min_disk'] = min_disk
-        else:
-            expected_props['backup_type'] = 'fake-backup-type'
-
-        compute_utils.get_image_metadata(
-            self.context, self.compute_api.image_api,
-            FAKE_IMAGE_REF, instance).AndReturn(expected_meta)
+        utils.get_image_from_system_metadata(
+            instance.system_metadata).AndReturn(fake_image_meta)
 
         fake_image = dict(id='fake-image-id')
         mock_method = self.compute_api.image_api.create(
-                self.context, expected_meta)
+                self.context, sent_meta)
         if create_fails:
             mock_method.AndRaise(test.TestingException())
         else:
@@ -1989,7 +1991,7 @@ class _ComputeAPIUnitTestMixIn(object):
              'image_id': None, 'volume_id': None, 'disk_bus': None,
              'volume_size': None, 'source_type': 'snapshot',
              'device_type': None, 'snapshot_id': '1-snapshot',
-             'destination_type': 'volume', 'delete_on_termination': None})
+             'destination_type': 'volume', 'delete_on_termination': False})
 
         # All the db_only fields and the volume ones are removed
         self.compute_api.snapshot_volume_backed(

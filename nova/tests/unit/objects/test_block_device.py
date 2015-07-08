@@ -15,6 +15,7 @@
 import contextlib
 
 import mock
+import six
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova import context
@@ -90,6 +91,12 @@ class _TestBlockDeviceMappingObject(object):
         self.assertRaises(exception.ObjectActionError,
                           bdm_object.save, self.context)
 
+    @mock.patch.object(db, 'block_device_mapping_update', return_value=None)
+    def test_save_not_found(self, bdm_update):
+        bdm_object = objects.BlockDeviceMapping(context=self.context)
+        bdm_object.id = 123
+        self.assertRaises(exception.BDMNotFound, bdm_object.save)
+
     @mock.patch.object(db, 'block_device_mapping_get_by_volume_id')
     def test_get_by_volume_id(self, get_by_vol_id):
         get_by_vol_id.return_value = self.fake_bdm()
@@ -98,7 +105,6 @@ class _TestBlockDeviceMappingObject(object):
                 self.context, 'fake-volume-id')
         for attr in block_device_obj.BLOCK_DEVICE_OPTIONAL_ATTRS:
             self.assertFalse(vol_bdm.obj_attr_is_set(attr))
-        self.assertRemotes()
 
     @mock.patch.object(db, 'block_device_mapping_get_by_volume_id')
     def test_get_by_volume_id_not_found(self, get_by_vol_id):
@@ -129,7 +135,6 @@ class _TestBlockDeviceMappingObject(object):
             self.assertTrue(vol_bdm.obj_attr_is_set(attr))
         get_by_vol_id.assert_called_once_with(self.context, 'fake-volume-id',
                                               ['instance'])
-        self.assertRemotes()
 
     def _test_create_mocked(self, cell_type=None, update_or_create=False):
         if cell_type:
@@ -206,7 +211,7 @@ class _TestBlockDeviceMappingObject(object):
                                'bdm_update_or_create_at_top'):
             bdm.create()
 
-        for k, v in values.iteritems():
+        for k, v in six.iteritems(values):
             self.assertEqual(v, getattr(bdm, k))
 
     def test_create_fails(self):

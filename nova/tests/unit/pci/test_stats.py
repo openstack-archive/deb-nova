@@ -15,6 +15,8 @@
 
 import mock
 
+import six
+
 from nova import exception
 from nova import objects
 from nova.pci import stats
@@ -96,8 +98,23 @@ class PciDeviceStatsTestCase(test.NoDBTestCase):
                           self.pci_stats.remove_device,
                           self.fake_dev_2)
 
+    def test_pci_stats_equivalent(self):
+        pci_stats2 = stats.PciDeviceStats()
+        map(pci_stats2.add_device, [self.fake_dev_1,
+                                    self.fake_dev_2,
+                                    self.fake_dev_3,
+                                    self.fake_dev_4])
+        self.assertEqual(self.pci_stats, pci_stats2)
+
+    def test_pci_stats_not_equivalent(self):
+        pci_stats2 = stats.PciDeviceStats()
+        map(pci_stats2.add_device, [self.fake_dev_1,
+                                    self.fake_dev_2,
+                                    self.fake_dev_3])
+        self.assertNotEqual(self.pci_stats, pci_stats2)
+
     def test_object_create(self):
-        m = objects.pci_device_pool.from_pci_stats(self.pci_stats.pools)
+        m = self.pci_stats.to_device_pools_obj()
         new_stats = stats.PciDeviceStats(m)
 
         self.assertEqual(len(new_stats.pools), 3)
@@ -233,7 +250,7 @@ class PciDeviceStatsWithTagsTestCase(test.NoDBTestCase):
         self.assertEqual(product_id, pool['product_id'])
         self.assertEqual(count, pool['count'])
         if tags:
-            for k, v in tags.iteritems():
+            for k, v in six.iteritems(tags):
                 self.assertEqual(v, pool[k])
 
     def _assertPools(self):

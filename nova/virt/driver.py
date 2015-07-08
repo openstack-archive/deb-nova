@@ -34,13 +34,14 @@ driver_opts = [
     cfg.StrOpt('compute_driver',
                help='Driver to use for controlling virtualization. Options '
                     'include: libvirt.LibvirtDriver, xenapi.XenAPIDriver, '
-                    'fake.FakeDriver, baremetal.BareMetalDriver, '
+                    'fake.FakeDriver, ironic.IronicDriver, '
                     'vmwareapi.VMwareVCDriver, hyperv.HyperVDriver'),
     cfg.StrOpt('default_ephemeral_format',
                help='The default format an ephemeral_volume will be '
                     'formatted with on creation.'),
     cfg.StrOpt('preallocate_images',
                default='none',
+               choices=('none', 'space'),
                help='VM image preallocation mode: '
                     '"none" => no storage provisioning is done up front, '
                     '"space" => storage is fully allocated at instance start'),
@@ -73,6 +74,35 @@ def driver_dict_from_config(named_driver_config, *args, **kwargs):
         driver_registry[driver_type] = driver_class(*args, **kwargs)
 
     return driver_registry
+
+
+def get_block_device_info(instance, block_device_mapping):
+    """Converts block device mappings for an instance to driver format.
+
+    Virt drivers expect block device mapping to be presented in the format
+    of a dict containing the following keys:
+
+        root_device_name: device name of the root disk
+        ephemerals: a (potentially empty) list of DriverEphemeralBlockDevice
+                    instances
+        swap: An instance of DriverSwapBlockDevice or None
+        block_device_mapping: a (potentially empty) list of
+                           DriverVolumeBlockDevice or any of it's more
+                           specialized subclasses.
+    """
+    from nova.virt import block_device as virt_block_device
+
+    block_device_info = {
+        'root_device_name': instance.root_device_name,
+        'ephemerals': virt_block_device.convert_ephemerals(
+            block_device_mapping),
+        'block_device_mapping':
+            virt_block_device.convert_all_volumes(*block_device_mapping)
+    }
+    swap_list = virt_block_device.convert_swap(block_device_mapping)
+    block_device_info['swap'] = virt_block_device.get_swap(swap_list)
+
+    return block_device_info
 
 
 def block_device_info_get_root(block_device_info):
@@ -136,7 +166,8 @@ class ComputeDriver(object):
     capabilities = {
         "has_imagecache": False,
         "supports_recreate": False,
-        }
+        "supports_migrate_to_same_host": False
+    }
 
     def __init__(self, virtapi):
         self.virtapi = virtapi

@@ -1105,6 +1105,24 @@ class VlanNetworkTestCase(test.TestCase):
         error_msg = 'vlan must be an integer'
         self.assertIn(error_msg, six.text_type(exc))
 
+    def test_vlan_multiple_without_dhcp_server(self):
+        networks = self.network.create_networks(
+                          self.context_admin, label="fake", num_networks=2,
+                          vlan_start=100, cidr='192.168.3.1/24',
+                          network_size=100)
+
+        self.assertEqual(networks[0]["dhcp_server"], "192.168.3.1")
+        self.assertEqual(networks[1]["dhcp_server"], "192.168.3.129")
+
+    def test_vlan_multiple_with_dhcp_server(self):
+        networks = self.network.create_networks(
+                          self.context_admin, label="fake", num_networks=2,
+                          vlan_start=100, cidr='192.168.3.1/24',
+                          network_size=100, dhcp_server='192.168.3.1')
+
+        self.assertEqual(networks[0]["dhcp_server"], "192.168.3.1")
+        self.assertEqual(networks[1]["dhcp_server"], "192.168.3.1")
+
     @mock.patch('nova.db.network_get')
     def test_validate_networks(self, net_get):
         def network_get(_context, network_id, project_only='allow_none'):
@@ -1939,14 +1957,14 @@ class VlanNetworkTestCase(test.TestCase):
 
 class _TestDomainObject(object):
     def __init__(self, **kwargs):
-        for k, v in kwargs.iteritems():
+        for k, v in six.iteritems(kwargs):
             self.__setattr__(k, v)
 
 
 class FakeNetwork(object):
     def __init__(self, **kwargs):
         self.vlan = None
-        for k, v in kwargs.iteritems():
+        for k, v in six.iteritems(kwargs):
             self.__setattr__(k, v)
 
     def __getitem__(self, item):

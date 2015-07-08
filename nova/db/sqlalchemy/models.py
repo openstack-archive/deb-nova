@@ -100,6 +100,7 @@ class Service(BASE, NovaBase):
     report_count = Column(Integer, nullable=False, default=0)
     disabled = Column(Boolean, default=False)
     disabled_reason = Column(String(255))
+    last_seen_up = Column(DateTime, nullable=True)
 
 
 class ComputeNode(BASE, NovaBase):
@@ -397,47 +398,6 @@ class InstanceTypes(BASE, NovaBase):
     is_public = Column(Boolean, default=True)
 
 
-class Volume(BASE, NovaBase):
-    """Represents a block storage device that can be attached to a VM."""
-    __tablename__ = 'volumes'
-    __table_args__ = (
-        Index('volumes_instance_uuid_idx', 'instance_uuid'),
-    )
-    id = Column(String(36), primary_key=True, nullable=False)
-    deleted = Column(String(36), default="")
-
-    @property
-    def name(self):
-        return CONF.volume_name_template % self.id
-
-    ec2_id = Column(String(255))
-    user_id = Column(String(255))
-    project_id = Column(String(255))
-
-    snapshot_id = Column(String(36))
-
-    host = Column(String(255))
-    size = Column(Integer)
-    availability_zone = Column(String(255))
-    instance_uuid = Column(String(36))
-    mountpoint = Column(String(255))
-    attach_time = Column(DateTime)
-    status = Column(String(255))  # TODO(vish): enum?
-    attach_status = Column(String(255))  # TODO(vish): enum
-
-    scheduled_at = Column(DateTime)
-    launched_at = Column(DateTime)
-    terminated_at = Column(DateTime)
-
-    display_name = Column(String(255))
-    display_description = Column(String(255))
-
-    provider_location = Column(String(256))
-    provider_auth = Column(String(256))
-
-    volume_type_id = Column(Integer)
-
-
 class Quota(BASE, NovaBase):
     """Represents a single quota override for a project.
 
@@ -639,25 +599,6 @@ class BlockDeviceMapping(BASE, NovaBase):
     connection_info = Column(MediumText())
 
 
-class IscsiTarget(BASE, NovaBase):
-    """Represents an iscsi target for a given host."""
-    __tablename__ = 'iscsi_targets'
-    __table_args__ = (
-        Index('iscsi_targets_volume_id_fkey', 'volume_id'),
-        Index('iscsi_targets_host_volume_id_deleted_idx', 'host', 'volume_id',
-              'deleted')
-    )
-    id = Column(Integer, primary_key=True, nullable=False)
-    target_num = Column(Integer)
-    host = Column(String(255))
-    volume_id = Column(String(36), ForeignKey('volumes.id'))
-    volume = orm.relationship(Volume,
-                          backref=orm.backref('iscsi_target', uselist=False),
-                          foreign_keys=volume_id,
-                          primaryjoin='and_(IscsiTarget.volume_id==Volume.id,'
-                                           'IscsiTarget.deleted==0)')
-
-
 class SecurityGroupInstanceAssociation(BASE, NovaBase):
     __tablename__ = 'security_group_instance_association'
     __table_args__ = (
@@ -775,9 +716,16 @@ class Migration(BASE, NovaBase):
     __table_args__ = (
         Index('migrations_instance_uuid_and_status_idx', 'deleted',
               'instance_uuid', 'status'),
+        # MySQL has a limit of 3072 bytes for an multi-column index. This
+        # index ends up being larger than that using the utf-8 encoding.
+        # Limiting the index to the prefixes will keep it under the limit.
+        # FIXME(johannes): Is it MySQL or InnoDB that imposes the limit?
         Index('migrations_by_host_nodes_and_status_idx', 'deleted',
               'source_compute', 'dest_compute', 'source_node', 'dest_node',
-              'status'),
+              'status', mysql_length={'source_compute': 100,
+                                      'dest_compute': 100,
+                                      'source_node': 100,
+                                      'dest_node': 100}),
     )
     id = Column(Integer, primary_key=True, nullable=False)
     # NOTE(tr3buchet): the ____compute variables are instance['host']
@@ -793,6 +741,10 @@ class Migration(BASE, NovaBase):
     instance_uuid = Column(String(36), ForeignKey('instances.uuid'))
     # TODO(_cerberus_): enum
     status = Column(String(255))
+    migration_type = Column(Enum('migration', 'resize', 'live-migration',
+                                 'evacuate'),
+                            nullable=True)
+    hidden = Column(Boolean, default=False)
 
     instance = orm.relationship("Instance", foreign_keys=instance_uuid,
                             primaryjoin='and_(Migration.instance_uuid == '
@@ -860,6 +812,7 @@ class VirtualInterface(BASE, NovaBase):
                         name="uniq_virtual_interfaces0address0deleted"),
         Index('virtual_interfaces_network_id_idx', 'network_id'),
         Index('virtual_interfaces_instance_uuid_fkey', 'instance_uuid'),
+        Index('virtual_interfaces_uuid_idx', 'uuid'),
     )
     id = Column(Integer, primary_key=True, nullable=False)
     address = Column(String(255))

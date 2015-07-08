@@ -66,47 +66,8 @@ class LocalAPI(object):
         return self._manager.instance_update(context, instance_uuid,
                                              updates, 'compute')
 
-    def instance_get_all_by_host(self, context, host, columns_to_join=None):
-        return self._manager.instance_get_all_by_host(
-            context, host, None, columns_to_join=columns_to_join)
-
-    def instance_get_all_by_host_and_node(self, context, host, node):
-        return self._manager.instance_get_all_by_host(context, host, node,
-                None)
-
-    def migration_get_in_progress_by_host_and_node(self, context, host, node):
-        return self._manager.migration_get_in_progress_by_host_and_node(
-            context, host, node)
-
-    def aggregate_metadata_get_by_host(self, context, host,
-                                       key='availability_zone'):
-        return self._manager.aggregate_metadata_get_by_host(context,
-                                                            host,
-                                                            key)
-
     def provider_fw_rule_get_all(self, context):
         return self._manager.provider_fw_rule_get_all(context)
-
-    def block_device_mapping_create(self, context, values):
-        return self._manager.block_device_mapping_update_or_create(context,
-                                                                   values,
-                                                                   create=True)
-
-    def block_device_mapping_update(self, context, bdm_id, values):
-        values = dict(values)
-        values['id'] = bdm_id
-        return self._manager.block_device_mapping_update_or_create(
-            context, values, create=False)
-
-    def block_device_mapping_update_or_create(self, context, values):
-        return self._manager.block_device_mapping_update_or_create(context,
-                                                                   values,
-                                                                   create=None)
-
-    def block_device_mapping_get_all_by_instance(self, context, instance,
-                                                 legacy=True):
-        return self._manager.block_device_mapping_get_all_by_instance(
-            context, instance, legacy)
 
     def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
                          wr_bytes, instance, last_refreshed=None,
@@ -117,51 +78,8 @@ class LocalAPI(object):
                                               instance, last_refreshed,
                                               update_totals)
 
-    def service_get_all(self, context):
-        return self._manager.service_get_all_by(context, host=None, topic=None,
-                binary=None)
-
-    def service_get_all_by_topic(self, context, topic):
-        return self._manager.service_get_all_by(context, topic=topic,
-                host=None, binary=None)
-
-    def service_get_all_by_host(self, context, host):
-        return self._manager.service_get_all_by(context, host=host, topic=None,
-                binary=None)
-
-    def service_get_by_host_and_topic(self, context, host, topic):
-        return self._manager.service_get_all_by(context, topic, host,
-                binary=None)
-
-    def service_get_by_compute_host(self, context, host):
-        result = self._manager.service_get_all_by(context, 'compute', host,
-                binary=None)
-        # FIXME(comstud): A major revision bump to 2.0 should return a
-        # single entry, so we should just return 'result' at that point.
-        return result[0]
-
-    def service_get_by_host_and_binary(self, context, host, binary):
-        return self._manager.service_get_all_by(context, host=host,
-                                                binary=binary, topic=None)
-
-    def service_create(self, context, values):
-        return self._manager.service_create(context, values)
-
-    def service_destroy(self, context, service_id):
-        return self._manager.service_destroy(context, service_id)
-
     def compute_node_create(self, context, values):
         return self._manager.compute_node_create(context, values)
-
-    def compute_node_update(self, context, node, values, prune_stats=False):
-        # NOTE(belliott) ignore prune_stats param, it's no longer relevant
-        return self._manager.compute_node_update(context, node, values)
-
-    def compute_node_delete(self, context, node):
-        return self._manager.compute_node_delete(context, node)
-
-    def service_update(self, context, service, values):
-        return self._manager.service_update(context, service, values)
 
     def task_log_get(self, context, task_name, begin, end, host, state=None):
         return self._manager.task_log_get(context, task_name, begin, end,
@@ -179,16 +97,9 @@ class LocalAPI(object):
                                                begin, end, host,
                                                errors, message)
 
-    def security_groups_trigger_handler(self, context, event, *args):
-        return self._manager.security_groups_trigger_handler(context,
-                                                             event, args)
-
     def security_groups_trigger_members_refresh(self, context, group_ids):
         return self._manager.security_groups_trigger_members_refresh(context,
                                                                      group_ids)
-
-    def get_ec2_ids(self, context, instance):
-        return self._manager.get_ec2_ids(context, instance)
 
     def object_backport(self, context, objinst, target_version):
         return self._manager.object_backport(context, objinst, target_version)

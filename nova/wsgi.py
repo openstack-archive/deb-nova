@@ -29,10 +29,10 @@ import eventlet.wsgi
 import greenlet
 from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_log import loggers
 from oslo_utils import excutils
 from paste import deploy
 import routes.middleware
+import six
 import webob.dec
 import webob.exc
 
@@ -115,7 +115,6 @@ class Server(object):
         self.pool_size = pool_size or self.default_pool_size
         self._pool = eventlet.GreenPool(self.pool_size)
         self._logger = logging.getLogger("nova.%s.wsgi.server" % self.name)
-        self._wsgi_logger = loggers.WritableLogger(self._logger)
         self._use_ssl = use_ssl
         self._max_url_len = max_url_len
         self.client_socket_timeout = CONF.client_socket_timeout or None
@@ -221,7 +220,7 @@ class Server(object):
             'site': self.app,
             'protocol': self._protocol,
             'custom_pool': self._pool,
-            'log': self._wsgi_logger,
+            'log': self._logger,
             'log_format': CONF.wsgi_log_format,
             'debug': False,
             'keepalive': CONF.wsgi_keep_alive,
@@ -422,7 +421,7 @@ class Debug(Middleware):
         resp = req.get_response(self.application)
 
         print(('*' * 40) + ' RESPONSE HEADERS')
-        for (key, value) in resp.headers.iteritems():
+        for (key, value) in six.iteritems(resp.headers):
             print(key, '=', value)
         print()
 

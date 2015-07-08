@@ -27,6 +27,7 @@ import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
+from six.moves import range
 import six.moves.urllib.parse as urlparse
 import testtools
 import webob
@@ -88,7 +89,6 @@ def return_security_group(context, instance_id, security_group_id):
 
 
 def instance_update_and_get_original(context, instance_uuid, values,
-                                     update_cells=True,
                                      columns_to_join=None,
                                      ):
     inst = fakes.stub_instance(INSTANCE_IDS.get(instance_uuid),
@@ -97,7 +97,7 @@ def instance_update_and_get_original(context, instance_uuid, values,
     return (inst, inst)
 
 
-def instance_update(context, instance_uuid, values, update_cells=True):
+def instance_update(context, instance_uuid, values):
     inst = fakes.stub_instance(INSTANCE_IDS.get(instance_uuid),
                                name=values.get('display_name'))
     inst = dict(inst, **values)
@@ -542,7 +542,7 @@ class ServersControllerTest(ControllerTest):
 
         servers = res_dict['servers']
         self.assertEqual([s['id'] for s in servers],
-                [fakes.get_fake_uuid(i) for i in xrange(len(servers))])
+                [fakes.get_fake_uuid(i) for i in range(len(servers))])
 
         servers_links = res_dict['servers_links']
         self.assertEqual(servers_links[0]['rel'], 'next')
@@ -574,7 +574,7 @@ class ServersControllerTest(ControllerTest):
 
         servers = res['servers']
         self.assertEqual([s['id'] for s in servers],
-                [fakes.get_fake_uuid(i) for i in xrange(len(servers))])
+                [fakes.get_fake_uuid(i) for i in range(len(servers))])
 
         servers_links = res['servers_links']
         self.assertEqual(servers_links[0]['rel'], 'next')
@@ -598,7 +598,7 @@ class ServersControllerTest(ControllerTest):
 
         servers = res['servers']
         self.assertEqual([s['id'] for s in servers],
-                [fakes.get_fake_uuid(i) for i in xrange(len(servers))])
+                [fakes.get_fake_uuid(i) for i in range(len(servers))])
 
         servers_links = res['servers_links']
         self.assertEqual(servers_links[0]['rel'], 'next')
@@ -822,6 +822,7 @@ class ServersControllerTest(ControllerTest):
                          columns_to_join=None, use_slave=False):
             self.assertIsNotNone(filters)
             self.assertNotIn('project_id', filters)
+            self.assertTrue(context.is_admin)
             return [fakes.stub_instance(100)]
 
         self.stubs.Set(db, 'instance_get_all_by_filters',
@@ -1083,6 +1084,53 @@ class ServersControllerTest(ControllerTest):
         self.assertEqual(len(servers), 1)
         self.assertEqual(servers[0]['id'], server_uuid)
 
+    @mock.patch.object(compute_api.API, 'get_all')
+    def test_get_servers_deleted_filter_str_to_bool(self, mock_get_all):
+        server_uuid = str(uuid.uuid4())
+
+        db_list = [fakes.stub_instance(100, uuid=server_uuid,
+                                       vm_state='deleted')]
+        mock_get_all.return_value = instance_obj._make_instance_list(
+            context, objects.InstanceList(), db_list, FIELDS)
+
+        req = fakes.HTTPRequest.blank('/fake/servers?deleted=true',
+                                      use_admin_context=True)
+
+        servers = self.controller.detail(req)['servers']
+        self.assertEqual(1, len(servers))
+        self.assertEqual(server_uuid, servers[0]['id'])
+
+        # Assert that 'deleted' filter value is converted to boolean
+        # while calling get_all() method.
+        expected_search_opts = {'deleted': True, 'project_id': 'fake'}
+        mock_get_all.assert_called_once_with(
+            mock.ANY, search_opts=expected_search_opts, limit=mock.ANY,
+            marker=mock.ANY, want_objects=mock.ANY,
+            sort_keys=mock.ANY, sort_dirs=mock.ANY)
+
+    @mock.patch.object(compute_api.API, 'get_all')
+    def test_get_servers_deleted_filter_invalid_str(self, mock_get_all):
+        server_uuid = str(uuid.uuid4())
+
+        db_list = [fakes.stub_instance(100, uuid=server_uuid)]
+        mock_get_all.return_value = instance_obj._make_instance_list(
+            context, objects.InstanceList(), db_list, FIELDS)
+
+        req = fakes.HTTPRequest.blank('/fake/servers?deleted=abc',
+                                      use_admin_context=True)
+
+        servers = self.controller.detail(req)['servers']
+        self.assertEqual(1, len(servers))
+        self.assertEqual(server_uuid, servers[0]['id'])
+
+        # Assert that invalid 'deleted' filter value is converted to boolean
+        # False while calling get_all() method.
+        expected_search_opts = {'deleted': False, 'project_id': 'fake'}
+        mock_get_all.assert_called_once_with(
+            mock.ANY, search_opts=expected_search_opts, limit=mock.ANY,
+            marker=mock.ANY, want_objects=mock.ANY,
+            sort_keys=mock.ANY, sort_dirs=mock.ANY)
+
     def test_get_servers_allows_name(self):
         server_uuid = str(uuid.uuid4())
 
@@ -1285,7 +1333,7 @@ class ServersControllerTest(ControllerTest):
         def return_servers_with_host(context, *args, **kwargs):
             return [fakes.stub_instance(i + 1, 'fake', 'fake', host=i % 2,
                                         uuid=fakes.get_fake_uuid(i))
-                    for i in xrange(5)]
+                    for i in range(5)]
 
         self.stubs.Set(db, 'instance_get_all_by_filters',
                        return_servers_with_host)
@@ -1851,14 +1899,8 @@ class ServersControllerCreateTest(test.TestCase):
             instance.update(values)
             return instance
 
-        def server_update(context, instance_uuid, params, update_cells=False):
-            inst = self.instance_cache_by_uuid[instance_uuid]
-            inst.update(params)
-            return inst
-
         def server_update_and_get_original(
-                context, instance_uuid, params, update_cells=False,
-                columns_to_join=None):
+                context, instance_uuid, params, columns_to_join=None):
             inst = self.instance_cache_by_uuid[instance_uuid]
             inst.update(params)
             return (inst, inst)
@@ -2630,7 +2672,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict,
                                           self._test_create_extra, params)
 
-    def test_create_instance_with_neturonv2_not_found_network(self):
+    def test_create_instance_with_neutronv2_not_found_network(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         network = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
         requested_networks = [{'uuid': network}]

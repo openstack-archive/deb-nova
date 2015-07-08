@@ -12,15 +12,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
 import copy
 
 from oslo_config import cfg
+from oslo_db import exception as db_exc
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
 
 from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
+from nova.cells import utils as cells_utils
 from nova.compute import flavors
 from nova import context
 from nova import db
@@ -43,7 +46,7 @@ _INSTANCE_OPTIONAL_JOINED_FIELDS = ['metadata', 'system_metadata',
                                     'pci_devices', 'tags']
 # These are fields that are optional but don't translate to db columns
 _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault', 'flavor', 'old_flavor',
-                                        'new_flavor']
+                                        'new_flavor', 'ec2_ids']
 # These are fields that are optional and in instance_extra
 _INSTANCE_EXTRA_FIELDS = ['numa_topology', 'pci_requests',
                           'flavor', 'vcpu_model']
@@ -130,6 +133,7 @@ def compat_instance(instance):
 
 
 # TODO(berrange): Remove NovaObjectDictCompat
+@base.NovaObjectRegistry.register
 class Instance(base.NovaPersistentObject, base.NovaObject,
                base.NovaObjectDictCompat):
     # Version 1.0: Initial version
@@ -153,7 +157,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     # Version 1.17: Added tags
     # Version 1.18: Added flavor, old_flavor, new_flavor
     # Version 1.19: Added vcpu_model
-    VERSION = '1.19'
+    # Version 1.20: Added ec2_ids
+    VERSION = '1.20'
 
     fields = {
         'id': fields.IntegerField(),
@@ -248,22 +253,24 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         'old_flavor': fields.ObjectField('Flavor', nullable=True),
         'new_flavor': fields.ObjectField('Flavor', nullable=True),
         'vcpu_model': fields.ObjectField('VirtCPUModel', nullable=True),
+        'ec2_ids': fields.ObjectField('EC2Ids'),
         }
 
     obj_extra_fields = ['name']
 
     obj_relationships = {
-        'fault': [('1.0', '1.0')],
+        'fault': [('1.0', '1.0'), ('1.13', '1.2')],
         'info_cache': [('1.1', '1.0'), ('1.9', '1.4'), ('1.10', '1.5')],
         'security_groups': [('1.2', '1.0')],
         'pci_devices': [('1.6', '1.0'), ('1.15', '1.1')],
-        'numa_topology': [('1.14', '1.0')],
+        'numa_topology': [('1.14', '1.0'), ('1.16', '1.1')],
         'pci_requests': [('1.16', '1.1')],
         'tags': [('1.17', '1.0')],
         'flavor': [('1.18', '1.1')],
         'old_flavor': [('1.18', '1.1')],
         'new_flavor': [('1.18', '1.1')],
         'vcpu_model': [('1.19', '1.0')],
+        'ec2_ids': [('1.20', '1.0')],
     }
 
     def __init__(self, *args, **kwargs):
@@ -445,8 +452,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         if flavor_implied:
             # This instance is from before flavors were migrated out of
             # system_metadata. Make sure that we honor that.
-            if db_inst['extra']['flavor'] is not None:
-                self._flavor_from_db(db_inst['extra']['flavor'])
+            instance_extra = db_inst.get('extra') or {}
+            if instance_extra.get('flavor') is not None:
+                self._flavor_from_db(instance_extra['flavor'])
                 sysmeta = self.system_metadata
                 flavors.save_flavor_info(sysmeta, self.flavor)
                 del self.flavor
@@ -488,6 +496,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             else:
                 instance[field] = db_inst[field]
 
+        # NOTE(danms): We can be called with a dict instead of a
+        # SQLAlchemy object, so we have to be careful here
+        if hasattr(db_inst, '__dict__'):
+            have_extra = 'extra' in db_inst.__dict__ and db_inst['extra']
+        else:
+            have_extra = 'extra' in db_inst and db_inst['extra']
+
         if 'metadata' in expected_attrs:
             instance['metadata'] = utils.instance_meta(db_inst)
         if 'system_metadata' in expected_attrs:
@@ -497,13 +512,25 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 objects.InstanceFault.get_latest_for_instance(
                     context, instance.uuid))
         if 'numa_topology' in expected_attrs:
-            instance._load_numa_topology(
-                db_inst.get('extra').get('numa_topology'))
+            if have_extra:
+                instance._load_numa_topology(
+                    db_inst['extra'].get('numa_topology'))
+            else:
+                instance.numa_topology = None
         if 'pci_requests' in expected_attrs:
-            instance._load_pci_requests(
-                db_inst.get('extra').get('pci_requests'))
+            if have_extra:
+                instance._load_pci_requests(
+                    db_inst['extra'].get('pci_requests'))
+            else:
+                instance.pci_requests = None
         if 'vcpu_model' in expected_attrs:
-            instance._load_vcpu_model(db_inst.get('extra').get('vcpu_model'))
+            if have_extra:
+                instance._load_vcpu_model(
+                    db_inst['extra'].get('vcpu_model'))
+            else:
+                instance.vcpu_model = None
+        if 'ec2_ids' in expected_attrs:
+            instance._load_ec2_ids()
         if 'info_cache' in expected_attrs:
             if db_inst['info_cache'] is None:
                 instance.info_cache = None
@@ -632,6 +659,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         else:
             constraint = None
 
+        cell_type = cells_opts.get_cell_type()
+        if cell_type is not None:
+            stale_instance = self.obj_clone()
+
         try:
             db_inst = db.instance_destroy(self._context, self.uuid,
                                           constraint=constraint)
@@ -639,6 +670,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         except exception.ConstraintNotMet:
             raise exception.ObjectActionError(action='destroy',
                                               reason='host changed')
+        if cell_type == 'compute':
+            cells_api = cells_rpcapi.CellsAPI()
+            cells_api.instance_destroy_at_top(self._context, stale_instance)
         delattr(self, base.get_attrname('id'))
 
     def _save_info_cache(self, context):
@@ -677,6 +711,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         pass
 
     def _save_flavor(self, context):
+        if not any([x in self.obj_what_changed() for x in
+                    ('flavor', 'old_flavor', 'new_flavor')]):
+            return
         # FIXME(danms): We can do this smarterly by updating this
         # with all the other extra things at the same time
         flavor_info = {
@@ -710,6 +747,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             db.instance_extra_update_by_uuid(
                 context, self.uuid,
                 {'vcpu_model': update})
+
+    def _save_ec2_ids(self, context):
+        # NOTE(hanlind): Read-only so no need to save this.
+        pass
 
     def _maybe_upgrade_flavor(self):
         # NOTE(danms): We may have regressed to flavors stored in sysmeta,
@@ -756,9 +797,14 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         of task_state/vm_state
 
         """
+        # Store this on the class because _cell_name_blocks_sync is useless
+        # after the db update call below.
+        self._sync_cells = not self._cell_name_blocks_sync()
+
         context = self._context
         cell_type = cells_opts.get_cell_type()
-        if cell_type == 'api' and self.cell_name:
+
+        if cell_type is not None:
             # NOTE(comstud): We need to stash a copy of ourselves
             # before any updates are applied.  When we call the save
             # methods on nested objects, we will lose any changes to
@@ -770,14 +816,16 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             # authoritative for their view of vm_state and task_state.
             stale_instance = self.obj_clone()
 
+        cells_update_from_api = (cell_type == 'api' and self.cell_name and
+                                 self._sync_cells)
+
+        if cells_update_from_api:
             def _handle_cell_update_from_api():
                 cells_api = cells_rpcapi.CellsAPI()
                 cells_api.instance_update_from_api(context, stale_instance,
-                        expected_vm_state,
-                        expected_task_state,
-                        admin_state_reset)
-        else:
-            stale_instance = None
+                            expected_vm_state,
+                            expected_task_state,
+                            admin_state_reset)
 
         self._maybe_upgrade_flavor()
         updates = {}
@@ -793,11 +841,23 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 except AttributeError:
                     LOG.exception(_LE('No save handler for %s'), field,
                                   instance=self)
+                except db_exc.DBReferenceError:
+                    # NOTE(melwitt): This will happen if we instance.save()
+                    # before an instance.create() and FK constraint fails.
+                    # In practice, this occurs in cells during a delete of
+                    # an unscheduled instance. Otherwise, it could happen
+                    # as a result of bug.
+                    raise exception.InstanceNotFound(instance_id=self.uuid)
             elif field in changes:
-                updates[field] = self[field]
+                if (field == 'cell_name' and self[field] is not None and
+                        self[field].startswith(cells_utils.BLOCK_SYNC_FLAG)):
+                    updates[field] = self[field].replace(
+                            cells_utils.BLOCK_SYNC_FLAG, '', 1)
+                else:
+                    updates[field] = self[field]
 
         if not updates:
-            if stale_instance:
+            if cells_update_from_api:
                 _handle_cell_update_from_api()
             return
 
@@ -835,23 +895,23 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             expected_attrs.append('system_metadata')
             expected_attrs.append('flavor')
         old_ref, inst_ref = db.instance_update_and_get_original(
-                context, self.uuid, updates, update_cells=False,
+                context, self.uuid, updates,
                 columns_to_join=_expected_cols(expected_attrs))
 
         self._from_db_object(context, self, inst_ref,
                              expected_attrs=expected_attrs)
 
+        if cells_update_from_api:
+            _handle_cell_update_from_api()
+        elif cell_type == 'compute':
+            if self._sync_cells:
+                cells_api = cells_rpcapi.CellsAPI()
+                cells_api.instance_update_at_top(context, stale_instance)
+
         # NOTE(danms): We have to be super careful here not to trigger
         # any lazy-loads that will unmigrate or unbackport something. So,
         # make a copy of the instance for notifications first.
         new_ref = self.obj_clone()
-
-        if stale_instance:
-            _handle_cell_update_from_api()
-        elif cell_type == 'compute':
-            cells_api = cells_rpcapi.CellsAPI()
-            cells_api.instance_update_at_top(context,
-                                             base.obj_to_primitive(new_ref))
 
         notifications.send_update(context, old_ref, new_ref)
         self.obj_reset_changes()
@@ -957,6 +1017,9 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             self.vcpu_model = objects.VirtCPUModel.obj_from_primitive(
                 db_vcpu_model)
 
+    def _load_ec2_ids(self):
+        self.ec2_ids = objects.EC2Ids.get_by_instance(self._context, self)
+
     def obj_load_attr(self, attrname):
         if attrname not in INSTANCE_OPTIONAL_ATTRS:
             raise exception.ObjectActionError(
@@ -993,6 +1056,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             self._load_pci_requests()
         elif attrname == 'vcpu_model':
             self._load_vcpu_model()
+        elif attrname == 'ec2_ids':
+            self._load_ec2_ids()
         elif 'flavor' in attrname:
             self._load_flavor()
         else:
@@ -1047,6 +1112,49 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         if not md_was_changed:
             self.obj_reset_changes(['metadata'])
 
+    def _cell_name_blocks_sync(self):
+        if (self.obj_attr_is_set('cell_name') and
+                self.cell_name is not None and
+                self.cell_name.startswith(cells_utils.BLOCK_SYNC_FLAG)):
+            return True
+        return False
+
+    def _normalize_cell_name(self):
+        """Undo skip_cell_sync()'s cell_name modification if applied"""
+
+        if not self.obj_attr_is_set('cell_name') or self.cell_name is None:
+            return
+        cn_changed = 'cell_name' in self.obj_what_changed()
+        if self.cell_name.startswith(cells_utils.BLOCK_SYNC_FLAG):
+            self.cell_name = self.cell_name.replace(
+                    cells_utils.BLOCK_SYNC_FLAG, '', 1)
+            # cell_name is not normally an empty string, this means it was None
+            # or unset before cells_utils.BLOCK_SYNC_FLAG was applied.
+            if len(self.cell_name) == 0:
+                self.cell_name = None
+        if not cn_changed:
+            self.obj_reset_changes(['cell_name'])
+
+    @contextlib.contextmanager
+    def skip_cells_sync(self):
+        """Context manager to save an instance without syncing cells.
+
+        Temporarily disables the cells syncing logic, if enabled.  This should
+        only be used when saving an instance that has been passed down/up from
+        another cell in order to avoid passing it back to the originator to be
+        re-saved.
+        """
+        cn_changed = 'cell_name' in self.obj_what_changed()
+        if not self.obj_attr_is_set('cell_name') or self.cell_name is None:
+            self.cell_name = ''
+        self.cell_name = '%s%s' % (cells_utils.BLOCK_SYNC_FLAG, self.cell_name)
+        if not cn_changed:
+            self.obj_reset_changes(['cell_name'])
+        try:
+            yield
+        finally:
+            self._normalize_cell_name()
+
 
 def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
     get_fault = expected_attrs and 'fault' in expected_attrs
@@ -1073,6 +1181,7 @@ def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
     return inst_list
 
 
+@base.NovaObjectRegistry.register
 class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added use_slave to get_by_host
@@ -1092,7 +1201,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.14: Instance <= version 1.18
     # Version 1.15: Instance <= version 1.19
     # Version 1.16: Added get_all() method
-    VERSION = '1.16'
+    # Version 1.17: Instance <= version 1.20
+    VERSION = '1.17'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -1115,6 +1225,7 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         '1.14': '1.18',
         '1.15': '1.19',
         '1.16': '1.19',
+        '1.17': '1.20',
         }
 
     @base.remotable_classmethod

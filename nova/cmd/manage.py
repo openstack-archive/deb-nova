@@ -289,7 +289,7 @@ class ProjectCommands(object):
             quota = QUOTAS.get_user_quotas(ctxt, project_id, user_id)
         else:
             quota = QUOTAS.get_project_quotas(ctxt, project_id)
-        for key, value in quota.iteritems():
+        for key, value in six.iteritems(quota):
             if value['limit'] < 0 or value['limit'] is None:
                 value['limit'] = 'unlimited'
             print(print_format % (key, value['limit'], value['in_use'],
@@ -543,7 +543,7 @@ class NetworkCommands(object):
                dns1=None, dns2=None, project_id=None, priority=None,
                uuid=None, fixed_cidr=None):
         """Creates fixed ips for host by range."""
-        kwargs = {k: v for k, v in locals().iteritems()
+        kwargs = {k: v for k, v in six.iteritems(locals())
                   if v and k != "self"}
         if multi_host is not None:
             kwargs['multi_host'] = multi_host == 'T'
@@ -775,15 +775,12 @@ class ServiceCommands(object):
 
         """
         # Getting compute node info and related instances info
-        service_ref = objects.Service.get_by_compute_host(context, host)
-        instance_refs = db.instance_get_all_by_host(context,
-                                                    service_ref.host)
+        compute_ref = (
+            objects.ComputeNode.get_first_node_by_host_for_old_compat(context,
+                                                                      host))
+        instance_refs = db.instance_get_all_by_host(context, host)
 
         # Getting total available/used resource
-        # NOTE(sbauza): We're lazily loading the compute_node field here but
-        # we will change that later to get the ComputeNode object by using
-        # the Service host field
-        compute_ref = service_ref.compute_node
         resource = {'vcpus': compute_ref.vcpus,
                     'memory_mb': compute_ref.memory_mb,
                     'local_gb': compute_ref.local_gb,
@@ -911,6 +908,31 @@ class DbCommands(object):
         """Sync the database up to the most recent version."""
         return migration.db_sync(version)
 
+    @args('--dry-run', action='store_true', dest='dry_run',
+          default=False, help='Print SQL statements instead of executing')
+    def expand(self, dry_run):
+        """Expand database schema."""
+        return migration.db_expand(dry_run)
+
+    @args('--dry-run', action='store_true', dest='dry_run',
+          default=False, help='Print SQL statements instead of executing')
+    def migrate(self, dry_run):
+        """Migrate database schema."""
+        return migration.db_migrate(dry_run)
+
+    @args('--dry-run', action='store_true', dest='dry_run',
+          default=False, help='Print SQL statements instead of executing')
+    @args('--force-experimental-contract', action='store_true',
+          dest='force_experimental_contract',
+          help="Force experimental contract operation to run *VOLATILE*")
+    def contract(self, dry_run, force_experimental_contract=False):
+        """Contract database schema."""
+        if force_experimental_contract:
+            return migration.db_contract(dry_run)
+        print('The "contract" command is experimental and potentially '
+              'dangerous. As such, it is disabled by default. Enable using '
+              '"--force-experimental".')
+
     def version(self):
         """Print the current database version."""
         print(migration.db_version())
@@ -958,9 +980,12 @@ class DbCommands(object):
             print(_('There were no records found where '
                     'instance_uuid was NULL.'))
 
-    @args('--max-number', metavar='<number>',
+    @args('--max-number', metavar='<number>', dest='max_number',
           help='Maximum number of instances to consider')
-    def migrate_flavor_data(self, max_number):
+    @args('--force', action='store_true', dest='force',
+          help='Force instances to migrate (even if they may be performing '
+               'another operation). Warning, this is potentially dangerous.')
+    def migrate_flavor_data(self, max_number=None, force=False):
         if max_number is not None:
             max_number = int(max_number)
             if max_number < 0:
@@ -969,8 +994,8 @@ class DbCommands(object):
         admin_context = context.get_admin_context()
         flavor_cache = {}
         match, done = db.migrate_flavor_data(admin_context, max_number,
-                                             flavor_cache)
-        print(_('%(total)i instances matched query, %(done)i completed'),
+                                             flavor_cache, force)
+        print(_('%(total)i instances matched query, %(done)i completed') %
               {'total': match, 'done': done})
 
 
@@ -1041,7 +1066,7 @@ class AgentBuildCommands(object):
 
             buildlist.append(agent_build)
 
-        for key, buildlist in by_hypervisor.iteritems():
+        for key, buildlist in six.iteritems(by_hypervisor):
             if hypervisor and key != hypervisor:
                 continue
 

@@ -23,12 +23,13 @@ from eventlet import queue
 from eventlet import timeout
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import versionutils
+from six.moves import range
 
 from nova import context
 from nova import exception
 from nova.i18n import _, _LE, _LW
 from nova import objects
-from nova.openstack.common import versionutils
 from nova import utils
 from nova import version
 from nova.virt.xenapi.client import objects as cli_objects
@@ -128,7 +129,7 @@ class XenAPISession(object):
         return url
 
     def _populate_session_pool(self, url, user, pw, exception):
-        for i in xrange(CONF.xenserver.connection_concurrent - 1):
+        for i in range(CONF.xenserver.connection_concurrent - 1):
             session = self._create_session(url)
             with timeout.Timeout(CONF.xenserver.login_timeout, exception):
                 session.login_with_password(user, pw,
@@ -217,7 +218,7 @@ class XenAPISession(object):
         """Allows a plugin to raise RetryableError so we can try again."""
         attempts = num_retries + 1
         sleep_time = 0.5
-        for attempt in xrange(1, attempts + 1):
+        for attempt in range(1, attempts + 1):
             try:
                 if attempt > 1:
                     time.sleep(sleep_time)

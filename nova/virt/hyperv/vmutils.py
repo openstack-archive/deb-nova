@@ -27,6 +27,8 @@ if sys.platform == 'win32':
 
 from oslo_config import cfg
 from oslo_log import log as logging
+import six
+from six.moves import range
 
 from nova import exception
 from nova.i18n import _, _LW
@@ -95,7 +97,7 @@ class VMUtils(object):
 
     def __init__(self, host='.'):
         self._enabled_states_map = {v: k for k, v in
-                                    self._vm_power_states_map.iteritems()}
+                                    six.iteritems(self._vm_power_states_map)}
         if sys.platform == 'win32':
             self._init_hyperv_wmi_conn(host)
             self._conn_cimv2 = wmi.WMI(moniker='//%s/root/cimv2' % host)
@@ -116,8 +118,9 @@ class VMUtils(object):
         for vs in self._conn.Msvm_VirtualSystemSettingData(
                 ['ElementName', 'Notes'],
                 SettingType=self._VIRTUAL_SYSTEM_CURRENT_SETTINGS):
-            instance_notes.append((vs.ElementName,
-                                  [v for v in vs.Notes.split('\n') if v]))
+            if vs.Notes is not None:
+                instance_notes.append(
+                    (vs.ElementName, [v for v in vs.Notes.split('\n') if v]))
 
         return instance_notes
 
@@ -728,7 +731,7 @@ class VMUtils(object):
         attached_disks = self.get_attached_disks(scsi_controller_path)
         used_slots = [int(disk.AddressOnParent) for disk in attached_disks]
 
-        for slot in xrange(constants.SCSI_CONTROLLER_SLOTS_NUMBER):
+        for slot in range(constants.SCSI_CONTROLLER_SLOTS_NUMBER):
             if slot not in used_slots:
                 return slot
         raise HyperVException(_("Exceeded the maximum number of slots"))

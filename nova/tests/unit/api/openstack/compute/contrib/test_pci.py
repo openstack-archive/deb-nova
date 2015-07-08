@@ -31,9 +31,8 @@ from nova.tests.unit.objects import test_pci_device
 pci_stats = [{"count": 3,
               "vendor_id": "8086",
               "product_id": "1520",
-              "numa_node": 1,
-              "extra_info": {"phys_function": '[["0x0000", "0x04", '
-                                              '"0x00", "0x1"]]'}}]
+              "numa_node": 1}]
+
 fake_compute_node = objects.ComputeNode(
     pci_device_pools=pci_device_pool.from_pci_stats(pci_stats))
 
@@ -229,3 +228,31 @@ class PciControlletestV21(test.NoDBTestCase):
                              result['pci_devices'][i]['label'])
             self.assertEqual(dist['pci_devices'][i]['dev_id'],
                              result['pci_devices'][i]['dev_id'])
+
+
+class PciControllerPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(PciControllerPolicyEnforcementV21, self).setUp()
+        self.controller = pci.PciController()
+        self.req = fakes.HTTPRequest.blank('')
+
+    def _test_policy_failed(self, action, *args):
+        rule_name = "os_compute_api:os-pci:%s" % action
+        rule = {rule_name: "project:non_fake"}
+        self.policy.set_rules(rule)
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized, getattr(self.controller, action),
+            self.req, *args)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())
+
+    def test_index_policy_failed(self):
+        self._test_policy_failed('index')
+
+    def test_detail_policy_failed(self):
+        self._test_policy_failed('detail')
+
+    def test_show_policy_failed(self):
+        self._test_policy_failed('show', 1)

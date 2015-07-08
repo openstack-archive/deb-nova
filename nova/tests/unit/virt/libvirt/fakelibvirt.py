@@ -17,8 +17,10 @@ import uuid
 
 import fixtures
 from lxml import etree
+import six
 
 from nova.compute import arch
+from nova.virt.libvirt import config as vconfig
 
 # Allow passing None to the various connect methods
 # (i.e. allow the client to rely on default URLs)
@@ -132,6 +134,8 @@ VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE = 64
 
 # blockCommit flags
 VIR_DOMAIN_BLOCK_COMMIT_RELATIVE = 4
+# blockRebase flags
+VIR_DOMAIN_BLOCK_REBASE_RELATIVE = 8
 
 
 VIR_CONNECT_LIST_DOMAINS_ACTIVE = 1
@@ -185,6 +189,46 @@ class HostInfo(object):
         self.cpu_vendor = cpu_vendor
         self.numa_topology = numa_topology
         self.disabled_cpus_list = cpu_disabled or []
+
+    @classmethod
+    def _gen_numa_topology(self, cpu_nodes, cpu_sockets, cpu_cores,
+                           cpu_threads, kb_mem, numa_mempages_list=None):
+
+        topology = vconfig.LibvirtConfigCapsNUMATopology()
+
+        cpu_count = 0
+        for cell_count in range(cpu_nodes):
+            cell = vconfig.LibvirtConfigCapsNUMACell()
+            cell.id = cell_count
+            cell.memory = kb_mem / cpu_nodes
+            for socket_count in range(cpu_sockets):
+                for cpu_num in range(cpu_cores * cpu_threads):
+                    cpu = vconfig.LibvirtConfigCapsNUMACPU()
+                    cpu.id = cpu_count
+                    cpu.socket_id = cell_count
+                    cpu.core_id = cpu_num // cpu_threads
+                    cpu.siblings = set([cpu_threads *
+                                       (cpu_count // cpu_threads) + thread
+                                        for thread in range(cpu_threads)])
+                    cell.cpus.append(cpu)
+
+                    cpu_count += 1
+            # Set mempages per numa cell. if numa_mempages_list is empty
+            # we will set only the default 4K pages.
+            if numa_mempages_list:
+                mempages = numa_mempages_list[cell_count]
+            else:
+                mempages = vconfig.LibvirtConfigCapsNUMAPages()
+                mempages.size = 4
+                mempages.total = cell.memory / mempages.size
+                mempages = [mempages]
+            cell.mempages = mempages
+            topology.cells.append(cell)
+
+        return topology
+
+    def get_numa_topology(self):
+        return self.numa_topology
 
 
 VIR_DOMAIN_JOB_NONE = 0
@@ -526,7 +570,7 @@ class Domain(object):
                 long(self._def['memory']),
                 long(self._def['memory']),
                 self._def['vcpu'],
-                123456789L]
+                123456789]
 
     def migrateToURI(self, desturi, flags, dname, bandwidth):
         raise make_libvirtError(
@@ -563,7 +607,7 @@ class Domain(object):
         disk_info['_attached'] = True
         return disk_info in self._def['devices']['disks']
 
-    def detachDeviceFlags(self, xml, _flags):
+    def detachDeviceFlags(self, xml, flags):
         self.detachDevice(xml)
 
     def XMLDesc(self, flags):
@@ -672,7 +716,7 @@ class Domain(object):
     def vcpus(self):
         vcpus = ([], [])
         for i in range(0, self._def['vcpu']):
-            vcpus[0].append((i, 1, 120405L, i))
+            vcpus[0].append((i, 1, 120405, i))
             vcpus[1].append((True, True, True, True))
         return vcpus
 
@@ -702,7 +746,8 @@ class DomainSnapshot(object):
 
 
 class Connection(object):
-    def __init__(self, uri=None, readonly=False, version=9011, host_info=None):
+    def __init__(self, uri=None, readonly=False, version=9011,
+                 hv_version=1001000, host_info=None):
         if not uri or uri == '':
             if allow_default_uri_connection:
                 uri = 'qemu:///session'
@@ -712,8 +757,8 @@ class Connection(object):
 
         uri_whitelist = ['qemu:///system',
                          'qemu:///session',
-                         'lxc:///',     # from LibvirtDriver.uri()
-                         'xen:///',     # from LibvirtDriver.uri()
+                         'lxc:///',     # from LibvirtDriver._uri()
+                         'xen:///',     # from LibvirtDriver._uri()
                          'uml:///system',
                          'test:///default',
                          'parallels:///system']
@@ -734,7 +779,7 @@ class Connection(object):
         self._nodedevs = {}
         self._event_callbacks = {}
         self.fakeLibVersion = version
-        self.fakeVersion = version
+        self.fakeVersion = hv_version
         self.host_info = host_info or HostInfo()
 
     def _add_filter(self, nwfilter):
@@ -760,7 +805,7 @@ class Connection(object):
 
         dom._id = -1
 
-        for (k, v) in self._running_vms.iteritems():
+        for (k, v) in six.iteritems(self._running_vms):
             if v == dom:
                 del self._running_vms[k]
                 self._emit_lifecycle(dom, VIR_DOMAIN_EVENT_STOPPED, 0)
@@ -868,6 +913,10 @@ class Connection(object):
 
     def getCapabilities(self):
         """Return spoofed capabilities."""
+        numa_topology = self.host_info.get_numa_topology()
+        if isinstance(numa_topology, vconfig.LibvirtConfigCapsNUMATopology):
+            numa_topology = numa_topology.to_xml()
+
         return '''<capabilities>
   <host>
     <uuid>cef19ce0-0ca2-11df-855d-b19fbce37686</uuid>
@@ -1097,7 +1146,7 @@ class Connection(object):
 </capabilities>''' % {'sockets': self.host_info.cpu_sockets,
                       'cores': self.host_info.cpu_cores,
                       'threads': self.host_info.cpu_threads,
-                      'topology': self.host_info.numa_topology}
+                      'topology': numa_topology}
 
     def compareCPU(self, xml, flags):
         tree = etree.fromstring(xml)
@@ -1125,10 +1174,10 @@ class Connection(object):
 
     def getCPUStats(self, cpuNum, flag):
         if cpuNum < 2:
-            return {'kernel': 5664160000000L,
-                    'idle': 1592705190000000L,
-                    'user': 26728850000000L,
-                    'iowait': 6121490000000L}
+            return {'kernel': 5664160000000,
+                    'idle': 1592705190000000,
+                    'user': 26728850000000,
+                    'iowait': 6121490000000}
         else:
             raise make_libvirtError(
                     libvirtError,

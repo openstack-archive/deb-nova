@@ -29,13 +29,9 @@ LOG = logging.getLogger(__name__)
 
 mute_weigher_opts = [
         cfg.FloatOpt('mute_weight_multiplier',
-                default=-10.0,
+                default=-10000.0,
                 help='Multiplier used to weigh mute children. (The value '
                      'should be negative.)'),
-        cfg.FloatOpt('mute_weight_value',
-                default=1000.0,
-                help='Weight value assigned to mute children. (The value '
-                     'should be positive.)'),
 ]
 
 CONF = cfg.CONF
@@ -47,6 +43,8 @@ class MuteChildWeigher(weights.BaseCellWeigher):
     """If a child cell hasn't been heard from, greatly lower its selection
     weight.
     """
+
+    MUTE_WEIGH_VALUE = 1.0
 
     def weight_multiplier(self):
         # negative multiplier => lower weight
@@ -66,6 +64,6 @@ class MuteChildWeigher(weights.BaseCellWeigher):
             LOG.warning(_LW("%(cell)s has not been seen since %(last_seen)s "
                             "and is being treated as mute."),
                         {'cell': cell, 'last_seen': last_seen})
-            return CONF.cells.mute_weight_value
+            return self.MUTE_WEIGH_VALUE
         else:
             return 0

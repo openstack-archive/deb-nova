@@ -22,13 +22,13 @@ import os
 import platform
 import re
 import time
-import urllib2
 
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import strutils
 import six
+from six.moves import urllib
 import six.moves.urllib.parse as urlparse
 
 from nova.compute import arch
@@ -106,11 +106,12 @@ volume_opts = [
                help='Path to a Quobyte Client configuration file.'),
     cfg.StrOpt('iscsi_iface',
                deprecated_name='iscsi_transport',
+               choices=('be2iscsi', 'bnx2i', 'cxgb3i', 'cxgb4i', 'qla4xxx',
+                        'ocs'),
                help='The iSCSI transport iface to use to connect to target in '
-                    'case offload support is desired. Supported transports '
-                    'are be2iscsi, bnx2i, cxgb3i, cxgb4i, qla4xxx and ocs. '
-                    'Default format is transport_name.hwaddress and can be '
-                    'generated manually or via iscsiadm -m iface'),
+                    'case offload support is desired. Default format is '
+                    'transport_name.hwaddress and can be generated manually '
+                    'or via iscsiadm -m iface'),
                     # iser is also supported, but use LibvirtISERVolumeDriver
                     # instead
     ]
@@ -156,7 +157,7 @@ class LibvirtBaseVolumeDriver(object):
                          'read_iops_sec', 'write_iops_sec']
             specs = data['qos_specs']
             if isinstance(specs, dict):
-                for k, v in specs.iteritems():
+                for k, v in six.iteritems(specs):
                     if k in tune_opts:
                         new_key = 'disk_' + k
                         setattr(conf, new_key, v)
@@ -398,7 +399,6 @@ class LibvirtISCSIVolumeDriver(LibvirtBaseVolumeDriver):
         # multipath installed, discovering other targets if available
         # multipath should be configured on the nova-compute node,
         # in order to fit storage vendor
-        out = None
         if self.use_multipath:
             out = self._run_iscsiadm_discover(iscsi_properties)
 
@@ -1399,7 +1399,7 @@ class LibvirtFibreChannelVolumeDriver(LibvirtBaseVolumeDriver):
         if 'multipath_id' in connection_info['data']:
             multipath_id = connection_info['data']['multipath_id']
             mdev_info = linuxscsi.find_multipath_device(multipath_id)
-            devices = mdev_info['devices']
+            devices = mdev_info['devices'] if mdev_info else []
             LOG.debug("devices to remove = %s", devices)
         else:
             # only needed when multipath-tools work improperly
@@ -1469,8 +1469,8 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
             # turn local path into URL
             config = 'file://%s' % config
         try:
-            urllib2.urlopen(config, timeout=5).close()
-        except urllib2.URLError as e:
+            urllib.request.urlopen(config, timeout=5).close()
+        except urllib.error.URLError as e:
             msg = _LW("Cannot access 'scality_sofs_config': %s") % e
             LOG.warn(msg)
             raise exception.NovaException(msg)

@@ -14,6 +14,7 @@
 #    under the License.
 
 import abc
+import base64
 import contextlib
 import functools
 import os
@@ -35,6 +36,7 @@ from nova import keymgr
 from nova.openstack.common import fileutils
 from nova import utils
 from nova.virt.disk import api as disk
+from nova.virt.image import model as imgmodel
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import dmcrypt
@@ -45,9 +47,9 @@ from nova.virt.libvirt import utils as libvirt_utils
 __imagebackend_opts = [
     cfg.StrOpt('images_type',
                default='default',
-               help='VM Images format. Acceptable values are: raw, qcow2, lvm,'
-                    ' rbd, default. If default is specified,'
-                    ' then use_cow_images flag is used instead of this one.'),
+               choices=('raw', 'qcow2', 'lvm', 'rbd', 'ploop', 'default'),
+               help='VM Images format. If default is specified, then'
+                    ' use_cow_images flag is used instead of this one.'),
     cfg.StrOpt('images_volume_group',
                help='LVM Volume Group that is used for VM images, when you'
                     ' specify images_type=lvm.'),
@@ -62,9 +64,10 @@ __imagebackend_opts = [
                default='',  # default determined by librados
                help='Path to the ceph configuration file to use'),
     cfg.StrOpt('hw_disk_discard',
-               help='Discard option for nova managed disks (valid options '
-                    'are: ignore, unmap). Need Libvirt(1.0.6) Qemu1.5 '
-                    '(raw format) Qemu1.6(qcow2 format)'),
+               choices=('ignore', 'unmap'),
+               help='Discard option for nova managed disks. Need'
+                    ' Libvirt(1.0.6) Qemu1.5 (raw format) Qemu1.6(qcow2'
+                    ' format)'),
         ]
 
 CONF = cfg.CONF
@@ -104,7 +107,7 @@ class Image(object):
 
         self.source_type = source_type
         self.driver_format = driver_format
-        self.discard_mode = get_hw_disk_discard(CONF.libvirt.hw_disk_discard)
+        self.discard_mode = CONF.libvirt.hw_disk_discard
         self.is_block_dev = is_block_dev
         self.preallocate = False
 
@@ -164,7 +167,7 @@ class Image(object):
         tune_items = ['disk_read_bytes_sec', 'disk_read_iops_sec',
             'disk_write_bytes_sec', 'disk_write_iops_sec',
             'disk_total_bytes_sec', 'disk_total_iops_sec']
-        for key, value in extra_specs.iteritems():
+        for key, value in six.iteritems(extra_specs):
             scope = key.split(':')
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in tune_items:
@@ -246,9 +249,8 @@ class Image(object):
             can_fallocate = not err
             self.__class__.can_fallocate = can_fallocate
             if not can_fallocate:
-                LOG.error(_LE('Unable to preallocate_images=%(imgs)s at path: '
-                              '%(path)s'), {'imgs': CONF.preallocate_images,
-                                            'path': self.path})
+                LOG.error(_LE('Unable to preallocate image at path: '
+                              '%(path)s'), {'path': self.path})
         return can_fallocate
 
     def verify_base_size(self, base, size, base_size=0):
@@ -335,7 +337,7 @@ class Image(object):
                 with open(self.disk_info_path) as disk_info_file:
                     line = disk_info_file.read().rstrip()
                     dct = _dict_from_line(line)
-                    for path, driver_format in dct.iteritems():
+                    for path, driver_format in six.iteritems(dct):
                         if path == self.path:
                             return driver_format
             driver_format = self._get_driver_format()
@@ -374,6 +376,13 @@ class Image(object):
     def _get_lock_name(self, base):
         """Get an image's name of a base file."""
         return os.path.split(base)[-1]
+
+    def get_model(self, connection):
+        """Get the image information model
+
+        :returns: an instance of nova.virt.image.model.Image
+        """
+        raise NotImplementedError()
 
 
 class Raw(Image):
@@ -425,8 +434,9 @@ class Raw(Image):
             libvirt_utils.copy_image(base, target)
             if size:
                 # class Raw is misnamed, format may not be 'raw' in all cases
-                use_cow = self.driver_format == 'qcow2'
-                disk.extend(target, size, use_cow=use_cow)
+                image = imgmodel.LocalFileImage(target,
+                                                self.driver_format)
+                disk.extend(image, size)
 
         generating = 'image_id' not in kwargs
         if generating:
@@ -448,6 +458,10 @@ class Raw(Image):
     @staticmethod
     def is_file_in_instance_path():
         return True
+
+    def get_model(self, connection):
+        return imgmodel.LocalFileImage(self.path,
+                                       imgmodel.FORMAT_RAW)
 
 
 class Qcow2(Image):
@@ -473,7 +487,8 @@ class Qcow2(Image):
             # This would be keyed on a 'preallocate_images' setting.
             libvirt_utils.create_cow_image(base, target)
             if size:
-                disk.extend(target, size, use_cow=True)
+                image = imgmodel.LocalFileImage(target, imgmodel.FORMAT_QCOW2)
+                disk.extend(image, size)
 
         # Download the unmodified base image unless we already have a copy.
         if not os.path.exists(base):
@@ -502,7 +517,9 @@ class Qcow2(Image):
             if not os.path.exists(legacy_base):
                 with fileutils.remove_path_on_error(legacy_base):
                     libvirt_utils.copy_image(base, legacy_base)
-                    disk.extend(legacy_base, legacy_backing_size, use_cow=True)
+                    image = imgmodel.LocalFileImage(legacy_base,
+                                                    imgmodel.FORMAT_QCOW2)
+                    disk.extend(image, legacy_backing_size)
 
         if not os.path.exists(self.path):
             with fileutils.remove_path_on_error(self.path):
@@ -516,6 +533,10 @@ class Qcow2(Image):
     @staticmethod
     def is_file_in_instance_path():
         return True
+
+    def get_model(self, connection):
+        return imgmodel.LocalFileImage(self.path,
+                                       imgmodel.FORMAT_QCOW2)
 
 
 class Lvm(Image):
@@ -636,6 +657,9 @@ class Lvm(Image):
         images.convert_image(self.path, target, out_format,
                              run_as_root=True)
 
+    def get_model(self, connection):
+        return imgmodel.LocalBlockImage(self.path)
+
 
 class Rbd(Image):
 
@@ -656,8 +680,7 @@ class Rbd(Image):
                                  ' images_rbd_pool'
                                  ' flag to use rbd images.'))
         self.pool = CONF.libvirt.images_rbd_pool
-        self.discard_mode = get_hw_disk_discard(
-                CONF.libvirt.hw_disk_discard)
+        self.discard_mode = CONF.libvirt.hw_disk_discard
         self.rbd_user = CONF.libvirt.rbd_user
         self.ceph_conf = CONF.libvirt.images_rbd_ceph_conf
 
@@ -767,6 +790,22 @@ class Rbd(Image):
         raise exception.ImageUnacceptable(image_id=image_id_or_uri,
                                           reason=reason)
 
+    def get_model(self, connection):
+        secret = None
+        if CONF.libvirt.rbd_secret_uuid:
+            secretobj = connection.secretLookupByUUIDString(
+                CONF.libvirt.rbd_secret_uuid)
+            secret = base64.b64encode(secretobj.value())
+
+        hosts, ports = self.driver.get_mon_addrs()
+        servers = [str(':'.join(k)) for k in zip(hosts, ports)]
+
+        return imgmodel.RBDImage(self.rbd_name,
+                                 self.pool,
+                                 self.rbd_user,
+                                 secret,
+                                 servers)
+
 
 class Ploop(Image):
     def __init__(self, instance=None, disk_name=None, path=None):
@@ -864,11 +903,3 @@ class Backend(object):
         """
         backend = self.backend(image_type)
         return backend(instance=instance, path=disk_path)
-
-
-def get_hw_disk_discard(hw_disk_discard):
-    """Check valid and get hw_disk_discard value from Conf.
-    """
-    if hw_disk_discard and hw_disk_discard not in ('unmap', 'ignore'):
-        raise RuntimeError(_('Unknown hw_disk_discard=%s') % hw_disk_discard)
-    return hw_disk_discard

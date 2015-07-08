@@ -21,6 +21,7 @@ from nova.objects import fields
 
 
 # TODO(berrange): Remove NovaObjectDictCompat
+@base.NovaObjectRegistry.register
 class Aggregate(base.NovaPersistentObject, base.NovaObject,
                 base.NovaObjectDictCompat):
     # Version 1.0: Initial version
@@ -150,6 +151,7 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject,
         return self.metadata.get('availability_zone', None)
 
 
+@base.NovaObjectRegistry.register
 class AggregateList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added key argument to get_by_host()
@@ -194,7 +196,7 @@ class AggregateList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_by_metadata_key(cls, context, key, hosts=None):
         db_aggregates = db.aggregate_get_by_metadata_key(context, key=key)
-        if hosts:
+        if hosts is not None:
             db_aggregates = cls._filter_db_aggregates(db_aggregates, hosts)
         return base.obj_make_list(context, cls(context), objects.Aggregate,
                                   db_aggregates)

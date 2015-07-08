@@ -135,7 +135,7 @@ class InterfaceAttachmentController(object):
         except NotImplementedError:
             msg = _("Network driver does not support this function.")
             raise webob.exc.HTTPNotImplemented(explanation=msg)
-        except exception.InterfaceAttachFailed as e:
+        except exception.InterfaceAttachFailed:
             msg = _("Failed to attach interface")
             raise webob.exc.HTTPInternalServerError(explanation=msg)
         except exception.InstanceInvalidState as state_error:
@@ -173,7 +173,6 @@ class InterfaceAttachmentController(object):
         context = req.environ['nova.context']
         authorize(context)
         instance = common.get_instance(self.compute_api, context, server_id)
-        results = []
         search_opts = {'device_id': instance.uuid}
 
         try:

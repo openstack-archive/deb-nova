@@ -15,6 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import netaddr
 from oslo_log import log as logging
 from oslo_utils import uuidutils
 import webob
@@ -193,6 +194,9 @@ class FloatingIPActionController(wsgi.Controller):
         instance = common.get_instance(self.compute_api, context, id)
         cached_nwinfo = compute_utils.get_nw_info_for_instance(instance)
         if not cached_nwinfo:
+            LOG.warning(
+                _LW('Info cache is %r during associate') % instance.info_cache,
+                instance=instance)
             msg = _('No nw_info cache associated with instance')
             raise webob.exc.HTTPBadRequest(explanation=msg)
 
@@ -212,10 +216,19 @@ class FloatingIPActionController(wsgi.Controller):
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
         if not fixed_address:
-            fixed_address = fixed_ips[0]['address']
+            try:
+                fixed_address = next(ip['address'] for ip in fixed_ips
+                                     if netaddr.valid_ipv4(ip['address']))
+            except StopIteration:
+                msg = _('Unable to associate floating ip %(address)s '
+                        'to any fixed IPs for instance %(id)s. '
+                        'Instance has no fixed IPv4 addresses to '
+                        'associate.') % (
+                        {'address': address, 'id': id})
+                raise webob.exc.HTTPBadRequest(explanation=msg)
             if len(fixed_ips) > 1:
-                LOG.warning(_LW('multiple fixed_ips exist, using the first: '
-                                '%s'), fixed_address)
+                LOG.warning(_LW('multiple fixed_ips exist, using the first '
+                                'IPv4 fixed_ip: %s'), fixed_address)
 
         try:
             self.network_api.associate_floating_ip(context, instance,

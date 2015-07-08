@@ -25,6 +25,7 @@ import warnings
 import fixtures
 from oslo_config import cfg
 from oslo_messaging import conffixture as messaging_conffixture
+import six
 
 from nova.db import migration
 from nova.db.sqlalchemy import api as session
@@ -282,7 +283,7 @@ class ConfPatcher(fixtures.Fixture):
 
     def setUp(self):
         super(ConfPatcher, self).setUp()
-        for k, v in self.args.iteritems():
+        for k, v in six.iteritems(self.args):
             self.addCleanup(CONF.clear_override, k, self.group)
             CONF.set_override(k, v, self.group)
 
@@ -402,3 +403,12 @@ class IndirectionAPIFixture(fixtures.Fixture):
         self.orig_indirection_api = obj_base.NovaObject.indirection_api
         obj_base.NovaObject.indirection_api = self.indirection_api
         self.addCleanup(self.cleanup)
+
+
+class SpawnIsSynchronousFixture(fixtures.Fixture):
+    """Patch and restore the spawn_n utility method to be synchronous"""
+
+    def setUp(self):
+        super(SpawnIsSynchronousFixture, self).setUp()
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.utils.spawn_n', lambda f, *a, **k: f(*a, **k)))

@@ -593,15 +593,23 @@ class NetworkManager(manager.Manager):
         except exception.FixedIpNotFoundForInstance:
             fixed_ips = []
 
+        LOG.debug('Found %d fixed IPs associated to the instance in the '
+                  'database.',
+                  len(fixed_ips), instance_uuid=instance_uuid)
+
         nw_info = network_model.NetworkInfo()
 
         vifs = collections.OrderedDict()
         for fixed_ip in fixed_ips:
             vif = fixed_ip.virtual_interface
             if not vif:
+                LOG.warn(_LW('No VirtualInterface for FixedIP: %s'),
+                         str(fixed_ip.address), instance_uuid=instance_uuid)
                 continue
 
             if not fixed_ip.network:
+                LOG.warn(_LW('No Network for FixedIP: %s'),
+                         str(fixed_ip.address), instance_uuid=instance_uuid)
                 continue
 
             if vif.uuid in vifs:
@@ -647,7 +655,8 @@ class NetworkManager(manager.Manager):
         for vif in vifs.values():
             nw_info.append(network_model.VIF(**vif))
 
-        LOG.debug('Built network info: |%s|', nw_info)
+        LOG.debug('Built network info: |%s|', nw_info,
+                  instance_uuid=instance_uuid)
         return nw_info
 
     @staticmethod
@@ -895,6 +904,8 @@ class NetworkManager(manager.Manager):
                               instance=instance)
                     fip = objects.FixedIP.associate_pool(
                         context.elevated(), network['id'], instance_id)
+                    LOG.debug('Associated instance with fixed IP: %s', fip,
+                              instance=instance)
                     address = str(fip.address)
 
                 vif = objects.VirtualInterface.get_by_instance_and_network(
@@ -1015,18 +1026,18 @@ class NetworkManager(manager.Manager):
                     #             there may be a race condition that is causing
                     #             them per
                     #             https://code.launchpad.net/bugs/968457,
-                    #             so we log an error to help track down
+                    #             so we log a message to help track down
                     #             the possible race.
                     if not vif_id:
-                        LOG.error(_LE("Unable to release %s because vif "
-                                      "doesn't exist"), address)
+                        LOG.info(_LI("Unable to release %s because vif "
+                                     "doesn't exist"), address)
                         return
 
                     vif = objects.VirtualInterface.get_by_id(context, vif_id)
 
                     if not vif:
-                        LOG.error(_LE("Unable to release %s because vif "
-                                      "object doesn't exist"), address)
+                        LOG.info(_LI("Unable to release %s because vif "
+                                     "object doesn't exist"), address)
                         return
 
                     # NOTE(cfb): Call teardown before release_dhcp to ensure
@@ -1053,6 +1064,8 @@ class NetworkManager(manager.Manager):
                         context, address)
                     if (instance_uuid == fixed_ip_ref.instance_uuid and
                             not fixed_ip_ref.leased):
+                        LOG.debug('Explicitly disassociating fixed IP %s from '
+                                  'instance.', instance_uuid=instance_uuid)
                         fixed_ip_ref.disassociate()
                 else:
                     # We can't try to free the IP address so just call teardown
@@ -1082,7 +1095,7 @@ class NetworkManager(manager.Manager):
         fixed_ip.save()
         if not fixed_ip.allocated:
             LOG.warning(_LW('IP |%s| leased that isn\'t allocated'), address,
-                        context=context)
+                        context=context, instance_uuid=fixed_ip.instance_uuid)
 
     def release_fixed_ip(self, context, address):
         """Called by dhcp-bridge when ip is released."""
@@ -1095,7 +1108,7 @@ class NetworkManager(manager.Manager):
             return
         if not fixed_ip.leased:
             LOG.warning(_LW('IP %s released that was not leased'), address,
-                        context=context)
+                        context=context, instance_uuid=fixed_ip.instance_uuid)
         fixed_ip.leased = False
         fixed_ip.save()
         if not fixed_ip.allocated:
@@ -1231,9 +1244,9 @@ class NetworkManager(manager.Manager):
         used_subnets = [net.cidr for net in nets]
 
         def find_next(subnet):
-            next_subnet = subnet.next()
+            next_subnet = next(subnet)
             while next_subnet in subnets_v4:
-                next_subnet = next_subnet.next()
+                next_subnet = next(next_subnet)
             if next_subnet in fixed_net_v4:
                 return next_subnet
 
@@ -1351,13 +1364,11 @@ class NetworkManager(manager.Manager):
                 else:
                     net.gateway = current
                     current += 1
-                if not dhcp_server:
-                    dhcp_server = net.gateway
+                net.dhcp_server = dhcp_server or net.gateway
                 net.dhcp_start = current
                 current += 1
-                if str(net.dhcp_start) == dhcp_server:
+                if net.dhcp_start == net.dhcp_server:
                     net.dhcp_start = current
-                net.dhcp_server = dhcp_server
                 extra_reserved.append(str(net.dhcp_server))
                 extra_reserved.append(str(net.gateway))
 
@@ -1570,7 +1581,7 @@ class NetworkManager(manager.Manager):
             if vif.network_id is not None:
                 network = self._get_network_by_id(context, vif.network_id)
                 vif.net_uuid = network.uuid
-        return [dict(vif.iteritems()) for vif in vifs]
+        return [dict(vif) for vif in vifs]
 
     def get_instance_id_by_floating_address(self, context, address):
         """Returns the instance id a floating ip's fixed ip is allocated to."""

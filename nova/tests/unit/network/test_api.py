@@ -38,11 +38,18 @@ from nova import policy
 from nova import test
 from nova.tests.unit import fake_instance
 from nova.tests.unit.objects import test_fixed_ip
-from nova.tests.unit.objects import test_flavor
 from nova.tests.unit.objects import test_virtual_interface
-from nova import utils
 
 FAKE_UUID = 'a47ae74e-ab08-547f-9eee-ffd23fc46c16'
+
+fake_info_cache = {
+    'created_at': None,
+    'updated_at': None,
+    'deleted_at': None,
+    'deleted': False,
+    'instance_uuid': 'fake-uuid',
+    'network_info': '[]',
+    }
 
 
 class NetworkPolicyTestCase(test.TestCase):
@@ -170,11 +177,9 @@ class ApiTestCase(test.TestCase):
         self.mox.ReplayAll()
         flavor = flavors.get_default_flavor()
         flavor['rxtx_factor'] = 0
-        sys_meta = flavors.save_flavor_info({}, flavor)
-        instance = dict(id=1, uuid='uuid', project_id='project_id',
-            host='host', system_metadata=utils.dict_to_metadata(sys_meta))
-        instance = fake_instance.fake_instance_obj(
-            self.context, expected_attrs=['system_metadata'], **instance)
+        instance = objects.Instance(id=1, uuid='uuid', project_id='project_id',
+                                    host='host', system_metadata={},
+                                    flavor=flavor)
         self.network_api.allocate_for_instance(
             self.context, instance, 'vpn', 'requested_networks', macs=macs)
 
@@ -215,6 +220,7 @@ class ApiTestCase(test.TestCase):
         def fake_instance_info_cache_update(context, instance_uuid, cache):
             self.assertEqual(instance_uuid,
                              expected_updated_instances.pop())
+            return fake_info_cache
 
         self.stubs.Set(self.network_api.db, 'instance_info_cache_update',
                        fake_instance_info_cache_update)
@@ -282,12 +288,12 @@ class ApiTestCase(test.TestCase):
     def _stub_migrate_instance_calls(self, method, multi_host, info):
         fake_flavor = flavors.get_default_flavor()
         fake_flavor['rxtx_factor'] = 1.21
-        sys_meta = flavors.save_flavor_info({}, fake_flavor)
         fake_instance = objects.Instance(
             uuid=uuid.uuid4().hex,
             project_id='fake_project_id',
             instance_type_id=fake_flavor['id'],
-            system_metadata=sys_meta)
+            flavor=fake_flavor,
+            system_metadata={})
         fake_migration = {'source_compute': 'fake_compute_source',
                           'dest_compute': 'fake_compute_dest'}
 
@@ -447,8 +453,9 @@ class ApiTestCase(test.TestCase):
             mock.patch.object(self.network_api.network_rpcapi,
                               'get_instance_nw_info'),
             mock.patch.object(network_model.NetworkInfo, 'hydrate'),
+            mock.patch.object(objects.InstanceInfoCache, 'save'),
         ) as (
-            method_mock, nwinfo_mock, hydrate_mock
+            method_mock, nwinfo_mock, hydrate_mock, save_mock
         ):
             nw_info = network_model.NetworkInfo([])
             method_mock.return_value = nw_info
@@ -458,29 +465,20 @@ class ApiTestCase(test.TestCase):
             self.assertFalse(nwinfo_mock.called)
 
     def test_allocate_for_instance_refresh_cache(self):
-        sys_meta = flavors.save_flavor_info({}, test_flavor.fake_flavor)
-        instance = fake_instance.fake_instance_obj(
-            self.context, expected_attrs=['system_metadata'],
-            system_metadata=sys_meta)
+        instance = fake_instance.fake_instance_obj(self.context)
         vpn = 'fake-vpn'
         requested_networks = 'fake-networks'
         self._test_refresh_cache('allocate_for_instance', self.context,
                                  instance, vpn, requested_networks)
 
     def test_add_fixed_ip_to_instance_refresh_cache(self):
-        sys_meta = flavors.save_flavor_info({}, test_flavor.fake_flavor)
-        instance = fake_instance.fake_instance_obj(
-            self.context, expected_attrs=['system_metadata'],
-            system_metadata=sys_meta)
+        instance = fake_instance.fake_instance_obj(self.context)
         network_id = 'fake-network-id'
         self._test_refresh_cache('add_fixed_ip_to_instance', self.context,
                                  instance, network_id)
 
     def test_remove_fixed_ip_from_instance_refresh_cache(self):
-        sys_meta = flavors.save_flavor_info({}, test_flavor.fake_flavor)
-        instance = fake_instance.fake_instance_obj(
-            self.context, expected_attrs=['system_metadata'],
-            system_metadata=sys_meta)
+        instance = fake_instance.fake_instance_obj(self.context)
         address = 'fake-address'
         self._test_refresh_cache('remove_fixed_ip_from_instance', self.context,
                                  instance, address)
@@ -539,7 +537,7 @@ class ApiTestCase(test.TestCase):
 
 
 @mock.patch('nova.network.api.API')
-@mock.patch('nova.db.instance_info_cache_update')
+@mock.patch('nova.db.instance_info_cache_update', return_value=fake_info_cache)
 class TestUpdateInstanceCache(test.NoDBTestCase):
     def setUp(self):
         super(TestUpdateInstanceCache, self).setUp()

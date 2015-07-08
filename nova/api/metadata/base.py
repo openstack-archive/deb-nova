@@ -25,16 +25,15 @@ from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import importutils
 from oslo_utils import timeutils
+import six
 
 from nova.api.ec2 import ec2utils
 from nova.api.metadata import password
 from nova import availability_zones as az
 from nova import block_device
-from nova import conductor
 from nova import context
 from nova import network
 from nova import objects
-from nova.objects import base as obj_base
 from nova.objects import keypair as keypair_obj
 from nova import utils
 from nova.virt import netutils
@@ -101,7 +100,7 @@ class InstanceMetadata(object):
     """Instance metadata."""
 
     def __init__(self, instance, address=None, content=None, extra_md=None,
-                 conductor_api=None, network_info=None, vd_driver=None):
+                 network_info=None, vd_driver=None):
         """Creation of this object should basically cover all time consuming
         collection.  Methods after that should not cause time delays due to
         network operations or lengthy cpu operations.
@@ -119,11 +118,6 @@ class InstanceMetadata(object):
         self.instance = instance
         self.extra_md = extra_md
 
-        if conductor_api:
-            capi = conductor_api
-        else:
-            capi = conductor.API()
-
         self.availability_zone = az.get_instance_availability_zone(ctxt,
                                                                    instance)
 
@@ -136,9 +130,6 @@ class InstanceMetadata(object):
             self.userdata_raw = base64.b64decode(instance.user_data)
         else:
             self.userdata_raw = None
-
-        self.ec2_ids = capi.get_ec2_ids(ctxt,
-                                        obj_base.obj_to_primitive(instance))
 
         self.address = address
 
@@ -226,10 +217,10 @@ class InstanceMetadata(object):
         fmt_sgroups = [x['name'] for x in self.security_groups]
 
         meta_data = {
-            'ami-id': self.ec2_ids['ami-id'],
+            'ami-id': self.instance.ec2_ids.ami_id,
             'ami-launch-index': self.instance.launch_index,
             'ami-manifest-path': 'FIXME',
-            'instance-id': self.ec2_ids['instance-id'],
+            'instance-id': self.instance.ec2_ids.instance_id,
             'hostname': hostname,
             'local-ipv4': fixed_ip or self.address,
             'reservation-id': self.instance.reservation_id,
@@ -268,10 +259,10 @@ class InstanceMetadata(object):
 
         if self._check_version('2007-12-15', version):
             meta_data['block-device-mapping'] = self.mappings
-            if 'kernel-id' in self.ec2_ids:
-                meta_data['kernel-id'] = self.ec2_ids['kernel-id']
-            if 'ramdisk-id' in self.ec2_ids:
-                meta_data['ramdisk-id'] = self.ec2_ids['ramdisk-id']
+            if self.instance.ec2_ids.kernel_id:
+                meta_data['kernel-id'] = self.instance.ec2_ids.kernel_id
+            if self.instance.ec2_ids.ramdisk_id:
+                meta_data['ramdisk-id'] = self.instance.ec2_ids.ramdisk_id
 
         if self._check_version('2008-02-01', version):
             meta_data['placement'] = {'availability-zone':
@@ -457,7 +448,7 @@ class InstanceMetadata(object):
                 path = 'openstack/%s/%s' % (version, VD_JSON_NAME)
                 yield (path, self.lookup(path))
 
-        for (cid, content) in self.content.iteritems():
+        for (cid, content) in six.iteritems(self.content):
             yield ('%s/%s/%s' % ("openstack", CONTENT_DIR, cid), content)
 
 
@@ -506,20 +497,19 @@ class VendorDataDriver(object):
         return self._data
 
 
-def get_metadata_by_address(conductor_api, address):
+def get_metadata_by_address(address):
     ctxt = context.get_admin_context()
     fixed_ip = network.API().get_fixed_ip_by_address(ctxt, address)
 
-    return get_metadata_by_instance_id(conductor_api,
-                                       fixed_ip['instance_uuid'],
+    return get_metadata_by_instance_id(fixed_ip['instance_uuid'],
                                        address,
                                        ctxt)
 
 
-def get_metadata_by_instance_id(conductor_api, instance_id, address,
-                                ctxt=None):
+def get_metadata_by_instance_id(instance_id, address, ctxt=None):
     ctxt = ctxt or context.get_admin_context()
-    instance = objects.Instance.get_by_uuid(ctxt, instance_id)
+    instance = objects.Instance.get_by_uuid(
+        ctxt, instance_id, expected_attrs=['ec2_ids', 'flavor', 'info_cache'])
     return InstanceMetadata(instance, address)
 
 

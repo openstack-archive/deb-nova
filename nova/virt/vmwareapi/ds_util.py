@@ -20,6 +20,7 @@ from oslo_log import log as logging
 from oslo_vmware import exceptions as vexc
 from oslo_vmware.objects import datastore as ds_obj
 from oslo_vmware import pbm
+from oslo_vmware import vim_util as vutil
 
 from nova import exception
 from nova.i18n import _, _LE, _LI
@@ -30,17 +31,8 @@ from nova.virt.vmwareapi import vm_util
 LOG = logging.getLogger(__name__)
 ALL_SUPPORTED_DS_TYPES = frozenset([constants.DATASTORE_TYPE_VMFS,
                                     constants.DATASTORE_TYPE_NFS,
+                                    constants.DATASTORE_TYPE_NFS41,
                                     constants.DATASTORE_TYPE_VSAN])
-
-
-# NOTE(mdbooth): this convenience function is temporarily duplicated in
-# vm_util. The correct fix is to handle paginated results as they are returned
-# from the relevant vim_util function. However, vim_util is currently
-# effectively deprecated as we migrate to oslo.vmware. This duplication will be
-# removed when we fix it properly in oslo.vmware.
-def _get_token(results):
-    """Get the token from the property results."""
-    return getattr(results, 'token', None)
 
 
 def _select_datastore(session, data_stores, best_match, datastore_regex=None,
@@ -139,12 +131,8 @@ def get_datastore(session, cluster, datastore_regex=None,
                                        datastore_regex,
                                        storage_policy,
                                        allowed_ds_types)
-        token = _get_token(data_stores)
-        if not token:
-            break
-        data_stores = session._call_method(vim_util,
-                                           "continue_to_get_objects",
-                                           token)
+        data_stores = session._call_method(vutil, 'continue_retrieval',
+                                           data_stores)
     if best_match:
         return best_match
 
@@ -158,17 +146,6 @@ def get_datastore(session, cluster, datastore_regex=None,
             % datastore_regex.pattern)
     else:
         raise exception.DatastoreNotFound()
-
-
-def get_datastore_by_ref(session, ds_ref):
-    lst_properties = ["summary.type", "summary.name",
-                      "summary.capacity", "summary.freeSpace"]
-    props = session._call_method(vim_util, "get_object_properties",
-                                 None, ds_ref, "Datastore", lst_properties)
-    query = vm_util.get_values_from_object_properties(session, props)
-    return ds_obj.Datastore(ds_ref, query["summary.name"],
-                            capacity=query["summary.capacity"],
-                            freespace=query["summary.freeSpace"])
 
 
 def _get_allowed_datastores(data_stores, datastore_regex):
@@ -205,13 +182,8 @@ def get_available_datastores(session, cluster=None, datastore_regex=None):
     allowed = []
     while data_stores:
         allowed.extend(_get_allowed_datastores(data_stores, datastore_regex))
-        token = _get_token(data_stores)
-        if not token:
-            break
-
-        data_stores = session._call_method(vim_util,
-                                           "continue_to_get_objects",
-                                           token)
+        data_stores = session._call_method(vutil, 'continue_retrieval',
+                                           data_stores)
     return allowed
 
 

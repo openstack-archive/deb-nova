@@ -308,6 +308,12 @@ class ServersController(wsgi.Controller):
             if 'changes-since' not in search_opts:
                 # No 'changes-since', so we only want non-deleted servers
                 search_opts['deleted'] = False
+        else:
+            # Convert deleted filter value to a valid boolean.
+            # Return non-deleted servers if an invalid value
+            # is passed with deleted filter.
+            search_opts['deleted'] = strutils.bool_from_string(
+                search_opts['deleted'], default=False)
 
         if search_opts.get("vm_state") == ['deleted']:
             if context.is_admin:
@@ -348,12 +354,14 @@ class ServersController(wsgi.Controller):
             except ValueError as err:
                 raise exception.InvalidInput(six.text_type(err))
 
+        elevated = None
         if 'all_tenants' in search_opts:
             if is_detail:
                 authorize(context, action="detail:get_all_tenants")
             else:
                 authorize(context, action="index:get_all_tenants")
             del search_opts['all_tenants']
+            elevated = context.elevated()
         else:
             if context.project_id:
                 search_opts['project_id'] = context.project_id
@@ -363,7 +371,7 @@ class ServersController(wsgi.Controller):
         limit, marker = common.get_limit_and_marker(req)
         sort_keys, sort_dirs = common.get_sort_params(req.params)
         try:
-            instance_list = self.compute_api.get_all(context,
+            instance_list = self.compute_api.get_all(elevated or context,
                     search_opts=search_opts, limit=limit, marker=marker,
                     want_objects=True, expected_attrs=['pci_devices'],
                     sort_keys=sort_keys, sort_dirs=sort_dirs)
@@ -557,7 +565,7 @@ class ServersController(wsgi.Controller):
 
         try:
             flavor_id = self._flavor_id_from_req_data(body)
-        except ValueError as error:
+        except ValueError:
             msg = _("Invalid flavorRef provided.")
             raise exc.HTTPBadRequest(explanation=msg)
 
@@ -617,6 +625,7 @@ class ServersController(wsgi.Controller):
                 exception.PortRequiresFixedIP,
                 exception.NetworkRequiresSubnet,
                 exception.NetworkNotFound,
+                exception.NetworkDuplicated,
                 exception.InvalidBDMSnapshot,
                 exception.InvalidBDMVolume,
                 exception.InvalidBDMImage,
@@ -901,7 +910,7 @@ class ServersController(wsgi.Controller):
         if not image_href and create_kwargs.get('block_device_mapping'):
             return ''
         elif image_href:
-            return self._image_uuid_from_href(unicode(image_href))
+            return self._image_uuid_from_href(six.text_type(image_href))
         else:
             msg = _("Missing imageRef attribute")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1024,6 +1033,7 @@ class ServersController(wsgi.Controller):
         try:
             if self.compute_api.is_volume_backed_instance(context, instance,
                                                           bdms):
+                authorize(context, action="create_image:allow_volume_backed")
                 img = instance.image_ref
                 if not img:
                     properties = bdms.root_metadata(

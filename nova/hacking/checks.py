@@ -42,8 +42,6 @@ virt_import_re = re.compile(
     r"^\s*(?:import|from) nova\.(?:tests\.)?virt\.(\w+)")
 virt_config_re = re.compile(
     r"CONF\.import_opt\('.*?', 'nova\.virt\.(\w+)('|.)")
-author_tag_re = (re.compile("^\s*#\s*@?(a|A)uthor:"),
-                 re.compile("^\.\.\s+moduleauthor::"))
 asse_trueinst_re = re.compile(
                      r"(.)*assertTrue\(isinstance\((\w|\.|\'|\"|\[|\])+, "
                      "(\w|\.|\'|\"|\[|\])+\)\)")
@@ -97,6 +95,7 @@ custom_underscore_check = re.compile(r"(.)*_\s*=\s*(.)*")
 api_version_re = re.compile(r"@.*api_version")
 dict_constructor_with_list_copy_re = re.compile(r".*\bdict\((\[)?(\(|\[)")
 decorator_re = re.compile(r"@.*")
+http_not_implemented_re = re.compile(r"raise .*HTTPNotImplemented\(")
 
 # TODO(dims): When other oslo libraries switch over non-namespace'd
 # imports, we need to add them to the regexp below.
@@ -197,7 +196,8 @@ def _get_virt_name(regex, data):
     driver = m.group(1)
     # Ignore things we mis-detect as virt drivers in the regex
     if driver in ["test_virt_drivers", "driver", "firewall",
-                  "disk", "api", "imagecache", "cpu", "hardware"]:
+                  "disk", "api", "imagecache", "cpu", "hardware",
+                  "image"]:
         return None
     return driver
 
@@ -541,6 +541,17 @@ def assert_equal_in(logical_line):
                   "contents.")
 
 
+def check_http_not_implemented(logical_line, physical_line, filename):
+    msg = ("N339: HTTPNotImplemented response must be implemented with"
+           " common raise_feature_not_supported().")
+    if pep8.noqa(physical_line):
+        return
+    if "nova/api/openstack/compute/plugins/v3" not in filename:
+        return
+    if re.match(http_not_implemented_re, logical_line):
+        yield(0, msg)
+
+
 def factory(register):
     register(import_no_db_in_virt)
     register(no_db_session_in_public_api)
@@ -567,3 +578,4 @@ def factory(register):
     register(assert_true_or_false_with_in)
     register(dict_constructor_with_list_copy)
     register(assert_equal_in)
+    register(check_http_not_implemented)
