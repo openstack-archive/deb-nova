@@ -13,10 +13,11 @@ Build-Depends: debhelper (>= 9),
                openstack-pkg-tools (>= 23~),
                po-debconf,
                python-all,
-               python-pbr,
+               python-pbr (>= 0.11),
                python-setuptools,
                python-sphinx,
-Build-Depends-Indep: bpython,
+Build-Depends-Indep: alembic (>= 0.7.2),
+                     bpython,
                      euca2ools,
                      ipython,
                      libvirt-daemon-system,
@@ -25,63 +26,66 @@ Build-Depends-Indep: bpython,
                      python-babel,
                      python-barbicanclient (>= 3.0.1),
                      python-boto,
-                     python-cinderclient (>= 1:1.1.0),
+                     python-cinderclient (>= 1:1.2.2),
                      python-coverage,
                      python-decorator,
-                     python-eventlet (>= 0.16.1),
+                     python-eventlet (>= 0.17.3),
                      python-fixtures,
-                     python-glanceclient (>= 1:0.15.0),
+                     python-glanceclient (>= 1:0.18.0),
                      python-greenlet,
-                     python-hacking,
+                     python-hacking (>= 0.10.0),
                      python-ironicclient (>= 0.2.1),
                      python-iso8601,
                      python-jinja2,
                      python-jsonschema,
+                     python-keystoneclient (>= 1:1.6.0),
                      python-keystonemiddleware (>= 1.5.0),
                      python-lxml,
                      python-memcache,
-                     python-migrate (>= 0.9.5),
+                     python-migrate (>= 0.9.6),
                      python-mock,
                      python-mox3,
                      python-mysqldb,
                      python-netaddr,
+                     python-netifaces (>= 0.10.4),
                      python-neutronclient (>= 2.3.11),
                      python-novaclient (>= 1:2.9.0),
-                     python-oslo.concurrency (>= 1.8.0),
-                     python-oslo.config (>= 1:1.9.3),
+                     python-oslo.concurrency (>= 2.0.0),
+                     python-oslo.config (>= 1:1.11.0),
                      python-oslo.context (>= 0.2.0),
-                     python-oslo.db (>= 1.7.0),
+                     python-oslo.db (>= 1.10.0),
                      python-oslo.i18n (>= 1.5.0),
-                     python-oslo.log (>= 1.0.0),
+                     python-oslo.log (>= 1.2.0),
                      python-oslo.messaging (>= 1.8.0),
-                     python-oslo.middleware (>= 1.0.0),
-                     python-oslo.rootwrap (>= 1.6.0),
+                     python-oslo.middleware (>= 1.2.0),
+                     python-oslo.rootwrap (>= 2.0.0),
                      python-oslo.serialization (>= 1.4.0),
-                     python-oslo.utils (>= 1.4.0),
-                     python-oslo.vmware (>= 0.11.1),
+                     python-oslo.utils (>= 1.6.0),
+                     python-oslo.versionedobjects (>= 0.3.0),
+                     python-oslo.vmware (>= 0.13.1),
                      python-oslosphinx (>= 2.5.0),
                      python-oslotest (>= 1.5.1),
                      python-paramiko,
                      python-paste,
                      python-pastedeploy,
+                     python-prettytable,
                      python-psutil,
                      python-psycopg2,
                      python-pyasn1,
-                     python-requests,
+                     python-requests (>= 2.5.2),
                      python-requests-mock (>= 0.6.0),
                      python-rfc3986,
                      python-routes,
                      python-six (>= 1.9.0),
-                     python-sqlalchemy,
-                     python-stevedore (>= 1.3.0),
-                     python-suds,
-                     python-tempest-lib (>= 0.4.0),
-                     python-testtools,
+                     python-sqlalchemy (>= 0.9.7),
+                     python-stevedore (>= 1.5.0),
+                     python-tempest-lib (>= 0.5.0),
+                     python-testtools (>= 1.4.0),
                      python-webob,
                      sqlite3,
                      subunit,
                      testrepository,
-                     websockify,
+                     websockify (>= 0.6.0),
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.6
 Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
@@ -91,57 +95,61 @@ Homepage: http://www.openstack.org/software/openstack-compute/
 Package: python-nova
 Architecture: all
 Section: python
-Pre-Depends: dpkg (>= 1.15.6~)
-Depends: openssh-client,
+Depends: alembic (>= 0.7.2),
+         openssh-client,
          openssl,
          python-babel,
          python-boto,
-         python-cinderclient (>= 1:1.1.0),
+         python-cinderclient (>= 1:1.2.2),
          python-decorator,
-         python-eventlet (>= 0.16.1),
+         python-eventlet (>= 0.17.3),
          python-feedparser,
-         python-glanceclient (>= 1:0.15.0),
+         python-glanceclient (>= 1:0.18.0),
          python-greenlet,
          python-iso8601,
          python-jinja2,
          python-jsonschema,
+         python-keystoneclient (>= 1:1.6.0),
          python-keystonemiddleware (>= 1.5.0),
          python-lxml,
          python-memcache,
-         python-migrate (>= 0.9.5),
+         python-migrate (>= 0.9.6),
          python-mysqldb,
          python-netaddr,
+         python-netifaces (>= 0.10.4),
          python-neutronclient (>= 2.3.11),
          python-novaclient (>= 1:2.9.0),
-         python-oslo.concurrency (>= 1.8.0),
-         python-oslo.config (>= 1:1.9.3),
+         python-oslo.concurrency (>= 2.0.0),
+         python-oslo.config (>= 1:1.11.0),
          python-oslo.context (>= 0.2.0),
-         python-oslo.db (>= 1.7.0),
+         python-oslo.db (>= 1.10.0),
          python-oslo.i18n (>= 1.5.0),
-         python-oslo.log (>= 1.0.0),
+         python-oslo.log (>= 1.2.0),
          python-oslo.messaging (>= 1.8.0),
-         python-oslo.middleware (>= 1.0.0),
-         python-oslo.rootwrap (>= 1.6.0),
+         python-oslo.middleware (>= 1.2.0),
+         python-oslo.rootwrap (>= 2.0.0),
          python-oslo.serialization (>= 1.4.0),
-         python-oslo.utils (>= 1.4.0),
+         python-oslo.utils (>= 1.6.0),
+         python-oslo.versionedobjects (>= 0.3.0),
          python-paramiko,
          python-paste,
          python-pastedeploy,
-         python-pbr (>= 0.8),
+         python-pbr (>= 0.11),
+         python-prettytable,
          python-psutil,
          python-pyasn1,
          python-pycurl,
          python-pyparsing (>= 1.5.7),
-         python-requests (>= 1.1),
+         python-requests (>= 2.5.2),
          python-rfc3986,
          python-routes,
          python-six (>= 1.9.0),
-         python-sqlalchemy,
-         python-stevedore (>= 1.3.0),
+         python-sqlalchemy (>= 0.9.7),
+         python-stevedore (>= 1.5.0),
          python-tempita,
          python-webob,
          sudo,
-         websockify,
+         websockify (>= 0.6.0),
          ${misc:Depends},
          ${python:Depends},
 Suggests: python-suds (>= 0.4.0)
@@ -162,7 +170,6 @@ Description: OpenStack Compute - libraries
 
 Package: nova-common
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          bridge-utils,
          dbconfig-common,
@@ -191,7 +198,6 @@ Description: OpenStack Compute - common files
 
 Package: nova-compute
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          conntrack,
          curl,
@@ -228,7 +234,6 @@ Description: OpenStack Compute - compute node
 
 Package: nova-compute-lxc
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dpkg-dev,
          libvirt-daemon-system,
@@ -258,7 +263,6 @@ Description: OpenStack Compute - compute node (LXC)
 
 Package: nova-compute-qemu
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dpkg-dev,
          libvirt-daemon-system,
@@ -288,7 +292,6 @@ Description: OpenStack Compute - compute node (QEmu)
 
 Package: nova-compute-kvm
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dpkg-dev,
          libvirt-daemon-system,
@@ -319,11 +322,11 @@ Description: OpenStack Compute - compute node (KVM)
 
 Package: nova-compute-ironic
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          dpkg-dev,
          nova-common,
          nova-compute,
+         python-ironicclient (>= 0.2.1),
          python-libvirt (>= 1.2.5),
          ${misc:Depends},
 Provides: nova-compute-hypervisor
@@ -352,7 +355,6 @@ Description: OpenStack Compute - compute node (Ironic)
 
 Package: nova-conductor
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},
@@ -373,7 +375,6 @@ Description: OpenStack Compute - conductor service
 
 Package: nova-cert
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},
@@ -395,7 +396,6 @@ Description: OpenStack Compute - certificate manager
 
 Package: nova-scheduler
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},
@@ -417,7 +417,6 @@ Description: OpenStack Compute - virtual machine scheduler
 Package: nova-volume
 Section: oldlibs
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: cinder-api, cinder-scheduler, cinder-volume, ${misc:Depends}
 Description: OpenStack Compute - storage metapackage
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -435,7 +434,6 @@ Description: OpenStack Compute - storage metapackage
 
 Package: nova-api
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: adduser,
          debconf,
          nova-common (= ${binary:Version}),
@@ -460,7 +458,6 @@ Description: OpenStack Compute - compute API frontend
 
 Package: nova-network
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: bridge-utils,
          conntrack,
          dnsmasq-base,
@@ -497,7 +494,6 @@ Description: OpenStack Compute - network manager
 Package: nova-console
 Provides: nova-consoleauth
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},
@@ -521,7 +517,6 @@ Description: OpenStack Compute - console
 
 Package: nova-consoleauth
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},
@@ -547,7 +542,6 @@ Description: OpenStack Compute - Console Authenticator
 Package: nova-doc
 Architecture: all
 Section: doc
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: ${misc:Depends}, ${sphinxdoc:Depends}
 Description: OpenStack Compute - documentation
  OpenStack is a reliable cloud infrastructure. Its mission is to produce
@@ -565,7 +559,6 @@ Description: OpenStack Compute - documentation
 
 Package: nova-cells
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Depends: nova-common (= ${binary:Version}),
          ${misc:Depends},
          ${ostack-lsb-base},
@@ -586,7 +579,6 @@ Description: Openstack Compute - cells
 
 Package: nova-consoleproxy
 Architecture: all
-Pre-Depends: dpkg (>= 1.15.6~)
 Provides: nova-ajax-console-proxy,
           nova-novncproxy,
           nova-spicehtml5proxy,
@@ -623,7 +615,6 @@ Description: OpenStack Compute - NoVNC proxy
 
 #Package: nova-compute-xen
 #Architecture: all
-#Pre-Depends: dpkg (>= 1.15.6~)
 #Depends: adduser, nova-common, nova-compute, python-xenapi, ${misc:Depends}
 #Provides: nova-compute-hypervisor
 #Conflicts: nova-compute-ironic,
@@ -647,7 +638,6 @@ Description: OpenStack Compute - NoVNC proxy
 #
 #Package: nova-xcp-plugins
 #Architecture: all
-#Pre-Depends: dpkg (>= 1.15.6~)
 #Depends: xcp-xapi, ${misc:Depends}, ${python:Depends}
 #Provides: nova-xcp-network
 #Breaks: nova-xcp-network (<< 2013.1.2-1)

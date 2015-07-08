@@ -1,3 +1,10 @@
+nova (1:12.0.0~b1-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Reviewed (build-)depends for this release.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 08 Jul 2015 10:22:47 +0200
+
 nova (2015.1.0-8) unstable; urgency=medium
 
   * Allow running with SQLA 1.0.6.
