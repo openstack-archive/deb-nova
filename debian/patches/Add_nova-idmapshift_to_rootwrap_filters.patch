@@ -10,13 +10,13 @@ Closes-Bug: #1452143
  etc/nova/rootwrap.d/compute.filters | 3 +++
  1 file changed, 3 insertions(+)
 
-diff --git a/etc/nova/rootwrap.d/compute.filters b/etc/nova/rootwrap.d/compute.filters
-index acb5b25..d6ded57 100644
---- a/etc/nova/rootwrap.d/compute.filters
-+++ b/etc/nova/rootwrap.d/compute.filters
-@@ -159,6 +159,9 @@ brctl: CommandFilter, brctl, root
- # nova/virt/xenapi/vm_utils.py: 'mkswap'
- mkswap: CommandFilter, mkswap, root
+Index: nova/etc/nova/rootwrap.d/compute.filters
+===================================================================
+--- nova.orig/etc/nova/rootwrap.d/compute.filters
++++ nova/etc/nova/rootwrap.d/compute.filters
+@@ -165,6 +165,9 @@ mkswap: CommandFilter, mkswap, root
+ # nova/virt/libvirt/utils.py: 'nova-idmapshift'
+ nova-idmapshift: CommandFilter, nova-idmapshift, root
  
 +# nova/virt/libvirt/utils.py: 'nova-idmapshift'
 +nova-idmapshift: CommandFilter, nova-idmapshift, root
@@ -24,6 +24,3 @@ index acb5b25..d6ded57 100644
  # nova/virt/xenapi/vm_utils.py: 'mkfs'
  # nova/utils.py: 'mkfs', fs, path, label
  mkfs: CommandFilter, mkfs, root
--- 
-2.1.4
-

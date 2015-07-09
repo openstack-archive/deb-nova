@@ -8,8 +8,10 @@ Author: Thomas Goirand <zigo@debian.org>
 Forwarded: not-needed
 Last-Update: 2015-04-13
 
---- nova-2015.1~rc1.orig/nova/tests/unit/compute/test_claims.py
-+++ nova-2015.1~rc1/nova/tests/unit/compute/test_claims.py
+Index: nova/nova/tests/unit/compute/test_claims.py
+===================================================================
+--- nova.orig/nova/tests/unit/compute/test_claims.py
++++ nova/nova/tests/unit/compute/test_claims.py
 @@ -177,14 +177,14 @@ class ClaimTestCase(test.NoDBTestCase):
  
      def test_disk_insufficient(self, mock_get):
@@ -27,11 +29,13 @@ Last-Update: 2015-04-13
                  exception.ComputeResourcesUnavailable,
                  "memory.*disk",
                  self._claim, limits=limits, root_gb=10, ephemeral_gb=40,
---- nova-2015.1~rc1.orig/nova/tests/unit/objects/test_objects.py
-+++ nova-2015.1~rc1/nova/tests/unit/objects/test_objects.py
-@@ -514,7 +514,7 @@ class _TestObject(object):
+Index: nova/nova/tests/unit/objects/test_objects.py
+===================================================================
+--- nova.orig/nova/tests/unit/objects/test_objects.py
++++ nova/nova/tests/unit/objects/test_objects.py
+@@ -457,7 +457,7 @@ class _TestObject(object):
          class Foo(base.NovaObject):
-             fields = {'foobar': fields.Field(fields.Integer())}
+             fields = {'foobar': fields.IntegerField()}
          obj = Foo()
 -        with self.assertRaisesRegex(NotImplementedError, ".*foobar.*"):
 +        with self.assertRaisesRegexp(NotImplementedError, ".*foobar.*"):

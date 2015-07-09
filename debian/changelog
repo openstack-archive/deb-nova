@@ -2,6 +2,7 @@ nova (1:12.0.0~b1-1) experimental; urgency=medium
 
   * New upstream release.
   * Reviewed (build-)depends for this release.
+  * Rebased patches and removed those applied upstream.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 08 Jul 2015 10:22:47 +0200
 
