@@ -433,6 +433,16 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
+    def get_mks_console(self, context, instance):
+        """Get connection info for a MKS console.
+
+        :param context: security context
+        :param instance: nova.objects.instance.Instance
+
+        :returns an instance of console.type.ConsoleMKS
+        """
+        raise NotImplementedError()
+
     def get_diagnostics(self, instance):
         """Return data about VM diagnostics.
 
@@ -1347,6 +1357,23 @@ class ComputeDriver(object):
     def default_device_names_for_instance(self, instance, root_device_name,
                                           *block_device_lists):
         """Default the missing device names in the block device mapping."""
+        raise NotImplementedError()
+
+    def get_device_name_for_instance(self, instance,
+                                     bdms, block_device_obj):
+        """Get the next device name based on the block device mapping.
+
+        :param instance: nova.objects.instance.Instance that volume is
+                         requesting a device name
+        :param bdms: a nova.objects.BlockDeviceMappingList for the instance
+        :param block_device_obj: A nova.objects.BlockDeviceMapping instance
+                                 with all info about the requested block
+                                 device. device_name does not need to be set,
+                                 and should be decided by the driver
+                                 implementation if not set.
+
+        :returns: The chosen device name.
+        """
         raise NotImplementedError()
 
     def is_supported_fs_format(self, fs_type):

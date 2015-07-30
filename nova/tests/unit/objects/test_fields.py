@@ -197,6 +197,62 @@ class TestArchitecture(TestField):
         self.assertRaises(ValueError, self.field.stringify, 'ppc42')
 
 
+class TestBlockDeviceDestinationType(TestField):
+    def setUp(self):
+        super(TestBlockDeviceDestinationType, self).setUp()
+        self.field = fields.BlockDeviceDestinationTypeField()
+        self.coerce_good_values = [('local', 'local'),
+                                   ('volume', 'volume')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'volume'", self.field.stringify('volume'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestBlockDeviceSourceType(TestField):
+    def setUp(self):
+        super(TestBlockDeviceSourceType, self).setUp()
+        self.field = fields.BlockDeviceSourceTypeField()
+        self.coerce_good_values = [('blank', 'blank'),
+                                   ('image', 'image'),
+                                   ('snapshot', 'snapshot'),
+                                   ('volume', 'volume')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'image'", self.field.stringify('image'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestBlockDeviceType(TestField):
+    def setUp(self):
+        super(TestBlockDeviceType, self).setUp()
+        self.field = fields.BlockDeviceTypeField()
+        self.coerce_good_values = [('cdrom', 'cdrom'),
+                                   ('disk', 'disk'),
+                                   ('floppy', 'floppy'),
+                                   ('fs', 'fs'),
+                                   ('lun', 'lun')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'disk'", self.field.stringify('disk'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
 class TestCPUMode(TestField):
     def setUp(self):
         super(TestCPUMode, self).setUp()
@@ -443,6 +499,46 @@ class TestWatchdogAction(TestField):
 
     def test_stringify_invalid(self):
         self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestMonitorMetricType(TestField):
+    def setUp(self):
+        super(TestMonitorMetricType, self).setUp()
+        self.field = fields.MonitorMetricTypeField()
+        self.coerce_good_values = [('cpu.frequency', 'cpu.frequency'),
+                                   ('cpu.user.time', 'cpu.user.time'),
+                                   ('cpu.kernel.time', 'cpu.kernel.time'),
+                                   ('cpu.idle.time', 'cpu.idle.time'),
+                                   ('cpu.iowait.time', 'cpu.iowait.time'),
+                                   ('cpu.user.percent', 'cpu.user.percent'),
+                                   ('cpu.kernel.percent',
+                                       'cpu.kernel.percent'),
+                                   ('cpu.idle.percent', 'cpu.idle.percent'),
+                                   ('cpu.iowait.percent',
+                                       'cpu.iowait.percent'),
+                                   ('cpu.percent', 'cpu.percent')]
+        self.coerce_bad_values = ['cpu.typo']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'cpu.frequency'",
+                         self.field.stringify('cpu.frequency'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'cpufrequency')
+
+
+class TestVersionPredicate(TestString):
+    def setUp(self):
+        super(TestVersionPredicate, self).setUp()
+        self.field = fields.VersionPredicateField()
+        self.coerce_good_values = [('>=1.0', '>=1.0'),
+                                   ('==1.1', '==1.1'),
+                                   ('<1.1.0', '<1.1.0')]
+        self.coerce_bad_values = ['1', 'foo', '>1', 1.0, '1.0', '=1.0']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
 
 
 class TestInteger(TestField):

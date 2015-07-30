@@ -319,8 +319,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(self.attempts, 2)
 
     def _get_instance_type_by_name(self, type):
-        for instance_type in test_flavors.DEFAULT_FLAVORS:
-            if instance_type['name'] == type:
+        for instance_type in test_flavors.DEFAULT_FLAVOR_OBJS:
+            if instance_type.name == type:
                 return instance_type
         if type == 'm1.micro':
             return {'memory_mb': 128, 'root_gb': 0, 'deleted_at': None,
@@ -613,10 +613,10 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_ephemeral_disk_attach_from_bdi(self):
         ephemerals = [{'device_type': 'disk',
-                       'disk_bus': 'lsiLogic',
+                       'disk_bus': constants.DEFAULT_ADAPTER_TYPE,
                        'size': 25},
                       {'device_type': 'disk',
-                       'disk_bus': 'lsiLogic',
+                       'disk_bus': constants.DEFAULT_ADAPTER_TYPE,
                        'size': 25}]
         bdi = {'ephemerals': ephemerals}
         self._create_vm(bdi=bdi, ephemeral=50)

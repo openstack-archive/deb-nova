@@ -582,6 +582,13 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.assertIsInstance(serial_console, ctype.ConsoleSerial)
 
     @catch_notimplementederror
+    def test_get_mks_console(self):
+        instance_ref, network_info = self._get_running_instance()
+        mks_console = self.connection.get_mks_console(self.ctxt,
+                                                      instance_ref)
+        self.assertIsInstance(mks_console, ctype.ConsoleMKS)
+
+    @catch_notimplementederror
     def test_get_console_pool_info(self):
         instance_ref, network_info = self._get_running_instance()
         console_pool = self.connection.get_console_pool_info(instance_ref)
@@ -768,6 +775,12 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         instance_ref, network_info = self._get_running_instance()
         self.connection.get_instance_disk_info(instance_ref,
                                                block_device_info={})
+
+    @catch_notimplementederror
+    def test_get_device_name_for_instance(self):
+        instance, _ = self._get_running_instance()
+        self.connection.get_device_name_for_instance(
+            instance, [], mock.Mock(spec=objects.BlockDeviceMapping))
 
 
 class AbstractDriverTestCase(_VirtDriverTestCase, test.TestCase):

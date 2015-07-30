@@ -19,13 +19,11 @@ import importlib
 import os
 import os.path
 import socket
-import StringIO
 import struct
 import tempfile
 
 import eventlet
 import mock
-from mox3 import mox
 import netaddr
 from oslo_concurrency import processutils
 from oslo_config import cfg
@@ -95,35 +93,6 @@ class GenericUtilsTestCase(test.NoDBTestCase):
     def test_hostname_translate(self):
         hostname = "<}\x1fh\x10e\x08l\x02l\x05o\x12!{>"
         self.assertEqual("hello", utils.sanitize_hostname(hostname))
-
-    def test_read_cached_file(self):
-        self.mox.StubOutWithMock(os.path, "getmtime")
-        os.path.getmtime(mox.IgnoreArg()).AndReturn(1)
-        self.mox.ReplayAll()
-
-        cache_data = {"data": 1123, "mtime": 1}
-        data = utils.read_cached_file("/this/is/a/fake", cache_data)
-        self.assertEqual(cache_data["data"], data)
-
-    def test_read_modified_cached_file(self):
-        self.mox.StubOutWithMock(os.path, "getmtime")
-        os.path.getmtime(mox.IgnoreArg()).AndReturn(2)
-        self.mox.ReplayAll()
-
-        fake_contents = "lorem ipsum"
-        m = mock.mock_open(read_data=fake_contents)
-        with mock.patch("__builtin__.open", m, create=True):
-            cache_data = {"data": 1123, "mtime": 1}
-            self.reload_called = False
-
-            def test_reload(reloaded_data):
-                self.assertEqual(reloaded_data, fake_contents)
-                self.reload_called = True
-
-            data = utils.read_cached_file("/this/is/a/fake", cache_data,
-                                                    reload_func=test_reload)
-            self.assertEqual(data, fake_contents)
-            self.assertTrue(self.reload_called)
 
     def test_generate_password(self):
         password = utils.generate_password()
@@ -209,10 +178,13 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertEqual("localhost", utils.safe_ip_format("localhost"))
 
     def test_get_hash_str(self):
-        base_str = "foo"
+        base_str = b"foo"
+        base_unicode = u"foo"
         value = hashlib.md5(base_str).hexdigest()
         self.assertEqual(
             value, utils.get_hash_str(base_str))
+        self.assertEqual(
+            value, utils.get_hash_str(base_unicode))
 
     def test_use_rootwrap(self):
         self.flags(disable_rootwrap=False, group='workarounds')
@@ -231,6 +203,49 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         with mock.patch('nova.utils.execute') as mock_method:
             utils.ssh_execute('remotehost', 'ls', '-l')
         mock_method.assert_called_once_with(*expected_args)
+
+
+class TestCachedFile(test.NoDBTestCase):
+    @mock.patch('os.path.getmtime', return_value=1)
+    def test_read_cached_file(self, getmtime):
+        utils._FILE_CACHE = {
+            '/this/is/a/fake': {"data": 1123, "mtime": 1}
+        }
+        fresh, data = utils.read_cached_file("/this/is/a/fake")
+        fdata = utils._FILE_CACHE['/this/is/a/fake']["data"]
+        self.assertEqual(fdata, data)
+
+    @mock.patch('os.path.getmtime', return_value=2)
+    def test_read_modified_cached_file(self, getmtime):
+
+        utils._FILE_CACHE = {
+            '/this/is/a/fake': {"data": 1123, "mtime": 1}
+        }
+
+        fake_contents = "lorem ipsum"
+
+        with mock.patch('six.moves.builtins.open',
+                        mock.mock_open(read_data=fake_contents)):
+            fresh, data = utils.read_cached_file("/this/is/a/fake")
+
+        self.assertEqual(data, fake_contents)
+        self.assertTrue(fresh)
+
+    def test_delete_cached_file(self):
+        filename = '/this/is/a/fake/deletion/of/cached/file'
+        utils._FILE_CACHE = {
+            filename: {"data": 1123, "mtime": 1}
+        }
+        self.assertIn(filename, utils._FILE_CACHE)
+        utils.delete_cached_file(filename)
+        self.assertNotIn(filename, utils._FILE_CACHE)
+
+    def test_delete_cached_file_not_exist(self):
+        # We expect that if cached file does not exist no Exception raised.
+        filename = '/this/is/a/fake/deletion/attempt/of/not/cached/file'
+        self.assertNotIn(filename, utils._FILE_CACHE)
+        utils.delete_cached_file(filename)
+        self.assertNotIn(filename, utils._FILE_CACHE)
 
 
 class VPNPingTestCase(test.NoDBTestCase):
@@ -554,26 +569,26 @@ class LastBytesTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(LastBytesTestCase, self).setUp()
-        self.f = StringIO.StringIO('1234567890')
+        self.f = six.BytesIO(b'1234567890')
 
     def test_truncated(self):
         self.f.seek(0, os.SEEK_SET)
         out, remaining = utils.last_bytes(self.f, 5)
-        self.assertEqual(out, '67890')
+        self.assertEqual(out, b'67890')
         self.assertTrue(remaining > 0)
 
     def test_read_all(self):
         self.f.seek(0, os.SEEK_SET)
         out, remaining = utils.last_bytes(self.f, 1000)
-        self.assertEqual(out, '1234567890')
+        self.assertEqual(out, b'1234567890')
         self.assertFalse(remaining > 0)
 
     def test_seek_too_far_real_file(self):
         # StringIO doesn't raise IOError if you see past the start of the file.
-        flo = tempfile.TemporaryFile()
-        content = '1234567890'
-        flo.write(content)
-        self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
+        with tempfile.TemporaryFile() as flo:
+            content = b'1234567890'
+            flo.write(content)
+            self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
 
 
 class MetadataToDictTestCase(test.NoDBTestCase):
@@ -587,11 +602,14 @@ class MetadataToDictTestCase(test.NoDBTestCase):
         self.assertEqual(utils.metadata_to_dict([]), {})
 
     def test_dict_to_metadata(self):
+        def sort_key(adict):
+            return sorted(adict.items())
+
+        metadata = utils.dict_to_metadata(dict(foo1='bar1', foo2='bar2'))
         expected = [{'key': 'foo1', 'value': 'bar1'},
                     {'key': 'foo2', 'value': 'bar2'}]
-        self.assertEqual(sorted(utils.dict_to_metadata(dict(foo1='bar1',
-                                                     foo2='bar2'))),
-                         sorted(expected))
+        self.assertEqual(sorted(metadata, key=sort_key),
+                         sorted(expected, key=sort_key))
 
     def test_dict_to_metadata_empty(self):
         self.assertEqual(utils.dict_to_metadata({}), [])
@@ -612,7 +630,7 @@ class WrappedCodeTestCase(test.NoDBTestCase):
             pass
 
         func = utils.get_wrapped_function(wrapped)
-        func_code = func.func_code
+        func_code = func.__code__
         self.assertEqual(4, len(func_code.co_varnames))
         self.assertIn('self', func_code.co_varnames)
         self.assertIn('instance', func_code.co_varnames)
@@ -626,7 +644,7 @@ class WrappedCodeTestCase(test.NoDBTestCase):
             pass
 
         func = utils.get_wrapped_function(wrapped)
-        func_code = func.func_code
+        func_code = func.__code__
         self.assertEqual(4, len(func_code.co_varnames))
         self.assertIn('self', func_code.co_varnames)
         self.assertIn('instance', func_code.co_varnames)
@@ -641,7 +659,7 @@ class WrappedCodeTestCase(test.NoDBTestCase):
             pass
 
         func = utils.get_wrapped_function(wrapped)
-        func_code = func.func_code
+        func_code = func.__code__
         self.assertEqual(4, len(func_code.co_varnames))
         self.assertIn('self', func_code.co_varnames)
         self.assertIn('instance', func_code.co_varnames)
@@ -759,7 +777,7 @@ class ValidateIntegerTestCase(test.NoDBTestCase):
                           max_value=54)
         self.assertRaises(exception.InvalidInput,
                           utils.validate_integer,
-                          unichr(129), "UnicodeError",
+                          six.unichr(129), "UnicodeError",
                           max_value=1000)
 
 
@@ -831,6 +849,24 @@ class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertEqual(sys_meta[sys_key], expected)
 
+    def test_skip_image_properties(self):
+        image = self.get_image()
+        image["properties"] = {
+            "foo1": "bar", "foo2": "baz",
+            "mappings": "wizz", "img_block_device_mapping": "eek",
+        }
+
+        sys_meta = utils.get_system_metadata_from_image(image)
+
+        # Verify that we inherit all the image properties
+        for key, expected in six.iteritems(image["properties"]):
+            sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
+
+            if key in utils.SM_SKIP_KEYS:
+                self.assertNotIn(sys_key, sys_meta)
+            else:
+                self.assertEqual(sys_meta[sys_key], expected)
+
     def test_vhd_min_disk_image(self):
         image = self.get_image()
         flavor = self.get_flavor()
@@ -873,6 +909,8 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         sys_meta = self.get_system_metadata()
         sys_meta["%soo1" % utils.SM_IMAGE_PROP_PREFIX] = "bar"
         sys_meta["%soo2" % utils.SM_IMAGE_PROP_PREFIX] = "baz"
+        sys_meta["%simg_block_device_mapping" %
+                 utils.SM_IMAGE_PROP_PREFIX] = "eek"
 
         image = utils.get_image_from_system_metadata(sys_meta)
 
@@ -887,6 +925,8 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         for key, value in six.iteritems(image["properties"]):
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertEqual(image["properties"][key], sys_meta[sys_key])
+
+        self.assertNotIn("img_block_device_mapping", image["properties"])
 
     def test_dont_inherit_empty_values(self):
         sys_meta = self.get_system_metadata()
@@ -1028,7 +1068,7 @@ class SafeTruncateTestCase(test.NoDBTestCase):
         # Generate Chinese byte string whose length is 300. This Chinese UTF-8
         # character occupies 3 bytes. After truncating, the byte string length
         # should be 255.
-        msg = encodeutils.safe_decode('\xe8\xb5\xb5' * 100)
+        msg = u'\u8d75' * 100
         truncated_msg = utils.safe_truncate(msg, 255)
         byte_message = encodeutils.safe_encode(truncated_msg)
         self.assertEqual(255, len(byte_message))

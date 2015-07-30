@@ -27,6 +27,7 @@ import decorator
 from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_serialization import jsonutils
 from oslo_utils import excutils
 from oslo_utils import strutils
 from oslo_utils import units
@@ -689,7 +690,7 @@ class VMwareVMOps(object):
 
     def _create_config_drive(self, instance, injected_files, admin_password,
                              data_store_name, dc_name, upload_folder, cookies):
-        if CONF.config_drive_format not in ('iso9660', None):
+        if CONF.config_drive_format != 'iso9660':
             reason = (_('Invalid config_drive_format "%s"') %
                       CONF.config_drive_format)
             raise exception.InstancePowerOnFailure(reason=reason)
@@ -732,9 +733,9 @@ class VMwareVMOps(object):
                                     "VirtualMachine", "config.hardware.device")
         (controller_key, unit_number,
          controller_spec) = vm_util.allocate_controller_key_and_unit_number(
-                                                              client_factory,
-                                                              devices,
-                                                              'ide')
+                                                    client_factory,
+                                                    devices,
+                                                    constants.ADAPTER_TYPE_IDE)
         cdrom_attach_config_spec = vm_util.get_cdrom_attach_config_spec(
                                     client_factory, datastore, file_path,
                                     controller_key, unit_number)
@@ -1132,16 +1133,16 @@ class VMwareVMOps(object):
         extra_specs = self._get_extra_specs(flavor)
         metadata = self._get_instance_metadata(context, instance)
         vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
-                                                    int(flavor['vcpus']),
-                                                    int(flavor['memory_mb']),
+                                                    int(flavor.vcpus),
+                                                    int(flavor.memory_mb),
                                                     extra_specs,
                                                     metadata=metadata)
         vm_util.reconfigure_vm(self._session, vm_ref, vm_resize_spec)
 
     def _resize_disk(self, instance, vm_ref, vmdk, flavor):
-        if (flavor['root_gb'] > instance.root_gb and
-            flavor['root_gb'] > vmdk.capacity_in_bytes / units.Gi):
-            root_disk_in_kb = flavor['root_gb'] * units.Mi
+        if (flavor.root_gb > instance.root_gb and
+            flavor.root_gb > vmdk.capacity_in_bytes / units.Gi):
+            root_disk_in_kb = flavor.root_gb * units.Mi
             ds_ref = vmdk.device.backing.datastore
             dc_info = self.get_datacenter_ref_and_name(ds_ref)
             folder = ds_obj.DatastorePath.parse(vmdk.path).dirname
@@ -1188,9 +1189,9 @@ class VMwareVMOps(object):
                                      uuid=instance.uuid)
 
         # Checks if the migration needs a disk resize down.
-        if (flavor['root_gb'] < instance.root_gb or
-            (flavor['root_gb'] != 0 and
-             flavor['root_gb'] < vmdk.capacity_in_bytes / units.Gi)):
+        if (flavor.root_gb < instance.root_gb or
+            (flavor.root_gb != 0 and
+             flavor.root_gb < vmdk.capacity_in_bytes / units.Gi)):
             reason = _("Unable to shrink disk.")
             raise exception.InstanceFaultRollback(
                 exception.ResizeError(reason=reason))
@@ -1587,8 +1588,8 @@ class VMwareVMOps(object):
 
     def attach_interface(self, instance, image_meta, vif):
         """Attach an interface to the instance."""
-        vif_model = image_meta.get("hw_vif_model",
-                                   constants.DEFAULT_VIF_MODEL)
+        vif_model = image_meta.properties.get('hw_vif_model',
+                                              constants.DEFAULT_VIF_MODEL)
         vif_model = vm_util.convert_vif_model(vif_model)
         vif_info = vmwarevif.get_vif_dict(self._session, self._cluster,
                                           vif_model, utils.is_neutron(), vif)
@@ -1847,3 +1848,16 @@ class VMwareVMOps(object):
                   {'uuid': instance.uuid, 'host_name': host_name},
                   instance=instance)
         return ctype.ConsoleVNC(**vnc_console)
+
+    def get_mks_console(self, instance):
+        vm_ref = vm_util.get_vm_ref(self._session, instance)
+        ticket = self._session._call_method(self._session.vim,
+                                            'AcquireTicket',
+                                            vm_ref,
+                                            ticketType='mks')
+        thumbprint = ticket.sslThumbprint.replace(':', '').lower()
+        mks_auth = {'ticket': ticket.ticket,
+                    'cfgFile': ticket.cfgFile,
+                    'thumbprint': thumbprint}
+        internal_access_path = jsonutils.dumps(mks_auth)
+        return ctype.ConsoleMKS(ticket.host, ticket.port, internal_access_path)

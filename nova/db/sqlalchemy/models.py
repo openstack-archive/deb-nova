@@ -101,6 +101,7 @@ class Service(BASE, NovaBase):
     disabled = Column(Boolean, default=False)
     disabled_reason = Column(String(255))
     last_seen_up = Column(DateTime, nullable=True)
+    forced_down = Column(Boolean, default=False)
 
 
 class ComputeNode(BASE, NovaBase):
@@ -742,7 +743,7 @@ class Migration(BASE, NovaBase):
     # TODO(_cerberus_): enum
     status = Column(String(255))
     migration_type = Column(Enum('migration', 'resize', 'live-migration',
-                                 'evacuate'),
+                                 'evacuation'),
                             nullable=True)
     hidden = Column(Boolean, default=False)
 
@@ -986,11 +987,8 @@ class InstanceSystemMetadata(BASE, NovaBase):
                            ForeignKey('instances.uuid'),
                            nullable=False)
 
-    primary_join = ('and_(InstanceSystemMetadata.instance_uuid == '
-                    'Instance.uuid, InstanceSystemMetadata.deleted == 0)')
     instance = orm.relationship(Instance, backref="system_metadata",
-                            foreign_keys=instance_uuid,
-                            primaryjoin=primary_join)
+                            foreign_keys=instance_uuid)
 
 
 class InstanceTypeProjects(BASE, NovaBase):
@@ -1024,6 +1022,7 @@ class InstanceTypeExtraSpecs(BASE, NovaBase):
               name=("uniq_instance_type_extra_specs0"
                     "instance_type_id0key0deleted")
         ),
+        {'mysql_collate': 'utf8_bin'},
     )
     id = Column(Integer, primary_key=True)
     key = Column(String(255))

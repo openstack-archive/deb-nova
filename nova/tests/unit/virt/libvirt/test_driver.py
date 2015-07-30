@@ -37,7 +37,9 @@ from oslo_concurrency import lockutils
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+from oslo_service import loopingcall
 from oslo_utils import encodeutils
+from oslo_utils import fileutils
 from oslo_utils import importutils
 from oslo_utils import timeutils
 from oslo_utils import units
@@ -58,8 +60,6 @@ from nova import db
 from nova import exception
 from nova.network import model as network_model
 from nova import objects
-from nova.openstack.common import fileutils
-from nova.openstack.common import loopingcall
 from nova.pci import manager as pci_manager
 from nova import test
 from nova.tests.unit import fake_block_device
@@ -89,8 +89,8 @@ from nova.virt.libvirt import firewall
 from nova.virt.libvirt import guest as libvirt_guest
 from nova.virt.libvirt import host
 from nova.virt.libvirt import imagebackend
-from nova.virt.libvirt import lvm
-from nova.virt.libvirt import rbd_utils
+from nova.virt.libvirt.storage import lvm
+from nova.virt.libvirt.storage import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt.libvirt import volume as volume_drivers
 
@@ -3126,7 +3126,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch('nova.virt.disk.api.teardown_container')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.get_info')
     @mock.patch('nova.virt.disk.api.setup_container')
-    @mock.patch('nova.openstack.common.fileutils.ensure_tree')
+    @mock.patch('oslo_utils.fileutils.ensure_tree')
     @mock.patch.object(fake_libvirt_utils, 'get_instance_path')
     def test_unmount_fs_if_error_during_lxc_create_domain(self,
             mock_get_inst_path, mock_ensure_tree, mock_setup_container,
@@ -3491,6 +3491,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                          cfg.system_serial)
         self.assertEqual(instance_ref['uuid'],
                          cfg.system_uuid)
+        self.assertEqual("Virtual Machine",
+                         cfg.system_family)
 
     def test_get_guest_config_sysinfo_serial_none(self):
         self.flags(sysinfo_serial="none", group="libvirt")
@@ -8143,8 +8145,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         drvr._hard_reboot(self.context, instance, network_info,
                           block_device_info)
 
-    @mock.patch('nova.openstack.common.fileutils.ensure_tree')
-    @mock.patch('nova.openstack.common.loopingcall.FixedIntervalLoopingCall')
+    @mock.patch('oslo_utils.fileutils.ensure_tree')
+    @mock.patch('oslo_service.loopingcall.FixedIntervalLoopingCall')
     @mock.patch('nova.pci.manager.get_instance_pci_devs')
     @mock.patch('nova.virt.libvirt.LibvirtDriver._prepare_pci_devices_for_use')
     @mock.patch('nova.virt.libvirt.LibvirtDriver._create_domain_and_network')
@@ -9970,7 +9972,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch('nova.virt.disk.api.clean_lxc_namespace')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.get_info')
     @mock.patch('nova.virt.disk.api.setup_container')
-    @mock.patch('nova.openstack.common.fileutils.ensure_tree')
+    @mock.patch('oslo_utils.fileutils.ensure_tree')
     @mock.patch.object(fake_libvirt_utils, 'get_instance_path')
     def test_create_domain_lxc(self, mock_get_inst_path, mock_ensure_tree,
                            mock_setup_container, mock_get_info, mock_clean):
@@ -10023,7 +10025,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.get_info')
     @mock.patch.object(fake_libvirt_utils, 'chown_for_id_maps')
     @mock.patch('nova.virt.disk.api.setup_container')
-    @mock.patch('nova.openstack.common.fileutils.ensure_tree')
+    @mock.patch('oslo_utils.fileutils.ensure_tree')
     @mock.patch.object(fake_libvirt_utils, 'get_instance_path')
     def test_create_domain_lxc_id_maps(self, mock_get_inst_path,
                                        mock_ensure_tree, mock_setup_container,
@@ -10090,7 +10092,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch('nova.virt.disk.api.teardown_container')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.get_info')
     @mock.patch('nova.virt.disk.api.setup_container')
-    @mock.patch('nova.openstack.common.fileutils.ensure_tree')
+    @mock.patch('oslo_utils.fileutils.ensure_tree')
     @mock.patch.object(fake_libvirt_utils, 'get_instance_path')
     def test_create_domain_lxc_not_running(self, mock_get_inst_path,
                                            mock_ensure_tree,
@@ -10910,10 +10912,42 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             instance, network_info=network_info)
         block_device_info_get_mapping.assert_called_once_with(bdm_info)
 
+    @mock.patch('nova.virt.driver.block_device_info_get_mapping')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_get_serial_ports_from_instance')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
+    def test_cleanup_serial_console_domain_gone(
+            self, undefine, get_ports, block_device_info_get_mapping):
+        self.flags(enabled="True", group='serial_console')
+        instance = {'name': 'i1'}
+        network_info = {}
+        bdm_info = {}
+        firewall_driver = mock.MagicMock()
+
+        block_device_info_get_mapping.return_value = ()
+
+        # Ensure _get_serial_ports_from_instance raises same exception
+        # that would have occurred if domain was gone.
+        get_ports.side_effect = exception.InstanceNotFound("domain undefined")
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
+        drvr.firewall_driver = firewall_driver
+        drvr.cleanup(
+            'ctx', instance, network_info,
+            block_device_info=bdm_info,
+            destroy_disks=False, destroy_vifs=False)
+
+        get_ports.assert_called_once_with(instance)
+        undefine.assert_called_once_with(instance)
+        firewall_driver.unfilter_instance.assert_called_once_with(
+            instance, network_info=network_info)
+        block_device_info_get_mapping.assert_called_once_with(bdm_info)
+
     def test_swap_volume(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
 
         mock_dom = mock.MagicMock()
+        guest = libvirt_guest.Guest(mock_dom)
 
         with mock.patch.object(drvr._conn, 'defineXML',
                                create=True) as mock_define:
@@ -10925,15 +10959,15 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             mock_dom.isPersistent.return_value = True
             mock_dom.blockJobInfo.return_value = {}
 
-            drvr._swap_volume(mock_dom, srcfile, dstfile, 1)
+            drvr._swap_volume(guest, srcfile, dstfile, 1)
 
             mock_dom.XMLDesc.assert_called_once_with(
                 flags=(fakelibvirt.VIR_DOMAIN_XML_INACTIVE |
                        fakelibvirt.VIR_DOMAIN_XML_SECURE))
             mock_dom.blockRebase.assert_called_once_with(
-                srcfile, dstfile, 0,
-                fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
-                fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT)
+                srcfile, dstfile, 0, flags=(
+                    fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
+                    fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT))
             mock_dom.blockResize.assert_called_once_with(
                 srcfile, 1 * units.Gi / units.Ki)
             mock_define.assert_called_once_with(xmldoc)
@@ -10945,8 +10979,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 'get_by_volume_id')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._get_volume_config')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._connect_volume')
-    @mock.patch('nova.virt.libvirt.host.Host.get_domain')
-    def test_swap_volume_driver_bdm_save(self, get_domain,
+    @mock.patch('nova.virt.libvirt.host.Host.get_guest')
+    def test_swap_volume_driver_bdm_save(self, get_guest,
                                          connect_volume, get_volume_config,
                                          get_by_volume_id, volume_save,
                                          swap_volume, disconnect_volume):
@@ -10961,6 +10995,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                'data': {'device_path': '/fake-new-volume',
                                         'access_mode': 'rw'}}
         mock_dom = mock.MagicMock()
+        guest = libvirt_guest.Guest(mock_dom)
         mock_dom.XMLDesc.return_value = """<domain>
           <devices>
             <disk type='file'>
@@ -10970,7 +11005,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
           </devices>
         </domain>
         """
-        get_domain.return_value = mock_dom
+        mock_dom.name.return_value = 'inst'
+        mock_dom.UUIDString.return_value = 'uuid'
+        get_guest.return_value = guest
         disk_info = {'bus': 'virtio', 'type': 'disk', 'dev': 'vdb'}
         get_volume_config.return_value = mock.MagicMock(
             source_path='/fake-new-volume')
@@ -10988,9 +11025,10 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         conn.swap_volume(old_connection_info, new_connection_info, instance,
                          '/dev/vdb', 1)
 
-        get_domain.assert_called_once_with(instance)
+        get_guest.assert_called_once_with(instance)
         connect_volume.assert_called_once_with(new_connection_info, disk_info)
-        swap_volume.assert_called_once_with(mock_dom, 'vdb',
+
+        swap_volume.assert_called_once_with(guest, 'vdb',
                                             '/fake-new-volume', 1)
         disconnect_volume.assert_called_once_with(old_connection_info, 'vdb')
         volume_save.assert_called_once_with()
@@ -11020,18 +11058,19 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             mock_dom.isPersistent.return_value = True
             mock_size.return_value = 1004009
             mock_backing.return_value = bckfile
+            guest = libvirt_guest.Guest(mock_dom)
 
-            drvr._live_snapshot(self.context, self.test_instance, mock_dom,
+            drvr._live_snapshot(self.context, self.test_instance, guest,
                                 srcfile, dstfile, "qcow2", {})
 
             mock_dom.XMLDesc.assert_called_once_with(flags=(
                 fakelibvirt.VIR_DOMAIN_XML_INACTIVE |
                 fakelibvirt.VIR_DOMAIN_XML_SECURE))
             mock_dom.blockRebase.assert_called_once_with(
-                srcfile, dltfile, 0,
-                fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
-                fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT |
-                fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_SHALLOW)
+                srcfile, dltfile, 0, flags=(
+                    fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
+                    fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT |
+                    fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_SHALLOW))
 
             mock_size.assert_called_once_with(srcfile)
             mock_backing.assert_called_once_with(srcfile, basename=False)
@@ -11330,7 +11369,6 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         inst['key_data'] = 'ABCDEFG'
         inst['system_metadata'] = {}
         inst['metadata'] = {}
-        inst['vm_mode'] = 'hvm'
 
         inst.update(params)
 
@@ -12090,7 +12128,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
             instance)
 
     @mock.patch('os.path.exists')
-    @mock.patch('nova.virt.libvirt.lvm.list_volumes')
+    @mock.patch.object(lvm, 'list_volumes')
     def test_lvm_disks(self, listlvs, exists):
         instance = objects.Instance(uuid='fake-uuid', id=1)
         self.flags(images_volume_group='vols', group='libvirt')
@@ -13260,10 +13298,11 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.get_domain(instance).AndReturn(domain)
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
-        domain.blockRebase('vda', 'snap.img', 0, 0)
+        domain.blockRebase('vda', 'snap.img', 0, flags=0)
 
-        domain.blockJobInfo('vda', 0).AndReturn({'cur': 1, 'end': 1000})
-        domain.blockJobInfo('vda', 0).AndReturn({'cur': 1000, 'end': 1000})
+        domain.blockJobInfo('vda', flags=0).AndReturn({'cur': 1, 'end': 1000})
+        domain.blockJobInfo('vda', flags=0).AndReturn(
+            {'cur': 1000, 'end': 1000})
 
         self.mox.ReplayAll()
 
@@ -13282,23 +13321,25 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         snapshot_id = 'snapshot-1234'
 
         domain = FakeVirtDomain(fake_xml=self.dom_xml)
+        guest = libvirt_guest.Guest(domain)
         self.mox.StubOutWithMock(domain, 'XMLDesc')
         domain.XMLDesc(flags=0).AndReturn(self.dom_xml)
 
-        self.mox.StubOutWithMock(self.drvr._host, 'get_domain')
+        self.mox.StubOutWithMock(self.drvr._host, 'get_guest')
         self.mox.StubOutWithMock(self.drvr._host, 'has_min_version')
         self.mox.StubOutWithMock(domain, 'blockRebase')
         self.mox.StubOutWithMock(domain, 'blockCommit')
         self.mox.StubOutWithMock(domain, 'blockJobInfo')
 
-        self.drvr._host.get_domain(instance).AndReturn(domain)
+        self.drvr._host.get_guest(instance).AndReturn(guest)
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockRebase('vda', 'snap.img', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
 
-        domain.blockJobInfo('vda', 0).AndReturn({'cur': 1, 'end': 1000})
-        domain.blockJobInfo('vda', 0).AndReturn({'cur': 1000, 'end': 1000})
+        domain.blockJobInfo('vda', flags=0).AndReturn({'cur': 1, 'end': 1000})
+        domain.blockJobInfo('vda', flags=0).AndReturn(
+            {'cur': 1000, 'end': 1000})
 
         self.mox.ReplayAll()
 
@@ -13364,10 +13405,10 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockCommit('vda', 'other-snap.img', 'snap.img', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
 
-        domain.blockJobInfo('vda', 0).AndReturn({'cur': 1, 'end': 1000})
-        domain.blockJobInfo('vda', 0).AndReturn({})
+        domain.blockJobInfo('vda', flags=0).AndReturn({'cur': 1, 'end': 1000})
+        domain.blockJobInfo('vda', flags=0).AndReturn({})
 
         self.mox.ReplayAll()
 
@@ -13493,10 +13534,11 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.get_domain(instance).AndReturn(domain)
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
-        domain.blockRebase('vdb', 'vdb[1]', 0, 0)
+        domain.blockRebase('vdb', 'vdb[1]', 0, flags=0)
 
-        domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1, 'end': 1000})
-        domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1000, 'end': 1000})
+        domain.blockJobInfo('vdb', flags=0).AndReturn({'cur': 1, 'end': 1000})
+        domain.blockJobInfo('vdb', flags=0).AndReturn(
+            {'cur': 1000, 'end': 1000})
 
         self.mox.ReplayAll()
 
@@ -13534,10 +13576,11 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockRebase('vdb', 'vdb[1]', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
 
-        domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1, 'end': 1000})
-        domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1000, 'end': 1000})
+        domain.blockJobInfo('vdb', flags=0).AndReturn({'cur': 1, 'end': 1000})
+        domain.blockJobInfo('vdb', flags=0).AndReturn(
+            {'cur': 1000, 'end': 1000})
 
         self.mox.ReplayAll()
 
@@ -13616,10 +13659,11 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockCommit('vdb', 'vdb[0]', 'vdb[1]', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
 
-        domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1, 'end': 1000})
-        domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1000, 'end': 1000})
+        domain.blockJobInfo('vdb', flags=0).AndReturn({'cur': 1, 'end': 1000})
+        domain.blockJobInfo('vdb', flags=0).AndReturn(
+            {'cur': 1000, 'end': 1000})
 
         self.mox.ReplayAll()
 

@@ -16,7 +16,6 @@
 
 import inspect
 import os
-import uuid as uuid_lib
 
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -24,7 +23,6 @@ from oslo_serialization import jsonutils
 from oslo_utils import importutils
 import testtools
 
-from nova.api.metadata import password
 # Import extensions to pull in osapi_compute_extension CONF option used below.
 from nova.console import manager as console_manager  # noqa - only for cfg
 from nova.network.neutronv2 import api as neutron_api  # noqa - only for cfg
@@ -207,228 +205,6 @@ class LimitsSampleJsonTest(ApiSampleTestBaseV2):
         self._verify_response('limit-get-resp', subs, response, 200)
 
 
-class SecurityGroupsSampleJsonTest(ServersSampleBase):
-    extension_name = "nova.api.openstack.compute.contrib" + \
-                     ".security_groups.Security_groups"
-
-    def _get_create_subs(self):
-        return {
-                'group_name': 'test',
-                "description": "description",
-        }
-
-    def _create_security_group(self):
-        subs = self._get_create_subs()
-        return self._do_post('os-security-groups',
-                             'security-group-post-req', subs)
-
-    def _add_group(self, uuid):
-        subs = {
-                'group_name': 'test'
-        }
-        return self._do_post('servers/%s/action' % uuid,
-                             'security-group-add-post-req', subs)
-
-    def test_security_group_create(self):
-        response = self._create_security_group()
-        subs = self._get_create_subs()
-        self._verify_response('security-groups-create-resp', subs,
-                              response, 200)
-
-    def test_security_groups_list(self):
-        # Get api sample of security groups get list request.
-        response = self._do_get('os-security-groups')
-        subs = self._get_regexes()
-        self._verify_response('security-groups-list-get-resp',
-                              subs, response, 200)
-
-    def test_security_groups_get(self):
-        # Get api sample of security groups get request.
-        security_group_id = '1'
-        response = self._do_get('os-security-groups/%s' % security_group_id)
-        subs = self._get_regexes()
-        self._verify_response('security-groups-get-resp', subs, response, 200)
-
-    def test_security_groups_list_server(self):
-        # Get api sample of security groups for a specific server.
-        uuid = self._post_server(use_common_server_api_samples=False)
-        response = self._do_get('servers/%s/os-security-groups' % uuid)
-        subs = self._get_regexes()
-        self._verify_response('server-security-groups-list-resp',
-                              subs, response, 200)
-
-    def test_security_groups_add(self):
-        self._create_security_group()
-        uuid = self._post_server(use_common_server_api_samples=False)
-        response = self._add_group(uuid)
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.content, '')
-
-    def test_security_groups_remove(self):
-        self._create_security_group()
-        uuid = self._post_server(use_common_server_api_samples=False)
-        self._add_group(uuid)
-        subs = {
-                'group_name': 'test'
-        }
-        response = self._do_post('servers/%s/action' % uuid,
-                                 'security-group-remove-post-req', subs)
-        self.assertEqual(response.status_code, 202)
-        self.assertEqual(response.content, '')
-
-
-class SchedulerHintsJsonTest(ApiSampleTestBaseV2):
-    extension_name = ("nova.api.openstack.compute.contrib.scheduler_hints."
-                     "Scheduler_hints")
-
-    def test_scheduler_hints_post(self):
-        # Get api sample of scheduler hint post request.
-        hints = {'image_id': fake.get_valid_image_id(),
-                 'image_near': str(uuid_lib.uuid4())
-        }
-        response = self._do_post('servers', 'scheduler-hints-post-req',
-                                 hints)
-        subs = self._get_regexes()
-        self._verify_response('scheduler-hints-post-resp', subs, response, 202)
-
-
-class KeyPairsSampleJsonTest(ApiSampleTestBaseV2):
-    extension_name = "nova.api.openstack.compute.contrib.keypairs.Keypairs"
-
-    def generalize_subs(self, subs, vanilla_regexes):
-        subs['keypair_name'] = 'keypair-[0-9a-f-]+'
-        return subs
-
-    def test_keypairs_post(self, public_key=None):
-        """Get api sample of key pairs post request."""
-        key_name = 'keypair-' + str(uuid_lib.uuid4())
-        response = self._do_post('os-keypairs', 'keypairs-post-req',
-                                 {'keypair_name': key_name})
-        subs = self._get_regexes()
-        subs['keypair_name'] = '(%s)' % key_name
-        self._verify_response('keypairs-post-resp', subs, response, 200)
-        # NOTE(maurosr): return the key_name is necessary cause the
-        # verification returns the label of the last compared information in
-        # the response, not necessarily the key name.
-        return key_name
-
-    def test_keypairs_import_key_post(self):
-        # Get api sample of key pairs post to import user's key.
-        key_name = 'keypair-' + str(uuid_lib.uuid4())
-        subs = {
-            'keypair_name': key_name,
-            'public_key': "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAAAgQDx8nkQv/zgGg"
-                          "B4rMYmIf+6A4l6Rr+o/6lHBQdW5aYd44bd8JttDCE/F/pNRr0l"
-                          "RE+PiqSPO8nDPHw0010JeMH9gYgnnFlyY3/OcJ02RhIPyyxYpv"
-                          "9FhY+2YiUkpwFOcLImyrxEsYXpD/0d3ac30bNH6Sw9JD9UZHYc"
-                          "pSxsIbECHw== Generated-by-Nova"
-        }
-        response = self._do_post('os-keypairs', 'keypairs-import-post-req',
-                                 subs)
-        subs = self._get_regexes()
-        subs['keypair_name'] = '(%s)' % key_name
-        self._verify_response('keypairs-import-post-resp', subs, response, 200)
-
-    def test_keypairs_list(self):
-        # Get api sample of key pairs list request.
-        key_name = self.test_keypairs_post()
-        response = self._do_get('os-keypairs')
-        subs = self._get_regexes()
-        subs['keypair_name'] = '(%s)' % key_name
-        self._verify_response('keypairs-list-resp', subs, response, 200)
-
-    def test_keypairs_get(self):
-        # Get api sample of key pairs get request.
-        key_name = self.test_keypairs_post()
-        response = self._do_get('os-keypairs/%s' % key_name)
-        subs = self._get_regexes()
-        subs['keypair_name'] = '(%s)' % key_name
-        self._verify_response('keypairs-get-resp', subs, response, 200)
-
-
-class RescueJsonTest(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib"
-                     ".rescue.Rescue")
-
-    def _rescue(self, uuid):
-        req_subs = {
-            'password': 'MySecretPass'
-        }
-        response = self._do_post('servers/%s/action' % uuid,
-                                 'server-rescue-req', req_subs)
-        self._verify_response('server-rescue', req_subs, response, 200)
-
-    def _unrescue(self, uuid):
-        response = self._do_post('servers/%s/action' % uuid,
-                                 'server-unrescue-req', {})
-        self.assertEqual(response.status_code, 202)
-
-    def test_server_rescue(self):
-        uuid = self._post_server()
-
-        self._rescue(uuid)
-
-        # Do a server get to make sure that the 'RESCUE' state is set
-        response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        subs['id'] = uuid
-        subs['status'] = 'RESCUE'
-
-        self._verify_response('server-get-resp-rescue', subs, response, 200)
-
-    def test_server_unrescue(self):
-        uuid = self._post_server()
-
-        self._rescue(uuid)
-        self._unrescue(uuid)
-
-        # Do a server get to make sure that the 'ACTIVE' state is back
-        response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        subs['id'] = uuid
-        subs['status'] = 'ACTIVE'
-
-        self._verify_response('server-get-resp-unrescue', subs, response, 200)
-
-
-class ExtendedRescueWithImageJsonTest(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib"
-                      ".extended_rescue_with_image.Extended_rescue_with_image")
-
-    def _get_flags(self):
-        f = super(ExtendedRescueWithImageJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        # ExtendedRescueWithImage extension also needs Rescue to be loaded.
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.rescue.Rescue')
-        return f
-
-    def _rescue(self, uuid):
-        req_subs = {
-            'password': 'MySecretPass',
-            'rescue_image_ref': fake.get_valid_image_id()
-        }
-        response = self._do_post('servers/%s/action' % uuid,
-                                 'server-rescue-req', req_subs)
-        self._verify_response('server-rescue', req_subs, response, 200)
-
-    def test_server_rescue(self):
-        uuid = self._post_server()
-
-        self._rescue(uuid)
-
-        # Do a server get to make sure that the 'RESCUE' state is set
-        response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        subs['id'] = uuid
-        subs['status'] = 'RESCUE'
-
-        self._verify_response('server-get-resp-rescue', subs, response, 200)
-
-
 class VirtualInterfacesJsonTest(ServersSampleBase):
     extension_name = ("nova.api.openstack.compute.contrib"
                      ".virtual_interfaces.Virtual_interfaces")
@@ -469,22 +245,6 @@ class UsedLimitsForAdminSamplesJsonTest(ApiSampleTestBaseV2):
         subs = self._get_regexes()
         return self._verify_response('usedlimitsforadmin-get-resp', subs,
                                      response, 200)
-
-
-class AvailabilityZoneJsonTest(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib.availability_zone."
-                      "Availability_zone")
-
-    def test_create_availability_zone(self):
-        subs = {
-            'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
-            "availability_zone": "nova"
-        }
-        response = self._do_post('servers', 'availability-zone-post-req', subs)
-        subs.update(self._get_regexes())
-        self._verify_response('availability-zone-post-resp', subs,
-                              response, 202)
 
 
 class ExtendedIpsSampleJsonTests(ServersSampleBase):
@@ -561,34 +321,6 @@ class ExtendedVIFNetSampleJsonTests(ServersSampleBase):
         self._verify_response('vifs-list-resp', subs, response, 200)
 
 
-class ServerPasswordSampleJsonTests(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib.server_password."
-                      "Server_password")
-
-    def test_get_password(self):
-
-        # Mock password since there is no api to set it
-        def fake_ext_password(*args, **kwargs):
-            return ("xlozO3wLCBRWAa2yDjCCVx8vwNPypxnypmRYDa/zErlQ+EzPe1S/"
-                    "Gz6nfmC52mOlOSCRuUOmG7kqqgejPof6M7bOezS387zjq4LSvvwp"
-                    "28zUknzy4YzfFGhnHAdai3TxUJ26pfQCYrq8UTzmKF2Bq8ioSEtV"
-                    "VzM0A96pDh8W2i7BOz6MdoiVyiev/I1K2LsuipfxSJR7Wdke4zNX"
-                    "JjHHP2RfYsVbZ/k9ANu+Nz4iIH8/7Cacud/pphH7EjrY6a4RZNrj"
-                    "QskrhKYed0YERpotyjYk1eDtRe72GrSiXteqCM4biaQ5w3ruS+Ac"
-                    "X//PXk3uJ5kC7d67fPXaVz4WaQRYMg==")
-        self.stubs.Set(password, "extract_password", fake_ext_password)
-        uuid = self._post_server()
-        response = self._do_get('servers/%s/os-server-password' % uuid)
-        subs = self._get_regexes()
-        subs['encrypted_password'] = fake_ext_password().replace('+', '\\+')
-        self._verify_response('get-password-resp', subs, response, 200)
-
-    def test_reset_password(self):
-        uuid = self._post_server()
-        response = self._do_delete('servers/%s/os-server-password' % uuid)
-        self.assertEqual(response.status_code, 204)
-
-
 class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
     extension_name = ('nova.api.openstack.compute.contrib.'
                       'block_device_mapping_v2_boot.'
@@ -607,26 +339,6 @@ class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
         self.stubs.Set(cinder.API, 'check_attach',
                        fakes.stub_volume_check_attach)
         return self._post_server()
-
-
-class ExtendedAvailabilityZoneJsonTests(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib"
-                                ".extended_availability_zone"
-                                ".Extended_availability_zone")
-
-    def test_show(self):
-        uuid = self._post_server()
-        response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        self._verify_response('server-get-resp', subs, response, 200)
-
-    def test_detail(self):
-        self._post_server()
-        response = self._do_get('servers/detail')
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        self._verify_response('servers-detail-resp', subs, response, 200)
 
 
 class ServerGroupQuotas_LimitsSampleJsonTest(LimitsSampleJsonTest):

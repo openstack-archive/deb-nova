@@ -20,7 +20,6 @@
 
 import copy
 import datetime
-import types
 import uuid as stdlib_uuid
 
 import iso8601
@@ -39,6 +38,7 @@ from six.moves import range
 from sqlalchemy import Column
 from sqlalchemy.dialects import sqlite
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import inspect
 from sqlalchemy import Integer
 from sqlalchemy import MetaData
@@ -48,8 +48,6 @@ from sqlalchemy import Table
 
 from nova import block_device
 from nova.compute import arch
-from nova.compute import flavors
-from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
 from nova import db
@@ -59,7 +57,6 @@ from nova.db.sqlalchemy import types as col_types
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
 from nova import objects
-from nova.objects import base as obj_base
 from nova import quota
 from nova import test
 from nova.tests.unit import matchers
@@ -169,7 +166,7 @@ class DecoratorTestCase(test.TestCase):
 
         decorated_func = decorator(test_func)
 
-        self.assertEqual(test_func.func_name, decorated_func.func_name)
+        self.assertEqual(test_func.__name__, decorated_func.__name__)
         self.assertEqual(test_func.__doc__, decorated_func.__doc__)
         self.assertEqual(test_func.__module__, decorated_func.__module__)
 
@@ -773,7 +770,7 @@ class AggregateDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt)
         metadata = _get_fake_aggr_metadata()
-        key = metadata.keys()[0]
+        key = list(metadata.keys())[0]
         new_metadata = {key: 'foo',
                         'fake_new_key': 'fake_new_value'}
         metadata.update(new_metadata)
@@ -804,7 +801,7 @@ class AggregateDBApiTestCase(test.TestCase):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt)
         metadata = _get_fake_aggr_metadata()
-        key = metadata.keys()[0]
+        key = list(metadata.keys())[0]
         db.aggregate_metadata_delete(ctxt, result['id'], key)
         new_metadata = {key: 'foo'}
         db.aggregate_metadata_add(ctxt, result['id'], new_metadata)
@@ -817,9 +814,10 @@ class AggregateDBApiTestCase(test.TestCase):
         result = _create_aggregate(context=ctxt, metadata=None)
         metadata = _get_fake_aggr_metadata()
         db.aggregate_metadata_add(ctxt, result['id'], metadata)
-        db.aggregate_metadata_delete(ctxt, result['id'], metadata.keys()[0])
+        db.aggregate_metadata_delete(ctxt, result['id'],
+                                     list(metadata.keys())[0])
         expected = db.aggregate_metadata_get(ctxt, result['id'])
-        del metadata[metadata.keys()[0]]
+        del metadata[list(metadata.keys())[0]]
         self.assertThat(metadata, matchers.DictMatches(expected))
 
     def test_aggregate_remove_availability_zone(self):
@@ -958,7 +956,7 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
 
     def test_get_regexp_op_for_database_mysql(self):
         op = sqlalchemy_api._get_regexp_op_for_connection(
-                'mysql://root@localhost')
+                'mysql+pymysql://root@localhost')
         self.assertEqual('REGEXP', op)
 
     def test_get_regexp_op_for_database_postgresql(self):
@@ -1028,7 +1026,7 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         self.create_instance_with_args(host='host2')
         result = sqlalchemy_api._instance_get_all_uuids_by_host(ctxt, 'host1')
         self.assertEqual(2, len(result))
-        self.assertEqual(types.UnicodeType, type(result[0]))
+        self.assertEqual(six.text_type, type(result[0]))
 
     def test_instance_get_active_by_window_joined(self):
         now = datetime.datetime(2013, 10, 10, 17, 16, 37, 156701)
@@ -1247,7 +1245,7 @@ class MigrationTestCase(test.TestCase):
 
     def _create(self, status='migrating', source_compute='host1',
                 source_node='a', dest_compute='host2', dest_node='b',
-                system_metadata=None):
+                system_metadata=None, migration_type=None):
 
         values = {'host': source_compute}
         instance = db.instance_create(self.ctxt, values)
@@ -1257,7 +1255,8 @@ class MigrationTestCase(test.TestCase):
 
         values = {'status': status, 'source_compute': source_compute,
                   'source_node': source_node, 'dest_compute': dest_compute,
-                  'dest_node': dest_node, 'instance_uuid': instance['uuid']}
+                  'dest_node': dest_node, 'instance_uuid': instance['uuid'],
+                  'migration_type': migration_type}
         db.migration_create(self.ctxt, values)
 
     def _assert_in_progress(self, migrations):
@@ -1310,6 +1309,16 @@ class MigrationTestCase(test.TestCase):
             self.assertEqual(filters["status"], migration['status'])
             hosts = [migration['source_compute'], migration['dest_compute']]
             self.assertIn(filters["host"], hosts)
+
+    def test_get_migrations_by_filters_with_type(self):
+        self._create(status="special", source_compute="host9",
+                     migration_type="evacuation")
+        self._create(status="special", source_compute="host9",
+                     migration_type="live-migration")
+        filters = {"status": "special", "host": "host9",
+                   "migration_type": "evacuation", "hidden": False}
+        migrations = db.migration_get_all_by_filters(self.ctxt, filters)
+        self.assertEqual(1, len(migrations))
 
     def test_get_migrations_by_filters_source_compute(self):
         filters = {'source_compute': 'host2'}
@@ -1368,7 +1377,11 @@ class ModelsObjectComparatorMixin(object):
     def _dict_from_object(self, obj, ignored_keys):
         if ignored_keys is None:
             ignored_keys = []
-        return {k: v for k, v in obj.iteritems()
+        if isinstance(obj, dict):
+            obj_items = obj.items()
+        else:
+            obj_items = obj.iteritems()
+        return {k: v for k, v in obj_items
                 if k not in ignored_keys}
 
     def _assertEqualObjects(self, obj1, obj2, ignored_keys=None):
@@ -1379,7 +1392,7 @@ class ModelsObjectComparatorMixin(object):
                          len(obj2),
                          "Keys mismatch: %s" %
                           str(set(obj1.keys()) ^ set(obj2.keys())))
-        for key, value in obj1.iteritems():
+        for key, value in obj1.items():
             self.assertEqual(value, obj2[key])
 
     def _assertEqualListsOfObjects(self, objs1, objs2, ignored_keys=None):
@@ -1392,7 +1405,7 @@ class ModelsObjectComparatorMixin(object):
     def _assertEqualOrderedListOfObjects(self, objs1, objs2,
                                          ignored_keys=None):
         obj_to_dict = lambda o: self._dict_from_object(o, ignored_keys)
-        conv = lambda obj: map(obj_to_dict, obj)
+        conv = lambda objs: [obj_to_dict(obj) for obj in objs]
 
         self.assertEqual(conv(objs1), conv(objs2))
 
@@ -1578,15 +1591,15 @@ class SecurityGroupRuleTestCase(test.TestCase, ModelsObjectComparatorMixin):
         rules_ids = [security_group_rule['id'], security_group_rule1['id']]
         for rule in found_rules:
             if columns is None:
-                self.assertIn('grantee_group', dict(rule.iteritems()))
+                self.assertIn('grantee_group', dict(rule))
                 self.assertIn('instances',
-                              dict(rule.grantee_group.iteritems()))
+                              dict(rule.grantee_group))
                 self.assertIn(
                     'system_metadata',
-                    dict(rule.grantee_group.instances[0].iteritems()))
+                    dict(rule.grantee_group.instances[0]))
                 self.assertIn(rule['id'], rules_ids)
             else:
-                self.assertNotIn('grantee_group', dict(rule.iteritems()))
+                self.assertNotIn('grantee_group', dict(rule))
 
     def test_security_group_rule_get_by_security_group(self):
         self._test_security_group_rule_get_by_security_group()
@@ -1674,7 +1687,7 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_security_group_create(self):
         security_group = self._create_security_group({})
         self.assertIsNotNone(security_group['id'])
-        for key, value in self._get_base_values().iteritems():
+        for key, value in self._get_base_values().items():
             self.assertEqual(value, security_group[key])
 
     def test_security_group_destroy(self):
@@ -1707,7 +1720,7 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
             self.ctxt, secgroup['id'],
             columns_to_join=['instances.system_metadata'])
         inst = secgroup.instances[0]
-        self.assertIn('system_metadata', dict(inst.iteritems()).keys())
+        self.assertIn('system_metadata', dict(inst).keys())
 
     def test_security_group_get_no_instances(self):
         instance = db.instance_create(self.ctxt, {})
@@ -1862,7 +1875,7 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                     security_group['id'],
                                     new_values,
                                     columns_to_join=['rules.grantee_group'])
-        for key, value in new_values.iteritems():
+        for key, value in new_values.items():
             self.assertEqual(updated_group[key], value)
         self.assertEqual(updated_group['rules'], [])
 
@@ -2632,6 +2645,9 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         set_and_check(meta)
         del meta['gigawatts']
         set_and_check(meta)
+        self.ctxt.read_deleted = 'yes'
+        self.assertNotIn('gigawatts',
+            db.instance_system_metadata_get(self.ctxt, instance.uuid))
 
     def test_security_group_in_use(self):
         db.instance_create(self.ctxt, dict(host='foo'))
@@ -2691,7 +2707,8 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_instance_destroy(self):
         ctxt = context.get_admin_context()
         values = {
-            'metadata': {'key': 'value'}
+            'metadata': {'key': 'value'},
+            'system_metadata': {'key': 'value'}
         }
         inst_uuid = self.create_instance_with_args(**values)['uuid']
         db.instance_destroy(ctxt, inst_uuid)
@@ -2700,6 +2717,9 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           db.instance_get, ctxt, inst_uuid)
         self.assertIsNone(db.instance_info_cache_get(ctxt, inst_uuid))
         self.assertEqual({}, db.instance_metadata_get(ctxt, inst_uuid))
+        ctxt.read_deleted = 'yes'
+        self.assertEqual(values['system_metadata'],
+                         db.instance_system_metadata_get(ctxt, inst_uuid))
 
     def test_instance_destroy_already_destroyed(self):
         ctxt = context.get_admin_context()
@@ -2785,7 +2805,8 @@ class InstanceExtraTestCase(test.TestCase):
         extra = db.instance_extra_get_by_instance_uuid(
             self.ctxt, self.instance['uuid'],
             columns=['numa_topology', 'vcpu_model'])
-        self.assertNotIn('pci_requests', extra)
+        self.assertRaises(SQLAlchemyError,
+                          extra.__getitem__, 'pci_requests')
         self.assertIn('numa_topology', extra)
         self.assertIn('vcpu_model', extra)
 
@@ -2801,7 +2822,8 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'binary': 'fake_binary',
             'topic': 'fake_topic',
             'report_count': 3,
-            'disabled': False
+            'disabled': False,
+            'forced_down': False
         }
 
     def _create_service(self, values):
@@ -2812,7 +2834,7 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_service_create(self):
         service = self._create_service({})
         self.assertIsNotNone(service['id'])
-        for key, value in self._get_base_values().iteritems():
+        for key, value in self._get_base_values().items():
             self.assertEqual(value, service[key])
 
     def test_service_create_disabled(self):
@@ -2841,12 +2863,24 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         }
         db.service_update(self.ctxt, service['id'], new_values)
         updated_service = db.service_get(self.ctxt, service['id'])
-        for key, value in new_values.iteritems():
+        for key, value in new_values.items():
             self.assertEqual(value, updated_service[key])
 
     def test_service_update_not_found_exception(self):
         self.assertRaises(exception.ServiceNotFound,
                           db.service_update, self.ctxt, 100500, {})
+
+    def test_service_update_with_set_forced_down(self):
+        service = self._create_service({})
+        db.service_update(self.ctxt, service['id'], {'forced_down': True})
+        updated_service = db.service_get(self.ctxt, service['id'])
+        self.assertTrue(updated_service['forced_down'])
+
+    def test_service_update_with_unset_forced_down(self):
+        service = self._create_service({'forced_down': True})
+        db.service_update(self.ctxt, service['id'], {'forced_down': False})
+        updated_service = db.service_get(self.ctxt, service['id'])
+        self.assertFalse(updated_service['forced_down'])
 
     def test_service_get(self):
         service1 = self._create_service({})
@@ -3529,9 +3563,9 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
                 filters = {}
 
             expected_it = flavors
-            for name, value in filters.iteritems():
+            for name, value in filters.items():
                 filt = lambda it: lambda_filters[name](it, value)
-                expected_it = filter(filt, expected_it)
+                expected_it = list(filter(filt, expected_it))
 
             real_it = db.flavor_get_all(self.ctxt, filters=filters)
             self._assertEqualListsOfObjects(expected_it, real_it)
@@ -3554,9 +3588,9 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
             for root in root_filts:
                 for disabled in disabled_filts:
                     for is_public in is_public_filts:
-                        filts = [f.items() for f in
-                                    [mem, root, disabled, is_public]]
-                        filts = dict(reduce(lambda x, y: x + y, filts, []))
+                        filts = {}
+                        for f in (mem, root, disabled, is_public):
+                            filts.update(f)
                         assert_multi_filter_flavor_get(filts)
 
     def test_flavor_get_all_limit_sort(self):
@@ -3744,7 +3778,7 @@ class InstanceTypeExtraSpecsTestCase(BaseInstanceTypeTestCase):
     def test_flavor_extra_specs_delete(self):
         for it in self.flavors:
             specs = it['extra_specs']
-            key = specs.keys()[0]
+            key = list(specs.keys())[0]
             del specs[key]
             db.flavor_extra_specs_delete(self.ctxt, it['flavorid'], key)
             real_specs = db.flavor_extra_specs_get(self.ctxt, it['flavorid'])
@@ -3953,15 +3987,15 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
             'host3': ['1.1.1.6']
         }
 
-        for host, ips in host_ips.iteritems():
+        for host, ips in host_ips.items():
             for ip in ips:
                 instance_uuid = self._create_instance(host=host)
                 db.fixed_ip_create(self.ctxt, {'address': ip})
                 db.fixed_ip_associate(self.ctxt, ip, instance_uuid)
 
-        for host, ips in host_ips.iteritems():
-            ips_on_host = map(lambda x: x['address'],
-                                db.fixed_ip_get_by_host(self.ctxt, host))
+        for host, ips in host_ips.items():
+            ips_on_host = [x['address']
+                           for x in db.fixed_ip_get_by_host(self.ctxt, host)]
             self._assertEqualListsOfPrimitivesAsSets(ips_on_host, ips)
 
     def test_fixed_ip_get_by_network_host_not_found_exception(self):
@@ -4211,6 +4245,20 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
             self.assertRaises(exception.FixedIpNotFoundForNetwork,
                               db.fixed_ip_associate,
                               self.ctxt, None, instance_uuid)
+            self.assertEqual(1, mock_first.call_count)
+
+    def test_fixed_ip_associate_no_network_id_with_no_retries(self):
+        # Tests that trying to associate an instance to a fixed IP on a network
+        # but without specifying the network ID during associate will fail.
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+        address = self.create_fixed_ip(network_id=network['id'])
+
+        with mock.patch('sqlalchemy.orm.query.Query.first',
+                        return_value=None) as mock_first:
+            self.assertRaises(exception.FixedIpNotFoundForNetwork,
+                              db.fixed_ip_associate,
+                              self.ctxt, address, instance_uuid)
             self.assertEqual(1, mock_first.call_count)
 
     def test_fixed_ip_associate_pool_invalid_uuid(self):
@@ -4553,13 +4601,13 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'pool2': ['2.2.2.2'],
             'pool3': ['3.3.3.3', '4.4.4.4', '5.5.5.5']
         }
-        for pool, addresses in pools.iteritems():
+        for pool, addresses in pools.items():
             for address in addresses:
                 vals = {'pool': pool, 'address': address, 'project_id': None}
                 self._create_floating_ip(vals)
 
         project_id = self._get_base_values()['project_id']
-        for pool, addresses in pools.iteritems():
+        for pool, addresses in pools.items():
             alloc_addrs = []
             for i in addresses:
                 float_addr = db.floating_ip_allocate_address(self.ctxt,
@@ -4657,7 +4705,7 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_floating_ip_bulk_create(self):
         expected_ips = ['1.1.1.1', '1.1.1.2', '1.1.1.3', '1.1.1.4']
         result = db.floating_ip_bulk_create(self.ctxt,
-                                   map(lambda x: {'address': x}, expected_ips),
+                                   [{'address': x} for x in expected_ips],
                                    want_result=False)
         self.assertIsNone(result)
         self._assertEqualListsOfPrimitivesAsSets(self._get_existing_ips(),
@@ -4667,11 +4715,13 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         ips = ['1.1.1.1', '1.1.1.2', '1.1.1.3', '1.1.1.4']
         prepare_ips = lambda x: {'address': x}
 
-        result = db.floating_ip_bulk_create(self.ctxt, map(prepare_ips, ips))
+        result = db.floating_ip_bulk_create(self.ctxt,
+                                            list(map(prepare_ips, ips)))
         self.assertEqual(ips, [ip.address for ip in result])
         self.assertRaises(exception.FloatingIpExists,
                           db.floating_ip_bulk_create,
-                          self.ctxt, map(prepare_ips, ['1.1.1.5', '1.1.1.4']),
+                          self.ctxt,
+                          list(map(prepare_ips, ['1.1.1.5', '1.1.1.4'])),
                           want_result=False)
         self.assertRaises(exception.FloatingIpNotFoundForAddress,
                           db.floating_ip_get_by_address,
@@ -4714,7 +4764,7 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         db.floating_ip_bulk_destroy(self.ctxt, ips_for_delete)
 
-        expected_addresses = map(lambda x: x['address'], ips_for_non_delete)
+        expected_addresses = [x['address'] for x in ips_for_non_delete]
         self._assertEqualListsOfPrimitivesAsSets(self._get_existing_ips(),
                                                  expected_addresses)
         self.assertEqual(db.quota_usage_get_all_by_project(
@@ -4889,14 +4939,14 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         }
 
         hosts_with_float_ips = {}
-        for host, addresses in hosts.iteritems():
+        for host, addresses in hosts.items():
             hosts_with_float_ips[host] = []
             for address in addresses:
                 float_ip = self._create_floating_ip({'host': host,
                                                      'address': address})
                 hosts_with_float_ips[host].append(float_ip)
 
-        for host, float_ips in hosts_with_float_ips.iteritems():
+        for host, float_ips in hosts_with_float_ips.items():
             real_float_ips = db.floating_ip_get_all_by_host(self.ctxt, host)
             self._assertEqualListsOfObjects(float_ips, real_float_ips,
                                             ignored_keys="fixed_ip")
@@ -4914,14 +4964,14 @@ class FloatingIpTestCase(test.TestCase, ModelsObjectComparatorMixin):
         }
 
         projects_with_float_ips = {}
-        for project_id, addresses in projects.iteritems():
+        for project_id, addresses in projects.items():
             projects_with_float_ips[project_id] = []
             for address in addresses:
                 float_ip = self._create_floating_ip({'project_id': project_id,
                                                      'address': address})
                 projects_with_float_ips[project_id].append(float_ip)
 
-        for project_id, float_ips in projects_with_float_ips.iteritems():
+        for project_id, float_ips in projects_with_float_ips.items():
             real_float_ips = db.floating_ip_get_all_by_project(self.ctxt,
                                                                project_id)
             self._assertEqualListsOfObjects(float_ips, real_float_ips,
@@ -5328,8 +5378,8 @@ class TaskLogTestCase(test.TestCase):
         super(TaskLogTestCase, self).setUp()
         self.context = context.get_admin_context()
         now = timeutils.utcnow()
-        self.begin = now - datetime.timedelta(seconds=10)
-        self.end = now - datetime.timedelta(seconds=5)
+        self.begin = timeutils.strtime(now - datetime.timedelta(seconds=10))
+        self.end = timeutils.strtime(now - datetime.timedelta(seconds=5))
         self.task_name = 'fake-task-name'
         self.host = 'fake-host'
         self.message = 'Fake task message'
@@ -5340,8 +5390,10 @@ class TaskLogTestCase(test.TestCase):
         result = db.task_log_get(self.context, self.task_name, self.begin,
                                  self.end, self.host)
         self.assertEqual(result['task_name'], self.task_name)
-        self.assertEqual(result['period_beginning'], self.begin)
-        self.assertEqual(result['period_ending'], self.end)
+        self.assertEqual(result['period_beginning'],
+                         timeutils.parse_strtime(self.begin))
+        self.assertEqual(result['period_ending'],
+                         timeutils.parse_strtime(self.end))
         self.assertEqual(result['host'], self.host)
         self.assertEqual(result['message'], self.message)
 
@@ -5433,8 +5485,8 @@ class BlockDeviceMappingTestCase(test.TestCase):
         bdm_real = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid)
         self.assertEqual(bdm_real[0]['destination_type'], 'moon')
         # Also make sure the update call returned correct data
-        self.assertEqual(dict(bdm_real[0].iteritems()),
-                         dict(result.iteritems()))
+        self.assertEqual(dict(bdm_real[0]),
+                         dict(result))
 
     def test_block_device_mapping_update_or_create(self):
         values = {
@@ -6320,7 +6372,7 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
         reservations_uuids = db.quota_reserve(self.ctxt, reservable_resources,
                                               quotas, quotas, deltas, None,
                                               None, None, 'project1')
-        resources_names = reservable_resources.keys()
+        resources_names = list(reservable_resources.keys())
         for reservation_uuid in reservations_uuids:
             reservation = _reservation_get(self.ctxt, reservation_uuid)
             usage = db.quota_usage_get(self.ctxt, 'project1',
@@ -6373,7 +6425,7 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
         quota_usage = db.quota_usage_get(self.ctxt, 'p1', 'resource0')
         expected = {'resource': 'resource0', 'project_id': 'p1',
                     'in_use': 0, 'reserved': 0, 'total': 0}
-        for key, value in expected.iteritems():
+        for key, value in expected.items():
             self.assertEqual(value, quota_usage[key])
 
     def test_quota_usage_get_all_by_project(self):
@@ -6406,7 +6458,7 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
         quota_usage = db.quota_usage_get(self.ctxt, 'p1', 'resource0', 'u1')
         expected = {'resource': 'resource0', 'project_id': 'p1',
                     'user_id': 'u1', 'in_use': 42, 'reserved': 43, 'total': 85}
-        for key, value in expected.iteritems():
+        for key, value in expected.items():
             self.assertEqual(value, quota_usage[key])
 
     def test_quota_create_exists(self):
@@ -6741,7 +6793,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
             compute_node_data['hypervisor_hostname'] = name
             node = db.compute_node_create(self.ctxt, compute_node_data)
 
-            node = dict(node.iteritems())
+            node = dict(node)
 
             expected.append(node)
 
@@ -6886,7 +6938,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_compute_node_statistics(self):
         stats = db.compute_node_statistics(self.ctxt)
         self.assertEqual(stats.pop('count'), 1)
-        for k, v in stats.iteritems():
+        for k, v in stats.items():
             self.assertEqual(v, self.item[k])
 
     def test_compute_node_statistics_disabled_service(self):
@@ -7035,7 +7087,7 @@ class CertificateTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'project_id': 'project',
             'file_name': 'filename'
         }
-        return [{k: v + str(x) for k, v in base_values.iteritems()}
+        return [{k: v + str(x) for k, v in base_values.items()}
                 for x in range(1, 4)]
 
     def _certificates_create(self):
@@ -7202,7 +7254,7 @@ class CellTestCase(test.TestCase, ModelsObjectComparatorMixin):
         test_values = []
         for x in range(1, 4):
             modified_val = {k: self._cell_value_modify(v, x)
-                        for k, v in self._get_cell_base_values().iteritems()}
+                        for k, v in self._get_cell_base_values().items()}
             db.cell_create(self.ctxt, modified_val)
             test_values.append(modified_val)
         return test_values
@@ -7593,351 +7645,6 @@ class Ec2TestCase(test.TestCase):
         self.assertRaises(exception.InstanceNotFound,
                           db.get_instance_uuid_by_ec2_id,
                           self.ctxt, 100500)
-
-
-class FlavorMigrationTestCase(test.TestCase):
-    def test_augment_flavor_to_migrate_no_extra_specs(self):
-        flavor = objects.Flavor()
-        full_flavor = objects.Flavor(extra_specs={'foo': 'bar'})
-        sqlalchemy_api._augment_flavor_to_migrate(flavor, full_flavor)
-        self.assertTrue(flavor.obj_attr_is_set('extra_specs'))
-        self.assertEqual(full_flavor.extra_specs, flavor.extra_specs)
-
-    def test_augment_flavor_to_migrate_extra_specs_merge(self):
-        flavor = objects.Flavor()
-        flavor.extra_specs = {'foo': '1', 'bar': '2'}
-        full_flavor = objects.Flavor(extra_specs={'bar': '3', 'baz': '4'})
-        sqlalchemy_api._augment_flavor_to_migrate(flavor, full_flavor)
-        self.assertEqual({'foo': '1', 'bar': '2', 'baz': '4'},
-                         flavor.extra_specs)
-
-    @mock.patch('nova.db.sqlalchemy.api._augment_flavor_to_migrate')
-    def test_augment_flavors_to_migrate(self, mock_augment):
-        instance = objects.Instance()
-        instance._context = context.get_admin_context()
-        instance.flavor = objects.Flavor(flavorid='foo')
-        instance.old_flavor = None
-        instance.new_flavor = None
-        sqlalchemy_api._augment_flavors_to_migrate(instance,
-                                                   {'foo': 'bar'})
-        mock_augment.assert_called_once_with(instance.flavor, 'bar')
-
-    @mock.patch('nova.db.sqlalchemy.api._augment_flavor_to_migrate')
-    @mock.patch('nova.objects.Flavor.get_by_flavor_id')
-    def test_augment_flavors_to_migrate_uses_cache(self, mock_get,
-                                                   mock_augment):
-        instance = objects.Instance(context=context.get_admin_context())
-        instance.flavor = objects.Flavor(flavorid='foo')
-        instance.old_flavor = objects.Flavor(flavorid='foo')
-        instance.new_flavor = objects.Flavor(flavorid='bar')
-
-        flavor_cache = {'bar': 'bar_flavor'}
-        mock_get.return_value = 'foo_flavor'
-
-        sqlalchemy_api._augment_flavors_to_migrate(instance, flavor_cache)
-        self.assertIn('foo', flavor_cache)
-        self.assertEqual('foo_flavor', flavor_cache['foo'])
-        mock_get.assert_called_once_with(mock.ANY, 'foo')
-
-    def test_migrate_flavor(self):
-        ctxt = context.get_admin_context()
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        db.flavor_extra_specs_update_or_create(ctxt, flavor.flavorid,
-                                               {'new_spec': 'foo'})
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': 'foobar'},
-                  }
-        db.instance_create(ctxt, values)
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': None},
-                  }
-        instance = db.instance_create(ctxt, values)
-
-        match, done = db.migrate_flavor_data(ctxt, None, {})
-        self.assertEqual(1, match)
-        self.assertEqual(1, done)
-        extra = db.instance_extra_get_by_instance_uuid(ctxt, instance['uuid'],
-                                                       columns=['flavor'])
-        flavorinfo = jsonutils.loads(extra.flavor)
-        self.assertIsNone(flavorinfo['old'])
-        self.assertIsNone(flavorinfo['new'])
-        curflavor = obj_base.NovaObject.obj_from_primitive(flavorinfo['cur'])
-        self.assertEqual(flavor.flavorid, curflavor.flavorid)
-
-    def test_migrate_flavor_honors_limit(self):
-        ctxt = context.get_admin_context()
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        db.flavor_extra_specs_update_or_create(ctxt, flavor.flavorid,
-                                               {'new_spec': 'foo'})
-
-        for i in (1, 2, 3, 4, 5):
-            values = {'uuid': str(stdlib_uuid.uuid4()),
-                      'system_metadata': sysmeta,
-                      'extra': {'flavor': 'foobar'},
-                      }
-            db.instance_create(ctxt, values)
-
-            values = {'uuid': str(stdlib_uuid.uuid4()),
-                      'system_metadata': sysmeta,
-                      'extra': {'flavor': None},
-                      }
-            db.instance_create(ctxt, values)
-
-        match, done = db.migrate_flavor_data(ctxt, 2, {})
-        self.assertEqual(2, match)
-        self.assertEqual(2, done)
-
-        match, done = db.migrate_flavor_data(ctxt, 1, {})
-        self.assertEqual(1, match)
-        self.assertEqual(1, done)
-
-        match, done = db.migrate_flavor_data(ctxt, None, {})
-        self.assertEqual(2, match)
-        self.assertEqual(2, done)
-
-        match, done = db.migrate_flavor_data(ctxt, None, {})
-        self.assertEqual(0, match)
-        self.assertEqual(0, done)
-
-    def _test_migrate_flavor_states(self, force=False):
-        ctxt = context.get_admin_context()
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': None},
-        }
-        db.instance_create(ctxt, values)
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'task_state': task_states.SPAWNING,
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': None},
-        }
-        db.instance_create(ctxt, values)
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'vm_state': vm_states.RESCUED,
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': None},
-        }
-        db.instance_create(ctxt, values)
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'vm_state': vm_states.RESIZED,
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': None},
-        }
-        db.instance_create(ctxt, values)
-
-        match, done = db.migrate_flavor_data(ctxt, None, {}, force)
-
-        if not force:
-            self.assertEqual(4, match)
-            self.assertEqual(1, done)
-
-            match, done = db.migrate_flavor_data(ctxt, None, {}, force)
-            self.assertEqual(3, match)
-            self.assertEqual(0, done)
-        else:
-            self.assertEqual(4, match)
-            self.assertEqual(4, done)
-
-            match, done = db.migrate_flavor_data(ctxt, None, {}, force)
-            self.assertEqual(0, match)
-            self.assertEqual(0, done)
-
-    def test_migrate_flavor_honors_states(self):
-        self._test_migrate_flavor_states(force=False)
-
-    def test_migrate_flavor_force_states(self):
-        self._test_migrate_flavor_states(force=True)
-
-    def test_migrate_flavor_gets_missing_extra_rows(self):
-        ctxt = context.get_admin_context()
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        values1 = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-                  'extra': {'flavor': None},
-        }
-        db.instance_create(ctxt, values1)
-        values2 = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-        }
-        inst2 = db.instance_create(ctxt, values2)
-        sqlalchemy_api.model_query(ctxt, models.InstanceExtra).\
-            filter_by(instance_uuid=inst2.uuid).delete()
-
-        self.assertIsNone(db.instance_extra_get_by_instance_uuid(
-            ctxt, inst2.uuid))
-        match, done = db.migrate_flavor_data(ctxt, None, {})
-        self.assertEqual(2, match)
-        self.assertEqual(2, done)
-        extra = db.instance_extra_get_by_instance_uuid(ctxt, inst2.uuid)
-        self.assertIsNotNone(extra)
-        self.assertIsNotNone(extra.flavor)
-
-    def test_migrate_flavor_with_deleted_things(self):
-        ctxt = context.get_admin_context()
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-
-        # Instance with some deleted metadata bits. We create
-        # with a flavor, then change one of the keys so that
-        # we end up with a soft-deleted row for that value.
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-        }
-        inst1 = db.instance_create(ctxt, values)
-        _sysmeta = dict(sysmeta, instance_type_id=123)
-        db.instance_system_metadata_update(ctxt, inst1.uuid,
-                                           _sysmeta, True)
-
-        # Deleted instance. Without a full flavor in sysmeta,
-        # if this is hit in the migration, we'll explode trying
-        # to construct the full flavor.
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': sysmeta,
-        }
-        inst2 = db.instance_create(ctxt, values)
-        inst2.soft_delete(session=None)
-
-        # Instance that has only deleted flavor metadata. This
-        # looks like an instance that previously had flavor stuff
-        # in sysmeta, but has since been converted. Since extra.flavor
-        # is not a legitimate structure, we'll explode if the migration
-        # code tries to hit this.
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'system_metadata': {'instance_type_id': '123'},
-                  'extra': {'flavor': 'foobar'},
-        }
-        inst3 = db.instance_create(ctxt, values)
-        db.instance_system_metadata_update(ctxt, inst3.uuid,
-                                           {'foo': 'bar'},
-                                           True)
-
-        match, done = db.migrate_flavor_data(ctxt, None, {})
-        self.assertEqual(1, match)
-        self.assertEqual(1, done)
-
-    @mock.patch('nova.objects.Flavor.get_by_id')
-    def _test_migrate_flavor_with_no_sysmeta(self, flavor, inst,
-                                             expected_count,
-                                             mock_get_flavor):
-        ctxt = context.get_admin_context()
-        mock_get_flavor.return_value = flavor
-
-        flavor_cache = {}
-        total, hit = db.migrate_flavor_data(ctxt, None, flavor_cache)
-        self.assertEqual(expected_count, total)
-        self.assertEqual(expected_count, hit)
-        mock_get_flavor.assert_called_once_with(mock.ANY, 123)
-        self.assertIn(flavor.flavorid, flavor_cache)
-
-        # NOTE(danms): Fetch the pieces to make sure the sans-sysmeta
-        # instance is actually migrated in the database
-        extra = db.instance_extra_get_by_instance_uuid(ctxt, inst['uuid'])
-        self.assertIn('flavor', extra)
-        extra_flavor = objects.Flavor.obj_from_primitive(
-            jsonutils.loads(extra['flavor'])['cur'])
-        self.assertEqual(flavor.id, extra_flavor.id)
-
-        sysmeta = db.instance_system_metadata_get(ctxt, inst['uuid'])
-        self.assertNotIn('instance_type_id', sysmeta)
-
-    def test_migrate_flavor_with_no_sysmeta_first(self):
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        ctxt = context.get_admin_context()
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': sysmeta,
-              }
-        db.instance_create(ctxt, values)
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': {},
-              }
-        bad_inst = db.instance_create(ctxt, values)
-
-        self._test_migrate_flavor_with_no_sysmeta(flavor, bad_inst, 2)
-
-    def test_migrate_flavor_with_no_sysmeta_last(self):
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        ctxt = context.get_admin_context()
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': {},
-              }
-        bad_inst = db.instance_create(ctxt, values)
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': sysmeta,
-              }
-        db.instance_create(ctxt, values)
-
-        self._test_migrate_flavor_with_no_sysmeta(flavor, bad_inst, 2)
-
-    def test_migrate_flavor_with_no_sysmeta_alone(self):
-        flavor = flavors.get_default_flavor()
-        ctxt = context.get_admin_context()
-
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': {},
-              }
-        bad_inst = db.instance_create(ctxt, values)
-
-        self._test_migrate_flavor_with_no_sysmeta(flavor, bad_inst, 1)
-
-    @mock.patch('nova.objects.Instance.save')
-    @mock.patch('nova.objects.Flavor.get_by_id')
-    def test_migrate_flavor_with_no_sysmeta_no_flavor(self, mock_get_flavor,
-                                                      mock_save):
-        ctxt = context.get_admin_context()
-        mock_get_flavor.side_effect = exception.FlavorNotFound(flavor_id=123)
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': {},
-              }
-        db.instance_create(ctxt, values)
-
-        flavor_cache = {}
-        db.migrate_flavor_data(ctxt, None, flavor_cache)
-        mock_get_flavor.assert_called_once_with(mock.ANY, 123)
-        self.assertEqual({}, flavor_cache)
-        self.assertFalse(mock_save.called)
-
-    @mock.patch('nova.objects.Flavor.get_by_flavor_id')
-    @mock.patch('nova.db.sqlalchemy.api._augment_flavor_to_migrate')
-    @mock.patch('nova.objects.Instance.save')
-    def test_migrate_flavor_with_missing_flavor(self, mock_save,
-                                                mock_augment,
-                                                mock_get_flavor):
-        ctxt = context.get_admin_context()
-        flavor = flavors.get_default_flavor()
-        sysmeta = flavors.save_flavor_info({}, flavor)
-        mock_get_flavor.side_effect = exception.FlavorNotFound(flavor_id=123)
-        values = {'uuid': str(stdlib_uuid.uuid4()),
-                  'instance_type_id': 123,
-                  'system_metadata': sysmeta,
-              }
-        db.instance_create(ctxt, values)
-
-        flavor_cache = {}
-        db.migrate_flavor_data(ctxt, None, flavor_cache)
-        self.assertFalse(mock_augment.called)
-        self.assertTrue(mock_save.called)
-        self.assertEqual({}, flavor_cache)
 
 
 class ArchiveTestCase(test.TestCase):
@@ -8877,6 +8584,19 @@ class TestDBInstanceTags(test.TestCase):
         tags = self._get_tags_from_resp(tag_refs)
         self.assertEqual([], tags)
 
+    def test_instance_tag_exists(self):
+        uuid = self._create_instance()
+        tag1 = 'tag1'
+        tag2 = 'tag2'
+
+        db.instance_tag_add(self.context, uuid, tag1)
+
+        # NOTE(snikitin): Make sure it's actually a bool
+        self.assertEqual(True, db.instance_tag_exists(self.context, uuid,
+                                                        tag1))
+        self.assertEqual(False, db.instance_tag_exists(self.context, uuid,
+                                                         tag2))
+
     def test_instance_tag_add_to_non_existing_instance(self):
         self._create_instance()
         self.assertRaises(exception.InstanceNotFound, db.instance_tag_add,
@@ -8903,3 +8623,9 @@ class TestDBInstanceTags(test.TestCase):
         self.assertRaises(exception.InstanceNotFound,
                           db.instance_tag_delete_all,
                           self.context, 'fake_uuid')
+
+    def test_instance_tag_exists_non_existing_instance(self):
+        self._create_instance()
+        self.assertRaises(exception.InstanceNotFound,
+                          db.instance_tag_exists,
+                          self.context, 'fake_uuid', 'tag')

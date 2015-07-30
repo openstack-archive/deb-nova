@@ -498,8 +498,8 @@ class _TestObject(object):
         error = None
         try:
             base.NovaObject.obj_class_from_name('MyObj', '1.25')
-        except exception.IncompatibleObjectVersion as error:
-            pass
+        except exception.IncompatibleObjectVersion as ex:
+            error = ex
 
         self.assertIsNotNone(error)
         self.assertEqual('1.6', error.kwargs['supported'])
@@ -646,7 +646,7 @@ class _TestObject(object):
         myobj_fields = (['foo', 'bar', 'missing',
                          'readonly', 'rel_object',
                          'rel_objects', 'mutable_default'] +
-                        base_fields)
+                        list(base_fields))
         myobj3_fields = ['new_field']
         self.assertTrue(issubclass(TestSubclassedObject, MyObj))
         self.assertEqual(len(myobj_fields), len(MyObj.fields))
@@ -986,6 +986,36 @@ class TestObjectSerializer(_BaseTestCase):
         # .0 of the object.
         self.assertEqual('1.6', obj.VERSION)
 
+    def test_nested_backport(self):
+        @base.NovaObjectRegistry.register
+        class Parent(base.NovaObject):
+            VERSION = '1.0'
+
+            fields = {
+                'child': fields.ObjectField('MyObj'),
+            }
+
+        @base.NovaObjectRegistry.register  # noqa
+        class Parent(base.NovaObject):
+            VERSION = '1.1'
+
+            fields = {
+                'child': fields.ObjectField('MyObj'),
+            }
+
+        child = MyObj(foo=1)
+        parent = Parent(child=child)
+        prim = parent.obj_to_primitive()
+        child_prim = prim['nova_object.data']['child']
+        child_prim['nova_object.version'] = '1.10'
+        ser = base.NovaObjectSerializer()
+        with mock.patch.object(ser.conductor, 'object_backport') as backport:
+            ser.deserialize_entity(self.context, prim)
+            # NOTE(danms): This should be the version of the parent object,
+            # not the child. If wrong, this will be '1.6', which is the max
+            # child version in our registry.
+            backport.assert_called_once_with(self.context, prim, '1.1')
+
     def test_object_serialization(self):
         ser = base.NovaObjectSerializer()
         obj = MyObj()
@@ -1059,8 +1089,8 @@ object_data = {
     'AggregateList': '1.2-79689d69db4de545a82fe09f30468c53',
     'BandwidthUsage': '1.2-c6e4c779c7f40f2407e3d70022e3cd1c',
     'BandwidthUsageList': '1.2-77b4d43e641459f464a6aa4d53debd8f',
-    'BlockDeviceMapping': '1.9-72d92c263f03a5cbc1761b0ea4c66c22',
-    'BlockDeviceMappingList': '1.10-972d431e07463ae1f68e752521937b01',
+    'BlockDeviceMapping': '1.13-d44d8d694619e79c172a99b3c1d6261d',
+    'BlockDeviceMappingList': '1.14-ff39c726181b66dfdf54d7c73abf5ffb',
     'CellMapping': '1.0-7f1a7e85a22bbb7559fc730ab658b9bd',
     'ComputeNode': '1.11-71784d2e6f2814ab467d4e0f69286843',
     'ComputeNodeList': '1.11-8d269636229e8a39fef1c3514f77d0c0',
@@ -1070,16 +1100,17 @@ object_data = {
     'EC2InstanceMapping': '1.0-a4556eb5c5e94c045fe84f49cf71644f',
     'EC2SnapshotMapping': '1.0-47e7ddabe1af966dce0cfd0ed6cd7cd1',
     'EC2VolumeMapping': '1.0-5b713751d6f97bad620f3378a521020d',
-    'FixedIP': '1.10-b5818a33996228fc146f096d1403742c',
-    'FixedIPList': '1.10-d0db9597559409a4a01b3577500dfe5e',
+    'FixedIP': '1.11-b5818a33996228fc146f096d1403742c',
+    'FixedIPList': '1.11-18c3cc9a716bc12dd35940fe64d8eb7b',
     'Flavor': '1.1-b6bb7a730a79d720344accefafacf7ee',
     'FlavorList': '1.1-d96e87307f94062ce538f77b5e221e13',
-    'FloatingIP': '1.6-52a67d52d85eb8b3f324a5b7935a335b',
-    'FloatingIPList': '1.7-bdd31ccd6ff9bb0d290108397b3cd44c',
+    'FloatingIP': '1.7-52a67d52d85eb8b3f324a5b7935a335b',
+    'FloatingIPList': '1.8-9a9fe191dc694ea4ff08946be9460718',
+    'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
     'HVSpec': '1.0-3999ff70698fc472c2d4d60359949f6b',
-    'ImageMeta': '1.1-642d1b2eb3e880a367f37d72dd76162d',
-    'ImageMetaProps': '1.1-8fe09b7872538f291649e77375f8ac4c',
-    'Instance': '1.20-260d385315d4868b6397c61a13109841',
+    'ImageMeta': '1.2-642d1b2eb3e880a367f37d72dd76162d',
+    'ImageMetaProps': '1.2-204fe877eecc83ffc68feeea7d1ea481',
+    'Instance': '1.21-260d385315d4868b6397c61a13109841',
     'InstanceAction': '1.1-f9f293e526b66fca0d05c3b3a2d13914',
     'InstanceActionEvent': '1.1-e56a64fa4710e43ef7af2ad9d6028b33',
     'InstanceActionEventList': '1.0-c37db4e58b637a857c90fb02284d8f7c',
@@ -1090,7 +1121,7 @@ object_data = {
     'InstanceGroup': '1.9-a413a4ec0ff391e3ef0faa4e3e2a96d0',
     'InstanceGroupList': '1.6-1e383df73d9bd224714df83d9a9983bb',
     'InstanceInfoCache': '1.5-cd8b96fefe0fc8d4d337243ba0bf0e1e',
-    'InstanceList': '1.17-64f6949d58e4ecd3219142f1567a61d9',
+    'InstanceList': '1.19-d7256b45308fe195ecfb2f5718e44316',
     'InstanceMapping': '1.0-47ef26034dfcbea78427565d9177fe50',
     'InstanceMappingList': '1.0-b7b108f6a56bd100c20a3ebd5f3801a1',
     'InstanceNUMACell': '1.2-535ef30e0de2d6a0d26a71bd58ecafc4',
@@ -1099,8 +1130,10 @@ object_data = {
     'InstancePCIRequests': '1.1-fc8d179960869c9af038205a80af2541',
     'KeyPair': '1.3-bfaa2a8b148cdf11e0c72435d9dd097a',
     'KeyPairList': '1.2-60f984184dc5a8eba6e34e20cbabef04',
-    'Migration': '1.2-331b1f37d0b20b932614181b9832c860',
+    'Migration': '1.2-8784125bedcea0a9227318511904e853',
     'MigrationList': '1.2-5e79c0693d7ebe4e9ac03b5db11ab243',
+    'MonitorMetric': '1.0-4fe7f3fb1777567883ac842120ec5800',
+    'MonitorMetricList': '1.0-1b54e51ad0fc1f3a8878f5010e7e16dc',
     'NUMACell': '1.2-74fc993ac5c83005e76e34e8487f1c05',
     'NUMAPagesTopology': '1.0-c71d86317283266dc8364c149155e48e',
     'NUMATopology': '1.2-c63fad38be73b6afd04715c9c1b29220',
@@ -1110,7 +1143,7 @@ object_data = {
     'NetworkRequest': '1.1-7a3e4ca2ce1e7b62d8400488f2f2b756',
     'NetworkRequestList': '1.1-ea2a8e1c1ecf3608af2956e657adeb4c',
     'PciDevice': '1.3-4d43db45e3978fca4280f696633c7c20',
-    'PciDeviceList': '1.1-2b8b6d0cf622c58543c5dec50c7e877c',
+    'PciDeviceList': '1.2-2b8b6d0cf622c58543c5dec50c7e877c',
     'PciDevicePool': '1.1-3f5ddc3ff7bfa14da7f6c7e9904cc000',
     'PciDevicePoolList': '1.1-ea2a8e1c1ecf3608af2956e657adeb4c',
     'Quotas': '1.2-1fe4cd50593aaf5d36a6dc5ab3f98fb3',
@@ -1120,10 +1153,12 @@ object_data = {
     'SecurityGroupList': '1.0-a3bb51998e7d2a95b3e613111e853817',
     'SecurityGroupRule': '1.1-ae1da17b79970012e8536f88cb3c6b29',
     'SecurityGroupRuleList': '1.1-521f1aeb7b0cc00d026175509289d020',
-    'Service': '1.13-bc6c9671a91439e08224c2652da5fc4c',
-    'ServiceList': '1.11-d1728430a30700c143e542b7c75f65b0',
-    'Tag': '1.0-616bf44af4a22e853c17b37a758ec73e',
-    'TagList': '1.0-e16d65894484b7530b720792ffbbbd02',
+    'Service': '1.14-1d5c9a16f47da93e82082c4fce31588a',
+    'ServiceList': '1.12-02c9aec8f075cfa8d6cb4da0507a60e7',
+    'TaskLog': '1.0-78b0534366f29aa3eebb01860fbe18fe',
+    'TaskLogList': '1.0-2378c0e2afdbbfaf392f31c1dffa4d25',
+    'Tag': '1.1-8b8d7d5b48887651a0e01241672e2963',
+    'TagList': '1.1-6263d7242b87010174cf1d4ad49e5148',
     'VirtCPUFeature': '1.0-3310718d8c72309259a6e39bdefe83ee',
     'VirtCPUModel': '1.0-6a5cc9f322729fc70ddc6733bacd57d3',
     'VirtCPUTopology': '1.0-fc694de72e20298f7c6bab1083fd4563',
@@ -1133,41 +1168,78 @@ object_data = {
 
 
 object_relationships = {
-    'BlockDeviceMapping': {'Instance': '1.20'},
+    'AgentList': {'Agent': '1.0'},
+    'AggregateList': {'Aggregate': '1.1'},
+    'BandwidthUsageList': {'BandwidthUsage': '1.2'},
+    'BlockDeviceMapping': {'Instance': '1.21'},
+    'BlockDeviceMappingList': {'BlockDeviceMapping': '1.13'},
     'ComputeNode': {'HVSpec': '1.0', 'PciDevicePoolList': '1.1'},
-    'FixedIP': {'Instance': '1.20', 'Network': '1.2',
+    'ComputeNodeList': {'ComputeNode': '1.11'},
+    'DNSDomainList': {'DNSDomain': '1.0'},
+    'FixedIP': {'Instance': '1.21', 'Network': '1.2',
                 'VirtualInterface': '1.0',
-                'FloatingIPList': '1.7'},
-    'FloatingIP': {'FixedIP': '1.10'},
-    'ImageMeta': {'ImageMetaProps': '1.1'},
+                'FloatingIPList': '1.8'},
+    'FixedIPList': {'FixedIP': '1.11'},
+    'FlavorList': {'Flavor': '1.1'},
+    'FloatingIP': {'FixedIP': '1.11'},
+    'FloatingIPList': {'FloatingIP': '1.7'},
+    'HostMapping': {'CellMapping': '1.0'},
+    'ImageMeta': {'ImageMetaProps': '1.2'},
     'Instance': {'InstanceFault': '1.2',
                  'InstanceInfoCache': '1.5',
                  'InstanceNUMATopology': '1.1',
-                 'PciDeviceList': '1.1',
-                 'TagList': '1.0',
+                 'PciDeviceList': '1.2',
+                 'TagList': '1.1',
                  'SecurityGroupList': '1.0',
                  'Flavor': '1.1',
                  'InstancePCIRequests': '1.1',
                  'VirtCPUModel': '1.0',
                  'EC2Ids': '1.0',
                  },
+    'InstanceActionEventList': {'InstanceActionEvent': '1.1'},
+    'InstanceActionList': {'InstanceAction': '1.1'},
+    'InstanceFaultList': {'InstanceFault': '1.2'},
+    'InstanceGroupList': {'InstanceGroup': '1.9'},
+    'InstanceList': {'Instance': '1.21'},
+    'InstanceMappingList': {'InstanceMapping': '1.0'},
     'InstanceNUMACell': {'VirtCPUTopology': '1.0'},
     'InstanceNUMATopology': {'InstanceNUMACell': '1.2'},
     'InstancePCIRequests': {'InstancePCIRequest': '1.1'},
+    'KeyPairList': {'KeyPair': '1.3'},
+    'MigrationList': {'Migration': '1.2'},
+    'MonitorMetricList': {'MonitorMetric': '1.0'},
+    'NetworkList': {'Network': '1.2'},
+    'NetworkRequestList': {'NetworkRequest': '1.1'},
     'NUMACell': {'NUMAPagesTopology': '1.0'},
     'NUMATopology': {'NUMACell': '1.2'},
+    'PciDeviceList': {'PciDevice': '1.3'},
+    'PciDevicePoolList': {'PciDevicePool': '1.1'},
+    'SecurityGroupList': {'SecurityGroup': '1.1'},
     'SecurityGroupRule': {'SecurityGroup': '1.1'},
+    'SecurityGroupRuleList': {'SecurityGroupRule': '1.1'},
     'Service': {'ComputeNode': '1.11'},
+    'ServiceList': {'Service': '1.14'},
+    'TagList': {'Tag': '1.1'},
+    'TaskLogList': {'TaskLog': '1.0'},
     'VirtCPUModel': {'VirtCPUFeature': '1.0', 'VirtCPUTopology': '1.0'},
+    'VirtualInterfaceList': {'VirtualInterface': '1.0'}
 }
 
 
 class TestObjectVersions(test.NoDBTestCase):
+    @staticmethod
+    def _is_method(thing):
+        # NOTE(dims): In Python3, The concept of 'unbound methods' has
+        # been removed from the language. When referencing a method
+        # as a class attribute, you now get a plain function object.
+        # so let's check for both
+        return inspect.isfunction(thing) or inspect.ismethod(thing)
+
     def _find_remotable_method(self, cls, thing, parent_was_remotable=False):
         """Follow a chain of remotable things down to the original function."""
         if isinstance(thing, classmethod):
             return self._find_remotable_method(cls, thing.__get__(None, cls))
-        elif inspect.ismethod(thing) and hasattr(thing, 'remotable'):
+        elif self._is_method(thing) and hasattr(thing, 'remotable'):
             return self._find_remotable_method(cls, thing.original_fn,
                                                parent_was_remotable=True)
         elif parent_was_remotable:
@@ -1181,12 +1253,12 @@ class TestObjectVersions(test.NoDBTestCase):
     def _get_fingerprint(self, obj_name):
         obj_classes = base.NovaObjectRegistry.obj_classes()
         obj_class = obj_classes[obj_name][0]
-        fields = obj_class.fields.items()
+        fields = list(obj_class.fields.items())
         fields.sort()
         methods = []
         for name in dir(obj_class):
             thing = getattr(obj_class, name)
-            if inspect.ismethod(thing) or isinstance(thing, classmethod):
+            if self._is_method(thing) or isinstance(thing, classmethod):
                 method = self._find_remotable_method(obj_class, thing)
                 if method:
                     methods.append((name, inspect.getargspec(method)))
@@ -1202,14 +1274,26 @@ class TestObjectVersions(test.NoDBTestCase):
                                  sorted(obj_class.child_versions.items())))
         else:
             relevant_data = (fields, methods)
-        fingerprint = '%s-%s' % (obj_class.VERSION,
-                                 hashlib.md5(str(relevant_data)).hexdigest())
+        relevant_data = repr(relevant_data)
+        if six.PY3:
+            relevant_data = relevant_data.encode('utf-8')
+        fingerprint = '%s-%s' % (
+        obj_class.VERSION, hashlib.md5(relevant_data).hexdigest())
         return fingerprint
+
+    def test_find_remotable_method(self):
+        class MyObject(object):
+            @base.remotable
+            def my_method(self):
+                return 'Hello World!'
+        thing = self._find_remotable_method(MyObject,
+                                            getattr(MyObject, 'my_method'))
+        self.assertIsNotNone(thing)
 
     def test_versions(self):
         fingerprints = {}
         obj_classes = base.NovaObjectRegistry.obj_classes()
-        for obj_name in obj_classes:
+        for obj_name in sorted(obj_classes, key=lambda x: x[0]):
             fingerprints[obj_name] = self._get_fingerprint(obj_name)
 
         if os.getenv('GENERATE_HASHES'):
@@ -1246,15 +1330,9 @@ class TestObjectVersions(test.NoDBTestCase):
 
         obj_classes = base.NovaObjectRegistry.obj_classes()
         for name, field in obj_class.fields.items():
-            # Notes(yjiang5): ObjectListBase should be covered by
-            # child_versions test
-            if (issubclass(obj_class, base.ObjectListBase) and
-                    name == 'objects'):
-                continue
             sub_obj_name = self._get_object_field_name(field)
             if sub_obj_name:
                 sub_obj_class = obj_classes[sub_obj_name][0]
-                self._build_tree(tree, sub_obj_class)
                 tree.setdefault(obj_name, {})
                 tree[obj_name][sub_obj_name] = sub_obj_class.VERSION
 
@@ -1277,7 +1355,9 @@ class TestObjectVersions(test.NoDBTestCase):
                          'Please make sure to bump the versions of '
                          'parent objects and provide a rule in their '
                          'obj_make_compatible() routines to backlevel '
-                         'the child object.')
+                         'the child object. Also remember to update versions '
+                         'of child objects as necessary in the '
+                         'object_relationships mapping used in this test.')
 
     def test_obj_make_compatible(self):
         # Iterate all object classes and verify that we can run

@@ -45,7 +45,6 @@ from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import block_device as block_device_obj
 from nova.objects import fields
-from nova.objects import instance as instance_obj
 from nova.objects import quotas as quotas_obj
 from nova import quota
 from nova import rpc
@@ -183,43 +182,6 @@ class _BaseTestCase(object):
         result = self.conductor.compute_node_create(self.context,
                                                     'fake-values')
         self.assertEqual(result, 'fake-result')
-
-    def test_task_log_get(self):
-        self.mox.StubOutWithMock(db, 'task_log_get')
-        db.task_log_get(self.context, 'task', 'begin', 'end', 'host',
-                        'state').AndReturn('result')
-        self.mox.ReplayAll()
-        result = self.conductor.task_log_get(self.context, 'task', 'begin',
-                                             'end', 'host', 'state')
-        self.assertEqual(result, 'result')
-
-    def test_task_log_get_with_no_state(self):
-        self.mox.StubOutWithMock(db, 'task_log_get')
-        db.task_log_get(self.context, 'task', 'begin', 'end',
-                        'host', None).AndReturn('result')
-        self.mox.ReplayAll()
-        result = self.conductor.task_log_get(self.context, 'task', 'begin',
-                                             'end', 'host', None)
-        self.assertEqual(result, 'result')
-
-    def test_task_log_begin_task(self):
-        self.mox.StubOutWithMock(db, 'task_log_begin_task')
-        db.task_log_begin_task(self.context.elevated(), 'task', 'begin',
-                               'end', 'host', 'items',
-                               'message').AndReturn('result')
-        self.mox.ReplayAll()
-        result = self.conductor.task_log_begin_task(
-            self.context, 'task', 'begin', 'end', 'host', 'items', 'message')
-        self.assertEqual(result, 'result')
-
-    def test_task_log_end_task(self):
-        self.mox.StubOutWithMock(db, 'task_log_end_task')
-        db.task_log_end_task(self.context.elevated(), 'task', 'begin', 'end',
-                             'host', 'errors', 'message').AndReturn('result')
-        self.mox.ReplayAll()
-        result = self.conductor.task_log_end_task(
-            self.context, 'task', 'begin', 'end', 'host', 'errors', 'message')
-        self.assertEqual(result, 'result')
 
     def test_security_groups_trigger_members_refresh(self):
         self.mox.StubOutWithMock(self.conductor_manager.security_group_api,
@@ -776,6 +738,43 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         result = self.conductor.compute_node_delete(self.context, node)
         self.assertIsNone(result)
 
+    def test_task_log_get(self):
+        self.mox.StubOutWithMock(db, 'task_log_get')
+        db.task_log_get(self.context, 'task', 'begin', 'end', 'host',
+                        'state').AndReturn('result')
+        self.mox.ReplayAll()
+        result = self.conductor.task_log_get(self.context, 'task', 'begin',
+                                             'end', 'host', 'state')
+        self.assertEqual(result, 'result')
+
+    def test_task_log_get_with_no_state(self):
+        self.mox.StubOutWithMock(db, 'task_log_get')
+        db.task_log_get(self.context, 'task', 'begin', 'end',
+                        'host', None).AndReturn('result')
+        self.mox.ReplayAll()
+        result = self.conductor.task_log_get(self.context, 'task', 'begin',
+                                             'end', 'host', None)
+        self.assertEqual(result, 'result')
+
+    def test_task_log_begin_task(self):
+        self.mox.StubOutWithMock(db, 'task_log_begin_task')
+        db.task_log_begin_task(self.context.elevated(), 'task', 'begin',
+                               'end', 'host', 'items',
+                               'message').AndReturn('result')
+        self.mox.ReplayAll()
+        result = self.conductor.task_log_begin_task(
+            self.context, 'task', 'begin', 'end', 'host', 'items', 'message')
+        self.assertEqual(result, 'result')
+
+    def test_task_log_end_task(self):
+        self.mox.StubOutWithMock(db, 'task_log_end_task')
+        db.task_log_end_task(self.context.elevated(), 'task', 'begin', 'end',
+                             'host', 'errors', 'message').AndReturn('result')
+        self.mox.ReplayAll()
+        result = self.conductor.task_log_end_task(
+            self.context, 'task', 'begin', 'end', 'host', 'errors', 'message')
+        self.assertEqual(result, 'result')
+
 
 class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
     """Conductor RPC API Tests."""
@@ -936,17 +935,21 @@ class _BaseTaskTestCase(object):
             rebuild_args.update(update_args)
         return rebuild_args
 
-    def test_live_migrate(self):
+    @mock.patch('nova.objects.Migration')
+    def test_live_migrate(self, migobj):
         inst = fake_instance.fake_db_instance()
         inst_obj = objects.Instance._from_db_object(
             self.context, objects.Instance(), inst, [])
+
+        migration = migobj()
 
         self.mox.StubOutWithMock(live_migrate, 'execute')
         live_migrate.execute(self.context,
                              mox.IsA(objects.Instance),
                              'destination',
                              'block_migration',
-                             'disk_over_commit')
+                             'disk_over_commit',
+                             migration)
         self.mox.ReplayAll()
 
         if isinstance(self.conductor, (conductor_api.ComputeTaskAPI,
@@ -959,6 +962,10 @@ class _BaseTaskTestCase(object):
             self.conductor.migrate_server(self.context, inst_obj,
                 {'host': 'destination'}, True, False, None,
                  'block_migration', 'disk_over_commit')
+
+        self.assertEqual('pre-migrating', migration.status)
+        self.assertEqual('destination', migration.dest_compute)
+        self.assertEqual(inst_obj.host, migration.source_compute)
 
     def _test_cold_migrate(self, clean_shutdown=True):
         self.mox.StubOutWithMock(utils, 'get_image_from_system_metadata')
@@ -1034,7 +1041,9 @@ class _BaseTaskTestCase(object):
                                       uuid=uuid.uuid4(),
                                       flavor=instance_type) for i in range(2)]
         instance_type_p = obj_base.obj_to_primitive(instance_type)
-        instance_properties = instance_obj.compat_instance(instances[0])
+        instance_properties = obj_base.obj_to_primitive(instances[0])
+        instance_properties['system_metadata'] = flavors.save_flavor_info(
+            {}, instance_type)
 
         self.mox.StubOutWithMock(scheduler_utils, 'setup_instance_group')
         self.mox.StubOutWithMock(self.conductor_manager.scheduler_client,
@@ -1427,6 +1436,8 @@ class _BaseTaskTestCase(object):
             rebuild_mock.assert_called_once_with(self.context,
                                             instance=inst_obj,
                                             **rebuild_args)
+        self.assertEqual('compute.instance.rebuild.scheduled',
+                         fake_notifier.NOTIFICATIONS[0].event_type)
 
     def test_rebuild_instance_with_scheduler_no_host(self):
         inst_obj = self._create_fake_instance_obj()
@@ -1521,7 +1532,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 'uuid': instance['uuid'], },
         }
 
-    def _test_migrate_server_deals_with_expected_exceptions(self, ex):
+    @mock.patch('nova.objects.Migration')
+    def _test_migrate_server_deals_with_expected_exceptions(self, ex, migobj):
         instance = fake_instance.fake_db_instance(uuid='uuid',
                                                   vm_state=vm_states.ACTIVE)
         inst_obj = objects.Instance._from_db_object(
@@ -1530,9 +1542,11 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         self.mox.StubOutWithMock(scheduler_utils,
                 'set_vm_state_and_notify')
 
+        migration = migobj()
+
         live_migrate.execute(self.context, mox.IsA(objects.Instance),
                              'destination', 'block_migration',
-                             'disk_over_commit').AndRaise(ex)
+                             'disk_over_commit', migration).AndRaise(ex)
 
         scheduler_utils.set_vm_state_and_notify(self.context,
                 inst_obj.uuid,
@@ -1551,6 +1565,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
             {'host': 'destination'}, True, False, None, 'block_migration',
             'disk_over_commit')
 
+        self.assertEqual('error', migration.status)
+
     def test_migrate_server_deals_with_invalidcpuinfo_exception(self):
         instance = fake_instance.fake_db_instance(uuid='uuid',
                                                   vm_state=vm_states.ACTIVE)
@@ -1563,7 +1579,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         ex = exc.InvalidCPUInfo(reason="invalid cpu info.")
         live_migrate.execute(self.context, mox.IsA(objects.Instance),
                              'destination', 'block_migration',
-                             'disk_over_commit').AndRaise(ex)
+                             'disk_over_commit',
+                             mox.IsA(objects.Migration)).AndRaise(ex)
 
         scheduler_utils.set_vm_state_and_notify(self.context,
                 inst_obj.uuid,

@@ -28,6 +28,8 @@ import glanceclient.exc
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
+from oslo_service import sslutils
+from oslo_utils import excutils
 from oslo_utils import netutils
 from oslo_utils import timeutils
 import six
@@ -35,7 +37,7 @@ from six.moves import range
 import six.moves.urllib.parse as urlparse
 
 from nova import exception
-from nova.i18n import _, _LE
+from nova.i18n import _LE, _LI, _LW
 import nova.image.download as image_xfers
 
 
@@ -75,7 +77,6 @@ CONF = cfg.CONF
 CONF.register_opts(glance_opts, 'glance')
 CONF.import_opt('auth_strategy', 'nova.api.auth')
 CONF.import_opt('my_ip', 'nova.netconf')
-CONF.import_group('ssl', 'nova.openstack.common.sslutils')
 
 
 def generate_glance_url():
@@ -127,6 +128,7 @@ def _create_glance_client(context, host, port, use_ssl, version=1):
         # https specific params
         params['insecure'] = CONF.glance.api_insecure
         params['ssl_compression'] = False
+        sslutils.is_enabled(CONF)
         if CONF.ssl.cert_file:
             params['cert_file'] = CONF.ssl.cert_file
         if CONF.ssl.key_file:
@@ -212,7 +214,13 @@ class GlanceClientWrapper(object):
         retry_excs = (glanceclient.exc.ServiceUnavailable,
                 glanceclient.exc.InvalidEndpoint,
                 glanceclient.exc.CommunicationError)
-        num_attempts = 1 + CONF.glance.num_retries
+        retries = CONF.glance.num_retries
+        if retries < 0:
+            LOG.warning(_LW("Treating negative config value (%(retries)s) for "
+                            "'glance.num_retries' as 0."),
+                        {'retries': retries})
+            retries = 0
+        num_attempts = retries + 1
 
         for attempt in range(1, num_attempts + 1):
             client = self.client or self._create_onetime_client(context,
@@ -228,12 +236,11 @@ class GlanceClientWrapper(object):
                 else:
                     extra = 'done trying'
 
-                error_msg = (_("Error contacting glance server "
-                               "'%(host)s:%(port)s' for '%(method)s', "
-                               "%(extra)s.") %
-                             {'host': host, 'port': port,
-                              'method': method, 'extra': extra})
-                LOG.exception(error_msg)
+                LOG.exception(_LE("Error contacting glance server "
+                                  "'%(host)s:%(port)s' for '%(method)s', "
+                                  "%(extra)s."),
+                              {'host': host, 'port': port,
+                               'method': method, 'extra': extra})
                 if attempt == num_attempts:
                     raise exception.GlanceConnectionFailed(
                             host=host, port=port, reason=six.text_type(e))
@@ -341,9 +348,8 @@ class GlanceImageService(object):
                 if xfer_mod:
                     try:
                         xfer_mod.download(context, o, dst_path, loc_meta)
-                        msg = _("Successfully transferred "
-                                "using %s") % o.scheme
-                        LOG.info(msg)
+                        LOG.info(_LI("Successfully transferred "
+                                     "using %s"), o.scheme)
                         return
                     except Exception:
                         LOG.exception(_LE("Download image error"))
@@ -364,6 +370,10 @@ class GlanceImageService(object):
             try:
                 for chunk in image_chunks:
                     data.write(chunk)
+            except Exception as ex:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_LE("Error writing to %(path)s: %(exception)s"),
+                              {'path': dst_path, 'exception': ex})
             finally:
                 if close_file:
                     data.close()

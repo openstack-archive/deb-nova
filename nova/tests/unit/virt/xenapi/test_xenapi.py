@@ -51,6 +51,7 @@ from nova import objects
 from nova.objects import base
 from nova import test
 from nova.tests.unit.db import fakes as db_fakes
+from nova.tests.unit import fake_flavor
 from nova.tests.unit import fake_instance
 from nova.tests.unit import fake_network
 from nova.tests.unit import fake_processutils
@@ -1250,6 +1251,12 @@ iface eth0 inet6 static
         self._test_spawn_fails_silently_with(exception.AgentError,
                                              value=error)
 
+    def test_spawn_sets_last_dom_id(self):
+        self._test_spawn(IMAGE_VHD, None, None,
+                         os_type="linux", architecture="x86-64")
+        self.assertEqual(self.vm['domid'],
+                         self.vm['other_config']['last_dom_id'])
+
     def test_rescue(self):
         instance = self._create_instance(spawn=False, obj=True)
         xenapi_fake.create_vm(instance['name'], 'Running')
@@ -1672,7 +1679,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_disk_and_power_off(self):
         instance = db.instance_create(self.context, self.instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
-        flavor = {"root_gb": 80, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=80,
+                                             ephemeral_gb=0)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         vm_ref = vm_utils.lookup(conn._session, instance['name'])
         self.mox.StubOutWithMock(volume_utils, 'is_booted_from_volume')
@@ -1684,7 +1692,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_disk_and_power_off_passes_exceptions(self):
         instance = db.instance_create(self.context, self.instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
-        flavor = {"root_gb": 80, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=80,
+                                             ephemeral_gb=0)
 
         def fake_raise(*args, **kwargs):
             raise exception.MigrationError(reason='test failure')
@@ -1698,7 +1707,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
 
     def test_migrate_disk_and_power_off_throws_on_zero_gb_resize_down(self):
         instance = db.instance_create(self.context, self.instance_values)
-        flavor = {"root_gb": 0, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
+                                             ephemeral_gb=0)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.ResizeError,
                           conn.migrate_disk_and_power_off,
@@ -1706,7 +1716,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                           'fake_dest', flavor, None)
 
     def test_migrate_disk_and_power_off_with_zero_gb_old_and_new_works(self):
-        flavor = {"root_gb": 0, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
+                                             ephemeral_gb=0)
         values = copy.copy(self.instance_values)
         values["root_gb"] = 0
         values["ephemeral_gb"] = 0
@@ -1846,6 +1857,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         instance = db.instance_create(self.context, instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = db.flavor_get_by_name(self.context, 'm1.small')
+        flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         def fake_get_partitions(partition):
@@ -1864,6 +1876,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         instance = db.instance_create(self.context, instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = db.flavor_get_by_name(self.context, 'm1.small')
+        flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         def fake_get_partitions(partition):

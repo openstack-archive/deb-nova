@@ -51,16 +51,22 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
     # Version 1.7: Add update_or_create method
     # Version 1.8: Instance version 1.19
     # Version 1.9: Instance version 1.20
-    VERSION = '1.9'
+    # Version 1.10: Changed source_type field to BlockDeviceSourceTypeField.
+    # Version 1.11: Changed destination_type field to
+    #               BlockDeviceDestinationTypeField.
+    # Version 1.12: Changed device_type field to BlockDeviceTypeField.
+    # Version 1.13: Instance version 1.21
+    VERSION = '1.13'
 
     fields = {
         'id': fields.IntegerField(),
         'instance_uuid': fields.UUIDField(),
         'instance': fields.ObjectField('Instance', nullable=True),
-        'source_type': fields.StringField(nullable=True),
-        'destination_type': fields.StringField(nullable=True),
+        'source_type': fields.BlockDeviceSourceTypeField(nullable=True),
+        'destination_type': fields.BlockDeviceDestinationTypeField(
+                                nullable=True),
         'guest_format': fields.StringField(nullable=True),
-        'device_type': fields.StringField(nullable=True),
+        'device_type': fields.BlockDeviceTypeField(nullable=True),
         'disk_bus': fields.StringField(nullable=True),
         'boot_index': fields.IntegerField(nullable=True),
         'device_name': fields.StringField(nullable=True),
@@ -76,7 +82,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
     obj_relationships = {
         'instance': [('1.0', '1.13'), ('1.2', '1.14'), ('1.3', '1.15'),
                      ('1.4', '1.16'), ('1.5', '1.17'), ('1.6', '1.18'),
-                     ('1.8', '1.19'), ('1.9', '1.20')],
+                     ('1.8', '1.19'), ('1.9', '1.20'), ('1.13', '1.21')],
     }
 
     @staticmethod
@@ -136,7 +142,11 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
                     context, updates, legacy=False)
 
         self._from_db_object(context, self, db_bdm)
-        if cell_type == 'compute':
+        # NOTE(alaski): bdms are looked up by instance uuid and device_name
+        # so if we sync up with no device_name an entry will be created that
+        # will not be found on a later update_or_create call and a second bdm
+        # create will occur.
+        if cell_type == 'compute' and db_bdm.get('device_name') is not None:
             cells_api = cells_rpcapi.CellsAPI()
             cells_api.bdm_update_or_create_at_top(
                     context, self, create=cells_create)
@@ -205,11 +215,12 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
 
     @property
     def is_volume(self):
-        return self.destination_type == 'volume'
+        return (self.destination_type ==
+                    fields.BlockDeviceDestinationType.VOLUME)
 
     @property
     def is_image(self):
-        return self.source_type == 'image'
+        return self.source_type == fields.BlockDeviceSourceType.IMAGE
 
     def get_image_mapping(self):
         return block_device.BlockDeviceDict(self).get_image_mapping()
@@ -246,7 +257,11 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.8: BlockDeviceMapping <= version 1.7
     # Version 1.9: BlockDeviceMapping <= version 1.8
     # Version 1.10: BlockDeviceMapping <= version 1.9
-    VERSION = '1.10'
+    # Version 1.11: BlockDeviceMapping <= version 1.10
+    # Version 1.12: BlockDeviceMapping <= version 1.11
+    # Version 1.13: BlockDeviceMapping <= version 1.12
+    # Version 1.14: BlockDeviceMapping <= version 1.13
+    VERSION = '1.14'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
@@ -263,6 +278,10 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
         '1.8': '1.7',
         '1.9': '1.8',
         '1.10': '1.9',
+        '1.11': '1.10',
+        '1.12': '1.11',
+        '1.13': '1.12',
+        '1.14': '1.13',
     }
 
     @base.remotable_classmethod

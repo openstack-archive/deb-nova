@@ -24,6 +24,7 @@ import uuid
 import mock
 from mox3 import mox
 from oslo_config import cfg
+from oslo_utils import fileutils
 from oslo_utils import units
 import six
 
@@ -33,8 +34,8 @@ from nova import db
 from nova import exception
 from nova.image import glance
 from nova import objects
-from nova.openstack.common import fileutils
 from nova import test
+from nova.tests.unit import fake_flavor
 from nova.tests.unit import fake_instance
 from nova.tests.unit import fake_network
 from nova.tests.unit.image import fake as fake_image
@@ -811,6 +812,7 @@ class HyperVAPITestCase(HyperVAPIBaseTestCase):
             flavor = 'm1.small'
 
         flavor = db.flavor_get_by_name(self._context, flavor)
+        flavor = fake_flavor.fake_flavor_obj(self._context, **flavor)
 
         if not size_exception:
             fake_root_vhd_path = 'C:\\FakePath\\root.vhd'

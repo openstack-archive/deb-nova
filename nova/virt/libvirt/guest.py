@@ -33,6 +33,8 @@ from oslo_utils import encodeutils
 from oslo_utils import excutils
 from oslo_utils import importutils
 
+from nova import exception
+from nova.i18n import _
 from nova.i18n import _LE
 from nova import utils
 from nova.virt.libvirt import config as vconfig
@@ -152,12 +154,12 @@ class Guest(object):
     def get_vcpus_info(self):
         """Returns virtual cpus information of guest.
 
-        :returns: objects.VirtVCPUInfo
+        :returns: guest.VCPUInfo
         """
         vcpus = self._domain.vcpus()
         if vcpus is not None:
             for vcpu in vcpus[0]:
-                yield GuestVCPUInfo(
+                yield VCPUInfo(
                     id=vcpu[0], cpu=vcpu[3], state=vcpu[1], time=vcpu[2])
 
     def delete_configuration(self):
@@ -178,6 +180,10 @@ class Guest(object):
             except AttributeError:
                 pass
             self._domain.undefine()
+
+    def has_persistent_configuration(self):
+        """Whether domain config is persistently stored on the host."""
+        return self._domain.isPersistent()
 
     def attach_device(self, conf, persistent=False, live=False):
         """Attaches device to the guest.
@@ -235,8 +241,113 @@ class Guest(object):
         flags |= dump_migratable and libvirt.VIR_DOMAIN_XML_MIGRATABLE or 0
         return self._domain.XMLDesc(flags=flags)
 
+    def save_memory_state(self):
+        """Saves the domain's memory state. Requires running domain.
 
-class GuestVCPUInfo(object):
+        raises: raises libvirtError on error
+        """
+        self._domain.managedSave(0)
+
+    def get_block_device(self, disk):
+        """Returns a block device wrapper for disk."""
+        return BlockDevice(self, disk)
+
+
+class BlockDevice(object):
+    """Wrapper around block device API"""
+
+    REBASE_DEFAULT_BANDWIDTH = 0  # in MiB/s - 0 unlimited
+    COMMIT_DEFAULT_BANDWIDTH = 0  # in MiB/s - 0 unlimited
+
+    def __init__(self, guest, disk):
+        self._guest = guest
+        self._disk = disk
+
+    def abort_job(self, async=False, pivot=False):
+        """Request to cancel any job currently running on the block.
+
+        :param async: Request only, do not wait for completion
+        :param pivot: Pivot to new file when ending a copy or
+                      active commit job
+        """
+        flags = async and libvirt.VIR_DOMAIN_BLOCK_JOB_ABORT_ASYNC or 0
+        flags |= pivot and libvirt.VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT or 0
+        self._guest._domain.blockJobAbort(self._disk, flags=flags)
+
+    def get_job_info(self):
+        """Returns information about job currently running
+
+        :returns: BlockDeviceJobInfo or None
+        """
+        status = self._guest._domain.blockJobInfo(self._disk, flags=0)
+        if status != -1:
+            return BlockDeviceJobInfo(
+                job=status.get("type", 0),
+                bandwidth=status.get("bandwidth", 0),
+                cur=status.get("cur", 0),
+                end=status.get("end", 0))
+
+    def rebase(self, base, shallow=False, reuse_ext=False,
+               copy=False, relative=False):
+        """Rebases block to new base
+
+        :param shallow: Limit copy to top of source backing chain
+        :param reuse_ext: Reuse existing external file of a copy
+        :param copy: Start a copy job
+        :param relative: Keep backing chain referenced using relative names
+        """
+        flags = shallow and libvirt.VIR_DOMAIN_BLOCK_REBASE_SHALLOW or 0
+        flags |= reuse_ext and libvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT or 0
+        flags |= copy and libvirt.VIR_DOMAIN_BLOCK_REBASE_COPY or 0
+        flags |= relative and libvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE or 0
+        return self._guest._domain.blockRebase(
+            self._disk, base, self.REBASE_DEFAULT_BANDWIDTH, flags=flags)
+
+    def commit(self, base, top, relative=False):
+        """Commit on block device
+
+        For performance during live snapshot it will reduces the disk chain
+        to a single disk.
+
+        :param relative: Keep backing chain referenced using relative names
+        """
+        flags = relative and libvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE or 0
+        return self._guest._domain.blockCommit(
+            self._disk, base, top, self.COMMIT_DEFAULT_BANDWIDTH, flags=flags)
+
+    def resize(self, size_kb):
+        """Resizes block device to Kib size."""
+        self._guest._domain.blockResize(self._disk, size_kb)
+
+    def wait_for_job(self, abort_on_error=False, wait_for_job_clean=False):
+        """Wait for libvirt block job to complete.
+
+        Libvirt may return either cur==end or an empty dict when
+        the job is complete, depending on whether the job has been
+        cleaned up by libvirt yet, or not.
+
+        :param abort_on_error: Whether to stop process and raise NovaException
+                               on error (default: False)
+        :param wait_for_job_clean: Whether to force wait to ensure job is
+                                   finished (see bug: LP#1119173)
+
+        :returns: True if still in progress
+                  False if completed
+        """
+        status = self.get_job_info()
+        if not status and abort_on_error:
+            msg = _('libvirt error while requesting blockjob info.')
+            raise exception.NovaException(msg)
+
+        if wait_for_job_clean:
+            job_ended = status.job == 0
+        else:
+            job_ended = status.cur == status.end
+
+        return not job_ended
+
+
+class VCPUInfo(object):
     def __init__(self, id, cpu, state, time):
         """Structure for information about guest vcpus.
 
@@ -250,3 +361,19 @@ class GuestVCPUInfo(object):
         self.cpu = cpu
         self.state = state
         self.time = time
+
+
+class BlockDeviceJobInfo(object):
+    def __init__(self, job, bandwidth, cur, end):
+        """Structure for information about running job.
+
+        :param job: The running job (0 placeholder, 1 pull,
+                      2 copy, 3 commit, 4 active commit)
+        :param bandwidth: Used in MiB/s
+        :param cur: Indicates the position between 0 and 'end'
+        :param end: Indicates the position for this operation
+        """
+        self.job = job
+        self.bandwidth = bandwidth
+        self.cur = cur
+        self.end = end

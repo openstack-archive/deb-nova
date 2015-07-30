@@ -13,6 +13,7 @@
 #    under the License.
 
 from collections import OrderedDict
+from distutils import versionpredicate
 
 import netaddr
 from oslo_utils import strutils
@@ -82,6 +83,50 @@ class Architecture(Enum):
             msg = _("Architecture name '%s' is not valid") % value
             raise ValueError(msg)
         return super(Architecture, self).coerce(obj, attr, value)
+
+
+class BlockDeviceDestinationType(Enum):
+    """Represents possible destination_type values for a BlockDeviceMapping."""
+
+    LOCAL = 'local'
+    VOLUME = 'volume'
+
+    ALL = (LOCAL, VOLUME)
+
+    def __init__(self):
+        super(BlockDeviceDestinationType, self).__init__(
+            valid_values=BlockDeviceDestinationType.ALL)
+
+
+class BlockDeviceSourceType(Enum):
+    """Represents the possible source_type values for a BlockDeviceMapping."""
+
+    BLANK = 'blank'
+    IMAGE = 'image'
+    SNAPSHOT = 'snapshot'
+    VOLUME = 'volume'
+
+    ALL = (BLANK, IMAGE, SNAPSHOT, VOLUME)
+
+    def __init__(self):
+        super(BlockDeviceSourceType, self).__init__(
+            valid_values=BlockDeviceSourceType.ALL)
+
+
+class BlockDeviceType(Enum):
+    """Represents possible device_type values for a BlockDeviceMapping."""
+
+    CDROM = 'cdrom'
+    DISK = 'disk'
+    FLOPPY = 'floppy'
+    FS = 'fs'
+    LUN = 'lun'
+
+    ALL = (CDROM, DISK, FLOPPY, FS, LUN)
+
+    def __init__(self):
+        super(BlockDeviceType, self).__init__(
+            valid_values=BlockDeviceType.ALL)
 
 
 class CPUAllocationPolicy(Enum):
@@ -287,6 +332,50 @@ class WatchdogAction(Enum):
             valid_values=WatchdogAction.ALL)
 
 
+class MonitorMetricType(Enum):
+
+    CPU_FREQUENCY = "cpu.frequency"
+    CPU_USER_TIME = "cpu.user.time"
+    CPU_KERNEL_TIME = "cpu.kernel.time"
+    CPU_IDLE_TIME = "cpu.idle.time"
+    CPU_IOWAIT_TIME = "cpu.iowait.time"
+    CPU_USER_PERCENT = "cpu.user.percent"
+    CPU_KERNEL_PERCENT = "cpu.kernel.percent"
+    CPU_IDLE_PERCENT = "cpu.idle.percent"
+    CPU_IOWAIT_PERCENT = "cpu.iowait.percent"
+    CPU_PERCENT = "cpu.percent"
+
+    ALL = (
+        CPU_FREQUENCY,
+        CPU_USER_TIME,
+        CPU_KERNEL_TIME,
+        CPU_IDLE_TIME,
+        CPU_IOWAIT_TIME,
+        CPU_USER_PERCENT,
+        CPU_KERNEL_PERCENT,
+        CPU_IDLE_PERCENT,
+        CPU_IOWAIT_PERCENT,
+        CPU_PERCENT,
+    )
+
+    def __init__(self):
+        super(MonitorMetricType, self).__init__(
+            valid_values=MonitorMetricType.ALL)
+
+
+# NOTE(sbauza): Remove this on next release of oslo.versionedobjects
+class VersionPredicate(fields.String):
+    @staticmethod
+    def coerce(obj, attr, value):
+        try:
+            versionpredicate.VersionPredicate('check (%s)' % value)
+        except ValueError:
+            raise ValueError(_('Version %(val)s is not a valid predicate in '
+                               'field %(attr)s') %
+                             {'val': value, 'attr': attr})
+        return value
+
+
 # NOTE(danms): Remove this on next release of oslo.versionedobjects
 class FlexibleBoolean(fields.Boolean):
     @staticmethod
@@ -486,6 +575,18 @@ class ArchitectureField(BaseEnumField):
     AUTO_TYPE = Architecture()
 
 
+class BlockDeviceDestinationTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceDestinationType()
+
+
+class BlockDeviceSourceTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceSourceType()
+
+
+class BlockDeviceTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceType()
+
+
 class CPUAllocationPolicyField(BaseEnumField):
     AUTO_TYPE = CPUAllocationPolicy()
 
@@ -536,6 +637,15 @@ class VMModeField(BaseEnumField):
 
 class WatchdogActionField(BaseEnumField):
     AUTO_TYPE = WatchdogAction()
+
+
+class MonitorMetricTypeField(BaseEnumField):
+    AUTO_TYPE = MonitorMetricType()
+
+
+# FIXME(sbauza): Remove this after oslo.versionedobjects gets it
+class VersionPredicateField(AutoTypedField):
+    AUTO_TYPE = VersionPredicate()
 
 
 # FIXME(danms): Remove this after oslo.versionedobjects gets it

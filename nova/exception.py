@@ -1250,6 +1250,10 @@ class NoValidHost(NovaException):
     msg_fmt = _("No valid host was found. %(reason)s")
 
 
+class MaxRetriesExceeded(NoValidHost):
+    msg_fmt = _("Exceeded maximum number of retries. %(reason)s")
+
+
 class QuotaError(NovaException):
     ec2_code = 'ResourceLimitExceeded'
     msg_fmt = _("Quota exceeded: code=%(code)s")
@@ -1398,13 +1402,8 @@ class ConfigDriveMountFailed(NovaException):
 
 
 class ConfigDriveUnknownFormat(NovaException):
-    msg_fmt = _("Unknown config drive format %(format)s for %(os_type)s "
-                "os type. Valid options are: iso9660, vfat or None.")
-
-
-class ConfigDriveUnsupportedFormat(NovaException):
-    msg_fmt = _("Unsupported config drive format %(format)s "
-                "for %(image_type)s image type. Image path: %(image_path)")
+    msg_fmt = _("Unknown config drive format %(format)s. Select one of "
+                "iso9660 or vfat.")
 
 
 class InterfaceAttachFailed(Invalid):
@@ -1876,3 +1875,7 @@ class UnsupportedImageModel(Invalid):
 
 class DatabaseMigrationError(NovaException):
     msg_fmt = _("Database migration failed: %(reason)s")
+
+
+class HostMappingNotFound(Invalid):
+    msg_fmt = _("Host '%(name)s' is not mapped to any cell")

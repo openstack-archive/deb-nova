@@ -259,28 +259,29 @@ class Claim(NopClaim):
                        'requested': requested})
 
 
-class ResizeClaim(Claim):
-    """Claim used for holding resources for an incoming resize/migration
-    operation.
+class MoveClaim(Claim):
+    """Claim used for holding resources for an incoming move operation.
+
+    Move can be either a migrate/resize, live-migrate or an evacuate operation.
     """
     def __init__(self, context, instance, instance_type, image_meta, tracker,
                  resources, overhead=None, limits=None):
         self.context = context
         self.instance_type = instance_type
         self.image_meta = image_meta
-        super(ResizeClaim, self).__init__(context, instance, tracker,
-                                          resources, overhead=overhead,
-                                          limits=limits)
+        super(MoveClaim, self).__init__(context, instance, tracker,
+                                         resources, overhead=overhead,
+                                         limits=limits)
         self.migration = None
 
     @property
     def disk_gb(self):
-        return (self.instance_type['root_gb'] +
-                self.instance_type['ephemeral_gb'])
+        return (self.instance_type.root_gb +
+                self.instance_type.ephemeral_gb)
 
     @property
     def memory_mb(self):
-        return self.instance_type['memory_mb'] + self.overhead['memory_mb']
+        return self.instance_type.memory_mb + self.overhead['memory_mb']
 
     @property
     def numa_topology(self):
@@ -306,7 +307,7 @@ class ResizeClaim(Claim):
         been aborted.
         """
         LOG.debug("Aborting claim: %s" % self, instance=self.instance)
-        self.tracker.drop_resize_claim(
+        self.tracker.drop_move_claim(
             self.context,
             self.instance, instance_type=self.instance_type,
             image_meta=self.image_meta)

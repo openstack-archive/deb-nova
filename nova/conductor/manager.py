@@ -17,6 +17,7 @@
 import copy
 import itertools
 
+from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
@@ -43,11 +44,13 @@ from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import base as nova_object
 from nova import quota
+from nova import rpc
 from nova.scheduler import client as scheduler_client
 from nova.scheduler import utils as scheduler_utils
 from nova import utils
 
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
 
 # Instead of having a huge list of arguments to instance_update(), we just
 # accept a dict of fields to update and use this whitelist to validate it.
@@ -340,11 +343,13 @@ class ConductorManager(manager.Manager):
         svc = self.db.service_update(context, service['id'], values)
         return jsonutils.to_primitive(svc)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def task_log_get(self, context, task_name, begin, end, host, state):
         result = self.db.task_log_get(context, task_name, begin, end, host,
                                       state)
         return jsonutils.to_primitive(result)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def task_log_begin_task(self, context, task_name, begin, end, host,
                             task_items, message):
         result = self.db.task_log_begin_task(context.elevated(), task_name,
@@ -352,6 +357,7 @@ class ConductorManager(manager.Manager):
                                              message)
         return jsonutils.to_primitive(result)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def task_log_end_task(self, context, task_name, begin, end, host,
                           errors, message):
         result = self.db.task_log_end_task(context.elevated(), task_name,
@@ -488,6 +494,7 @@ class ComputeTaskManager(base.Base):
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.image_api = image.API()
         self.scheduler_client = scheduler_client.SchedulerClient()
+        self.notifier = rpc.get_notifier('compute', CONF.host)
 
     @messaging.expected_exceptions(exception.NoValidHost,
                                    exception.ComputeServiceUnavailable,
@@ -621,9 +628,24 @@ class ComputeTaskManager(base.Base):
                      expected_task_state=task_states.MIGRATING,),
                 ex, request_spec, self.db)
 
+        migration = objects.Migration(context=context.elevated())
+        migration.dest_compute = destination
+        migration.status = 'pre-migrating'
+        migration.instance_uuid = instance.uuid
+        migration.source_compute = instance.host
+        migration.migration_type = 'live-migration'
+        if instance.obj_attr_is_set('flavor'):
+            migration.old_instance_type_id = instance.flavor.id
+            migration.new_instance_type_id = instance.flavor.id
+        else:
+            migration.old_instance_type_id = instance.instance_type_id
+            migration.new_instance_type_id = instance.instance_type_id
+        migration.create()
+
         try:
             live_migrate.execute(context, instance, destination,
-                             block_migration, disk_over_commit)
+                                 block_migration, disk_over_commit,
+                                 migration)
         except (exception.NoValidHost,
                 exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
@@ -639,6 +661,8 @@ class ComputeTaskManager(base.Base):
             with excutils.save_and_reraise_exception():
                 # TODO(johngarbutt) - eventually need instance actions here
                 _set_vm_state(context, instance, ex, instance.vm_state)
+                migration.status = 'error'
+                migration.save()
         except Exception as ex:
             LOG.error(_LE('Migration of instance %(instance_id)s to host'
                           ' %(dest)s unexpectedly failed.'),
@@ -646,6 +670,8 @@ class ComputeTaskManager(base.Base):
                       exc_info=True)
             _set_vm_state(context, instance, ex, vm_states.ERROR,
                           instance.task_state)
+            migration.status = 'failed'
+            migration.save()
             raise exception.MigrationError(reason=six.text_type(ex))
 
     def build_instances(self, context, instances, image, filter_properties,
@@ -833,6 +859,9 @@ class ComputeTaskManager(base.Base):
                         LOG.warning(_LW("Server with unsupported policy "
                                         "cannot be rebuilt"),
                                     instance=instance)
+
+            compute_utils.notify_about_instance_usage(
+                self.notifier, context, instance, "rebuild.scheduled")
 
             self.compute_rpcapi.rebuild_instance(context,
                     instance=instance,

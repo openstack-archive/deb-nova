@@ -13,7 +13,6 @@
 #    under the License.
 
 import contextlib
-import copy
 
 from oslo_config import cfg
 from oslo_db import exception as db_exc
@@ -83,8 +82,7 @@ def _expected_cols(expected_attrs):
                     if field in expected_attrs]
     if complex_cols:
         simple_cols.append('extra')
-    simple_cols = filter(lambda x: x not in _INSTANCE_EXTRA_FIELDS,
-                         simple_cols)
+    simple_cols = [x for x in simple_cols if x not in _INSTANCE_EXTRA_FIELDS]
     if (any([flavor in expected_attrs
              for flavor in ['flavor', 'old_flavor', 'new_flavor']]) and
             'system_metadata' not in simple_cols):
@@ -94,42 +92,6 @@ def _expected_cols(expected_attrs):
         simple_cols.append('system_metadata')
         expected_attrs.append('system_metadata')
     return simple_cols + complex_cols
-
-
-def compat_instance(instance):
-    """Create a dict-like instance structure from an objects.Instance.
-
-    This is basically the same as nova.objects.base.obj_to_primitive(),
-    except that it includes some instance-specific details, like stashing
-    flavor information in system_metadata.
-
-    If you have a function (or RPC client) that needs to see the instance
-    as a dict that has flavor information in system_metadata, use this
-    to appease it (while you fix said thing).
-
-    :param instance: a nova.objects.Instance instance
-    :returns: a dict-based instance structure
-    """
-    if not isinstance(instance, objects.Instance):
-        return instance
-
-    db_instance = copy.deepcopy(base.obj_to_primitive(instance))
-
-    flavor_attrs = [('', 'flavor'), ('old_', 'old_flavor'),
-                    ('new_', 'new_flavor')]
-    for prefix, attr in flavor_attrs:
-        flavor = (instance.obj_attr_is_set(attr) and
-                  getattr(instance, attr) or None)
-        if flavor:
-            # NOTE(danms): If flavor is unset or None, don't
-            # copy it into the primitive's system_metadata
-            db_instance['system_metadata'] = \
-                flavors.save_flavor_info(
-                    db_instance.get('system_metadata', {}),
-                    flavor, prefix)
-        if attr in db_instance:
-            del db_instance[attr]
-    return db_instance
 
 
 # TODO(berrange): Remove NovaObjectDictCompat
@@ -155,10 +117,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     # Version 1.15: PciDeviceList 1.1
     # Version 1.16: Added pci_requests
     # Version 1.17: Added tags
-    # Version 1.18: Added flavor, old_flavor, new_flavor
+    # Version 1.18: Added flavor, old_flavor, new_flavor, will use
+    #               PciDeviceList version 1.2
     # Version 1.19: Added vcpu_model
     # Version 1.20: Added ec2_ids
-    VERSION = '1.20'
+    # Version 1.21: TagList 1.1
+    VERSION = '1.21'
 
     fields = {
         'id': fields.IntegerField(),
@@ -262,10 +226,16 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         'fault': [('1.0', '1.0'), ('1.13', '1.2')],
         'info_cache': [('1.1', '1.0'), ('1.9', '1.4'), ('1.10', '1.5')],
         'security_groups': [('1.2', '1.0')],
-        'pci_devices': [('1.6', '1.0'), ('1.15', '1.1')],
+        'pci_devices': [('1.6', '1.0'), ('1.15', '1.1'),
+                        # FIXME(ndipanov): Currently we don't want to send 1.2
+                        # to Kilo nodes - they can't handle it and will fail
+                        # due to
+                        # https://bugs.launchpad.net/nova/+bug/1474074
+                        # Kilo Instance is at 1.19
+                        ('1.20', '1.2')],
         'numa_topology': [('1.14', '1.0'), ('1.16', '1.1')],
         'pci_requests': [('1.16', '1.1')],
-        'tags': [('1.17', '1.0')],
+        'tags': [('1.17', '1.0'), ('1.21', '1.1')],
         'flavor': [('1.18', '1.1')],
         'old_flavor': [('1.18', '1.1')],
         'new_flavor': [('1.18', '1.1')],
@@ -1202,7 +1172,9 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 1.15: Instance <= version 1.19
     # Version 1.16: Added get_all() method
     # Version 1.17: Instance <= version 1.20
-    VERSION = '1.17'
+    # Version 1.18: Instance <= version 1.21
+    # Version 1.19: Erronenous removal of get_hung_in_rebooting(). Reverted.
+    VERSION = '1.19'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -1226,6 +1198,8 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         '1.15': '1.19',
         '1.16': '1.19',
         '1.17': '1.20',
+        '1.18': '1.21',
+        '1.19': '1.21',
         }
 
     @base.remotable_classmethod

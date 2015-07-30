@@ -2394,6 +2394,12 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertTrue(net['should_create_bridge'])
         self.assertIsNone(iid)
 
+    def test_nw_info_build_network_tap(self):
+        net, iid = self._test_nw_info_build_network(model.VIF_TYPE_TAP)
+        self.assertIsNone(net['bridge'])
+        self.assertNotIn('should_create_bridge', net)
+        self.assertIsNone(iid)
+
     def test_nw_info_build_network_other(self):
         net, iid = self._test_nw_info_build_network(None)
         self.assertIsNone(net['bridge'])
@@ -2814,6 +2820,20 @@ class TestNeutronv2WithMock(test.TestCase):
                           api.get_instance_nw_info, 'context', instance)
         mock_lock.assert_called_once_with('refresh_cache-%s' % instance.uuid)
 
+    @mock.patch('oslo_concurrency.lockutils.lock')
+    @mock.patch.object(neutronapi.API, '_get_instance_nw_info')
+    @mock.patch('nova.network.base_api.update_instance_cache_with_nw_info')
+    def test_get_instance_nw_info(self, mock_update, mock_get, mock_lock):
+        fake_result = mock.sentinel.get_nw_info_result
+        mock_get.return_value = fake_result
+        instance = fake_instance.fake_instance_obj(self.context)
+        result = self.api.get_instance_nw_info(self.context, instance)
+        mock_get.assert_called_once_with(self.context, instance)
+        mock_update.assert_called_once_with(self.api, self.context, instance,
+                                            nw_info=fake_result,
+                                            update_cells=False)
+        self.assertEqual(fake_result, result)
+
     def _test_validate_networks_fixed_ip_no_dup(self, nets, requested_networks,
                                                 ids, list_port_values):
 
@@ -3022,6 +3042,29 @@ class TestNeutronv2WithMock(test.TestCase):
         fake_ip = '1.1.1.1'
         # Run the code.
         self.assertRaises(exception.FixedIpAlreadyInUse,
+                          self.api._create_port,
+                          neutronapi.get_client(self.context),
+                          instance, net['id'], port_req_body,
+                          fixed_ip=fake_ip)
+        # Assert the calls.
+        create_port_mock.assert_called_once_with(port_req_body)
+
+    @mock.patch.object(client.Client, 'create_port',
+                       side_effect=exceptions.InvalidIpForNetworkClient())
+    def test_create_port_with_invalid_ip_for_network(self, create_port_mock):
+        # Create fake data.
+        instance = fake_instance.fake_instance_obj(self.context)
+        net = {'id': 'my_netid1',
+               'name': 'my_netname1',
+               'subnets': ['mysubnid1'],
+               'tenant_id': instance['project_id']}
+        zone = 'compute:%s' % instance['availability_zone']
+        port_req_body = {'port': {'device_id': instance['uuid'],
+                                  'device_owner': zone,
+                                  'mac_address': 'XX:XX:XX:XX:XX:XX'}}
+        fake_ip = '1.1.1.1'
+        # Run the code.
+        self.assertRaises(exception.InvalidInput,
                           self.api._create_port,
                           neutronapi.get_client(self.context),
                           instance, net['id'], port_req_body,
