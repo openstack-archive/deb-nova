@@ -28,9 +28,7 @@ override_dh_auto_clean:
 override_dh_auto_build:
 	dh_auto_build
 
-	set -e ; for i in build/* ; do \
-		PYTHONPATH=$$i bash tools/config/generate_sample.sh -b . -p nova -o etc/nova ; \
-	done
+	oslo-config-generator --config-file=etc/nova/nova-config-generator.conf
 
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.postinst
