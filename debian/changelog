@@ -1,3 +1,11 @@
+nova (1:12.0.0~b2-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Reviewed (build-)depends for this release.
+  * Using oslo-config-generator to build the sample config file.
+
+ -- Thomas Goirand <zigo@debian.org>  Thu, 30 Jul 2015 22:55:25 +0000
+
 nova (1:12.0.0~b1-1) experimental; urgency=medium
 
   * New upstream release.

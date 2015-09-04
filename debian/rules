@@ -28,9 +28,7 @@ override_dh_auto_clean:
 override_dh_auto_build:
 	dh_auto_build
 
-	set -e ; for i in build/* ; do \
-		PYTHONPATH=$$i bash tools/config/generate_sample.sh -b . -p nova -o etc/nova ; \
-	done
+	oslo-config-generator --config-file=etc/nova/nova-config-generator.conf
 
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.postinst
@@ -63,7 +61,7 @@ override_dh_install:
 
 	dh_install --fail-missing -Xbin/nova-all -Xbin/nova-objectstore
 	mkdir -p $(CURDIR)/debian/nova-common/usr/share/nova-common
-	bash tools/config/generate_sample.sh -b . -p nova -o $(CURDIR)/debian/nova-common/usr/share/nova-common
+	cp etc/nova/nova.conf.sample $(CURDIR)/debian/nova-common/usr/share/nova-common
 
 	install -D -m 0440 $(CURDIR)/debian/nova-common.sudoers $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
 	install -D -m 0644 $(CURDIR)/etc/nova/logging_sample.conf $(CURDIR)/debian/nova-common/usr/share/nova-common/logging.conf
