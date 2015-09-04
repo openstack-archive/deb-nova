@@ -70,6 +70,8 @@ xenapi_vm_utils_opts = [
                     ' image_property `cache_in_nova=True`, and `none` turns'
                     ' off caching entirely'),
     cfg.IntOpt('image_compression_level',
+               min=1,
+               max=9,
                help='Compression level for images, e.g., 9 for gzip -9.'
                     ' Range is 1-9, 9 being most compressed but most CPU'
                     ' intensive on dom0.'),
@@ -139,7 +141,7 @@ PROGRESS_INTERVAL_SECONDS = 300
 
 # Fudge factor to allow for the VHD chain to be slightly larger than
 # the partitioned space. Otherwise, legitimate images near their
-# maximum allowed size can fail on build with FlavorDiskTooSmall.
+# maximum allowed size can fail on build with FlavorDiskSmallerThanImage.
 VHD_SIZE_CHECK_FUDGE_FACTOR_GB = 10
 
 
@@ -194,13 +196,11 @@ class ImageType(object):
         }.get(image_type_id)
 
 
-def get_vm_device_id(session, image_properties):
+def get_vm_device_id(session, image_meta):
     # NOTE: device_id should be 2 for windows VMs which run new xentools
     # (>=6.1). Refer to http://support.citrix.com/article/CTX135099 for more
     # information.
-    if image_properties is None:
-        image_properties = {}
-    device_id = image_properties.get('xenapi_device_id')
+    device_id = image_meta.properties.get('hw_device_id')
 
     # The device_id is required to be set for hypervisor version 6.1 and above
     if device_id:
@@ -910,7 +910,7 @@ def update_vdi_virtual_size(session, instance, vdi_ref, new_gb):
 
 
 def resize_disk(session, instance, vdi_ref, flavor):
-    size_gb = flavor['root_gb']
+    size_gb = flavor.root_gb
     if size_gb == 0:
         reason = _("Can't resize a disk to 0 GB.")
         raise exception.ResizeError(reason=reason)
@@ -1044,7 +1044,7 @@ def _generate_disk(session, instance, vm_ref, userdevice, name_label,
         # 2. Attach VDI to compute worker (VBD hotplug)
         with vdi_attached_here(session, vdi_ref, read_only=False) as dev:
             # 3. Create partition
-            partition_start = "0"
+            partition_start = "2048s"
             partition_end = "-0"
 
             partition_path = _make_partition(session, dev,
@@ -1497,7 +1497,9 @@ def _check_vdi_size(context, session, instance, vdi_uuid):
                   {'size': size, 'allowed_size': allowed_size},
                   instance=instance)
 
-        raise exception.FlavorDiskTooSmall()
+        raise exception.FlavorDiskSmallerThanImage(
+            flavor_size=(flavor.root_gb * units.Gi),
+            image_size=(size * units.Gi))
 
 
 def _fetch_disk_image(context, session, instance, name_label, image_id,
@@ -1604,10 +1606,8 @@ def determine_disk_image_type(image_meta):
     2. If we're not using Glance, then we need to deduce this based on
        whether a kernel_id is specified.
     """
-    if not image_meta or 'disk_format' not in image_meta:
+    if not image_meta.obj_attr_is_set("disk_format"):
         return None
-
-    disk_format = image_meta['disk_format']
 
     disk_format_map = {
         'ami': ImageType.DISK,
@@ -1619,18 +1619,13 @@ def determine_disk_image_type(image_meta):
     }
 
     try:
-        image_type = disk_format_map[disk_format]
+        image_type = disk_format_map[image_meta.disk_format]
     except KeyError:
-        raise exception.InvalidDiskFormat(disk_format=disk_format)
+        raise exception.InvalidDiskFormat(disk_format=image_meta.disk_format)
 
-    image_ref = image_meta.get('id')
-
-    params = {
-        'image_type_str': ImageType.to_string(image_type),
-        'image_ref': image_ref
-    }
-    LOG.debug("Detected %(image_type_str)s format for image %(image_ref)s",
-              params)
+    LOG.debug("Detected %(type)s format for image %(image)s",
+              {'type': ImageType.to_string(image_type),
+               'image': image_meta})
 
     return image_type
 
@@ -2517,7 +2512,7 @@ def _import_migrated_root_disk(session, instance):
 def _import_migrate_ephemeral_disks(session, instance):
     ephemeral_vdis = {}
     instance_uuid = instance['uuid']
-    ephemeral_gb = instance["ephemeral_gb"]
+    ephemeral_gb = instance.old_flavor.ephemeral_gb
     disk_sizes = get_ephemeral_disk_sizes(ephemeral_gb)
     for chain_number, _size in enumerate(disk_sizes, start=1):
         chain_label = instance_uuid + "_ephemeral_%d" % chain_number

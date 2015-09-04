@@ -61,48 +61,18 @@ class LocalAPI(object):
         # nothing to wait for in the local case.
         pass
 
-    def instance_update(self, context, instance_uuid, **updates):
-        """Perform an instance update in the database."""
-        return self._manager.instance_update(context, instance_uuid,
-                                             updates, 'compute')
-
     def provider_fw_rule_get_all(self, context):
         return self._manager.provider_fw_rule_get_all(context)
-
-    def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
-                         wr_bytes, instance, last_refreshed=None,
-                         update_totals=False):
-        return self._manager.vol_usage_update(context, vol_id,
-                                              rd_req, rd_bytes,
-                                              wr_req, wr_bytes,
-                                              instance, last_refreshed,
-                                              update_totals)
 
     def compute_node_create(self, context, values):
         return self._manager.compute_node_create(context, values)
 
-    def task_log_get(self, context, task_name, begin, end, host, state=None):
-        return self._manager.task_log_get(context, task_name, begin, end,
-                                          host, state)
-
-    def task_log_begin_task(self, context, task_name, begin, end, host,
-                            task_items=None, message=None):
-        return self._manager.task_log_begin_task(context, task_name,
-                                                 begin, end, host,
-                                                 task_items, message)
-
-    def task_log_end_task(self, context, task_name, begin, end, host,
-                          errors, message=None):
-        return self._manager.task_log_end_task(context, task_name,
-                                               begin, end, host,
-                                               errors, message)
-
-    def security_groups_trigger_members_refresh(self, context, group_ids):
-        return self._manager.security_groups_trigger_members_refresh(context,
-                                                                     group_ids)
-
     def object_backport(self, context, objinst, target_version):
         return self._manager.object_backport(context, objinst, target_version)
+
+    def object_backport_versions(self, context, objinst, object_versions):
+        return self._manager.object_backport_versions(context, objinst,
+                                                      object_versions)
 
 
 class LocalComputeTaskAPI(object):
@@ -212,11 +182,6 @@ class API(LocalAPI):
                                 'before nova-conductor?  '
                                 'Reattempting establishment of '
                                 'nova-conductor connection...'))
-
-    def instance_update(self, context, instance_uuid, **updates):
-        """Perform an instance update in the database."""
-        return self._manager.instance_update(context, instance_uuid,
-                                             updates, 'conductor')
 
 
 class ComputeTaskAPI(object):

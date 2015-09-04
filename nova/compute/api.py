@@ -32,6 +32,7 @@ from oslo_serialization import jsonutils
 from oslo_utils import excutils
 from oslo_utils import strutils
 from oslo_utils import timeutils
+from oslo_utils import units
 from oslo_utils import uuidutils
 import six
 from six.moves import range
@@ -646,7 +647,8 @@ class API(base.Base):
         # reason, we rely on the DB to cast True to a String.
         return True if bool_val else ''
 
-    def _check_requested_image(self, context, image_id, image, instance_type):
+    def _check_requested_image(self, context, image_id, image,
+                               instance_type, root_bdm):
         if not image:
             return
 
@@ -663,16 +665,64 @@ class API(base.Base):
         if instance_type['memory_mb'] < int(image.get('min_ram') or 0):
             raise exception.FlavorMemoryTooSmall()
 
-        # NOTE(johannes): root_gb is allowed to be 0 for legacy reasons
-        # since libvirt interpreted the value differently than other
-        # drivers. A value of 0 means don't check size.
-        root_gb = instance_type['root_gb']
-        if root_gb:
-            if int(image.get('size') or 0) > root_gb * (1024 ** 3):
-                raise exception.FlavorDiskTooSmall()
+        # Image min_disk is in gb, size is in bytes. For sanity, have them both
+        # in bytes.
+        image_min_disk = int(image.get('min_disk') or 0) * units.Gi
+        image_size = int(image.get('size') or 0)
 
-            if int(image.get('min_disk') or 0) > root_gb:
-                    raise exception.FlavorDiskTooSmall()
+        # Target disk is a volume. Don't check flavor disk size because it
+        # doesn't make sense, and check min_disk against the volume size.
+        if (root_bdm is not None and root_bdm.is_volume):
+            # There are 2 possibilities here: either the target volume already
+            # exists, or it doesn't, in which case the bdm will contain the
+            # intended volume size.
+            #
+            # Cinder does its own check against min_disk, so if the target
+            # volume already exists this has already been done and we don't
+            # need to check it again here. In this case, volume_size may not be
+            # set on the bdm.
+            #
+            # If we're going to create the volume, the bdm will contain
+            # volume_size. Therefore we should check it if it exists. This will
+            # still be checked again by cinder when the volume is created, but
+            # that will not happen until the request reaches a host. By
+            # checking it here, the user gets an immediate and useful failure
+            # indication.
+            #
+            # The third possibility is that we have failed to consider
+            # something, and there are actually more than 2 possibilities. In
+            # this case cinder will still do the check at volume creation time.
+            # The behaviour will still be correct, but the user will not get an
+            # immediate failure from the api, and will instead have to
+            # determine why the instance is in an error state with a task of
+            # block_device_mapping.
+            #
+            # We could reasonably refactor this check into _validate_bdm at
+            # some future date, as the various size logic is already split out
+            # in there.
+            dest_size = root_bdm.volume_size
+            if dest_size is not None:
+                dest_size *= units.Gi
+
+                if image_min_disk > dest_size:
+                    raise exception.VolumeSmallerThanMinDisk(
+                        volume_size=dest_size, image_min_disk=image_min_disk)
+
+        # Target disk is a local disk whose size is taken from the flavor
+        else:
+            dest_size = instance_type['root_gb'] * units.Gi
+
+            # NOTE(johannes): root_gb is allowed to be 0 for legacy reasons
+            # since libvirt interpreted the value differently than other
+            # drivers. A value of 0 means don't check size.
+            if dest_size != 0:
+                if image_size > dest_size:
+                    raise exception.FlavorDiskSmallerThanImage(
+                        flavor_size=dest_size, image_size=image_size)
+
+                if image_min_disk > dest_size:
+                    raise exception.FlavorDiskSmallerThanMinDisk(
+                        flavor_size=dest_size, image_min_disk=image_min_disk)
 
     def _get_image_defined_bdms(self, base_options, instance_type, image_meta,
                                 root_device_name):
@@ -713,6 +763,14 @@ class API(base.Base):
                 block_device.create_blank_bdm(instance_type['swap'], 'swap'))
 
         return flavor_defined_bdms
+
+    def _merge_with_image_bdms(self, block_device_mapping, image_mappings):
+        """Override any block devices from the image by device name"""
+        device_names = set(bdm['device_name'] for bdm in block_device_mapping
+                           if bdm['device_name'])
+        return (block_device_mapping +
+                [bdm for bdm in image_mappings
+                 if bdm['device_name'] not in device_names])
 
     def _check_and_transform_bdm(self, context, base_options, instance_type,
                                  image_meta, min_count, max_count,
@@ -758,7 +816,8 @@ class API(base.Base):
             block_device_mapping = (
                 filter(not_image_and_root_bdm, block_device_mapping))
 
-        block_device_mapping += image_defined_bdms
+        block_device_mapping = self._merge_with_image_bdms(
+            block_device_mapping, image_defined_bdms)
 
         if min_count > 1 or max_count > 1:
             if any(map(lambda bdm: bdm['source_type'] == 'volume',
@@ -782,10 +841,11 @@ class API(base.Base):
 
     def _checks_for_create_and_rebuild(self, context, image_id, image,
                                        instance_type, metadata,
-                                       files_to_inject):
+                                       files_to_inject, root_bdm):
         self._check_metadata_properties_quota(context, metadata)
         self._check_injected_file_quota(context, files_to_inject)
-        self._check_requested_image(context, image_id, image, instance_type)
+        self._check_requested_image(context, image_id, image,
+                                    instance_type, root_bdm)
 
     def _validate_and_build_base_options(self, context, instance_type,
                                          boot_meta, image_href, image_id,
@@ -793,7 +853,7 @@ class API(base.Base):
                                          display_description, key_name,
                                          key_data, security_groups,
                                          availability_zone, forced_host,
-                                         user_data, metadata, injected_files,
+                                         user_data, metadata,
                                          access_ip_v4, access_ip_v6,
                                          requested_networks, config_drive,
                                          auto_disk_config, reservation_id,
@@ -825,9 +885,6 @@ class API(base.Base):
             except base64.binascii.Error:
                 raise exception.InstanceUserDataMalformed()
 
-        self._checks_for_create_and_rebuild(context, image_id, boot_meta,
-                instance_type, metadata, injected_files)
-
         self._check_requested_secgroups(context, security_groups)
 
         # Note:  max_count is the number of instances requested by the user,
@@ -851,8 +908,9 @@ class API(base.Base):
                 block_device.properties_root_device_name(
                     boot_meta.get('properties', {})))
 
+        image_meta = objects.ImageMeta.from_dict(boot_meta)
         numa_topology = hardware.numa_get_constraints(
-                instance_type, boot_meta)
+                instance_type, image_meta)
 
         system_metadata = {}
 
@@ -908,15 +966,13 @@ class API(base.Base):
         return base_options, max_network_count
 
     def _build_filter_properties(self, context, scheduler_hints, forced_host,
-            forced_node, instance_type, pci_request_info):
+            forced_node, instance_type):
         filter_properties = dict(scheduler_hints=scheduler_hints)
         filter_properties['instance_type'] = instance_type
         if forced_host:
             filter_properties['force_hosts'] = [forced_host]
         if forced_node:
             filter_properties['force_nodes'] = [forced_node]
-        if pci_request_info and pci_request_info.requests:
-            filter_properties['pci_requests'] = pci_request_info
         return filter_properties
 
     def _provision_instances(self, context, instance_type, min_count,
@@ -1091,7 +1147,7 @@ class API(base.Base):
                 instance_type, boot_meta, image_href, image_id, kernel_id,
                 ramdisk_id, display_name, display_description,
                 key_name, key_data, security_groups, availability_zone,
-                forced_host, user_data, metadata, injected_files, access_ip_v4,
+                forced_host, user_data, metadata, access_ip_v4,
                 access_ip_v6, requested_networks, config_drive,
                 auto_disk_config, reservation_id, max_count)
 
@@ -1111,6 +1167,12 @@ class API(base.Base):
             base_options, instance_type, boot_meta, min_count, max_count,
             block_device_mapping, legacy_bdm)
 
+        # We can't do this check earlier because we need bdms from all sources
+        # to have been merged in order to get the root bdm.
+        self._checks_for_create_and_rebuild(context, image_id, boot_meta,
+                instance_type, metadata, injected_files,
+                block_device_mapping.root_bdm())
+
         instance_group = self._get_requested_instance_group(context,
                                    scheduler_hints, check_server_group_quota)
 
@@ -1121,8 +1183,7 @@ class API(base.Base):
 
         filter_properties = self._build_filter_properties(context,
                 scheduler_hints, forced_host,
-                forced_node, instance_type,
-                base_options.get('pci_requests'))
+                forced_node, instance_type)
 
         for instance in instances:
             self._record_action_start(context, instance,
@@ -1143,7 +1204,9 @@ class API(base.Base):
     @staticmethod
     def _volume_size(instance_type, bdm):
         size = bdm.get('volume_size')
-        if size is None and bdm.get('source_type') == 'blank':
+        # NOTE (ndipanov): inherit flavour size only for swap and ephemeral
+        if (size is None and bdm.get('source_type') == 'blank' and
+                bdm.get('destination_type') == 'local'):
             if bdm.get('guest_format') == 'swap':
                 size = instance_type.get('swap', 0)
             else:
@@ -1245,6 +1308,7 @@ class API(base.Base):
                     self.volume_api.check_attach(context,
                                                  volume,
                                                  instance=instance)
+                    bdm.volume_size = volume.get('size')
                 except (exception.CinderConnectionFailed,
                         exception.InvalidVolume):
                     raise
@@ -1252,11 +1316,18 @@ class API(base.Base):
                     raise exception.InvalidBDMVolume(id=volume_id)
             elif snapshot_id is not None:
                 try:
-                    self.volume_api.get_snapshot(context, snapshot_id)
+                    snap = self.volume_api.get_snapshot(context, snapshot_id)
+                    bdm.volume_size = bdm.volume_size or snap.get('size')
                 except exception.CinderConnectionFailed:
                     raise
                 except Exception:
                     raise exception.InvalidBDMSnapshot(id=snapshot_id)
+            elif (bdm.source_type == 'blank' and
+                    bdm.destination_type == 'volume' and
+                    not bdm.volume_size):
+                raise exception.InvalidBDM(message=_("Blank volumes "
+                    "(source: 'blank', dest: 'volume') need to have non-zero "
+                    "size"))
 
         ephemeral_size = sum(bdm.volume_size or 0
                 for bdm in all_mappings
@@ -1265,8 +1336,7 @@ class API(base.Base):
             raise exception.InvalidBDMEphemeralSize()
 
         # There should be only one swap
-        swap_list = [bdm for bdm in all_mappings
-                if block_device.new_format_is_swap(bdm)]
+        swap_list = block_device.get_bdm_swap_list(all_mappings)
         if len(swap_list) > 1:
             msg = _("More than one swap drive requested.")
             raise exception.InvalidBDMFormat(details=msg)
@@ -1654,13 +1724,13 @@ class API(base.Base):
         #    shy by delta(old, new) from the quota usages accounted
         #    for this instance, so we must adjust
         try:
-            deltas = self._downsize_quota_delta(context, instance)
+            deltas = compute_utils.downsize_quota_delta(context, instance)
         except KeyError:
             LOG.info(_LI('Migration %s may have been confirmed during '
                          'delete'),
                      migration.id, context=context, instance=instance)
             return
-        quotas = self._reserve_quota_delta(context, deltas, instance)
+        quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         self._record_action_start(context, instance,
                                   instance_actions.CONFIRM_RESIZE)
@@ -1688,19 +1758,9 @@ class API(base.Base):
             if (migration and
                     instance.instance_type_id ==
                         migration.new_instance_type_id):
-                old_inst_type_id = migration.old_instance_type_id
-                try:
-                    old_inst_type = flavors.get_flavor(old_inst_type_id)
-                except exception.FlavorNotFound:
-                    LOG.warning(_LW("Flavor %d not found"), old_inst_type_id)
-                    pass
-                else:
-                    instance_vcpus = old_inst_type['vcpus']
-                    vram_mb = int(old_inst_type.get('extra_specs',
-                                                    {}).get(VIDEO_RAM, 0))
-                    instance_memory_mb = (old_inst_type['memory_mb'] + vram_mb)
-                    LOG.debug("going to delete a resizing instance",
-                              instance=instance)
+                get_inst_attrs = compute_utils.get_inst_attrs_from_migration
+                instance_vcpus, instance_memory_mb = get_inst_attrs(migration,
+                                                                    instance)
 
         quotas = objects.Quotas(context)
         quotas.reserve(project_id=project_id,
@@ -1718,7 +1778,14 @@ class API(base.Base):
         else:
             LOG.warning(_LW("instance's host %s is down, deleting from "
                             "database"), instance.host, instance=instance)
-        instance.info_cache.delete()
+        if instance.info_cache is not None:
+            instance.info_cache.delete()
+        else:
+            # NOTE(yoshimatsu): Avoid AttributeError if instance.info_cache
+            # is None. When the root cause that instance.info_cache becomes
+            # None is fixed, the log level should be reconsidered.
+            LOG.warning(_LW("Info cache for instance could not be found. "
+                            "Ignore."), instance=instance)
         compute_utils.notify_about_instance_usage(
             self.notifier, context, instance, "%s.start" % delete_type)
 
@@ -1778,7 +1845,20 @@ class API(base.Base):
             instance.save()
         else:
             self.compute_rpcapi.terminate_instance(context, instance, bdms,
-                                                   reservations=reservations)
+                                                   reservations=reservations,
+                                                   delete_type='delete')
+
+    def _do_force_delete(self, context, instance, bdms, reservations=None,
+                         local=False):
+        if local:
+            instance.vm_state = vm_states.DELETED
+            instance.task_state = None
+            instance.terminated_at = timeutils.utcnow()
+            instance.save()
+        else:
+            self.compute_rpcapi.terminate_instance(context, instance, bdms,
+                                                   reservations=reservations,
+                                                   delete_type='force_delete')
 
     def _do_soft_delete(self, context, instance, bdms, reservations=None,
                         local=False):
@@ -1854,7 +1934,7 @@ class API(base.Base):
     @check_instance_state(must_have_launched=False)
     def force_delete(self, context, instance):
         """Force delete an instance in any vm_state/task_state."""
-        self._delete(context, instance, 'force_delete', self._do_delete,
+        self._delete(context, instance, 'force_delete', self._do_force_delete,
                      task_state=task_states.DELETING)
 
     def force_stop(self, context, instance, do_cast=True, clean_shutdown=True):
@@ -2158,53 +2238,69 @@ class API(base.Base):
         :param extra_properties: dict of extra image properties to include
 
         """
-        if extra_properties is None:
-            extra_properties = {}
-        instance_uuid = instance.uuid
-
         properties = {
-            'instance_uuid': instance_uuid,
+            'instance_uuid': instance.uuid,
             'user_id': str(context.user_id),
             'image_type': image_type,
         }
-        sent_meta = utils.get_image_from_system_metadata(
+        properties.update(extra_properties or {})
+
+        image_meta = self._initialize_instance_snapshot_metadata(
+            instance, name, properties)
+        return self.image_api.create(context, image_meta)
+
+    def _initialize_instance_snapshot_metadata(self, instance, name,
+                                               extra_properties=None):
+        """Initialize new metadata for a snapshot of the given instance.
+
+        :param instance: nova.objects.instance.Instance object
+        :param name: string for name of the snapshot
+        :param extra_properties: dict of extra metadata properties to include
+
+        :returns: the new instance snapshot metadata
+        """
+        image_meta = utils.get_image_from_system_metadata(
             instance.system_metadata)
+        image_meta.update({'name': name,
+                           'is_public': False})
 
         # Delete properties that are non-inheritable
-        image_props = sent_meta.get("properties", {})
-        for key in image_props.keys():
-            if key in CONF.non_inheritable_image_properties:
-                del image_props[key]
+        properties = image_meta['properties']
+        for key in CONF.non_inheritable_image_properties:
+            properties.pop(key, None)
 
-        sent_meta['name'] = name
-        sent_meta['is_public'] = False
-
-        # The properties set up above and in extra_properties have precedence
+        # The properties in extra_properties have precedence
         properties.update(extra_properties or {})
-        sent_meta['properties'].update(properties)
 
-        return self.image_api.create(context, sent_meta)
+        return image_meta
 
     # NOTE(melwitt): We don't check instance lock for snapshot because lock is
     #                intended to prevent accidental change/delete of instances
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED])
-    def snapshot_volume_backed(self, context, instance, image_meta, name,
+    def snapshot_volume_backed(self, context, instance, name,
                                extra_properties=None):
         """Snapshot the given volume-backed instance.
 
         :param instance: nova.objects.instance.Instance object
-        :param image_meta: metadata for the new image
         :param name: name of the backup or snapshot
         :param extra_properties: dict of extra image properties to include
 
         :returns: the new image metadata
         """
-        image_meta['name'] = name
-        image_meta['is_public'] = False
+        image_meta = self._initialize_instance_snapshot_metadata(
+            instance, name, extra_properties)
+        # the new image is simply a bucket of properties (particularly the
+        # block device mapping, kernel and ramdisk IDs) with no image data,
+        # hence the zero size
+        image_meta['size'] = 0
+        for attr in ('container_format', 'disk_format'):
+            image_meta.pop(attr, None)
         properties = image_meta['properties']
+        # clean properties before filling
+        for key in ('block_device_mapping', 'bdm_v2', 'root_device_name'):
+            properties.pop(key, None)
         if instance.root_device_name:
             properties['root_device_name'] = instance.root_device_name
-        properties.update(extra_properties or {})
 
         quiesced = False
         if instance.vm_state == vm_states.ACTIVE:
@@ -2212,6 +2308,7 @@ class API(base.Base):
                 self.compute_rpcapi.quiesce_instance(context, instance)
                 quiesced = True
             except (exception.InstanceQuiesceNotSupported,
+                    exception.QemuGuestAgentNotEnabled,
                     exception.NovaException, NotImplementedError) as err:
                 if strutils.bool_from_string(properties.get(
                         'os_require_quiesce')):
@@ -2249,24 +2346,9 @@ class API(base.Base):
         if quiesced:
             self.compute_rpcapi.unquiesce_instance(context, instance, mapping)
 
-        # NOTE (ndipanov): Remove swap/ephemerals from mappings as they will be
-        # in the block_device_mapping for the new image.
-        image_mappings = properties.get('mappings')
-        if image_mappings:
-            properties['mappings'] = [m for m in image_mappings
-                                      if not block_device.is_swap_or_ephemeral(
-                                          m['virtual'])]
         if mapping:
             properties['block_device_mapping'] = mapping
             properties['bdm_v2'] = True
-
-        for attr in ('status', 'location', 'id', 'owner'):
-            image_meta.pop(attr, None)
-
-        # the new image is simply a bucket of properties (particularly the
-        # block device mapping, kernel and ramdisk IDs) with no image data,
-        # hence the zero size
-        image_meta['size'] = 0
 
         return self.image_api.create(context, image_meta)
 
@@ -2335,8 +2417,9 @@ class API(base.Base):
         self._check_auto_disk_config(image=image, **kwargs)
 
         flavor = instance.get_flavor()
+        root_bdm = self._get_root_bdm(context, instance)
         self._checks_for_create_and_rebuild(context, image_id, image,
-                flavor, metadata, files_to_inject)
+                flavor, metadata, files_to_inject, root_bdm)
 
         kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
                 context, None, None, image)
@@ -2409,8 +2492,8 @@ class API(base.Base):
             elevated, instance.uuid, 'finished')
 
         # reverse quota reservation for increased resource usage
-        deltas = self._reverse_upsize_quota_delta(context, migration)
-        quotas = self._reserve_quota_delta(context, deltas, instance)
+        deltas = compute_utils.reverse_upsize_quota_delta(context, migration)
+        quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         instance.task_state = task_states.RESIZE_REVERTING
         try:
@@ -2446,8 +2529,8 @@ class API(base.Base):
                 elevated, instance.uuid, 'finished')
 
         # reserve quota only for any decrease in resource usage
-        deltas = self._downsize_quota_delta(context, instance)
-        quotas = self._reserve_quota_delta(context, deltas, instance)
+        deltas = compute_utils.downsize_quota_delta(context, instance)
+        quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         migration.status = 'confirming'
         migration.save()
@@ -2464,78 +2547,6 @@ class API(base.Base):
                                            migration,
                                            migration.source_compute,
                                            quotas.reservations or [])
-
-    @staticmethod
-    def _resize_quota_delta(context, new_flavor,
-                            old_flavor, sense, compare):
-        """Calculate any quota adjustment required at a particular point
-        in the resize cycle.
-
-        :param context: the request context
-        :param new_flavor: the target instance type
-        :param old_flavor: the original instance type
-        :param sense: the sense of the adjustment, 1 indicates a
-                      forward adjustment, whereas -1 indicates a
-                      reversal of a prior adjustment
-        :param compare: the direction of the comparison, 1 indicates
-                        we're checking for positive deltas, whereas
-                        -1 indicates negative deltas
-        """
-        def _quota_delta(resource):
-            return sense * (new_flavor[resource] - old_flavor[resource])
-
-        deltas = {}
-        if compare * _quota_delta('vcpus') > 0:
-            deltas['cores'] = _quota_delta('vcpus')
-        if compare * _quota_delta('memory_mb') > 0:
-            deltas['ram'] = _quota_delta('memory_mb')
-
-        return deltas
-
-    @staticmethod
-    def _upsize_quota_delta(context, new_flavor, old_flavor):
-        """Calculate deltas required to adjust quota for an instance upsize.
-        """
-        return API._resize_quota_delta(context, new_flavor, old_flavor, 1, 1)
-
-    @staticmethod
-    def _reverse_upsize_quota_delta(context, migration_ref):
-        """Calculate deltas required to reverse a prior upsizing
-        quota adjustment.
-        """
-        old_flavor = objects.Flavor.get_by_id(
-            context, migration_ref['old_instance_type_id'])
-        new_flavor = objects.Flavor.get_by_id(
-            context, migration_ref['new_instance_type_id'])
-
-        return API._resize_quota_delta(context, new_flavor, old_flavor, -1, -1)
-
-    @staticmethod
-    def _downsize_quota_delta(context, instance):
-        """Calculate deltas required to adjust quota for an instance downsize.
-        """
-        old_flavor = instance.get_flavor('old')
-        new_flavor = instance.get_flavor('new')
-        return API._resize_quota_delta(context, new_flavor, old_flavor, 1, -1)
-
-    @staticmethod
-    def _reserve_quota_delta(context, deltas, instance):
-        """If there are deltas to reserve, construct a Quotas object and
-        reserve the deltas for the given project.
-
-        @param context:    The nova request context.
-        @param deltas:     A dictionary of the proposed delta changes.
-        @param instance:   The instance we're operating on, so that
-                           quotas can use the correct project_id/user_id.
-        @return: nova.objects.quotas.Quotas
-        """
-        quotas = objects.Quotas(context=context)
-        if deltas:
-            project_id, user_id = quotas_obj.ids_from_instance(context,
-                                                               instance)
-            quotas.reserve(project_id=project_id, user_id=user_id,
-                           **deltas)
-        return quotas
 
     @staticmethod
     def _resize_cells_support(context, quotas, instance,
@@ -2585,7 +2596,8 @@ class API(base.Base):
             new_instance_type = flavors.get_flavor_by_flavor_id(
                     flavor_id, read_deleted="no")
             if (new_instance_type.get('root_gb') == 0 and
-                current_instance_type.get('root_gb') != 0):
+                current_instance_type.get('root_gb') != 0 and
+                not self.is_volume_backed_instance(context, instance)):
                 reason = _('Resize to zero disk flavor is not allowed.')
                 raise exception.CannotResizeDisk(reason=reason)
 
@@ -2613,10 +2625,12 @@ class API(base.Base):
 
         # ensure there is sufficient headroom for upsizes
         if flavor_id:
-            deltas = self._upsize_quota_delta(context, new_instance_type,
-                                              current_instance_type)
+            deltas = compute_utils.upsize_quota_delta(context,
+                                                      new_instance_type,
+                                                      current_instance_type)
             try:
-                quotas = self._reserve_quota_delta(context, deltas, instance)
+                quotas = compute_utils.reserve_quota_delta(context, deltas,
+                                                           instance)
             except exception.OverQuota as exc:
                 quotas = exc.kwargs['quotas']
                 overs = exc.kwargs['overs']
@@ -2935,6 +2949,19 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_host
+    def get_mks_console(self, context, instance, console_type):
+        """Get a url to a MKS console."""
+        connect_info = self.compute_rpcapi.get_mks_console(context,
+                instance=instance, console_type=console_type)
+        self.consoleauth_rpcapi.authorize_console(context,
+                connect_info['token'], console_type,
+                connect_info['host'], connect_info['port'],
+                connect_info['internal_access_path'], instance.uuid,
+                access_url=connect_info['access_url'])
+        return {'url': connect_info['access_url']}
+
+    @wrap_check_policy
+    @check_instance_host
     def get_console_output(self, context, instance, tail_length=None):
         """Get console output for an instance."""
         return self.compute_rpcapi.get_console_output(context,
@@ -3205,15 +3232,18 @@ class API(base.Base):
         uuids = [instance.uuid for instance in instances]
         return self.db.instance_fault_get_by_instance_uuids(context, uuids)
 
-    def is_volume_backed_instance(self, context, instance, bdms=None):
-        if not instance.image_ref:
-            return True
-
+    def _get_root_bdm(self, context, instance, bdms=None):
         if bdms is None:
             bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                     context, instance.uuid)
 
-        root_bdm = bdms.root_bdm()
+        return bdms.root_bdm()
+
+    def is_volume_backed_instance(self, context, instance, bdms=None):
+        if not instance.image_ref:
+            return True
+
+        root_bdm = self._get_root_bdm(context, instance, bdms)
         if not root_bdm:
             return False
         return root_bdm.is_volume
@@ -3263,6 +3293,21 @@ class API(base.Base):
         instance.task_state = task_states.REBUILDING
         instance.save(expected_task_state=[None])
         self._record_action_start(context, instance, instance_actions.EVACUATE)
+
+        # NOTE(danms): Create this as a tombstone for the source compute
+        # to find and cleanup. No need to pass it anywhere else.
+        migration = objects.Migration(context,
+                                      source_compute=instance.host,
+                                      source_node=instance.node,
+                                      instance_uuid=instance.uuid,
+                                      status='accepted',
+                                      migration_type='evacuation')
+        if host:
+            migration.dest_compute = host
+        migration.create()
+
+        compute_utils.notify_about_instance_usage(
+            self.notifier, context, instance, "evacuate")
 
         return self.compute_task_api.rebuild_instance(context,
                        instance=instance,
@@ -4114,16 +4159,16 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
             msg = _("Security group id should be integer")
             self.raise_invalid_property(msg)
 
-    def trigger_rules_refresh(self, context, id):
-        """Called when a rule is added to or removed from a security_group."""
-
-        security_group = self.db.security_group_get(
-            context, id, columns_to_join=['instances'])
-
-        for instance in security_group['instances']:
+    def _refresh_instance_security_rules(self, context, instances):
+        for instance in instances:
             if instance.host is not None:
                 self.compute_rpcapi.refresh_instance_security_rules(
                         context, instance.host, instance)
+
+    def trigger_rules_refresh(self, context, id):
+        """Called when a rule is added to or removed from a security_group."""
+        instances = objects.InstanceList.get_by_security_group_id(context, id)
+        self._refresh_instance_security_rules(context, instances)
 
     def trigger_members_refresh(self, context, group_ids):
         """Called when a security group gains a new or loses a member.
@@ -4131,35 +4176,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         Sends an update request to each compute node for each instance for
         which this is relevant.
         """
-        # First, we get the security group rules that reference these groups as
-        # the grantee..
-        security_group_rules = set()
-        for group_id in group_ids:
-            security_group_rules.update(
-                self.db.security_group_rule_get_by_security_group_grantee(
-                                                                     context,
-                                                                     group_id))
-
-        # ..then we distill the rules into the groups to which they belong..
-        security_groups = set()
-        for rule in security_group_rules:
-            security_group = self.db.security_group_get(
-                context, rule['parent_group_id'],
-                columns_to_join=['instances'])
-            security_groups.add(security_group)
-
-        # ..then we find the instances that are members of these groups..
-        instances = {}
-        for security_group in security_groups:
-            for instance in security_group['instances']:
-                if instance.uuid not in instances:
-                    instances[instance.uuid] = instance
-
-        # ..then we send a request to refresh the rules for each instance.
-        for instance in instances.values():
-            if instance.host:
-                self.compute_rpcapi.refresh_instance_security_rules(
-                        context, instance.host, instance)
+        instances = objects.InstanceList.get_by_grantee_security_group_ids(
+            context, group_ids)
+        self._refresh_instance_security_rules(context, instances)
 
     def get_instance_security_groups(self, context, instance_uuid,
                                      detailed=False):

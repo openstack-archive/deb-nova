@@ -38,6 +38,18 @@ class VMUtilsV2TestCase(test_vmutils.VMUtilsTestCase):
         self._vmutils = vmutilsv2.VMUtilsV2()
         self._vmutils._conn = mock.MagicMock()
 
+    @mock.patch('nova.virt.hyperv.hostutils.HostUtils'
+                '.check_min_windows_version')
+    @mock.patch.object(vmutilsv2, 'sys')
+    def test_serial_port_setting_data_win_version_10(self, mock_sys,
+                                                     mock_check_version):
+        mock_sys.platform = 'win32'
+        mock_check_version.return_value = True
+        _vmutils = vmutilsv2.VMUtilsV2()
+
+        self.assertEqual("Msvm_SerialPortSettingData",
+                         _vmutils._SERIAL_PORT_SETTING_DATA_CLASS)
+
     def test_create_vm(self):
         super(VMUtilsV2TestCase, self).test_create_vm()
         mock_vssd = self._vmutils._conn.Msvm_VirtualSystemSettingData.new()
@@ -149,6 +161,9 @@ class VMUtilsV2TestCase(test_vmutils.VMUtilsTestCase):
         self._vmutils._conn.Msvm_VirtualSystemSettingData.assert_called_with(
             ['ElementName', 'Notes'],
             VirtualSystemType=self._vmutils._VIRTUAL_SYSTEM_TYPE_REALIZED)
+
+    def _get_fake_instance_notes(self):
+        return [self._FAKE_VM_UUID]
 
     @mock.patch('nova.virt.hyperv.vmutilsv2.VMUtilsV2.check_ret_val')
     @mock.patch('nova.virt.hyperv.vmutilsv2.VMUtilsV2._get_wmi_obj')

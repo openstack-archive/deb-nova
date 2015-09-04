@@ -18,11 +18,14 @@
 """Utilities and helper functions."""
 
 import contextlib
+import copy
 import datetime
+import errno
 import functools
 import hashlib
 import hmac
 import inspect
+import logging as std_logging
 import os
 import pyclbr
 import random
@@ -32,6 +35,7 @@ import socket
 import struct
 import sys
 import tempfile
+import time
 from xml.sax import saxutils
 
 import eventlet
@@ -45,13 +49,14 @@ import oslo_messaging as messaging
 from oslo_utils import encodeutils
 from oslo_utils import excutils
 from oslo_utils import importutils
+from oslo_utils import strutils
 from oslo_utils import timeutils
 from oslo_utils import units
 import six
 from six.moves import range
 
 from nova import exception
-from nova.i18n import _, _LE, _LW
+from nova.i18n import _, _LE, _LI, _LW
 
 notify_decorator = 'nova.notifications.notify_decorator'
 
@@ -74,6 +79,11 @@ utils_opts = [
                default='month',
                help='Time period to generate instance usages for.  '
                     'Time period must be hour, day, month or year'),
+    cfg.BoolOpt('use_rootwrap_daemon', default=False,
+                help="Start and use a daemon that can run the commands that "
+                     "need to be run with root privileges. This option is "
+                     "usually enabled on nodes that run nova compute "
+                     "processes"),
     cfg.StrOpt('rootwrap_config',
                default="/etc/nova/rootwrap.conf",
                help='Path to the rootwrap configuration file to use for '
@@ -81,19 +91,6 @@ utils_opts = [
     cfg.StrOpt('tempdir',
                help='Explicitly specify the temporary working directory'),
 ]
-
-""" This group is for very specific reasons.
-
-If you're:
-- Working around an issue in a system tool (e.g. libvirt or qemu) where the fix
-  is in flight/discussed in that community.
-- The tool can be/is fixed in some distributions and rather than patch the code
-  those distributions can trivially set a config option to get the "correct"
-  behavior.
-This is a good place for your workaround.
-
-Please use with care!
-Document the BugID that your workaround is paired with."""
 
 workarounds_opts = [
     cfg.BoolOpt('disable_rootwrap',
@@ -110,7 +107,9 @@ workarounds_opts = [
                      'https://bugs.launchpad.net/nova/+bug/1334398'),
     cfg.BoolOpt('destroy_after_evacuate',
                 default=True,
-                help='Whether to destroy instances on startup when we suspect '
+                deprecated_for_removal=True,
+                help='DEPRECATED: Whether to destroy '
+                     'instances on startup when we suspect '
                      'they have previously been evacuated. This can result in '
                       'data loss if undesired. See '
                       'https://launchpad.net/bugs/1419785'),
@@ -135,6 +134,23 @@ workarounds_opts = [
                      "the Nova database they will have to be synchronized "
                      "manually. See https://bugs.launchpad.net/bugs/1444630"),
     ]
+""" The workarounds_opts group is for very specific reasons.
+
+If you're:
+
+ - Working around an issue in a system tool (e.g. libvirt or qemu) where the
+   fix is in flight/discussed in that community.
+ - The tool can be/is fixed in some distributions and rather than patch the
+   code those distributions can trivially set a config option to get the
+   "correct" behavior.
+
+Then this is a good place for your workaround.
+
+.. warning::
+
+  Please use with care! Document the BugID that your workaround is paired with.
+"""
+
 CONF = cfg.CONF
 CONF.register_opts(monkey_patch_opts)
 CONF.register_opts(utils_opts)
@@ -160,6 +176,23 @@ SM_IMAGE_PROP_PREFIX = "image_"
 SM_INHERITABLE_KEYS = (
     'min_ram', 'min_disk', 'disk_format', 'container_format',
 )
+# Keys which hold large structured data that won't fit in the
+# size constraints of the system_metadata table, so we avoid
+# storing and/or loading them.
+SM_SKIP_KEYS = (
+    # Legacy names
+    'mappings', 'block_device_mapping',
+    # Modern names
+    'img_mappings', 'img_block_device_mapping',
+)
+# Image attributes which Cinder stores in volume image metadata
+# as regular properties
+VIM_IMAGE_ATTRIBUTES = (
+    'image_id', 'image_name', 'size', 'checksum',
+    'container_format', 'disk_format', 'min_ram', 'min_disk',
+)
+
+_FILE_CACHE = {}
 
 
 def vpn_ping(address, port, timeout=0.05, session_id=None):
@@ -214,7 +247,7 @@ def vpn_ping(address, port, timeout=0.05, session_id=None):
     return (identifier == 0x40 and client_sess == session_id)
 
 
-def _get_root_helper():
+def get_root_helper():
     if CONF.workarounds.disable_rootwrap:
         cmd = 'sudo'
     else:
@@ -222,10 +255,138 @@ def _get_root_helper():
     return cmd
 
 
+def _get_rootwrap_helper():
+    if CONF.use_rootwrap_daemon:
+        return RootwrapDaemonHelper(CONF.rootwrap_config)
+    else:
+        return RootwrapProcessHelper()
+
+
+class RootwrapProcessHelper(object):
+    def trycmd(self, *cmd, **kwargs):
+        kwargs['root_helper'] = get_root_helper()
+        return processutils.trycmd(*cmd, **kwargs)
+
+    def execute(self, *cmd, **kwargs):
+        kwargs['root_helper'] = get_root_helper()
+        return processutils.execute(*cmd, **kwargs)
+
+
+class RootwrapDaemonHelper(RootwrapProcessHelper):
+    _clients = {}
+
+    @synchronized('daemon-client-lock')
+    def _get_client(cls, rootwrap_config):
+        try:
+            return cls._clients[rootwrap_config]
+        except KeyError:
+            from oslo_rootwrap import client
+            new_client = client.Client([
+                "sudo", "nova-rootwrap-daemon", rootwrap_config])
+            cls._clients[rootwrap_config] = new_client
+            return new_client
+
+    def __init__(self, rootwrap_config):
+        self.client = self._get_client(rootwrap_config)
+
+    def trycmd(self, *args, **kwargs):
+        discard_warnings = kwargs.pop('discard_warnings', False)
+        try:
+            out, err = self.execute(*args, **kwargs)
+            failed = False
+        except processutils.ProcessExecutionError as exn:
+            out, err = '', six.text_type(exn)
+            failed = True
+        if not failed and discard_warnings and err:
+            # Handle commands that output to stderr but otherwise succeed
+            err = ''
+        return out, err
+
+    def execute(self, *cmd, **kwargs):
+        # NOTE(dims): This method is to provide compatibility with the
+        # processutils.execute interface. So that calling daemon or direct
+        # rootwrap to honor the same set of flags in kwargs and to ensure
+        # that we don't regress any current behavior.
+        cmd = [str(c) for c in cmd]
+        loglevel = kwargs.pop('loglevel', std_logging.DEBUG)
+        log_errors = kwargs.pop('log_errors', None)
+        process_input = kwargs.pop('process_input', None)
+        delay_on_retry = kwargs.pop('delay_on_retry', True)
+        attempts = kwargs.pop('attempts', 1)
+        check_exit_code = kwargs.pop('check_exit_code', [0])
+        ignore_exit_code = False
+        if isinstance(check_exit_code, bool):
+            ignore_exit_code = not check_exit_code
+            check_exit_code = [0]
+        elif isinstance(check_exit_code, int):
+            check_exit_code = [check_exit_code]
+
+        sanitized_cmd = strutils.mask_password(' '.join(cmd))
+        LOG.info(_LI('Executing RootwrapDaemonHelper.execute '
+                     'cmd=[%(cmd)r] kwargs=[%(kwargs)r]'),
+                 {'cmd': sanitized_cmd, 'kwargs': kwargs})
+
+        while attempts > 0:
+            attempts -= 1
+            try:
+                start_time = time.time()
+                LOG.log(loglevel, _('Running cmd (subprocess): %s'),
+                        sanitized_cmd)
+
+                (returncode, out, err) = self.client.execute(
+                    cmd, process_input)
+
+                end_time = time.time() - start_time
+                LOG.log(loglevel,
+                        'CMD "%(sanitized_cmd)s" returned: %(return_code)s '
+                        'in %(end_time)0.3fs',
+                        {'sanitized_cmd': sanitized_cmd,
+                         'return_code': returncode,
+                         'end_time': end_time})
+
+                if not ignore_exit_code and returncode not in check_exit_code:
+                    out = strutils.mask_password(out)
+                    err = strutils.mask_password(err)
+                    raise processutils.ProcessExecutionError(
+                        exit_code=returncode,
+                        stdout=out,
+                        stderr=err,
+                        cmd=sanitized_cmd)
+                return (out, err)
+
+            except processutils.ProcessExecutionError as err:
+                # if we want to always log the errors or if this is
+                # the final attempt that failed and we want to log that.
+                if log_errors == processutils.LOG_ALL_ERRORS or (
+                                log_errors == processutils.LOG_FINAL_ERROR and
+                            not attempts):
+                    format = _('%(desc)r\ncommand: %(cmd)r\n'
+                               'exit code: %(code)r\nstdout: %(stdout)r\n'
+                               'stderr: %(stderr)r')
+                    LOG.log(loglevel, format, {"desc": err.description,
+                                               "cmd": err.cmd,
+                                               "code": err.exit_code,
+                                               "stdout": err.stdout,
+                                               "stderr": err.stderr})
+                if not attempts:
+                    LOG.log(loglevel, _('%r failed. Not Retrying.'),
+                            sanitized_cmd)
+                    raise
+                else:
+                    LOG.log(loglevel, _('%r failed. Retrying.'),
+                            sanitized_cmd)
+                    if delay_on_retry:
+                        time.sleep(random.randint(20, 200) / 100.0)
+
+
 def execute(*cmd, **kwargs):
     """Convenience wrapper around oslo's execute() method."""
-    if 'run_as_root' in kwargs and 'root_helper' not in kwargs:
-        kwargs['root_helper'] = _get_root_helper()
+    if 'run_as_root' in kwargs and kwargs.get('run_as_root'):
+        if CONF.use_rootwrap_daemon:
+            return RootwrapDaemonHelper(CONF.rootwrap_config).execute(
+                *cmd, **kwargs)
+        else:
+            return RootwrapProcessHelper().execute(*cmd, **kwargs)
     return processutils.execute(*cmd, **kwargs)
 
 
@@ -239,8 +400,12 @@ def ssh_execute(dest, *cmd, **kwargs):
 
 def trycmd(*args, **kwargs):
     """Convenience wrapper around oslo's trycmd() method."""
-    if 'run_as_root' in kwargs and 'root_helper' not in kwargs:
-        kwargs['root_helper'] = _get_root_helper()
+    if kwargs.get('run_as_root', False):
+        if CONF.use_rootwrap_daemon:
+            return RootwrapDaemonHelper(CONF.rootwrap_config).trycmd(
+                *args, **kwargs)
+        else:
+            return RootwrapProcessHelper().trycmd(*args, **kwargs)
     return processutils.trycmd(*args, **kwargs)
 
 
@@ -554,6 +719,12 @@ def monkey_patch():
     # If CONF.monkey_patch is not True, this function do nothing.
     if not CONF.monkey_patch:
         return
+    if six.PY3:
+        def is_method(obj):
+            # Unbound methods became regular functions on Python 3
+            return inspect.ismethod(obj) or inspect.isfunction(obj)
+    else:
+        is_method = inspect.ismethod
     # Get list of modules and decorators
     for module_and_decorator in CONF.monkey_patch_modules:
         module, decorator_name = module_and_decorator.split(':')
@@ -562,15 +733,15 @@ def monkey_patch():
         __import__(module)
         # Retrieve module information using pyclbr
         module_data = pyclbr.readmodule_ex(module)
-        for key in module_data.keys():
+        for key, value in module_data.items():
             # set the decorator for the class methods
-            if isinstance(module_data[key], pyclbr.Class):
+            if isinstance(value, pyclbr.Class):
                 clz = importutils.import_class("%s.%s" % (module, key))
-                for method, func in inspect.getmembers(clz, inspect.ismethod):
+                for method, func in inspect.getmembers(clz, is_method):
                     setattr(clz, method,
                         decorator("%s.%s.%s" % (module, key, method), func))
             # set the decorator for the function
-            if isinstance(module_data[key], pyclbr.Function):
+            if isinstance(value, pyclbr.Function):
                 func = importutils.import_class("%s.%s" % (module, key))
                 setattr(sys.modules[module], key,
                     decorator("%s.%s" % (module, key), func))
@@ -603,7 +774,10 @@ def make_dev_path(dev, partition=None, base='/dev'):
 def sanitize_hostname(hostname):
     """Return a hostname which conforms to RFC-952 and RFC-1123 specs."""
     if isinstance(hostname, six.text_type):
+        # Remove characters outside the Unicode range U+0000-U+00FF
         hostname = hostname.encode('latin-1', 'ignore')
+        if six.PY3:
+            hostname = hostname.decode('latin-1')
 
     hostname = re.sub('[ _]', '-', hostname)
     hostname = re.sub('[^\w.-]+', '', hostname)
@@ -611,27 +785,6 @@ def sanitize_hostname(hostname):
     hostname = hostname.strip('.-')
 
     return hostname
-
-
-def read_cached_file(filename, cache_info, reload_func=None):
-    """Read from a file if it has been modified.
-
-    :param cache_info: dictionary to hold opaque cache.
-    :param reload_func: optional function to be called with data when
-                        file is reloaded due to a modification.
-
-    :returns: data from file
-
-    """
-    mtime = os.path.getmtime(filename)
-    if not cache_info or mtime != cache_info.get('mtime'):
-        LOG.debug("Reloading cached file %s", filename)
-        with open(filename) as fap:
-            cache_info['data'] = fap.read()
-        cache_info['mtime'] = mtime
-        if reload_func:
-            reload_func(cache_info['data'])
-    return cache_info['data']
 
 
 @contextlib.contextmanager
@@ -819,7 +972,10 @@ def last_bytes(file_like_object, num):
     try:
         file_like_object.seek(-num, os.SEEK_END)
     except IOError as e:
-        if e.errno == 22:
+        # seek() fails with EINVAL when trying to go before the start of the
+        # file. It means that num is larger than the file size, so just
+        # go to the start.
+        if e.errno == errno.EINVAL:
             file_like_object.seek(0, os.SEEK_SET)
         else:
             raise
@@ -828,11 +984,12 @@ def last_bytes(file_like_object, num):
     return (file_like_object.read(), remaining)
 
 
-def metadata_to_dict(metadata):
+def metadata_to_dict(metadata, filter_deleted=False):
     result = {}
     for item in metadata:
-        if not item.get('deleted'):
-            result[item['key']] = item['value']
+        if not filter_deleted and item.get('deleted'):
+            continue
+        result[item['key']] = item['value']
     return result
 
 
@@ -856,19 +1013,20 @@ def instance_sys_meta(instance):
     if isinstance(instance['system_metadata'], dict):
         return instance['system_metadata']
     else:
-        return metadata_to_dict(instance['system_metadata'])
+        return metadata_to_dict(instance['system_metadata'],
+                                filter_deleted=True)
 
 
 def get_wrapped_function(function):
     """Get the method at the bottom of a stack of decorators."""
-    if not hasattr(function, 'func_closure') or not function.func_closure:
+    if not hasattr(function, '__closure__') or not function.__closure__:
         return function
 
     def _get_wrapped_function(function):
-        if not hasattr(function, 'func_closure') or not function.func_closure:
+        if not hasattr(function, '__closure__') or not function.__closure__:
             return None
 
-        for closure in function.func_closure:
+        for closure in function.__closure__:
             func = closure.cell_contents
 
             deeper_func = _get_wrapped_function(func)
@@ -1035,7 +1193,7 @@ def convert_version_to_int(version):
         if isinstance(version, six.string_types):
             version = convert_version_to_tuple(version)
         if isinstance(version, tuple):
-            return reduce(lambda x, y: (x * 1000) + y, version)
+            return six.moves.reduce(lambda x, y: (x * 1000) + y, version)
     except Exception:
         msg = _("Hypervisor version %s is invalid.") % version
         raise exception.NovaException(msg)
@@ -1047,9 +1205,9 @@ def convert_version_to_str(version_int):
     while version_int != 0:
         version_number = version_int - (version_int // factor * factor)
         version_numbers.insert(0, str(version_number))
-        version_int = version_int / factor
+        version_int = version_int // factor
 
-    return reduce(lambda x, y: "%s.%s" % (x, y), version_numbers)
+    return six.moves.reduce(lambda x, y: "%s.%s" % (x, y), version_numbers)
 
 
 def convert_version_to_tuple(version_str):
@@ -1101,6 +1259,9 @@ def get_system_metadata_from_image(image_meta, flavor=None):
     prefix_format = SM_IMAGE_PROP_PREFIX + '%s'
 
     for key, value in six.iteritems(image_meta.get('properties', {})):
+        if key in SM_SKIP_KEYS:
+            continue
+
         new_value = safe_truncate(six.text_type(value), 255)
         system_meta[prefix_format % key] = new_value
 
@@ -1126,7 +1287,7 @@ def get_image_from_system_metadata(system_meta):
     properties = {}
 
     if not isinstance(system_meta, dict):
-        system_meta = metadata_to_dict(system_meta)
+        system_meta = metadata_to_dict(system_meta, filter_deleted=True)
 
     for key, value in six.iteritems(system_meta):
         if value is None:
@@ -1136,6 +1297,9 @@ def get_image_from_system_metadata(system_meta):
         # just the ones we need. Leaving it for now to keep the old behaviour.
         if key.startswith(SM_IMAGE_PROP_PREFIX):
             key = key[len(SM_IMAGE_PROP_PREFIX):]
+
+        if key in SM_SKIP_KEYS:
+            continue
 
         if key in SM_INHERITABLE_KEYS:
             image_meta[key] = value
@@ -1148,21 +1312,23 @@ def get_image_from_system_metadata(system_meta):
 
 
 def get_image_metadata_from_volume(volume):
-    properties = volume.get('volume_image_metadata', {})
+    properties = copy.copy(volume.get('volume_image_metadata', {}))
     image_meta = {'properties': properties}
-    # NOTE(yjiang5): restore the basic attributes
-    # NOTE(mdbooth): These values come from volume_glance_metadata
-    # in cinder. This is a simple key/value table, and all values
-    # are strings. We need to convert them to ints to avoid
-    # unexpected type errors.
-    image_meta['min_ram'] = int(properties.get('min_ram', 0))
-    image_meta['min_disk'] = int(properties.get('min_disk', 0))
     # Volume size is no longer related to the original image size,
     # so we take it from the volume directly. Cinder creates
     # volumes in Gb increments, and stores size in Gb, whereas
     # glance reports size in bytes. As we're returning glance
     # metadata here, we need to convert it.
     image_meta['size'] = volume.get('size', 0) * units.Gi
+    # NOTE(yjiang5): restore the basic attributes
+    # NOTE(mdbooth): These values come from volume_glance_metadata
+    # in cinder. This is a simple key/value table, and all values
+    # are strings. We need to convert them to ints to avoid
+    # unexpected type errors.
+    for attr in VIM_IMAGE_ATTRIBUTES:
+        val = properties.pop(attr, None)
+        if attr in ('min_ram', 'min_disk'):
+            image_meta[attr] = int(val or 0)
     # NOTE(yjiang5): Always set the image status as 'active'
     # and depends on followed volume_api.check_attach() to
     # verify it. This hack should be harmless with that check.
@@ -1171,7 +1337,12 @@ def get_image_metadata_from_volume(volume):
 
 
 def get_hash_str(base_str):
-    """returns string that represents hash of base_str (in hex format)."""
+    """Returns string that represents MD5 hash of base_str (in hex format).
+
+    If base_str is a Unicode string, encode it to UTF-8.
+    """
+    if isinstance(base_str, six.text_type):
+        base_str = base_str.encode('utf-8')
     return hashlib.md5(base_str).hexdigest()
 
 if hasattr(hmac, 'compare_digest'):
@@ -1308,3 +1479,39 @@ def safe_truncate(value, length):
         except UnicodeDecodeError:
             b_value = b_value[:-1]
     return u_value
+
+
+def read_cached_file(filename, force_reload=False):
+    """Read from a file if it has been modified.
+
+    :param force_reload: Whether to reload the file.
+    :returns: A tuple with a boolean specifying if the data is fresh
+              or not.
+    """
+    global _FILE_CACHE
+
+    if force_reload:
+        delete_cached_file(filename)
+
+    reloaded = False
+    mtime = os.path.getmtime(filename)
+    cache_info = _FILE_CACHE.setdefault(filename, {})
+
+    if not cache_info or mtime > cache_info.get('mtime', 0):
+        LOG.debug("Reloading cached file %s", filename)
+        with open(filename) as fap:
+            cache_info['data'] = fap.read()
+        cache_info['mtime'] = mtime
+        reloaded = True
+    return (reloaded, cache_info['data'])
+
+
+def delete_cached_file(filename):
+    """Delete cached file if present.
+
+    :param filename: filename to delete
+    """
+    global _FILE_CACHE
+
+    if filename in _FILE_CACHE:
+        del _FILE_CACHE[filename]

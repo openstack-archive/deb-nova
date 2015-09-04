@@ -4,20 +4,21 @@
 #
 # Translators:
 # Adriana Chisco Landazábal <achisco94@gmail.com>, 2015
+# Pablo Sanchez <furybeat@gmail.com>, 2015
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-06-22 06:09+0000\n"
-"PO-Revision-Date: 2015-06-16 13:32+0000\n"
+"POT-Creation-Date: 2015-08-05 06:20+0000\n"
+"PO-Revision-Date: 2015-07-23 20:46+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
-"Language-Team: Spanish (http://www.transifex.com/projects/p/nova/language/"
+"Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
 "es/)\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 1.3\n"
+"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
 #, python-format
@@ -132,28 +133,8 @@ msgid "Called setup_basic_filtering in nwfilter"
 msgstr "Se ha llamado a setup_basic_filtering en nwfilter"
 
 #, python-format
-msgid "Caught %s, exiting"
-msgstr "Se ha captado %s, saliendo"
-
-#, python-format
-msgid "Caught %s, stopping children"
-msgstr "Se ha captado %s, deteniendo hijos"
-
-#, python-format
 msgid "Checking Token: %(token)s, %(token_valid)s"
 msgstr "Validando Token: %(token)s, %(token_valid)s"
-
-#, python-format
-msgid "Child %(pid)d killed by signal %(sig)d"
-msgstr "Hijo %(pid)d matado por señal %(sig)d"
-
-#, python-format
-msgid "Child %(pid)s exited with status %(code)d"
-msgstr "El hijo %(pid)s ha salido con el estado %(code)d"
-
-#, python-format
-msgid "Child caught %s, exiting"
-msgstr "Hijo captado %s, saliendo"
 
 msgid "Claim successful"
 msgstr "Reclamación satisfactoria"
@@ -169,10 +150,6 @@ msgstr "Registro compute_service creado para %(host)s:%(node)s"
 #, python-format
 msgid "Compute_service record updated for %(host)s:%(node)s"
 msgstr "El registro compute_service se ha actualizado para %(host)s:%(node)s"
-
-#, python-format
-msgid "Compute_service record updated for %s"
-msgstr "El registro compute_service se actualizó para %s"
 
 #, python-format
 msgid ""
@@ -286,13 +263,8 @@ msgstr "Se eliminaron %s las instantáneas."
 msgid "Deleted virtual disk %s."
 msgstr "Se eliminó el escritorio virtual %s."
 
-#, python-format
-msgid ""
-"Deleting instance as its host (%(instance_host)s) is not equal to our host "
-"(%(our_host)s)."
-msgstr ""
-"Suprimiendo instancia porque el host (%(instance_host)s) no es igual a "
-"nuestro host (%(our_host)s)."
+msgid "Deleting instance as it has been evacuated from this host"
+msgstr "Borrando instancia ya que ha sido evacuada de este nodo."
 
 #, python-format
 msgid "Deleting instance files %s"
@@ -424,10 +396,6 @@ msgid "Error in handshake: %s"
 msgstr "Error en reconocimiento: %s"
 
 #, python-format
-msgid "Eventlet backdoor listening on %(port)s for process %(pid)d"
-msgstr "Eventlet oculto escuchando en %(port)s para el proceso %(pid)d"
-
-#, python-format
 msgid "Failed to get image info from path %(path)s; error: %(error)s"
 msgstr ""
 "No se ha podido obtener la imagen de la ruta %(path)s; error: %(error)s"
@@ -491,9 +459,6 @@ msgstr ""
 "Forzando la ruta directa hacia %(cell_name)s debido al consejo del "
 "planificador 'target_cell'"
 
-msgid "Forking too fast, sleeping"
-msgstr "Bifurcación demasiado rápida, en reposo"
-
 #, python-format
 msgid "Found %(instance_count)d hung reboots older than %(timeout)d seconds"
 msgstr ""
@@ -540,6 +505,16 @@ msgstr "Se ha obtenido una solicitud para destruir instancia"
 #, python-format
 msgid "HTTP exception thrown: %s"
 msgstr "Excepción de HTTP emitida: %s"
+
+#, python-format
+msgid ""
+"Ignoring request to release fixed IP %(address)s with MAC %(mac)s since it "
+"is now associated with a new instance that is in the process of allocating "
+"it's network."
+msgstr ""
+"Ignorando peticion de liberar IP fija %(address)s con MAC %(mac)s ya que "
+"esta siendo ahora asociada con una nueva instancia que está en el proceso de "
+"reservar su red."
 
 #, python-format
 msgid "Image %s is no longer used by this node. Pending deletion!"
@@ -664,6 +639,9 @@ msgstr ""
 msgid "Instance spawned successfully."
 msgstr "Instancia generada satisfactoriamente. "
 
+msgid "Instance was successfully rebuilt"
+msgstr "Instancia recreada satisfactoriamente."
+
 #, python-format
 msgid "Invalid cluster or resource pool name : %s"
 msgstr "Cluster o nombre de pool de recursos inválido: %s"
@@ -751,9 +729,6 @@ msgid ""
 msgstr ""
 "No hay celdas disponibles al planificar. Se reintentará dentro de "
 "%(sleep_time)s segundo(s)"
-
-msgid "Parent process has died unexpectedly, exiting"
-msgstr "El proceso padre se ha detenido inesperadamente, saliendo"
 
 msgid "Pausing"
 msgstr "Poniéndose en pausa"
@@ -910,14 +885,6 @@ msgstr ""
 "índice equivalente."
 
 #, python-format
-msgid "Skipping periodic task %(task)s because it is disabled"
-msgstr "Omitiendo la tarea periódica %(task)s porque está inhabilitada"
-
-#, python-format
-msgid "Skipping periodic task %(task)s because its interval is negative"
-msgstr "Omitiendo la tarea periódica %(task)s porque el intervalo es negativo"
-
-#, python-format
 msgid "Skipping quiescing instance: %(reason)s."
 msgstr "Omitiendo instancia de desactivación: %(reason)s."
 
@@ -934,16 +901,8 @@ msgid "Spawning new instance"
 msgstr "Generando nueva instancia"
 
 #, python-format
-msgid "Started child %d"
-msgstr "Se ha iniciado el hijo %d"
-
-#, python-format
 msgid "Starting %(topic)s node (version %(version)s)"
 msgstr "Iniciando el nodo %(topic)s (versión %(version)s)"
-
-#, python-format
-msgid "Starting %d workers"
-msgstr "Iniciando %d trabajadores"
 
 msgid "Starting halted instance found during reboot"
 msgstr "Iniciando instancia detenida encontrada durante rearranque"
@@ -963,8 +922,32 @@ msgid "Stopping WSGI server."
 msgstr "Deteniendo el servidor WSGI. "
 
 #, python-format
+msgid "Successfully powered off Ironic node %s"
+msgstr "Apagado satisfactoriamente nodo Ironic %s"
+
+#, python-format
+msgid "Successfully powered on Ironic node %s"
+msgstr "Encendido correctamente nodo Ironic %s"
+
+#, python-format
+msgid "Successfully provisioned Ironic node %s"
+msgstr "Provisionado satisfactoriamente nodo Ironic %s"
+
+#, python-format
+msgid "Successfully rebooted Ironic node %s"
+msgstr "Reiniciado satisfactoriamente nodo Ironic %s"
+
+#, python-format
 msgid "Successfully synced instances from host '%s'."
 msgstr "Las instancias del host '%s' se han sincronizado correctamente."
+
+#, python-format
+msgid "Successfully transferred using %s"
+msgstr "Exitosamente transferido utilizando %s"
+
+#, python-format
+msgid "Successfully unprovisioned Ironic node %s"
+msgstr "Desprovisionado satfisfactoriamente nodo Ironic %s"
 
 #, python-format
 msgid "Swapping volume %(old_volume)s for %(new_volume)s"
@@ -1113,13 +1096,6 @@ msgstr ""
 
 msgid "WSGI server has stopped."
 msgstr "El servidor WSGI se ha detenido."
-
-msgid "Wait called after thread killed. Cleaning up."
-msgstr "Esperar llamado después de cortar la línea. Limpiando."
-
-#, python-format
-msgid "Waiting on %d children to exit"
-msgstr "En espera de %d hijos para salir"
 
 #, python-format
 msgid "Working on deleting snapshot %s from shelved instance..."

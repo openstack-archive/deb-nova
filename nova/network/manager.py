@@ -37,6 +37,7 @@ import netaddr
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
+from oslo_service import periodic_task
 from oslo_utils import excutils
 from oslo_utils import importutils
 from oslo_utils import netutils
@@ -44,7 +45,6 @@ from oslo_utils import strutils
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
 
-from nova import conductor
 from nova import context
 from nova import exception
 from nova.i18n import _, _LI, _LE, _LW
@@ -55,10 +55,10 @@ from nova.network import driver
 from nova.network import floating_ips
 from nova.network import model as network_model
 from nova.network import rpcapi as network_rpcapi
+from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import quotas as quotas_obj
-from nova.openstack.common import periodic_task
 from nova import servicegroup
 from nova import utils
 
@@ -78,6 +78,8 @@ network_opts = [
                help='FlatDhcp will bridge into this interface if set'),
     cfg.IntOpt('vlan_start',
                default=100,
+               min=1,
+               max=4094,
                help='First VLAN for private networks'),
     cfg.StrOpt('vlan_interface',
                help='VLANs will bridge into this interface if set'),
@@ -179,9 +181,8 @@ class RPCAllocateFixedIP(object):
                 host = network['host']
             # NOTE(vish): if there is no network host, set one
             if host is None:
-                network_p = obj_base.obj_to_primitive(network)
                 host = self.network_rpcapi.set_network_host(context,
-                                                            network_p)
+                                                            network)
             if host != self.host:
                 # need to call allocate_fixed_ip to correct network host
                 green_threads.append(eventlet.spawn(
@@ -249,7 +250,7 @@ class NetworkManager(manager.Manager):
         The one at a time part is to flatten the layout to help scale
     """
 
-    target = messaging.Target(version='1.13')
+    target = messaging.Target(version='1.15')
 
     # If True, this manager requires VIF to create a bridge.
     SHOULD_CREATE_BRIDGE = False
@@ -273,7 +274,8 @@ class NetworkManager(manager.Manager):
                 CONF.floating_ip_dns_manager)
         self.network_api = network_api.API()
         self.network_rpcapi = network_rpcapi.NetworkAPI()
-        self.conductor_api = conductor.API()
+        self.security_group_api = (
+            openstack_driver.get_openstack_security_group_driver())
 
         self.servicegroup_api = servicegroup.API()
 
@@ -349,11 +351,13 @@ class NetworkManager(manager.Manager):
 
     def set_network_host(self, context, network_ref):
         """Safely sets the host of the network."""
+        # TODO(mriedem): Remove this compat shim when network RPC API version
+        # 1.0 is dropped.
         if not isinstance(network_ref, obj_base.NovaObject):
             network_ref = objects.Network._from_db_object(
                 context, objects.Network(), network_ref)
         LOG.debug('Setting host %s for network %s', self.host,
-                  network_ref['uuid'], context=context)
+                  network_ref.uuid, context=context)
         network_ref.host = self.host
         network_ref.save()
         return self.host
@@ -381,8 +385,8 @@ class NetworkManager(manager.Manager):
         groups = instance.security_groups
         group_ids = [group.id for group in groups]
 
-        self.conductor_api.security_groups_trigger_members_refresh(
-            admin_context, group_ids)
+        self.security_group_api.trigger_members_refresh(admin_context,
+                                                        group_ids)
 
     # NOTE(hanlind): This method can be removed in version 2.0 of the RPC API
     def get_instance_uuids_by_ip_filter(self, context, filters):
@@ -884,6 +888,20 @@ class NetworkManager(manager.Manager):
 
         try:
             if network['cidr']:
+
+                # NOTE(mriedem): allocate the vif before associating the
+                # instance to reduce a race window where a previous instance
+                # was associated with the fixed IP and has released it, because
+                # release_fixed_ip will disassociate if allocated is False.
+                vif = objects.VirtualInterface.get_by_instance_and_network(
+                        context, instance_id, network['id'])
+                if vif is None:
+                    LOG.debug('vif for network %(network)s is used up, '
+                              'trying to create new vif',
+                              {'network': network['id']}, instance=instance)
+                    vif = self._add_virtual_interface(context,
+                        instance_id, network['id'])
+
                 address = kwargs.get('address', None)
                 if address:
                     LOG.debug('Associating instance with specified fixed IP '
@@ -907,15 +925,6 @@ class NetworkManager(manager.Manager):
                     LOG.debug('Associated instance with fixed IP: %s', fip,
                               instance=instance)
                     address = str(fip.address)
-
-                vif = objects.VirtualInterface.get_by_instance_and_network(
-                        context, instance_id, network['id'])
-                if vif is None:
-                    LOG.debug('vif for network %(network)s is used up, '
-                              'trying to create new vif',
-                              {'network': network['id']}, instance=instance)
-                    vif = self._add_virtual_interface(context,
-                        instance_id, network['id'])
 
                 fip.allocated = True
                 fip.virtual_interface_id = vif.id
@@ -1097,7 +1106,7 @@ class NetworkManager(manager.Manager):
             LOG.warning(_LW('IP |%s| leased that isn\'t allocated'), address,
                         context=context, instance_uuid=fixed_ip.instance_uuid)
 
-    def release_fixed_ip(self, context, address):
+    def release_fixed_ip(self, context, address, mac=None):
         """Called by dhcp-bridge when ip is released."""
         LOG.debug('Released IP |%s|', address, context=context)
         fixed_ip = objects.FixedIP.get_by_address(context, address)
@@ -1109,9 +1118,40 @@ class NetworkManager(manager.Manager):
         if not fixed_ip.leased:
             LOG.warning(_LW('IP %s released that was not leased'), address,
                         context=context, instance_uuid=fixed_ip.instance_uuid)
-        fixed_ip.leased = False
-        fixed_ip.save()
+        else:
+            fixed_ip.leased = False
+            fixed_ip.save()
         if not fixed_ip.allocated:
+            # NOTE(mriedem): Sometimes allocate_fixed_ip will associate the
+            # fixed IP to a new instance while an old associated instance is
+            # being deallocated. So we check to see if the mac is for the VIF
+            # that is associated to the instance that is currently associated
+            # with the fixed IP because if it's not, we hit this race and
+            # should ignore the request so we don't disassociate the fixed IP
+            # from the wrong instance.
+            if mac:
+                LOG.debug('Checking to see if virtual interface with MAC '
+                          '%(mac)s is still associated to instance.',
+                          {'mac': mac}, instance_uuid=fixed_ip.instance_uuid)
+                vif = objects.VirtualInterface.get_by_address(context, mac)
+                if vif:
+                    LOG.debug('Found VIF: %s', vif,
+                              instance_uuid=fixed_ip.instance_uuid)
+                    if vif.instance_uuid != fixed_ip.instance_uuid:
+                        LOG.info(_LI("Ignoring request to release fixed IP "
+                                     "%(address)s with MAC %(mac)s since it "
+                                     "is now associated with a new instance "
+                                     "that is in the process of allocating "
+                                     "it's network."),
+                                 {'address': address, 'mac': mac},
+                                 instance_uuid=fixed_ip.instance_uuid)
+                        return
+                else:
+                    LOG.debug('No VIF was found for MAC: %s', mac,
+                              instance_uuid=fixed_ip.instance_uuid)
+
+            LOG.debug('Disassociating fixed IP %s from instance.', address,
+                      instance_uuid=fixed_ip.instance_uuid)
             fixed_ip.disassociate()
 
     @staticmethod
@@ -1534,10 +1574,6 @@ class NetworkManager(manager.Manager):
         if networks is None or len(networks) == 0:
             return
 
-        network_uuids = [uuid for (uuid, fixed_ip) in networks]
-
-        self._get_networks_by_uuids(context, network_uuids)
-
         for network_uuid, address in networks:
             # check if the fixed IP address is valid and
             # it actually belongs to the network
@@ -1941,6 +1977,22 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
 
         LOG.debug('Allocate fixed ip on network %s', network['uuid'],
                   instance_uuid=instance_id)
+
+        # NOTE(mriedem): allocate the vif before associating the
+        # instance to reduce a race window where a previous instance
+        # was associated with the fixed IP and has released it, because
+        # release_fixed_ip will disassociate if allocated is False.
+        vif = objects.VirtualInterface.get_by_instance_and_network(
+            context, instance_id, network['id'])
+        if vif is None:
+            LOG.debug('vif for network %(network)s and instance '
+                      '%(instance_id)s is used up, '
+                      'trying to create new vif',
+                      {'network': network['id'],
+                       'instance_id': instance_id})
+            vif = self._add_virtual_interface(context,
+                instance_id, network['id'])
+
         if kwargs.get('vpn', None):
             address = network['vpn_private_address']
             fip = objects.FixedIP.associate(context, str(address),
@@ -1957,17 +2009,6 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
                                                      network['id'],
                                                      instance_id)
         address = fip.address
-
-        vif = objects.VirtualInterface.get_by_instance_and_network(
-            context, instance_id, network['id'])
-        if vif is None:
-            LOG.debug('vif for network %(network)s and instance '
-                      '%(instance_id)s is used up, '
-                      'trying to create new vif',
-                      {'network': network['id'],
-                       'instance_id': instance_id})
-            vif = self._add_virtual_interface(context,
-                instance_id, network['id'])
 
         fip.allocated = True
         fip.virtual_interface_id = vif.id

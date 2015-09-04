@@ -10,20 +10,21 @@
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2011
 # Jose Ramirez Garcia <jose.ramirez.rk@gmail.com>, 2014
 # Edgar Carballo <karvayoEdgar@gmail.com>, 2013
+# Pablo Sanchez <furybeat@gmail.com>, 2015
 msgid ""
 msgstr ""
 "Project-Id-Version:  nova\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-06-22 06:08+0000\n"
-"PO-Revision-Date: 2015-06-17 20:15+0000\n"
-"Last-Translator: Adriana Chisco Landazábal <achisco94@gmail.com>\n"
-"Language-Team: Spanish (http://www.transifex.com/projects/p/nova/language/"
+"POT-Creation-Date: 2015-08-12 06:30+0000\n"
+"PO-Revision-Date: 2015-08-12 06:27+0000\n"
+"Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
+"Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
 "es/)\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 1.3\n"
+"Generated-By: Babel 2.0\n"
 
 #, python-format
 msgid "%(address)s is not a valid IP v4/6 address."
@@ -84,10 +85,6 @@ msgid "%(name)s has more than %(max_length)s characters."
 msgstr "%(name)s tiene más de %(max_length)s caracteres."
 
 #, python-format
-msgid "%(objname)s object has no attribute '%(attrname)s'"
-msgstr "El objeto %(objname)s no tiene atributo '%(attrname)s'"
-
-#, python-format
 msgid "%(path)s is not on local storage: %(reason)s"
 msgstr "%(path)s no está en un almacenamiento local: %(reason)s"
 
@@ -98,10 +95,6 @@ msgstr "%(path)s no está en un almacenamiento compartido: %(reason)s"
 #, python-format
 msgid "%(req)s is required to create a network."
 msgstr "Se necesita %(req)s para crear una red."
-
-#, python-format
-msgid "%(total)i instances matched query, %(done)i completed"
-msgstr "%(total)i instancias coinciden con interrogación, %(done)i completado"
 
 #, python-format
 msgid "%(type)s hypervisor does not support PCI devices"
@@ -159,14 +152,6 @@ msgstr "%s no está soportada."
 #, python-format
 msgid "%s must be either 'MANUAL' or 'AUTO'."
 msgstr "%s debe ser 'MANUAL' o 'AUTO'."
-
-#, python-format
-msgid "%s param must be an integer"
-msgstr "El parámetro %s debe ser un entero"
-
-#, python-format
-msgid "%s param must be positive"
-msgstr "El parámetro %s debe ser positivo"
 
 #, python-format
 msgid "'%s' is either missing or empty."
@@ -345,10 +330,6 @@ msgid "Anti-affinity instance group policy was violated."
 msgstr "la política de grupo de anti-afinidad fue violada."
 
 #, python-format
-msgid "AoE device not found at %s"
-msgstr "No se ha encontrado el dispositivo AoE en %s"
-
-#, python-format
 msgid "Architecture name '%(arch)s' is not recognised"
 msgstr "No se reconoce el nombre de la Arquitectura '%(arch)s'"
 
@@ -451,6 +432,12 @@ msgstr "Binario"
 
 msgid "Blank components"
 msgstr "Componentes en blanco"
+
+msgid ""
+"Blank volumes (source: 'blank', dest: 'volume') need to have non-zero size"
+msgstr ""
+"Volumenes vacios (origen:'vacio',dest:'volume') necesitan tener un tamaño no "
+"nulo."
 
 #, python-format
 msgid "Block Device %(id)s is not bootable."
@@ -599,6 +586,10 @@ msgstr ""
 "autenticar en un host remoto."
 
 #, python-format
+msgid "Cannot access 'scality_sofs_config': %s"
+msgstr "No se puede acceder a 'scality_sofs_config': %s"
+
+#, python-format
 msgid "Cannot add host %(host)s in aggregate %(id)s: host exists"
 msgstr "No se puede añadir host  %(host)s en agregado %(id)s: el host existe"
 
@@ -624,23 +615,23 @@ msgid "Cannot call %(method)s on orphaned %(objtype)s object"
 msgstr "No se puede ejecutar %(method)s en un objecto huérfano %(objtype)s"
 
 msgid ""
-"Cannot create default bittorrent URL without torrent_base_url set or torrent "
-"URL fetcher extension"
+"Cannot create default bittorrent URL without xenserver.torrent_base_url "
+"configuration option set."
 msgstr ""
-"No se puede crear la URL predeterminada de bittorrent sin establecer "
-"torrent_base_url la extensión de búsqueda de URL torrent"
+"No se puede crear URL bittorrent por defecto sin la opcion xenserver."
+"torrent_base_url configurada. "
 
 msgid "Cannot disassociate auto assigned floating ip"
 msgstr "No se puede desasociar la IP flotante asignada automáticamente"
+
+msgid "Cannot execute /sbin/mount.sofs"
+msgstr "No se puede ejecutar /sbin/mount.sofs"
 
 msgid "Cannot find SR of content-type ISO"
 msgstr "No se puede encontrar SR de content-type ISO"
 
 msgid "Cannot find SR to read/write VDI."
 msgstr "No se puede encontrar SR para leer/grabar VDI."
-
-msgid "Cannot find any Fibre Channel HBAs"
-msgstr "No se puede encontrar ningún HBA de canal de fibra"
 
 #, python-format
 msgid "Cannot find boot VHD file for instance: %s"
@@ -654,16 +645,15 @@ msgid "Cannot get VM summary data for: %s"
 msgstr "No se pueden obtener datos de resumen de VM para: %s"
 
 #, python-format
-msgid "Cannot load '%s' in the base class"
-msgstr "No se puede cargar '%s' en la clase base"
-
-#, python-format
 msgid ""
 "Cannot log in target %(target_iqn)s. Unsupported iSCSI authentication "
 "method: %(auth_method)s."
 msgstr ""
 "No se puede iniciar sesión en destino %(target_iqn)s. No se soporta método "
 "de autenticación iSCSI: %(auth_method)s."
+
+msgid "Cannot mount Scality SOFS, check syslog for errors"
+msgstr "No se puede montar Scality SOFS, compruebe syslog por si hay errores"
 
 #, python-format
 msgid ""
@@ -724,9 +714,6 @@ msgstr "No se puede ejecutar 'db sync' hasta que se ejecute 'db contract'"
 
 msgid "Cannot run any more instances of this type."
 msgstr "No se pueden ejecutar más instancias de este tipo. "
-
-msgid "Cannot save anything in the base class"
-msgstr "No se puede guardar nada en la clase base"
 
 #, python-format
 msgid "Cannot set metadata %(metadata)s in aggregate %(id)s"
@@ -847,6 +834,10 @@ msgid ""
 msgstr ""
 "La configuración ha solicitado un modelo CPU explícito, pero el hipervisor "
 "libvirt actual '%s' no soporta la selección de modelos de CPU"
+
+#, python-format
+msgid "Conflict updating instance %(instance_uuid)s"
+msgstr "Conflicto actualizando instancia %(instance_uuid)s"
 
 msgid "Conflicting policies configured!"
 msgstr "Políticas conflictivas configuradas!"
@@ -1193,14 +1184,6 @@ msgstr ""
 
 #, python-format
 msgid ""
-"Error contacting glance server '%(host)s:%(port)s' for '%(method)s', "
-"%(extra)s."
-msgstr ""
-"Error al contactar con el servidor de glance '%(host)s:%(port)s' para "
-"'%(method)s', %(extra)s."
-
-#, python-format
-msgid ""
 "Error destroying the instance on node %(node)s. Provision state still "
 "'%(state)s'."
 msgstr ""
@@ -1336,6 +1319,10 @@ msgstr ""
 #, python-format
 msgid "Failed to access port %(port_id)s: %(reason)s"
 msgstr "Error al acceder a puerto %(port_id)s: %(reason)s"
+
+#, python-format
+msgid "Failed to add bridge: %s"
+msgstr "Ha ocurrido un error al añadir el bridge : %s"
 
 #, python-format
 msgid ""
@@ -1511,13 +1498,6 @@ msgstr "Error al analizar la respuesta de keystone: %s"
 msgid "Failure prepping block device."
 msgstr "Fallo al preparar el dispositivo de bloque."
 
-msgid "Fibre Channel device not found."
-msgstr "No se ha encontrado el dispositivo de canal de fibra."
-
-#, python-format
-msgid "Field %(field)s of %(objname)s is not an instance of Field"
-msgstr "El campo %(field)s de %(objname)s no es una instancia de campo."
-
 #, python-format
 msgid ""
 "Field labels list %(labels)s has different number of elements than fields "
@@ -1542,6 +1522,11 @@ msgstr "Nombre de fichero de la CA raíz"
 
 msgid "Filename of root Certificate Revocation List"
 msgstr "Lista de nombre de archivo de root con certificado de  revocacion"
+
+#, python-format
+msgid "Fixed IP %(ip)s is not a valid ip address for network %(network_id)s."
+msgstr ""
+"La IP fija %(ip)s no es una direccion IP valida para la red %(network_id)s."
 
 #, python-format
 msgid "Fixed IP %s has been deleted"
@@ -1641,9 +1626,6 @@ msgid ""
 msgstr ""
 "Los nombres del tipo solo pueden contener caracteres que se puedan imprimir "
 "y espacios horizontales."
-
-msgid "Flavor not found."
-msgstr "No se ha encontrado el tipo."
 
 msgid "Flavor used by the instance could not be found."
 msgstr "No se ha podido encontrar el tipo utilizado por la instancia."
@@ -1794,6 +1776,10 @@ msgstr ""
 "Host %(server)s se está ejecutando en una versión vieja de Nova, las "
 "migraciones en vivo que involucren el uso de esa versión pueden causar una "
 "pérdida de información. Actualice Nova en %(server)s e intente de nuevo."
+
+#, python-format
+msgid "Host '%(name)s' is not mapped to any cell"
+msgstr "Host '%(name)s' no esta mapeado a ninguna celda"
 
 msgid "Host PowerOn is not supported by the Hyper-V driver"
 msgstr "El controlador Hyper-V no soporta Host PowerOn"
@@ -2636,10 +2622,6 @@ msgstr ""
 "Lista de los sistemas de archivo que estan configurados en este archivo en "
 "la image_file_url: secciones <list entry name>"
 
-msgid "Live migration can not be used without shared storage."
-msgstr ""
-"No se puede utilizar la migración en directo con almacenamiento compartido."
-
 #, python-format
 msgid "Live migration failed: %s"
 msgstr "Ha fallado la migración en directo: %s"
@@ -2885,9 +2867,6 @@ msgstr ""
 "Se han encontrado varios grupos de seguridad que coinciden con '%s'. Utilice "
 "un ID para ser más específico."
 
-msgid "Multiple torrent URL fetcher extensions found. Failing."
-msgstr "Se han encontrado múltiples URL de buscadores torrent. Fallando."
-
 msgid "Must input network_id when request IP address"
 msgstr "Se debe ingresar a network_id cuando se solicite dirección IP"
 
@@ -2910,9 +2889,6 @@ msgid ""
 msgstr ""
 "Debe especificar host_ip, host_username y host_password para usar vmwareapi."
 "VMwareVCDriver"
-
-msgid "Must supply a positive value for max_number"
-msgstr "Se debe proporcionar un valor positivo para max_number"
 
 msgid "Must supply a positive value for max_rows"
 msgstr "Se debe proporcionar un valor positivo para max_rows"
@@ -3271,9 +3247,6 @@ msgstr ""
 msgid "Only 'updated_since', 'project_id' and 'deleted' are understood."
 msgstr "Solamente 'updated_since', 'project_id' y 'deleted' son entendidos."
 
-msgid "Only KVM and QEMU are supported"
-msgstr "Solo se soporta KVM y QEMU"
-
 msgid "Only administrators may list deleted instances"
 msgstr "Sólo los administradores pueden listar instancias suprimidas "
 
@@ -3462,15 +3435,6 @@ msgstr "La acción watchdog proporcionada (%(action)s) no está soportada."
 
 msgid "QEMU guest agent is not enabled"
 msgstr "Agente invitado QEMU no está habilitado"
-
-#, python-format
-msgid "Quiescing is not supported in instance %(instance_id)s: %(reason)s"
-msgstr ""
-"El modo inactivo no es soportado en instancia %(instance_id)s: %(reason)s"
-
-#, python-format
-msgid "Quiescing requires libvirt version %(version)s or greater"
-msgstr "El modo inactivo requiere versión libvirt %(version)s o mayor"
 
 msgid "Quota"
 msgstr "Cuota"
@@ -3969,10 +3933,6 @@ msgstr ""
 msgid "Success"
 msgstr "Éxito"
 
-#, python-format
-msgid "Successfully transferred using %s"
-msgstr "Exitosamente transferido utilizando %s"
-
 msgid "Suspended"
 msgstr "Suspendida"
 
@@ -4067,10 +4027,6 @@ msgstr ""
 #, python-format
 msgid "The firewall filter for %s does not exist"
 msgstr "El filtro de cortafuegos para %s no existe "
-
-#, python-format
-msgid "The group %s(group_name) must be configured with an id."
-msgstr "El grupo %s(group_name) debe ser configurado con un identificador."
 
 msgid "The input is not a string or unicode"
 msgstr "La entrada no es una serie o unicode"
@@ -4475,9 +4431,6 @@ msgstr "No se puede encontrar VBD/VDI de raíz para VM"
 msgid "Unable to find system log file!"
 msgstr "¡No ha sido posible encontrar el fichero de log del sistema!"
 
-msgid "Unable to find the key"
-msgstr "No se ha podido encontrar la clave"
-
 msgid "Unable to find volume"
 msgstr "No se puede encontrar volumen"
 
@@ -4633,20 +4586,8 @@ msgstr ""
 "%s"
 
 #, python-format
-msgid ""
-"Unexpected VM state: expecting %(expected)s but the actual state is "
-"%(actual)s"
-msgstr ""
-"Estado de VM inesperado: se esperaba %(expected)s pero el estado actual es "
-"%(actual)s"
-
-#, python-format
 msgid "Unexpected aggregate action %s"
 msgstr "Acción de agregado inesperada %s"
-
-#, python-format
-msgid "Unexpected argument for periodic task creation: %(arg)s."
-msgstr "Argumento inesperado para la creación de tarea periódica: %(arg)s."
 
 #, python-format
 msgid ""
@@ -4655,14 +4596,6 @@ msgid ""
 msgstr ""
 "Configuración sysinfo_serial inesperada '%(actual)s'. Los valores permitidos "
 "son %(expect)s'"
-
-#, python-format
-msgid ""
-"Unexpected task state: expecting %(expected)s but the actual state is "
-"%(actual)s"
-msgstr ""
-"Estado de tarea inesperado: se esperaba %(expected)s pero el estado es "
-"%(actual)s"
 
 msgid "Unexpected type adding stats"
 msgstr "Estado de adición de tipo inesperada"
@@ -4704,12 +4637,10 @@ msgid "Unknown chain: %r"
 msgstr "Cadena desconocida: %r"
 
 #, python-format
-msgid ""
-"Unknown config drive format %(format)s for %(os_type)s os type. Valid "
-"options are: iso9660, vfat or None."
+msgid "Unknown config drive format %(format)s. Select one of iso9660 or vfat."
 msgstr ""
-"Formato de unidad de configuración desconocido %(format)s para %(os_type)s "
-"tipo de sistema operativo. La opciones válidas son: iso9660, vfat o ninguna."
+"Formato de unidad de configuración desconocido %(format)s. Seleccione uno de "
+"iso9660 o vfat."
 
 #, python-format
 msgid "Unknown delete_info type %s"
@@ -4742,10 +4673,6 @@ msgid "Unknown sort direction, must be 'desc' or 'asc'"
 msgstr "Dirección de clasificación desconocida, debe ser 'desc' o ' asc'"
 
 #, python-format
-msgid "Unknown ssh key type %s"
-msgstr "Tipo de clave ssh desconocido %s"
-
-#, python-format
 msgid "Unknown type: %s"
 msgstr "Tipo desconocido: %s"
 
@@ -4771,20 +4698,8 @@ msgid "Unsupported Content-Type"
 msgstr "Tipo de contenido no soportado"
 
 #, python-format
-msgid ""
-"Unsupported config drive format %(format)s for %(image_type)s image type. "
-"Image path: %(image_path)"
-msgstr ""
-"Formato de unidad de configuración desconocido %(format)s para "
-"%(image_type)s tipo de imagen. Ruta de imagen: %(image_path)"
-
-#, python-format
 msgid "Unsupported disk format: %s"
 msgstr "Formato de disco no soportado: %s"
-
-#, python-format
-msgid "Unsupported object type %(objtype)s"
-msgstr "Tipo de objeto no soportado %(objtype)s"
 
 msgid "Unsupported virtual disk format"
 msgstr "Formato de disco virtual no soportado."
@@ -4887,13 +4802,8 @@ msgstr ""
 "El valor (%(value)s) para el parámetro Group%(property)s es inválido. El "
 "contenido se limita a '%(allowed)s'."
 
-#, python-format
-msgid ""
-"Version %(objver)s of %(objname)s is not supported. The maximum supported "
-"version is: %(supported)s"
-msgstr ""
-"No se soporta versión %(objver)s de %(objname)s. La versión máxima soportada "
-"es: %(supported)s"
+msgid "Value required for 'scality_sofs_config'"
+msgstr "Valor necesario para 'scality_sofs_config'"
 
 #, python-format
 msgid ""
@@ -5017,9 +4927,6 @@ msgstr ""
 msgid "WMI job failed with status %d. No error description available"
 msgstr ""
 "Tarea WMI fallida con estado %d. No hay descripción de error disponible."
-
-msgid "We are unable to locate any Fibre Channel devices"
-msgstr "No se puede localizar ningún dispositivo de canal de fibra"
 
 #, python-format
 msgid ""
@@ -5165,13 +5072,6 @@ msgstr "conectando a: %(host)s:%(port)s"
 msgid "cpu"
 msgstr "CPU"
 
-msgid "createBackup attribute 'rotation' must be an integer"
-msgstr "La 'rotación' del atributo createBackup debe ser un entero"
-
-msgid "createBackup attribute 'rotation' must be greater than or equal to zero"
-msgstr ""
-"El atributo de createBackup 'rotation' debe ser mayor que o igual a cero"
-
 #, python-format
 msgid "createBackup entity requires %s attribute"
 msgstr "La entidad createBackup necesita el atributo %s"
@@ -5263,10 +5163,6 @@ msgstr "hostname"
 msgid "href %s does not contain version"
 msgstr "href %s no contiene la versión"
 
-#, python-format
-msgid "iSCSI device not found at %s"
-msgstr "No se ha encontrado el dispositivo iSCSI en %s"
-
 msgid "id"
 msgstr "id"
 
@@ -5289,9 +5185,6 @@ msgstr "Se necesita imageLocation"
 
 msgid "index"
 msgstr "índice"
-
-msgid "installed version of librbd does not support cloning"
-msgstr "La versión de librbd instalada no soporta clonación"
 
 msgid "instance"
 msgstr "instancia"
@@ -5348,12 +5241,6 @@ msgstr "libguestfs no está nstalado (%s)"
 msgid "libvirt error while requesting blockjob info."
 msgstr "error de libvirt al solicitar información de blockjob."
 
-msgid "limit param must be an integer"
-msgstr "el parámetro de límite debe ser un entero"
-
-msgid "limit param must be positive"
-msgstr "el parámetro de límite debe ser positivo"
-
 #, python-format
 msgid "marker [%s] not found"
 msgstr "no se ha encontrado el marcador [%s]"
@@ -5402,12 +5289,6 @@ msgstr "nodo"
 #, python-format
 msgid "not able to execute ssh command: %s"
 msgstr "No es posible ejecutar comando ssh: %s"
-
-msgid "offset param must be an integer"
-msgstr "el parámetro de desplazamiento debe ser un entero"
-
-msgid "offset param must be positive"
-msgstr "el parámetro de desplazamiento debe ser positivo"
 
 msgid "onSharedStorage must be specified."
 msgstr "Se debe especificar onSharedStorage."
@@ -5599,10 +5480,6 @@ msgstr "Adjunto de volumen no especificado"
 
 msgid "volumeId must be specified."
 msgstr "Se debe especificar el volumeId"
-
-#, python-format
-msgid "volume_clear='%s' is not handled"
-msgstr "volume_clear='%s' no está manejado"
 
 #, python-format
 msgid "volume_id not found: %s"

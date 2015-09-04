@@ -40,7 +40,7 @@ from nova.virt.image import model as imgmodel
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import imagebackend
-from nova.virt.libvirt import rbd_utils
+from nova.virt.libvirt.storage import rbd_utils
 
 CONF = cfg.CONF
 CONF.import_opt('fixed_key', 'nova.keymgr.conf_key_mgr', group='keymgr')
@@ -152,6 +152,37 @@ class _ImageTestCase(object):
         else:
             self.assertEqual(fs.source_type, "file")
             self.assertEqual(fs.source_file, image.path)
+
+    def test_libvirt_info(self):
+        image = self.image_class(self.INSTANCE, self.NAME)
+        extra_specs = {
+            'quota:disk_read_bytes_sec': 10 * units.Mi,
+            'quota:disk_read_iops_sec': 1 * units.Ki,
+            'quota:disk_write_bytes_sec': 20 * units.Mi,
+            'quota:disk_write_iops_sec': 2 * units.Ki,
+            'quota:disk_total_bytes_sec': 30 * units.Mi,
+            'quota:disk_total_iops_sec': 3 * units.Ki,
+        }
+
+        disk = image.libvirt_info(disk_bus="virtio",
+                                  disk_dev="/dev/vda",
+                                  device_type="cdrom",
+                                  cache_mode="none",
+                                  extra_specs=extra_specs,
+                                  hypervisor_version=4004001)
+
+        self.assertIsInstance(disk, vconfig.LibvirtConfigGuestDisk)
+        self.assertEqual("/dev/vda", disk.target_dev)
+        self.assertEqual("virtio", disk.target_bus)
+        self.assertEqual("none", disk.driver_cache)
+        self.assertEqual("cdrom", disk.source_device)
+
+        self.assertEqual(10 * units.Mi, disk.disk_read_bytes_sec)
+        self.assertEqual(1 * units.Ki, disk.disk_read_iops_sec)
+        self.assertEqual(20 * units.Mi, disk.disk_write_bytes_sec)
+        self.assertEqual(2 * units.Ki, disk.disk_write_iops_sec)
+        self.assertEqual(30 * units.Mi, disk.disk_total_bytes_sec)
+        self.assertEqual(3 * units.Ki, disk.disk_total_iops_sec)
 
     @mock.patch('nova.virt.disk.api.get_disk_size')
     def test_get_disk_size(self, get_disk_size):
@@ -458,7 +489,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanImage,
                           image.create_image, fn, self.TEMPLATE_PATH, 1)
         self.mox.VerifyAll()
 
@@ -1223,7 +1254,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
 
         rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
         cmd = ('rbd', 'import', '--pool', self.POOL, self.TEMPLATE_PATH,
-               rbd_name, '--new-format', '--id', self.USER,
+               rbd_name, '--image-format=2', '--id', self.USER,
                '--conf', self.CONF)
         self.assertEqual(fake_processutils.fake_execute_get_log(),
             [' '.join(cmd)])
@@ -1245,7 +1276,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         image.check_image_exists().AndReturn(False)
         rbd_name = "%s_%s" % (self.INSTANCE['uuid'], self.NAME)
         cmd = ('rbd', 'import', '--pool', self.POOL, self.TEMPLATE_PATH,
-               rbd_name, '--new-format', '--id', self.USER,
+               rbd_name, '--image-format=2', '--id', self.USER,
                '--conf', self.CONF)
         self.mox.StubOutWithMock(image, 'get_disk_size')
         image.get_disk_size(rbd_name).AndReturn(self.SIZE)
@@ -1331,10 +1362,20 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
             driver_mock.exists.return_value = True
             driver_mock.size.return_value = 2
 
-            self.assertRaises(exception.FlavorDiskTooSmall,
+            self.assertRaises(exception.FlavorDiskSmallerThanImage,
                               image.create_image, mock.MagicMock(),
                               self.TEMPLATE_PATH, 1)
             driver_mock.size.assert_called_once_with(image.rbd_name)
+
+    @mock.patch.object(rbd_utils.RBDDriver, "get_mon_addrs")
+    def test_libvirt_info(self, mock_mon_addrs):
+        def get_mon_addrs():
+            hosts = ["server1", "server2"]
+            ports = ["1899", "1920"]
+            return hosts, ports
+        mock_mon_addrs.side_effect = get_mon_addrs
+
+        super(RbdTestCase, self).test_libvirt_info()
 
     @mock.patch.object(rbd_utils.RBDDriver, "get_mon_addrs")
     def test_get_model(self, mock_mon_addrs):
@@ -1361,6 +1402,40 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
             "MTIzNDU2Cg==",
             ["server1:1899", "server2:1920"]),
                          model)
+
+    def test_import_file(self):
+        image = self.image_class(self.INSTANCE, self.NAME)
+
+        @mock.patch.object(image, 'check_image_exists')
+        @mock.patch.object(image.driver, 'remove_image')
+        @mock.patch.object(image.driver, 'import_image')
+        def _test(mock_import, mock_remove, mock_exists):
+            mock_exists.return_value = True
+            image.import_file(self.INSTANCE, mock.sentinel.file,
+                              mock.sentinel.remote_name)
+            name = '%s_%s' % (self.INSTANCE.uuid,
+                              mock.sentinel.remote_name)
+            mock_exists.assert_called_once_with()
+            mock_remove.assert_called_once_with(name)
+            mock_import.assert_called_once_with(mock.sentinel.file, name)
+        _test()
+
+    def test_import_file_not_found(self):
+        image = self.image_class(self.INSTANCE, self.NAME)
+
+        @mock.patch.object(image, 'check_image_exists')
+        @mock.patch.object(image.driver, 'remove_image')
+        @mock.patch.object(image.driver, 'import_image')
+        def _test(mock_import, mock_remove, mock_exists):
+            mock_exists.return_value = False
+            image.import_file(self.INSTANCE, mock.sentinel.file,
+                              mock.sentinel.remote_name)
+            name = '%s_%s' % (self.INSTANCE.uuid,
+                              mock.sentinel.remote_name)
+            mock_exists.assert_called_once_with()
+            self.assertFalse(mock_remove.called)
+            mock_import.assert_called_once_with(mock.sentinel.file, name)
+        _test()
 
 
 class PloopTestCase(_ImageTestCase, test.NoDBTestCase):

@@ -509,6 +509,7 @@ class LibvirtConfigGuestCPUNUMACell(LibvirtConfigObject):
         self.id = None
         self.cpus = None
         self.memory = None
+        self.memAccess = None
 
     def parse_dom(self, xmldoc):
         if xmldoc.get("id") is not None:
@@ -517,6 +518,7 @@ class LibvirtConfigGuestCPUNUMACell(LibvirtConfigObject):
             self.memory = int(xmldoc.get("memory"))
         if xmldoc.get("cpus") is not None:
             self.cpus = hardware.parse_cpu_spec(xmldoc.get("cpus"))
+        self.memAccess = xmldoc.get("memAccess")
 
     def format_dom(self):
         cell = super(LibvirtConfigGuestCPUNUMACell, self).format_dom()
@@ -528,6 +530,8 @@ class LibvirtConfigGuestCPUNUMACell(LibvirtConfigObject):
                      hardware.format_cpu_spec(self.cpus))
         if self.memory is not None:
             cell.set("memory", str(self.memory))
+        if self.memAccess is not None:
+            cell.set("memAccess", self.memAccess)
 
         return cell
 
@@ -618,6 +622,7 @@ class LibvirtConfigGuestSysinfo(LibvirtConfigObject):
         self.system_version = None
         self.system_serial = None
         self.system_uuid = None
+        self.system_family = None
 
     def format_dom(self):
         sysinfo = super(LibvirtConfigGuestSysinfo, self).format_dom()
@@ -676,6 +681,13 @@ class LibvirtConfigGuestSysinfo(LibvirtConfigObject):
             info.text = self.system_uuid
             system.append(info)
 
+        if self.system_family is not None:
+            if system is None:
+                system = etree.Element("system")
+            info = etree.Element("entry", name="family")
+            info.text = self.system_family
+            system.append(info)
+
         if bios is not None:
             sysinfo.append(bios)
         if system is not None:
@@ -723,6 +735,7 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         self.logical_block_size = None
         self.physical_block_size = None
         self.readonly = False
+        self.shareable = False
         self.snapshot = None
         self.backing_store = None
 
@@ -824,6 +837,8 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
 
         if self.readonly:
             dev.append(etree.Element("readonly"))
+        if self.shareable:
+            dev.append(etree.Element("shareable"))
 
         return dev
 
@@ -867,6 +882,10 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
                 b = LibvirtConfigGuestDiskBackingStore()
                 b.parse_dom(c)
                 self.backing_store = b
+            elif c.tag == 'readonly':
+                self.readonly = True
+            elif c.tag == 'shareable':
+                self.shareable = True
 
 
 class LibvirtConfigGuestDiskBackingStore(LibvirtConfigObject):
@@ -1131,6 +1150,7 @@ class LibvirtConfigGuestInterface(LibvirtConfigGuestDevice):
         self.vhostuser_mode = None
         self.vhostuser_path = None
         self.vhostuser_type = None
+        self.vhost_queues = None
         self.vif_inbound_peak = None
         self.vif_inbound_burst = None
         self.vif_inbound_average = None
@@ -1150,7 +1170,10 @@ class LibvirtConfigGuestInterface(LibvirtConfigGuestDevice):
             dev.append(etree.Element("model", type=self.model))
 
         if self.driver_name:
-            dev.append(etree.Element("driver", name=self.driver_name))
+            drv_elem = etree.Element("driver", name=self.driver_name)
+            if self.vhost_queues is not None:
+                drv_elem.set('queues', str(self.vhost_queues))
+            dev.append(drv_elem)
 
         if self.net_type == "ethernet":
             if self.script is not None:
@@ -1607,7 +1630,7 @@ class LibvirtConfigGuestMemoryBacking(LibvirtConfigObject):
                 hugepages.append(item.format_dom())
             root.append(hugepages)
         if not self.sharedpages:
-            root.append(etree.Element("nosharedpages"))
+            root.append(etree.Element("nosharepages"))
         if self.locked:
             root.append(etree.Element("locked"))
 

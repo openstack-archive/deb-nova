@@ -29,6 +29,7 @@ import eventlet.wsgi
 import greenlet
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_service import service
 from oslo_utils import excutils
 from paste import deploy
 import routes.middleware
@@ -50,6 +51,11 @@ wsgi_opts = [
                  'generate log lines. The following values can be formatted '
                  'into it: client_ip, date_time, request_line, status_code, '
                  'body_length, wall_seconds.'),
+    cfg.StrOpt('secure_proxy_ssl_header',
+               help='The HTTP header used to determine the scheme for the '
+                    'original request, even if it was removed by an SSL '
+                    'terminating proxy. Typical value is '
+                    '"HTTP_X_FORWARDED_PROTO".'),
     cfg.StrOpt('ssl_ca_file',
                help="CA certificate file to use to verify "
                     "connecting clients"),
@@ -86,7 +92,7 @@ CONF.register_opts(wsgi_opts)
 LOG = logging.getLogger(__name__)
 
 
-class Server(object):
+class Server(service.ServiceBase):
     """Server class to manage a WSGI server, serving a WSGI application."""
 
     default_pool_size = CONF.wsgi_default_pool_size
@@ -121,7 +127,7 @@ class Server(object):
 
         if backlog < 1:
             raise exception.InvalidInput(
-                    reason='The backlog must be more than 1')
+                    reason=_('The backlog must be more than 0'))
 
         bind_addr = (host, port)
         # TODO(dims): eventlet's green dns/socket module does not actually
@@ -273,7 +279,12 @@ class Server(object):
 
 
 class Request(webob.Request):
-    pass
+    def __init__(self, environ, *args, **kwargs):
+        if CONF.secure_proxy_ssl_header:
+            scheme = environ.get(CONF.secure_proxy_ssl_header)
+            if scheme:
+                environ['wsgi.url_scheme'] = scheme
+        super(Request, self).__init__(environ, *args, **kwargs)
 
 
 class Application(object):

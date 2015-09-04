@@ -15,7 +15,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.i18n import _LW
@@ -23,16 +22,6 @@ from nova.scheduler import filters
 from nova.scheduler.filters import utils
 
 LOG = logging.getLogger(__name__)
-
-cpu_allocation_ratio_opt = cfg.FloatOpt('cpu_allocation_ratio',
-        default=16.0,
-        help='Virtual CPU to physical CPU allocation ratio which affects '
-             'all CPU filters. This configuration specifies a global ratio '
-             'for CoreFilter. For AggregateCoreFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found.')
-
-CONF = cfg.CONF
-CONF.register_opt(cpu_allocation_ratio_opt)
 
 
 class BaseCoreFilter(filters.BaseHostFilter):
@@ -61,6 +50,16 @@ class BaseCoreFilter(filters.BaseHostFilter):
         if vcpus_total > 0:
             host_state.limits['vcpu'] = vcpus_total
 
+            # Do not allow an instance to overcommit against itself, only
+            # against other instances.
+            if instance_vcpus > host_state.vcpus_total:
+                LOG.debug("%(host_state)s does not have %(instance_vcpus)d "
+                      "total cpus before overcommit, it only has %(cpus)d",
+                      {'host_state': host_state,
+                       'instance_vcpus': instance_vcpus,
+                       'cpus': host_state.vcpus_total})
+                return False
+
         free_vcpus = vcpus_total - host_state.vcpus_used
         if free_vcpus < instance_vcpus:
             LOG.debug("%(host_state)s does not have %(instance_vcpus)d "
@@ -78,7 +77,7 @@ class CoreFilter(BaseCoreFilter):
     """CoreFilter filters based on CPU core utilization."""
 
     def _get_cpu_allocation_ratio(self, host_state, filter_properties):
-        return CONF.cpu_allocation_ratio
+        return host_state.cpu_allocation_ratio
 
 
 class AggregateCoreFilter(BaseCoreFilter):
@@ -93,9 +92,9 @@ class AggregateCoreFilter(BaseCoreFilter):
             'cpu_allocation_ratio')
         try:
             ratio = utils.validate_num_values(
-                aggregate_vals, CONF.cpu_allocation_ratio, cast_to=float)
+                aggregate_vals, host_state.cpu_allocation_ratio, cast_to=float)
         except ValueError as e:
             LOG.warning(_LW("Could not decode cpu_allocation_ratio: '%s'"), e)
-            ratio = CONF.cpu_allocation_ratio
+            ratio = host_state.cpu_allocation_ratio
 
         return ratio

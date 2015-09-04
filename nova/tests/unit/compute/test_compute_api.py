@@ -20,6 +20,7 @@ import datetime
 import iso8601
 import mock
 from mox3 import mox
+from oslo_serialization import jsonutils
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
 
@@ -688,13 +689,15 @@ class _ComputeAPIUnitTestMixIn(object):
 
         self.mox.StubOutWithMock(objects.Migration,
                                  'get_by_instance_and_status')
-        self.mox.StubOutWithMock(flavors, 'get_flavor')
+        self.mox.StubOutWithMock(compute_utils,
+                                 'get_inst_attrs_from_migration')
 
         self.context.elevated().AndReturn(self.context)
         objects.Migration.get_by_instance_and_status(
             self.context, inst.uuid, 'post-migrating').AndReturn(migration)
-        flavors.get_flavor(migration.old_instance_type_id).AndReturn(
-            old_flavor)
+        compute_utils.get_inst_attrs_from_migration(
+            migration, inst).AndReturn((old_flavor.vcpus,
+                                        old_flavor.memory_mb))
 
     def _test_delete_resized_part(self, inst):
         migration = objects.Migration._from_db_object(
@@ -707,12 +710,12 @@ class _ComputeAPIUnitTestMixIn(object):
         self.context.elevated().AndReturn(self.context)
         objects.Migration.get_by_instance_and_status(
             self.context, inst.uuid, 'finished').AndReturn(migration)
-        self.compute_api._downsize_quota_delta(self.context, inst
-                                               ).AndReturn('deltas')
+        compute_utils.downsize_quota_delta(self.context,
+                                           inst).AndReturn('deltas')
         fake_quotas = objects.Quotas.from_reservations(self.context,
                                                           ['rsvs'])
-        self.compute_api._reserve_quota_delta(self.context, 'deltas', inst,
-                                              ).AndReturn(fake_quotas)
+        compute_utils.reserve_quota_delta(self.context, 'deltas',
+                                          inst).AndReturn(fake_quotas)
         self.compute_api._record_action_start(
             self.context, inst, instance_actions.CONFIRM_RESIZE)
         self.compute_api.compute_rpcapi.confirm_resize(
@@ -785,8 +788,8 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(db, 'service_get_by_compute_host')
         self.mox.StubOutWithMock(self.compute_api.servicegroup_api,
                                  'service_is_up')
-        self.mox.StubOutWithMock(self.compute_api, '_downsize_quota_delta')
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'downsize_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
         self.mox.StubOutWithMock(db, 'instance_update_and_get_original')
         self.mox.StubOutWithMock(inst.info_cache, 'delete')
@@ -874,7 +877,8 @@ class _ComputeAPIUnitTestMixIn(object):
                                             reservations=cast_reservations)
             elif delete_type in ['delete', 'force_delete']:
                 rpcapi.terminate_instance(self.context, inst, [],
-                                          reservations=cast_reservations)
+                                          reservations=cast_reservations,
+                                          delete_type=delete_type)
 
         if commit_quotas:
             # Local delete or when we're testing API cell.
@@ -985,7 +989,7 @@ class _ComputeAPIUnitTestMixIn(object):
             rpcapi.terminate_instance(
                     self.context, inst,
                     mox.IsA(objects.BlockDeviceMappingList),
-                    reservations=None)
+                    reservations=None, delete_type='delete')
         else:
             compute_utils.notify_about_instance_usage(
                     self.compute_api.notifier, self.context,
@@ -1009,16 +1013,16 @@ class _ComputeAPIUnitTestMixIn(object):
         for k, v in updates.items():
             self.assertEqual(inst[k], v)
 
+    def _fake_do_delete(context, instance, bdms,
+                        rservations=None, local=False):
+        pass
+
     def test_local_delete_with_deleted_volume(self):
         bdms = [objects.BlockDeviceMapping(
                 **fake_block_device.FakeDbBlockDeviceDict(
                 {'id': 42, 'volume_id': 'volume_id',
                  'source_type': 'volume', 'destination_type': 'volume',
                  'delete_on_termination': False}))]
-
-        def _fake_do_delete(context, instance, bdms,
-                           rservations=None, local=False):
-            pass
 
         inst = self._create_instance_obj()
         inst._context = self.context
@@ -1058,7 +1062,41 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.ReplayAll()
         self.compute_api._local_delete(self.context, inst, bdms,
                                        'delete',
-                                       _fake_do_delete)
+                                       self._fake_do_delete)
+
+    def test_local_delete_without_info_cache(self):
+        inst = self._create_instance_obj()
+
+        with contextlib.nested(
+            mock.patch.object(inst, 'destroy'),
+            mock.patch.object(self.context, 'elevated'),
+            mock.patch.object(self.compute_api.network_api,
+                              'deallocate_for_instance'),
+            mock.patch.object(db, 'instance_system_metadata_get'),
+            mock.patch.object(compute_utils,
+                              'notify_about_instance_usage')
+        ) as (
+            inst_destroy, context_elevated, net_api_deallocate_for_instance,
+            db_instance_system_metadata_get, notify_about_instance_usage
+        ):
+
+            compute_utils.notify_about_instance_usage(
+                        self.compute_api.notifier, self.context,
+                        inst, 'delete.start')
+            self.context.elevated().MultipleTimes().AndReturn(self.context)
+            if self.cell_type != 'api':
+                self.compute_api.network_api.deallocate_for_instance(
+                            self.context, inst)
+
+            inst.destroy()
+            compute_utils.notify_about_instance_usage(
+                        self.compute_api.notifier, self.context,
+                        inst, 'delete.end',
+                        system_metadata=inst.system_metadata)
+            inst.info_cache = None
+            self.compute_api._local_delete(self.context, inst, [],
+                                           'delete',
+                                           self._fake_do_delete)
 
     def test_delete_disabled(self):
         inst = self._create_instance_obj()
@@ -1095,8 +1133,8 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(self.context, 'elevated')
         self.mox.StubOutWithMock(objects.Migration,
                                  'get_by_instance_and_status')
-        self.mox.StubOutWithMock(self.compute_api, '_downsize_quota_delta')
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'downsize_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(fake_mig, 'save')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
         self.mox.StubOutWithMock(self.compute_api.compute_rpcapi,
@@ -1107,14 +1145,14 @@ class _ComputeAPIUnitTestMixIn(object):
             objects.Migration.get_by_instance_and_status(
                     self.context, fake_inst['uuid'], 'finished').AndReturn(
                             fake_mig)
-        self.compute_api._downsize_quota_delta(self.context,
-                                               fake_inst).AndReturn('deltas')
+        compute_utils.downsize_quota_delta(self.context,
+                                           fake_inst).AndReturn('deltas')
 
         resvs = ['resvs']
         fake_quotas = objects.Quotas.from_reservations(self.context, resvs)
 
-        self.compute_api._reserve_quota_delta(self.context, 'deltas',
-                                              fake_inst).AndReturn(fake_quotas)
+        compute_utils.reserve_quota_delta(self.context, 'deltas',
+                                          fake_inst).AndReturn(fake_quotas)
 
         def _check_mig(expected_task_state=None):
             self.assertEqual('confirming', fake_mig.status)
@@ -1155,9 +1193,9 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(self.context, 'elevated')
         self.mox.StubOutWithMock(objects.Migration,
                                  'get_by_instance_and_status')
-        self.mox.StubOutWithMock(self.compute_api,
-                                 '_reverse_upsize_quota_delta')
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils,
+                                 'reverse_upsize_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(fake_inst, 'save')
         self.mox.StubOutWithMock(fake_mig, 'save')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
@@ -1168,14 +1206,14 @@ class _ComputeAPIUnitTestMixIn(object):
         objects.Migration.get_by_instance_and_status(
                 self.context, fake_inst['uuid'], 'finished').AndReturn(
                         fake_mig)
-        self.compute_api._reverse_upsize_quota_delta(
-                self.context, fake_mig).AndReturn('deltas')
+        compute_utils.reverse_upsize_quota_delta(
+            self.context, fake_mig).AndReturn('deltas')
 
         resvs = ['resvs']
         fake_quotas = objects.Quotas.from_reservations(self.context, resvs)
 
-        self.compute_api._reserve_quota_delta(self.context, 'deltas',
-                                              fake_inst).AndReturn(fake_quotas)
+        compute_utils.reserve_quota_delta(self.context, 'deltas',
+                                          fake_inst).AndReturn(fake_quotas)
 
         def _check_state(expected_task_state=None):
             self.assertEqual(task_states.RESIZE_REVERTING,
@@ -1216,9 +1254,9 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(self.context, 'elevated')
         self.mox.StubOutWithMock(objects.Migration,
                                  'get_by_instance_and_status')
-        self.mox.StubOutWithMock(self.compute_api,
-                                 '_reverse_upsize_quota_delta')
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils,
+                                 'reverse_upsize_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(fake_inst, 'save')
 
         self.context.elevated().AndReturn(self.context)
@@ -1226,15 +1264,17 @@ class _ComputeAPIUnitTestMixIn(object):
             self.context, fake_inst['uuid'], 'finished').AndReturn(fake_mig)
 
         delta = ['delta']
-        self.compute_api._reverse_upsize_quota_delta(
+        compute_utils.reverse_upsize_quota_delta(
             self.context, fake_mig).AndReturn(delta)
         resvs = ['resvs']
         fake_quotas = objects.Quotas.from_reservations(self.context, resvs)
-        self.compute_api._reserve_quota_delta(
+        compute_utils.reserve_quota_delta(
             self.context, delta, fake_inst).AndReturn(fake_quotas)
 
         exc = exception.UnexpectedTaskStateError(
-            actual=task_states.RESIZE_REVERTING, expected=None)
+            instance_uuid=fake_inst['uuid'],
+            actual={'task_state': task_states.RESIZE_REVERTING},
+            expected={'task_state': [None]})
         fake_inst.save(expected_task_state=[None]).AndRaise(exc)
 
         fake_quotas.rollback()
@@ -1263,8 +1303,8 @@ class _ComputeAPIUnitTestMixIn(object):
         fake_inst = self._create_instance_obj(params=params)
 
         self.mox.StubOutWithMock(flavors, 'get_flavor_by_flavor_id')
-        self.mox.StubOutWithMock(self.compute_api, '_upsize_quota_delta')
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'upsize_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(fake_inst, 'save')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
         self.mox.StubOutWithMock(self.compute_api.compute_task_api,
@@ -1290,11 +1330,11 @@ class _ComputeAPIUnitTestMixIn(object):
             fake_quotas = objects.Quotas.from_reservations(self.context,
                                                            resvs)
             if flavor_id_passed:
-                self.compute_api._upsize_quota_delta(
-                        self.context, mox.IsA(objects.Flavor),
-                        mox.IsA(objects.Flavor)).AndReturn('deltas')
-                self.compute_api._reserve_quota_delta(self.context, 'deltas',
-                        fake_inst).AndReturn(fake_quotas)
+                compute_utils.upsize_quota_delta(
+                    self.context, mox.IsA(objects.Flavor),
+                    mox.IsA(objects.Flavor)).AndReturn('deltas')
+                compute_utils.reserve_quota_delta(
+                    self.context, 'deltas', fake_inst).AndReturn(fake_quotas)
 
             def _check_state(expected_task_state=None):
                 self.assertEqual(task_states.RESIZE_PREP,
@@ -1409,7 +1449,7 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_resize_invalid_flavor_fails(self):
         self.mox.StubOutWithMock(flavors, 'get_flavor_by_flavor_id')
         # Should never reach these.
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(quota.QUOTAS, 'commit')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
         self.mox.StubOutWithMock(self.compute_api.compute_task_api,
@@ -1432,7 +1472,7 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_resize_disabled_flavor_fails(self):
         self.mox.StubOutWithMock(flavors, 'get_flavor_by_flavor_id')
         # Should never reach these.
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         self.mox.StubOutWithMock(quota.QUOTAS, 'commit')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
         self.mox.StubOutWithMock(self.compute_api.compute_task_api,
@@ -1461,14 +1501,44 @@ class _ComputeAPIUnitTestMixIn(object):
 
         get_flavor_by_flavor_id.return_value = fake_flavor
 
-        self.assertRaises(exception.CannotResizeDisk,
-                          self.compute_api.resize, self.context,
-                          fake_inst, flavor_id='flavor-id')
+        with mock.patch.object(self.compute_api,
+                               'is_volume_backed_instance',
+                               return_value=False):
+            self.assertRaises(exception.CannotResizeDisk,
+                              self.compute_api.resize, self.context,
+                              fake_inst, flavor_id='flavor-id')
+
+    @mock.patch('nova.compute.api.API._record_action_start')
+    @mock.patch('nova.compute.api.API._resize_cells_support')
+    @mock.patch('nova.conductor.conductor_api.ComputeTaskAPI.resize_instance')
+    @mock.patch.object(flavors, 'get_flavor_by_flavor_id')
+    def test_resize_to_zero_disk_flavor_volume_backed(self,
+                                                      get_flavor_by_flavor_id,
+                                                      resize_instance_mock,
+                                                      cells_support_mock,
+                                                      record_mock):
+        params = dict(image_ref='')
+        fake_inst = self._create_instance_obj(params=params)
+
+        fake_flavor = self._create_flavor(id=200, flavorid='flavor-id',
+                                          name='foo', root_gb=0)
+
+        get_flavor_by_flavor_id.return_value = fake_flavor
+
+        @mock.patch.object(self.compute_api, 'is_volume_backed_instance',
+                           return_value=True)
+        @mock.patch.object(fake_inst, 'save')
+        def do_test(mock_save, mock_volume):
+            self.compute_api.resize(self.context, fake_inst,
+                                    flavor_id='flavor-id')
+            mock_volume.assert_called_once_with(self.context, fake_inst)
+
+        do_test()
 
     def test_resize_quota_exceeds_fails(self):
         self.mox.StubOutWithMock(flavors, 'get_flavor_by_flavor_id')
-        self.mox.StubOutWithMock(self.compute_api, '_upsize_quota_delta')
-        self.mox.StubOutWithMock(self.compute_api, '_reserve_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'upsize_quota_delta')
+        self.mox.StubOutWithMock(compute_utils, 'reserve_quota_delta')
         # Should never reach these.
         self.mox.StubOutWithMock(quota.QUOTAS, 'commit')
         self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
@@ -1481,9 +1551,9 @@ class _ComputeAPIUnitTestMixIn(object):
         flavors.get_flavor_by_flavor_id(
                 'flavor-id', read_deleted='no').AndReturn(fake_flavor)
         deltas = dict(resource=0)
-        self.compute_api._upsize_quota_delta(
-                self.context, mox.IsA(objects.Flavor),
-                mox.IsA(objects.Flavor)).AndReturn(deltas)
+        compute_utils.upsize_quota_delta(
+            self.context, mox.IsA(objects.Flavor),
+            mox.IsA(objects.Flavor)).AndReturn(deltas)
         usage = dict(in_use=0, reserved=0)
         quotas = {'resource': 0}
         usages = {'resource': usage}
@@ -1492,9 +1562,9 @@ class _ComputeAPIUnitTestMixIn(object):
                                usages=usages,
                                overs=overs)
 
-        self.compute_api._reserve_quota_delta(self.context, deltas,
-                fake_inst).AndRaise(
-                        exception.OverQuota(**over_quota_args))
+        compute_utils.reserve_quota_delta(self.context, deltas,
+                                          fake_inst).AndRaise(
+            exception.OverQuota(**over_quota_args))
 
         self.mox.ReplayAll()
 
@@ -1911,33 +1981,37 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def _test_snapshot_volume_backed(self, quiesce_required, quiesce_fails,
                                      vm_state=vm_states.ACTIVE):
-        params = dict(locked=True, vm_state=vm_state)
+        params = dict(locked=True, vm_state=vm_state,
+                      system_metadata={'image_min_ram': '11',
+                                       'image_min_disk': '22',
+                                       'image_container_format': 'ami',
+                                       'image_disk_format': 'ami',
+                                       'image_ram_disk': 'fake_ram_disk_id',
+                                       'image_bdm_v2': 'True',
+                                       'image_block_device_mapping': '[]',
+                                       'image_mappings': '[]',
+                                       'image_cache_in_nova': 'True',
+                                       })
         instance = self._create_instance_obj(params=params)
         instance['root_device_name'] = 'vda'
 
         instance_bdms = []
 
-        image_meta = {
-            'id': 'fake-image-id',
-            'properties': {'mappings': []},
-            'status': 'fake-status',
-            'location': 'far-away',
-            'owner': 'fake-tenant',
-        }
-
         expect_meta = {
             'name': 'test-snapshot',
             'properties': {'root_device_name': 'vda',
-                           'mappings': 'DONTCARE'},
+                           'ram_disk': 'fake_ram_disk_id'},
             'size': 0,
-            'is_public': False
+            'min_disk': '22',
+            'is_public': False,
+            'min_ram': '11',
         }
 
         quiesced = [False, False]
         quiesce_expected = not quiesce_fails and vm_state == vm_states.ACTIVE
 
         if quiesce_required:
-            image_meta['properties']['os_require_quiesce'] = 'yes'
+            instance.system_metadata['image_os_require_quiesce'] = 'yes'
             expect_meta['properties']['os_require_quiesce'] = 'yes'
 
         def fake_get_all_by_instance(context, instance, use_slave=False):
@@ -1976,7 +2050,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         # No block devices defined
         self.compute_api.snapshot_volume_backed(
-            self.context, instance, copy.deepcopy(image_meta), 'test-snapshot')
+            self.context, instance, 'test-snapshot')
 
         bdm = fake_block_device.FakeDbBlockDeviceDict(
                 {'no_device': False, 'volume_id': '1', 'boot_index': 0,
@@ -1991,30 +2065,49 @@ class _ComputeAPIUnitTestMixIn(object):
              'image_id': None, 'volume_id': None, 'disk_bus': None,
              'volume_size': None, 'source_type': 'snapshot',
              'device_type': None, 'snapshot_id': '1-snapshot',
+             'device_name': '/dev/vda',
              'destination_type': 'volume', 'delete_on_termination': False})
 
         # All the db_only fields and the volume ones are removed
         self.compute_api.snapshot_volume_backed(
-            self.context, instance, copy.deepcopy(image_meta), 'test-snapshot')
+            self.context, instance, 'test-snapshot')
 
         self.assertEqual(quiesce_expected, quiesced[0])
         self.assertEqual(quiesce_expected, quiesced[1])
 
-        image_mappings = [{'virtual': 'ami', 'device': 'vda'},
-                          {'device': 'vda', 'virtual': 'ephemeral0'},
-                          {'device': 'vdb', 'virtual': 'swap'},
-                          {'device': 'vdc', 'virtual': 'ephemeral1'}]
+        instance.system_metadata['image_mappings'] = jsonutils.dumps(
+            [{'virtual': 'ami', 'device': 'vda'},
+             {'device': 'vda', 'virtual': 'ephemeral0'},
+             {'device': 'vdb', 'virtual': 'swap'},
+             {'device': 'vdc', 'virtual': 'ephemeral1'}])[:255]
+        instance.system_metadata['image_block_device_mapping'] = (
+            jsonutils.dumps(
+                [{'source_type': 'snapshot', 'destination_type': 'volume',
+                  'guest_format': None, 'device_type': 'disk', 'boot_index': 1,
+                  'disk_bus': 'ide', 'device_name': '/dev/vdf',
+                  'delete_on_termination': True, 'snapshot_id': 'snapshot-2',
+                  'volume_id': None, 'volume_size': 100, 'image_id': None,
+                  'no_device': None}])[:255])
 
-        image_meta['properties']['mappings'] = image_mappings
-
-        expect_meta['properties']['mappings'] = [
-            {'virtual': 'ami', 'device': 'vda'}]
+        bdm = fake_block_device.FakeDbBlockDeviceDict(
+                {'no_device': False, 'volume_id': None, 'boot_index': -1,
+                 'connection_info': 'inf', 'device_name': '/dev/vdh',
+                 'source_type': 'blank', 'destination_type': 'local',
+                 'guest_format': 'swap', 'delete_on_termination': True})
+        instance_bdms.append(bdm)
+        expect_meta['properties']['block_device_mapping'].append(
+            {'guest_format': 'swap', 'boot_index': -1, 'no_device': False,
+             'image_id': None, 'volume_id': None, 'disk_bus': None,
+             'volume_size': None, 'source_type': 'blank',
+             'device_type': None, 'snapshot_id': None,
+             'device_name': '/dev/vdh',
+             'destination_type': 'local', 'delete_on_termination': True})
 
         quiesced = [False, False]
 
-        # Check that the mappgins from the image properties are included
+        # Check that the mappgins from the image properties are not included
         self.compute_api.snapshot_volume_backed(
-            self.context, instance, copy.deepcopy(image_meta), 'test-snapshot')
+            self.context, instance, 'test-snapshot')
 
         self.assertEqual(quiesce_expected, quiesced[0])
         self.assertEqual(quiesce_expected, quiesced[1])
@@ -2259,15 +2352,16 @@ class _ComputeAPIUnitTestMixIn(object):
                 vm_state=vm_states.ACTIVE, cell_name='fake-cell',
                 launched_at=timeutils.utcnow(),
                 system_metadata=orig_system_metadata,
+                image_ref='foo',
                 expected_attrs=['system_metadata'])
         get_flavor.return_value = test_flavor.fake_flavor
         flavor = instance.get_flavor()
-        image_href = ''
+        image_href = 'foo'
         image = {"min_ram": 10, "min_disk": 1,
                  "properties": {'architecture': arch.X86_64}}
         admin_pass = ''
         files_to_inject = []
-        bdms = []
+        bdms = objects.BlockDeviceMappingList()
 
         _get_image.return_value = (None, image)
         bdm_get_by_instance_uuid.return_value = bdms
@@ -2286,7 +2380,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         _check_auto_disk_config.assert_called_once_with(image=image)
         _checks_for_create_and_rebuild.assert_called_once_with(self.context,
-                None, image, flavor, {}, [])
+                None, image, flavor, {}, [], None)
         self.assertNotEqual(orig_system_metadata, instance.system_metadata)
 
     @mock.patch.object(objects.Instance, 'save')
@@ -2311,7 +2405,7 @@ class _ComputeAPIUnitTestMixIn(object):
                                     'vm_mode': 'xen'}}
         admin_pass = ''
         files_to_inject = []
-        bdms = []
+        bdms = objects.BlockDeviceMappingList()
 
         instance = fake_instance.fake_instance_obj(self.context,
                 vm_state=vm_states.ACTIVE, cell_name='fake-cell',
@@ -2344,7 +2438,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         _check_auto_disk_config.assert_called_once_with(image=new_image)
         _checks_for_create_and_rebuild.assert_called_once_with(self.context,
-                None, new_image, flavor, {}, [])
+                None, new_image, flavor, {}, [], None)
         self.assertEqual(vm_mode.XEN, instance.vm_mode)
 
     def _test_check_injected_file_quota_onset_file_limit_exceeded(self,
@@ -2780,6 +2874,14 @@ class _ComputeAPIUnitTestMixIn(object):
                           self.compute_api.create, self.context, None, None)
         api = compute_api.API(skip_policy_check=True)
         api.create(self.context, None, None)
+
+    @mock.patch.object(compute_api.API, '_get_instances_by_filters')
+    def test_tenant_to_project_conversion(self, mock_get):
+        mock_get.return_value = []
+        api = compute_api.API()
+        api.get_all(self.context, search_opts={'tenant_id': 'foo'})
+        filters = mock_get.call_args_list[0][0][1]
+        self.assertEqual({'project_id': 'foo'}, filters)
 
 
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):

@@ -38,10 +38,13 @@ VIF_TYPE_802_QBG = '802.1qbg'
 VIF_TYPE_802_QBH = '802.1qbh'
 VIF_TYPE_HW_VEB = 'hw_veb'
 VIF_TYPE_MLNX_DIRECT = 'mlnx_direct'
+VIF_TYPE_IB_HOSTDEV = 'ib_hostdev'
 VIF_TYPE_MIDONET = 'midonet'
 VIF_TYPE_VHOSTUSER = 'vhostuser'
 VIF_TYPE_VROUTER = 'vrouter'
 VIF_TYPE_OTHER = 'other'
+VIF_TYPE_TAP = 'tap'
+VIF_TYPE_MACVTAP = 'macvtap'
 
 # Constants for dictionary keys in the 'vif_details' field in the VIF
 # class
@@ -49,11 +52,20 @@ VIF_DETAILS_PORT_FILTER = 'port_filter'
 VIF_DETAILS_OVS_HYBRID_PLUG = 'ovs_hybrid_plug'
 VIF_DETAILS_PHYSICAL_NETWORK = 'physical_network'
 
-# The following two constants define the SR-IOV related fields in the
-# 'vif_details'. 'profileid' should be used for VIF_TYPE_802_QBH,
-# 'vlan' for VIF_TYPE_HW_VEB
+# The following constant defines an SR-IOV related parameter in the
+# 'vif_details'. 'profileid' should be used for VIF_TYPE_802_QBH
 VIF_DETAILS_PROFILEID = 'profileid'
+
+# The following constant defines an SR-IOV and macvtap related parameter in
+# the 'vif_details'. 'vlan' should be used for VIF_TYPE_HW_VEB or
+# VIF_TYPE_MACVTAP
 VIF_DETAILS_VLAN = 'vlan'
+
+# The following three constants define the macvtap related fields in
+# the 'vif_details'.
+VIF_DETAILS_MACVTAP_SOURCE = 'macvtap_source'
+VIF_DETAILS_MACVTAP_MODE = 'macvtap_mode'
+VIF_DETAILS_PHYS_INTERFACE = 'physical_interface'
 
 # Constants for vhost-user related fields in 'vif_details'.
 # Sets mode on vhost-user socket, valid values are 'client'
@@ -64,6 +76,10 @@ VIF_DETAILS_VHOSTUSER_SOCKET = 'vhostuser_socket'
 # Specifies whether vhost-user socket should be plugged
 # into ovs bridge. Valid values are True and False
 VIF_DETAILS_VHOSTUSER_OVS_PLUG = 'vhostuser_ovs_plug'
+
+# Constants for dictionary keys in the 'vif_details' field that are
+# valid for VIF_TYPE_TAP.
+VIF_DETAILS_TAP_MAC_ADDRESS = 'mac_address'
 
 # Define supported virtual NIC types. VNIC_TYPE_DIRECT and VNIC_TYPE_MACVTAP
 # are used for SR-IOV ports

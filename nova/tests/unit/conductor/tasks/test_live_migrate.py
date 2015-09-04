@@ -10,13 +10,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import mock
 from mox3 import mox
+import oslo_messaging as messaging
 
 from nova.compute import power_state
+from nova.compute import rpcapi as compute_rpcapi
 from nova.conductor.tasks import live_migrate
 from nova import exception
 from nova import objects
+from nova.scheduler import client as scheduler_client
 from nova.scheduler import utils as scheduler_utils
+from nova import servicegroup
 from nova import test
 from nova.tests.unit import fake_instance
 from nova import utils
@@ -41,12 +46,14 @@ class LiveMigrationTaskTestCase(test.NoDBTestCase):
         self.destination = "destination"
         self.block_migration = "bm"
         self.disk_over_commit = "doc"
+        self.migration = objects.Migration()
         self._generate_task()
 
     def _generate_task(self):
         self.task = live_migrate.LiveMigrationTask(self.context,
             self.instance, self.destination, self.block_migration,
-            self.disk_over_commit)
+            self.disk_over_commit, self.migration, compute_rpcapi.ComputeAPI(),
+            servicegroup.API(), scheduler_client.SchedulerClient())
 
     def test_execute_with_destination(self):
         self.mox.StubOutWithMock(self.task, '_check_host_is_up')
@@ -60,6 +67,7 @@ class LiveMigrationTaskTestCase(test.NoDBTestCase):
                 instance=self.instance,
                 dest=self.destination,
                 block_migration=self.block_migration,
+                migration=self.migration,
                 migrate_data=None).AndReturn("bob")
 
         self.mox.ReplayAll()
@@ -81,10 +89,14 @@ class LiveMigrationTaskTestCase(test.NoDBTestCase):
                 instance=self.instance,
                 dest="found_host",
                 block_migration=self.block_migration,
+                migration=self.migration,
                 migrate_data=None).AndReturn("bob")
 
         self.mox.ReplayAll()
-        self.assertEqual("bob", self.task.execute())
+        with mock.patch.object(self.migration, 'save') as mock_save:
+            self.assertEqual("bob", self.task.execute())
+            self.assertTrue(mock_save.called)
+            self.assertEqual('found_host', self.migration.dest_compute)
 
     def test_check_instance_is_active_passes_when_paused(self):
         self.task.instance['power_state'] = power_state.PAUSED
@@ -355,6 +367,41 @@ class LiveMigrationTaskTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
         self.assertEqual("host2", self.task._find_destination())
 
+    def test_find_destination_retry_with_failed_migration_pre_checks(self):
+        self.flags(migrate_max_retries=1)
+        self.mox.StubOutWithMock(utils, 'get_image_from_system_metadata')
+        self.mox.StubOutWithMock(scheduler_utils, 'build_request_spec')
+        self.mox.StubOutWithMock(scheduler_utils, 'setup_instance_group')
+        self.mox.StubOutWithMock(self.task.scheduler_client,
+                                 'select_destinations')
+        self.mox.StubOutWithMock(self.task,
+                '_check_compatible_with_source_hypervisor')
+        self.mox.StubOutWithMock(self.task, '_call_livem_checks_on_host')
+
+        utils.get_image_from_system_metadata(
+            self.instance.system_metadata).AndReturn("image")
+        scheduler_utils.build_request_spec(self.context, mox.IgnoreArg(),
+                                           mox.IgnoreArg()).AndReturn({})
+        scheduler_utils.setup_instance_group(
+            self.context, {}, {'ignore_hosts': [self.instance_host]})
+        self.task.scheduler_client.select_destinations(self.context,
+                mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(
+                        [{'host': 'host1'}])
+        self.task._check_compatible_with_source_hypervisor("host1")
+        self.task._call_livem_checks_on_host("host1")\
+                .AndRaise(exception.MigrationPreCheckError("reason"))
+
+        scheduler_utils.setup_instance_group(
+            self.context, {}, {'ignore_hosts': [self.instance_host, "host1"]})
+        self.task.scheduler_client.select_destinations(self.context,
+                mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(
+                        [{'host': 'host2'}])
+        self.task._check_compatible_with_source_hypervisor("host2")
+        self.task._call_livem_checks_on_host("host2")
+
+        self.mox.ReplayAll()
+        self.assertEqual("host2", self.task._find_destination())
+
     def test_find_destination_retry_exceeds_max(self):
         self.flags(migrate_max_retries=0)
         self.mox.StubOutWithMock(utils, 'get_image_from_system_metadata')
@@ -378,7 +425,8 @@ class LiveMigrationTaskTestCase(test.NoDBTestCase):
                 .AndRaise(exception.DestinationHypervisorTooOld)
 
         self.mox.ReplayAll()
-        self.assertRaises(exception.NoValidHost, self.task._find_destination)
+        self.assertRaises(exception.MaxRetriesExceeded,
+                          self.task._find_destination)
 
     def test_find_destination_when_runs_out_of_hosts(self):
         self.mox.StubOutWithMock(utils, 'get_image_from_system_metadata')
@@ -399,5 +447,9 @@ class LiveMigrationTaskTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
         self.assertRaises(exception.NoValidHost, self.task._find_destination)
 
-    def test_not_implemented_rollback(self):
-        self.assertRaises(NotImplementedError, self.task.rollback)
+    def test_call_livem_checks_on_host(self):
+        with mock.patch.object(self.task.compute_rpcapi,
+            'check_can_live_migrate_destination',
+            side_effect=messaging.MessagingTimeout):
+            self.assertRaises(exception.MigrationPreCheckError,
+                self.task._call_livem_checks_on_host, {})

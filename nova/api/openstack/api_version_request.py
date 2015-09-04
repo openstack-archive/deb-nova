@@ -15,6 +15,7 @@
 import re
 
 from nova import exception
+from nova.i18n import _
 
 # Define the minimum and maximum version of the API across all of the
 # REST API. The format of the version is:
@@ -43,6 +44,14 @@ REST_API_VERSION_HISTORY = """REST API Version History:
     * 2.3 - Exposes additional os-extended-server-attributes
             Exposes delete_on_termination for os-extended-volumes
     * 2.4 - Exposes reserved field in os-fixed-ips.
+    * 2.5 - Allow server search option ip6 for non-admin
+    * 2.6 - Consolidate the APIs for getting remote consoles
+    * 2.7 - Check flavor type before add tenant access.
+    * 2.8 - Add new protocol for VM console (mks)
+    * 2.9 - Exposes lock information in server details.
+    * 2.10 - Allow admins to query, create and delete keypairs owned by any
+             user.
+    * 2.11 - Exposes forced_down attribute for os-services
 """
 
 # The minimum and maximum versions of the API supported
@@ -51,7 +60,7 @@ REST_API_VERSION_HISTORY = """REST API Version History:
 # Note(cyeoh): This only applies for the v2.1 API once microversions
 # support is fully merged. It does not affect the V2 API.
 _MIN_API_VERSION = "2.1"
-_MAX_API_VERSION = "2.4"
+_MAX_API_VERSION = "2.11"
 DEFAULT_API_VERSION = _MIN_API_VERSION
 
 
@@ -73,9 +82,15 @@ class APIVersionRequest(object):
     """
 
     def __init__(self, version_string=None):
-        """Create an API version request object."""
-        self.ver_major = None
-        self.ver_minor = None
+        """Create an API version request object.
+
+        :param version_string: String representation of APIVersionRequest.
+            Correct format is 'X.Y', where 'X' and 'Y' are int values.
+            None value should be used to create Null APIVersionRequest,
+            which is equal to 0.0
+        """
+        self.ver_major = 0
+        self.ver_minor = 0
 
         if version_string is not None:
             match = re.match(r"^([1-9]\d*)\.([1-9]\d*|0)$",
@@ -92,13 +107,41 @@ class APIVersionRequest(object):
                 % (self.ver_major, self.ver_minor))
 
     def is_null(self):
-        return self.ver_major is None and self.ver_minor is None
+        return self.ver_major == 0 and self.ver_minor == 0
 
-    def __cmp__(self, other):
+    def _format_type_error(self, other):
+        return TypeError(_("'%(other)s' should be an instance of '%(cls)s'") %
+                         {"other": other, "cls": self.__class__})
+
+    def __lt__(self, other):
         if not isinstance(other, APIVersionRequest):
-            raise TypeError
-        return cmp((self.ver_major, self.ver_minor),
-                   (other.ver_major, other.ver_minor))
+            raise self._format_type_error(other)
+
+        return ((self.ver_major, self.ver_minor) <
+                (other.ver_major, other.ver_minor))
+
+    def __eq__(self, other):
+        if not isinstance(other, APIVersionRequest):
+            raise self._format_type_error(other)
+
+        return ((self.ver_major, self.ver_minor) ==
+                (other.ver_major, other.ver_minor))
+
+    def __gt__(self, other):
+        if not isinstance(other, APIVersionRequest):
+            raise self._format_type_error(other)
+
+        return ((self.ver_major, self.ver_minor) >
+                (other.ver_major, other.ver_minor))
+
+    def __le__(self, other):
+        return self < other or self == other
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    def __ge__(self, other):
+        return self > other or self == other
 
     def matches(self, min_version, max_version):
         """Returns whether the version object represents a version

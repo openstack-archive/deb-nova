@@ -46,7 +46,7 @@ class PciDeviceStats(object):
 
     The pci stats information is maintained exclusively by compute node
     resource tracker and updated to database. The scheduler fetches the
-    information and selects the compute node accordingly. If a comptue
+    information and selects the compute node accordingly. If a compute
     node is selected, the resource tracker allocates the devices to the
     instance and updates the pci stats information.
 
@@ -60,7 +60,7 @@ class PciDeviceStats(object):
         # NOTE(sbauza): Stats are a PCIDevicePoolList object
         self.pools = [pci_pool.to_dict()
                       for pci_pool in stats] if stats else []
-        self.pools.sort(self.pool_cmp)
+        self.pools.sort(key=lambda item: len(item))
 
     def _equal_properties(self, dev, entry, matching_keys):
         return all(dev.get(prop) == entry.get(prop)
@@ -88,7 +88,7 @@ class PciDeviceStats(object):
         if not devspec:
             return
         tags = devspec.get_tags()
-        pool = {k: dev.get(k) for k in self.pool_keys}
+        pool = {k: getattr(dev, k) for k in self.pool_keys}
         if tags:
             pool.update(tags)
         return pool
@@ -102,7 +102,7 @@ class PciDeviceStats(object):
                 dev_pool['count'] = 0
                 dev_pool['devices'] = []
                 self.pools.append(dev_pool)
-                self.pools.sort(self.pool_cmp)
+                self.pools.sort(key=lambda item: len(item))
                 pool = dev_pool
             pool['count'] += 1
             pool['devices'].append(dev)
@@ -159,8 +159,7 @@ class PciDeviceStats(object):
                           " on the compute node semaphore"))
                 for d in range(len(alloc_devices)):
                     self.add_device(alloc_devices.pop())
-                raise exception.PciDeviceRequestFailed(requests=pci_requests)
-
+                return None
             for pool in pools:
                 if pool['count'] >= count:
                     num_alloc = count
@@ -234,10 +233,6 @@ class PciDeviceStats(object):
         if not all([self._apply_request(self.pools, r, numa_cells)
                                             for r in requests]):
             raise exception.PciDeviceRequestFailed(requests=requests)
-
-    @staticmethod
-    def pool_cmp(dev1, dev2):
-        return len(dev1) - len(dev2)
 
     def __iter__(self):
         # 'devices' shouldn't be part of stats

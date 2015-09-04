@@ -17,8 +17,8 @@
 Tests dealing with HTTP rate-limiting.
 """
 
-import httplib
-import StringIO
+from six.moves import http_client as httplib
+from six.moves import StringIO
 
 import mock
 from oslo_serialization import jsonutils
@@ -26,11 +26,12 @@ import six
 from six.moves import range
 import webob
 
-from nova.api.openstack.compute import limits
-from nova.api.openstack.compute.plugins.v3 import limits as limits_v21
+from nova.api.openstack.compute.legacy_v2 import limits
+from nova.api.openstack.compute import limits as limits_v21
 from nova.api.openstack.compute import views
 from nova.api.openstack import wsgi
 import nova.context
+from nova import exception
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import matchers
@@ -726,7 +727,7 @@ class FakeHttplibSocket(object):
 
     def __init__(self, response_string):
         """Initialize new `FakeHttplibSocket`."""
-        self._buffer = StringIO.StringIO(response_string)
+        self._buffer = StringIO(response_string)
 
     def makefile(self, _mode, _other):
         """Returns the socket's internal buffer."""
@@ -897,3 +898,21 @@ class LimitsViewBuilderTest(test.NoDBTestCase):
         rate_limits = []
         output = self.view_builder.build(rate_limits, abs_limits)
         self.assertThat(output, matchers.DictMatches(expected_limits))
+
+
+class LimitsPolicyEnforcementV21(test.NoDBTestCase):
+
+    def setUp(self):
+        super(LimitsPolicyEnforcementV21, self).setUp()
+        self.controller = limits_v21.LimitsController()
+
+    def test_limits_index_policy_failed(self):
+        rule_name = "os_compute_api:limits"
+        self.policy.set_rules({rule_name: "project:non_fake"})
+        req = fakes.HTTPRequest.blank('')
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            self.controller.index, req=req)
+        self.assertEqual(
+            "Policy doesn't allow %s to be performed." % rule_name,
+            exc.format_message())

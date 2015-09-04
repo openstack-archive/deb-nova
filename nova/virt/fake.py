@@ -243,6 +243,9 @@ class FakeDriver(driver.ComputeDriver):
                  block_device_info=None):
         pass
 
+    def inject_nmi(self, instance):
+        pass
+
     def soft_delete(self, instance):
         pass
 
@@ -410,6 +413,11 @@ class FakeDriver(driver.ComputeDriver):
         return ctype.ConsoleSerial(internal_access_path='FAKE',
                                    host='fakerdpconsole.com',
                                    port=6969)
+
+    def get_mks_console(self, context, instance):
+        return ctype.ConsoleMKS(internal_access_path='FAKE',
+                                host='fakemksconsole.com',
+                                port=6969)
 
     def get_console_pool_info(self, console_type):
         return {'address': '127.0.0.1',

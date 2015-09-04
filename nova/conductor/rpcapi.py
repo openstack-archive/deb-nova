@@ -177,7 +177,14 @@ class ConductorAPI(object):
     * Remove compute_node_update()
     * Remove compute_node_delete()
     * Remove security_groups_trigger_handler()
+    * Remove task_log_get()
+    * Remove task_log_begin_task()
+    * Remove task_log_end_task()
+    * Remove security_groups_trigger_members_refresh()
+    * Remove vol_usage_update()
+    * Remove instance_update()
 
+    * 2.2 - Add object_backport_versions()
     """
 
     VERSION_ALIASES = {
@@ -198,60 +205,13 @@ class ConductorAPI(object):
                                      version_cap=version_cap,
                                      serializer=serializer)
 
-    def instance_update(self, context, instance_uuid, updates,
-                        service=None):
-        updates_p = jsonutils.to_primitive(updates)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_update',
-                          instance_uuid=instance_uuid,
-                          updates=updates_p,
-                          service=service)
-
     def provider_fw_rule_get_all(self, context):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'provider_fw_rule_get_all')
 
-    def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
-                         wr_bytes, instance, last_refreshed=None,
-                         update_totals=False):
-        instance_p = jsonutils.to_primitive(instance)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'vol_usage_update',
-                          vol_id=vol_id, rd_req=rd_req,
-                          rd_bytes=rd_bytes, wr_req=wr_req,
-                          wr_bytes=wr_bytes,
-                          instance=instance_p, last_refreshed=last_refreshed,
-                          update_totals=update_totals)
-
     def compute_node_create(self, context, values):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'compute_node_create', values=values)
-
-    def task_log_get(self, context, task_name, begin, end, host, state=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'task_log_get',
-                          task_name=task_name, begin=begin, end=end,
-                          host=host, state=state)
-
-    def task_log_begin_task(self, context, task_name, begin, end, host,
-                            task_items=None, message=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'task_log_begin_task',
-                          task_name=task_name,
-                          begin=begin, end=end, host=host,
-                          task_items=task_items, message=message)
-
-    def task_log_end_task(self, context, task_name, begin, end, host, errors,
-                          message=None):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'task_log_end_task',
-                          task_name=task_name, begin=begin, end=end,
-                          host=host, errors=errors, message=message)
-
-    def security_groups_trigger_members_refresh(self, context, group_ids):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'security_groups_trigger_members_refresh',
-                          group_ids=group_ids)
 
     def object_class_action(self, context, objname, objmethod, objver,
                             args, kwargs):
@@ -269,6 +229,11 @@ class ConductorAPI(object):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'object_backport', objinst=objinst,
                           target_version=target_version)
+
+    def object_backport_versions(self, context, objinst, object_versions):
+        cctxt = self.client.prepare(version='2.2')
+        return cctxt.call(context, 'object_backport_versions', objinst=objinst,
+                          object_versions=object_versions)
 
 
 class ComputeTaskAPI(object):

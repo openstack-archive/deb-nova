@@ -42,7 +42,6 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
-from nova.conductor import api as conductor_api
 from nova import context
 from nova import crypto
 from nova import db
@@ -51,6 +50,7 @@ from nova import objects
 from nova.objects import base
 from nova import test
 from nova.tests.unit.db import fakes as db_fakes
+from nova.tests.unit import fake_flavor
 from nova.tests.unit import fake_instance
 from nova.tests.unit import fake_network
 from nova.tests.unit import fake_processutils
@@ -96,41 +96,49 @@ IMAGE_FIXTURES = {
     IMAGE_MACHINE: {
         'image_meta': {'name': 'fakemachine', 'size': 0,
                        'disk_format': 'ami',
-                       'container_format': 'ami'},
+                       'container_format': 'ami',
+                       'id': 'fake-image'},
     },
     IMAGE_KERNEL: {
         'image_meta': {'name': 'fakekernel', 'size': 0,
                        'disk_format': 'aki',
-                       'container_format': 'aki'},
+                       'container_format': 'aki',
+                       'id': 'fake-kernel'},
     },
     IMAGE_RAMDISK: {
         'image_meta': {'name': 'fakeramdisk', 'size': 0,
                        'disk_format': 'ari',
-                       'container_format': 'ari'},
+                       'container_format': 'ari',
+                       'id': 'fake-ramdisk'},
     },
     IMAGE_RAW: {
         'image_meta': {'name': 'fakeraw', 'size': 0,
                        'disk_format': 'raw',
-                       'container_format': 'bare'},
+                       'container_format': 'bare',
+                       'id': 'fake-image-raw'},
     },
     IMAGE_VHD: {
         'image_meta': {'name': 'fakevhd', 'size': 0,
                        'disk_format': 'vhd',
-                       'container_format': 'ovf'},
+                       'container_format': 'ovf',
+                       'id': 'fake-image-vhd'},
     },
     IMAGE_ISO: {
         'image_meta': {'name': 'fakeiso', 'size': 0,
                        'disk_format': 'iso',
-                       'container_format': 'bare'},
+                       'container_format': 'bare',
+                       'id': 'fake-image-iso'},
     },
     IMAGE_IPXE_ISO: {
         'image_meta': {'name': 'fake_ipxe_iso', 'size': 0,
                        'disk_format': 'iso',
                        'container_format': 'bare',
+                       'id': 'fake-image-pxe',
                        'properties': {'ipxe_boot': 'true'}},
     },
     IMAGE_FROM_VOLUME: {
         'image_meta': {'name': 'fake_ipxe_iso',
+                       'id': 'fake-image-volume',
                        'properties': {'foo': 'bar'}},
     },
 }
@@ -751,9 +759,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             # NOTE(tr3buchet): this is a terrible way to do this...
             network_info[0]['network']['subnets'][0]['dns'] = []
 
-        image_meta = {}
-        if image_ref:
-            image_meta = IMAGE_FIXTURES[image_ref]["image_meta"]
+        image_meta = IMAGE_FIXTURES[image_ref]["image_meta"]
         self.conn.spawn(self.context, instance, image_meta, injected_files,
                         'herp', network_info, block_device_info)
         self.create_vm_record(self.conn, os_type, instance['name'])
@@ -913,11 +919,6 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                          IMAGE_RAMDISK)
         self.check_vm_params_for_linux_with_external_kernel()
 
-    def test_spawn_boot_from_volume_no_image_meta(self):
-        dev_info = get_fake_device_info()
-        self._test_spawn(None, None, None,
-                         block_device_info=dev_info)
-
     def test_spawn_boot_from_volume_no_glance_image_meta(self):
         dev_info = get_fake_device_info()
         self._test_spawn(IMAGE_FROM_VOLUME, None, None,
@@ -1046,7 +1047,6 @@ iface eth0 inet6 static
         xenapi_fake.reset_table('network')
         # Instance 2 will use vlan network (see db/fakes.py)
         ctxt = self.context.elevated()
-        self.network.conductor_api = conductor_api.LocalAPI()
         inst2 = self._create_instance(False, obj=True)
         networks = self.network.db.network_get_all(ctxt)
         with mock.patch('nova.objects.network.Network._from_db_object'):
@@ -1249,6 +1249,12 @@ iface eth0 inet6 static
         error = jsonutils.dumps({'returncode': -1, 'message': 'fake'})
         self._test_spawn_fails_silently_with(exception.AgentError,
                                              value=error)
+
+    def test_spawn_sets_last_dom_id(self):
+        self._test_spawn(IMAGE_VHD, None, None,
+                         os_type="linux", architecture="x86-64")
+        self.assertEqual(self.vm['domid'],
+                         self.vm['other_config']['last_dom_id'])
 
     def test_rescue(self):
         instance = self._create_instance(spawn=False, obj=True)
@@ -1672,7 +1678,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_disk_and_power_off(self):
         instance = db.instance_create(self.context, self.instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
-        flavor = {"root_gb": 80, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=80,
+                                             ephemeral_gb=0)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         vm_ref = vm_utils.lookup(conn._session, instance['name'])
         self.mox.StubOutWithMock(volume_utils, 'is_booted_from_volume')
@@ -1684,7 +1691,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_disk_and_power_off_passes_exceptions(self):
         instance = db.instance_create(self.context, self.instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
-        flavor = {"root_gb": 80, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=80,
+                                             ephemeral_gb=0)
 
         def fake_raise(*args, **kwargs):
             raise exception.MigrationError(reason='test failure')
@@ -1698,7 +1706,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
 
     def test_migrate_disk_and_power_off_throws_on_zero_gb_resize_down(self):
         instance = db.instance_create(self.context, self.instance_values)
-        flavor = {"root_gb": 0, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
+                                             ephemeral_gb=0)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.ResizeError,
                           conn.migrate_disk_and_power_off,
@@ -1706,7 +1715,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                           'fake_dest', flavor, None)
 
     def test_migrate_disk_and_power_off_with_zero_gb_old_and_new_works(self):
-        flavor = {"root_gb": 0, 'ephemeral_gb': 0}
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
+                                             ephemeral_gb=0)
         values = copy.copy(self.instance_values)
         values["root_gb"] = 0
         values["ephemeral_gb"] = 0
@@ -1846,6 +1856,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         instance = db.instance_create(self.context, instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = db.flavor_get_by_name(self.context, 'm1.small')
+        flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         def fake_get_partitions(partition):
@@ -1864,6 +1875,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         instance = db.instance_create(self.context, instance_values)
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = db.flavor_get_by_name(self.context, 'm1.small')
+        flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         def fake_get_partitions(partition):
@@ -2030,20 +2042,19 @@ class XenAPIDetermineDiskImageTestCase(test.NoDBTestCase):
         self.assertEqual(expected_disk_type, actual)
 
     def test_machine(self):
-        image_meta = {'id': 'a', 'disk_format': 'ami'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'disk_format': 'ami'})
         self.assert_disk_type(image_meta, vm_utils.ImageType.DISK)
 
     def test_raw(self):
-        image_meta = {'id': 'a', 'disk_format': 'raw'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'disk_format': 'raw'})
         self.assert_disk_type(image_meta, vm_utils.ImageType.DISK_RAW)
 
     def test_vhd(self):
-        image_meta = {'id': 'a', 'disk_format': 'vhd'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'disk_format': 'vhd'})
         self.assert_disk_type(image_meta, vm_utils.ImageType.DISK_VHD)
-
-    def test_none(self):
-        image_meta = None
-        self.assert_disk_type(image_meta, None)
 
 
 # FIXME(sirp): convert this to use XenAPITestBaseNoDB

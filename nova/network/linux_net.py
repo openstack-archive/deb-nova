@@ -29,6 +29,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
+from oslo_utils import fileutils
 from oslo_utils import importutils
 from oslo_utils import timeutils
 import six
@@ -36,7 +37,6 @@ import six
 from nova import exception
 from nova.i18n import _, _LE, _LW
 from nova import objects
-from nova.openstack.common import fileutils
 from nova import paths
 from nova.pci import utils as pci_utils
 from nova import utils
@@ -108,6 +108,8 @@ linux_net_opts = [
                help='The IP address for the metadata API server'),
     cfg.IntOpt('metadata_port',
                default=8775,
+               min=1,
+               max=65535,
                help='The port for the metadata API port'),
     cfg.StrOpt('iptables_top_regex',
                default='',
@@ -1549,9 +1551,11 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
 
     @staticmethod
     @utils.synchronized('lock_vlan', external=True)
-    def ensure_vlan(vlan_num, bridge_interface, mac_address=None, mtu=None):
+    def ensure_vlan(vlan_num, bridge_interface, mac_address=None, mtu=None,
+                    interface=None):
         """Create a vlan unless it already exists."""
-        interface = 'vlan%s' % vlan_num
+        if interface is None:
+            interface = 'vlan%s' % vlan_num
         if not device_exists(interface):
             LOG.debug('Starting VLAN interface %s', interface)
             _execute('ip', 'link', 'add', 'link', bridge_interface,
@@ -1599,7 +1603,13 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         """
         if not device_exists(bridge):
             LOG.debug('Starting Bridge %s', bridge)
-            _execute('brctl', 'addbr', bridge, run_as_root=True)
+            out, err = _execute('brctl', 'addbr', bridge,
+                                check_exit_code=False, run_as_root=True)
+            if (err and err != "device %s already exists; can't create "
+                               "bridge with the same name\n" % (bridge)):
+                msg = _('Failed to add bridge: %s') % err
+                raise exception.NovaException(msg)
+
             _execute('brctl', 'setfd', bridge, 0, run_as_root=True)
             # _execute('brctl setageing %s 10' % bridge, run_as_root=True)
             _execute('brctl', 'stp', bridge, 'off', run_as_root=True)

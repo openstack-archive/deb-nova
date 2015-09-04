@@ -22,6 +22,7 @@ import time
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging
+from oslo_service import periodic_task
 from oslo_utils import importutils
 from oslo_utils import timeutils
 import six
@@ -37,7 +38,6 @@ from nova import manager
 from nova import objects
 from nova.objects import base as base_obj
 from nova.objects import instance as instance_obj
-from nova.openstack.common import periodic_task
 
 cell_manager_opts = [
         cfg.StrOpt('driver',
@@ -76,7 +76,7 @@ class CellsManager(manager.Manager):
     Scheduling requests get passed to the scheduler class.
     """
 
-    target = oslo_messaging.Target(version='1.35')
+    target = oslo_messaging.Target(version='1.36')
 
     def __init__(self, *args, **kwargs):
         LOG.warning(_LW('The cells feature of Nova is considered experimental '
@@ -84,7 +84,10 @@ class CellsManager(manager.Manager):
                         'less testing than the rest of Nova. This may change '
                         'in the future, but current deployers should be aware '
                         'that the use of it in production right now may be '
-                        'risky.'))
+                        'risky. Also note that cells does not currently '
+                        'support rolling upgrades, it is assumed that cells '
+                        'deployments are upgraded lockstep so n-1 cells '
+                        'compatibility does not work.'))
         # Mostly for tests.
         cell_state_manager = kwargs.pop('cell_state_manager', None)
         super(CellsManager, self).__init__(service_name='cells',
@@ -520,9 +523,12 @@ class CellsManager(manager.Manager):
         """Resume an instance in its cell."""
         self.msg_runner.resume_instance(ctxt, instance)
 
-    def terminate_instance(self, ctxt, instance):
+    def terminate_instance(self, ctxt, instance, delete_type='delete'):
         """Delete an instance in its cell."""
-        self.msg_runner.terminate_instance(ctxt, instance)
+        # NOTE(rajesht): The `delete_type` parameter is passed so that it will
+        # be routed to destination cell, where instance deletion will happen.
+        self.msg_runner.terminate_instance(ctxt, instance,
+                                           delete_type=delete_type)
 
     def soft_delete_instance(self, ctxt, instance):
         """Soft-delete an instance in its cell."""

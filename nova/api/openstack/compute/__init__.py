@@ -19,19 +19,24 @@ WSGI middleware for OpenStack Compute API.
 """
 
 from oslo_config import cfg
+from oslo_log import log as logging
 
 import nova.api.openstack
-from nova.api.openstack.compute import consoles
-from nova.api.openstack.compute import extensions
-from nova.api.openstack.compute import flavors
-from nova.api.openstack.compute import image_metadata
-from nova.api.openstack.compute import images
-from nova.api.openstack.compute import ips
-from nova.api.openstack.compute import limits
-from nova.api.openstack.compute import plugins
-from nova.api.openstack.compute import server_metadata
-from nova.api.openstack.compute import servers
-from nova.api.openstack.compute import versions
+from nova.api.openstack.compute import extension_info
+from nova.api.openstack.compute.legacy_v2 import consoles as v2_consoles
+from nova.api.openstack.compute.legacy_v2 import extensions as v2_extensions
+from nova.api.openstack.compute.legacy_v2 import flavors as v2_flavors
+from nova.api.openstack.compute.legacy_v2 import image_metadata \
+        as v2_image_metadata
+from nova.api.openstack.compute.legacy_v2 import images as v2_images
+from nova.api.openstack.compute.legacy_v2 import ips as v2_ips
+from nova.api.openstack.compute.legacy_v2 import limits as v2_limits
+from nova.api.openstack.compute.legacy_v2 import server_metadata \
+        as v2_server_metadata
+from nova.api.openstack.compute.legacy_v2 import servers as v2_servers
+from nova.api.openstack.compute.legacy_v2 import versions \
+        as legacy_v2_versions
+from nova.i18n import _LW
 
 allow_instance_snapshots_opt = cfg.BoolOpt('allow_instance_snapshots',
         default=True,
@@ -40,16 +45,29 @@ allow_instance_snapshots_opt = cfg.BoolOpt('allow_instance_snapshots',
 CONF = cfg.CONF
 CONF.register_opt(allow_instance_snapshots_opt)
 
+LOG = logging.getLogger(__name__)
+
 
 class APIRouter(nova.api.openstack.APIRouter):
     """Routes requests on the OpenStack API to the appropriate controller
     and method.
     """
-    ExtensionManager = extensions.ExtensionManager
+    ExtensionManager = v2_extensions.ExtensionManager
+
+    def __init__(self, ext_mgr=None, init_only=None):
+        LOG.warning(_LW(
+            "Deprecated: Starting with the Liberty release, the v2 API was "
+            "already deprecated and the v2.1 API is set as the default. Nova "
+            "also supports v2.1 API legacy v2 compatible mode for switching "
+            "to v2.1 API smoothly. For more information on how to configure "
+            "v2.1 API and legacy v2 compatible mode, please refer Nova "
+            "api-paste.ini sample file."))
+        super(APIRouter, self).__init__(ext_mgr=ext_mgr,
+                                        init_only=init_only)
 
     def _setup_routes(self, mapper, ext_mgr, init_only):
         if init_only is None or 'versions' in init_only:
-            self.resources['versions'] = versions.create_resource()
+            self.resources['versions'] = legacy_v2_versions.create_resource()
             mapper.connect("versions", "/",
                         controller=self.resources['versions'],
                         action='show',
@@ -58,7 +76,7 @@ class APIRouter(nova.api.openstack.APIRouter):
         mapper.redirect("", "/")
 
         if init_only is None or 'consoles' in init_only:
-            self.resources['consoles'] = consoles.create_resource()
+            self.resources['consoles'] = v2_consoles.create_resource()
             mapper.resource("console", "consoles",
                         controller=self.resources['consoles'],
                         parent_resource=dict(member_name='server',
@@ -66,38 +84,39 @@ class APIRouter(nova.api.openstack.APIRouter):
 
         if init_only is None or 'consoles' in init_only or \
                 'servers' in init_only or 'ips' in init_only:
-            self.resources['servers'] = servers.create_resource(ext_mgr)
+            self.resources['servers'] = v2_servers.create_resource(ext_mgr)
             mapper.resource("server", "servers",
                             controller=self.resources['servers'],
                             collection={'detail': 'GET'},
                             member={'action': 'POST'})
 
         if init_only is None or 'ips' in init_only:
-            self.resources['ips'] = ips.create_resource()
+            self.resources['ips'] = v2_ips.create_resource()
             mapper.resource("ip", "ips", controller=self.resources['ips'],
                             parent_resource=dict(member_name='server',
                                                  collection_name='servers'))
 
         if init_only is None or 'images' in init_only:
-            self.resources['images'] = images.create_resource()
+            self.resources['images'] = v2_images.create_resource()
             mapper.resource("image", "images",
                             controller=self.resources['images'],
                             collection={'detail': 'GET'})
 
         if init_only is None or 'limits' in init_only:
-            self.resources['limits'] = limits.create_resource()
+            self.resources['limits'] = v2_limits.create_resource()
             mapper.resource("limit", "limits",
                             controller=self.resources['limits'])
 
         if init_only is None or 'flavors' in init_only:
-            self.resources['flavors'] = flavors.create_resource()
+            self.resources['flavors'] = v2_flavors.create_resource()
             mapper.resource("flavor", "flavors",
                             controller=self.resources['flavors'],
                             collection={'detail': 'GET'},
                             member={'action': 'POST'})
 
         if init_only is None or 'image_metadata' in init_only:
-            self.resources['image_metadata'] = image_metadata.create_resource()
+            v2immeta = v2_image_metadata
+            self.resources['image_metadata'] = v2immeta.create_resource()
             image_metadata_controller = self.resources['image_metadata']
 
             mapper.resource("image_meta", "metadata",
@@ -113,7 +132,7 @@ class APIRouter(nova.api.openstack.APIRouter):
 
         if init_only is None or 'server_metadata' in init_only:
             self.resources['server_metadata'] = \
-                server_metadata.create_resource()
+                v2_server_metadata.create_resource()
             server_metadata_controller = self.resources['server_metadata']
 
             mapper.resource("server_meta", "metadata",
@@ -133,7 +152,7 @@ class APIRouterV21(nova.api.openstack.APIRouterV21):
     and method.
     """
     def __init__(self, init_only=None):
-        self._loaded_extension_info = plugins.LoadedExtensionInfo()
+        self._loaded_extension_info = extension_info.LoadedExtensionInfo()
         super(APIRouterV21, self).__init__(init_only)
 
     def _register_extension(self, ext):
@@ -151,7 +170,11 @@ class APIRouterV3(nova.api.openstack.APIRouterV21):
     and method.
     """
     def __init__(self, init_only=None):
-        self._loaded_extension_info = plugins.LoadedExtensionInfo()
+        LOG.warning(_LW(
+            "Deprecated: The v3 API was deprecated. The v2.1 API replaces it "
+            "as the Nova API, please refer Nova api-paste.ini sample file for "
+            "how to configure v2.1 API."))
+        self._loaded_extension_info = extension_info.LoadedExtensionInfo()
         super(APIRouterV3, self).__init__(init_only, v3mode=True)
 
     def _register_extension(self, ext):

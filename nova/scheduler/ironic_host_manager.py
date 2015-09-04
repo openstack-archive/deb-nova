@@ -21,10 +21,8 @@ This host manager will consume all cpu's, disk space, and
 ram from a host / node as it is supporting Baremetal hosts, which can not be
 subdivided into multiple instances.
 """
-import iso8601
 from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_utils import timeutils
 
 from nova.compute import hv_type
 from nova.scheduler import host_manager
@@ -83,17 +81,19 @@ class IronicNodeState(host_manager.HostState):
                                         in compute.supported_hv_specs]
         else:
             self.supported_instances = []
+
+        # update allocation ratios given by the ComputeNode object
+        self.cpu_allocation_ratio = compute.cpu_allocation_ratio
+        self.ram_allocation_ratio = compute.ram_allocation_ratio
+
         self.updated = compute.updated_at
 
+    @host_manager.set_update_time_on_success
     def consume_from_instance(self, instance):
         """Consume nodes entire resources regardless of instance request."""
         self.free_ram_mb = 0
         self.free_disk_mb = 0
         self.vcpus_used = self.vcpus_total
-
-        now = timeutils.utcnow()
-        # NOTE(sbauza): Objects are UTC tz-aware by default
-        self.updated = now.replace(tzinfo=iso8601.iso8601.Utc())
 
 
 class IronicHostManager(host_manager.HostManager):
@@ -111,3 +111,11 @@ class IronicHostManager(host_manager.HostManager):
             return IronicNodeState(host, node, **kwargs)
         else:
             return host_manager.HostState(host, node, **kwargs)
+
+    def _init_instance_info(self):
+        """Ironic hosts should not pass instance info."""
+        pass
+
+    def _add_instance_info(self, context, compute, host_state):
+        """Ironic hosts should not pass instance info."""
+        host_state.instances = {}

@@ -25,6 +25,7 @@ from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
+from oslo_service import service
 from oslo_utils import importutils
 
 from nova import baserpc
@@ -35,7 +36,6 @@ from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
 from nova.objects import base as objects_base
-from nova.openstack.common import service
 from nova import rpc
 from nova import servicegroup
 from nova import utils
@@ -67,6 +67,8 @@ service_opts = [
                help='The IP address on which the EC2 API will listen.'),
     cfg.IntOpt('ec2_listen_port',
                default=8773,
+               min=1,
+               max=65535,
                help='The port on which the EC2 API will listen.'),
     cfg.IntOpt('ec2_workers',
                help='Number of workers for EC2 API service. The default will '
@@ -76,6 +78,8 @@ service_opts = [
                help='The IP address on which the OpenStack API will listen.'),
     cfg.IntOpt('osapi_compute_listen_port',
                default=8774,
+               min=1,
+               max=65535,
                help='The port on which the OpenStack API will listen.'),
     cfg.IntOpt('osapi_compute_workers',
                help='Number of workers for OpenStack API service. The default '
@@ -88,6 +92,8 @@ service_opts = [
                help='The IP address on which the metadata API will listen.'),
     cfg.IntOpt('metadata_listen_port',
                default=8775,
+               min=1,
+               max=65535,
                help='The port on which the metadata API will listen.'),
     cfg.IntOpt('metadata_workers',
                help='Number of workers for metadata service. The default will '
@@ -125,7 +131,7 @@ class Service(service.Service):
 
     A service takes a manager and enables rpc by listening to queues based
     on topic. It also periodically runs tasks on the manager and reports
-    it state to the database services table.
+    its state to the database services table.
     """
 
     def __init__(self, host, binary, topic, manager, report_interval=None,
@@ -305,7 +311,7 @@ class Service(service.Service):
             sys.exit(1)
 
 
-class WSGIService(object):
+class WSGIService(service.Service):
     """Provides ability to launch API from a 'paste' configuration."""
 
     def __init__(self, name, loader=None, use_ssl=False, max_url_len=None):
@@ -412,7 +418,7 @@ class WSGIService(object):
 
 
 def process_launcher():
-    return service.ProcessLauncher()
+    return service.ProcessLauncher(CONF)
 
 
 # NOTE(vish): the global launcher is to maintain the existing
@@ -426,7 +432,7 @@ def serve(server, workers=None):
     if _launcher:
         raise RuntimeError(_('serve() can only be called once'))
 
-    _launcher = service.launch(server, workers=workers)
+    _launcher = service.launch(CONF, server, workers=workers)
 
 
 def wait():

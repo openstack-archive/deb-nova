@@ -53,6 +53,7 @@ VIR_DOMAIN_BLOCK_REBASE_SHALLOW = 1
 VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT = 2
 VIR_DOMAIN_BLOCK_REBASE_COPY = 8
 
+VIR_DOMAIN_BLOCK_JOB_ABORT_ASYNC = 1
 VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT = 2
 
 VIR_DOMAIN_EVENT_ID_LIFECYCLE = 0
@@ -107,6 +108,7 @@ VIR_FROM_NWFILTER = 330
 VIR_FROM_REMOTE = 340
 VIR_FROM_RPC = 345
 VIR_FROM_NODEDEV = 666
+VIR_ERR_INVALID_ARG = 8
 VIR_ERR_NO_SUPPORT = 3
 VIR_ERR_XML_DETAIL = 350
 VIR_ERR_NO_DOMAIN = 420
@@ -528,6 +530,9 @@ class Domain(object):
     def undefine(self):
         self._connection._undefine(self)
 
+    def isPersistent(self):
+        return True
+
     def undefineFlags(self, flags):
         self.undefine()
         if flags & VIR_DOMAIN_UNDEFINE_MANAGED_SAVE:
@@ -586,6 +591,9 @@ class Domain(object):
                 error_code=VIR_ERR_INTERNAL_ERROR,
                 error_domain=VIR_FROM_QEMU)
 
+    def migrateSetMaxDowntime(self, downtime):
+        pass
+
     def attachDevice(self, xml):
         disk_info = _parse_disk_info(etree.fromstring(xml))
         disk_info['_attached'] = True
@@ -609,6 +617,9 @@ class Domain(object):
 
     def detachDeviceFlags(self, xml, flags):
         self.detachDevice(xml)
+
+    def setUserPassword(self, user, password, flags=0):
+        pass
 
     def XMLDesc(self, flags):
         disks = ''
@@ -729,11 +740,38 @@ class Domain(object):
     def blockJobInfo(self, disk, flags):
         return {}
 
+    def blockJobAbort(self, disk, flags):
+        pass
+
+    def blockResize(self, disk, size):
+        pass
+
+    def blockRebase(self, disk, base, bandwidth=0, flags=0):
+        if (not base) and (flags and VIR_DOMAIN_BLOCK_REBASE_RELATIVE):
+            raise make_libvirtError(
+                    libvirtError,
+                    'flag VIR_DOMAIN_BLOCK_REBASE_RELATIVE is '
+                    'valid only with non-null base',
+                    error_code=VIR_ERR_INVALID_ARG,
+                    error_domain=VIR_FROM_QEMU)
+        return 0
+
+    def blockCommit(self, disk, base, top, flags):
+        return 0
+
     def jobInfo(self):
-        return []
+        # NOTE(danms): This is an array of 12 integers, so just report
+        # something to avoid an IndexError if we look at this
+        return [0] * 12
 
     def jobStats(self, flags=0):
         return {}
+
+    def injectNMI(self, flags=0):
+        return 0
+
+    def abortJob(self):
+        pass
 
 
 class DomainSnapshot(object):

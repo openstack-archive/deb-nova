@@ -22,8 +22,149 @@ There is a special value ``latest`` which can be specified, which will
 allow a client to always receive the most recent version of API
 responses from the server.
 
+.. warning:: The ``latest`` value is mostly meant for integration testing and
+  would be dangerous to rely on in client code since Nova microversions are not
+  following semver and therefore backward compability is not guaranteed.
+  Clients, like python-novaclient, should always require a specific
+  microversion but limit what is acceptable to the version range that it
+  understands at the time.
+
 For full details please read the `Kilo spec for microversions
 <http://git.openstack.org/cgit/openstack/nova-specs/tree/specs/kilo/implemented/api-microversions.rst>`_
+
+When do I need a new Microversion?
+----------------------------------
+
+A microversion is needed when the contract to the user is
+changed. The user contract covers many kinds of information such as:
+
+- the Request
+
+  - the list of resource urls which exist on the server
+
+    Example: adding a new servers/{ID}/foo which didn't exist in a
+    previous version of the code
+
+  - the list of query parameters that are valid on urls
+
+    Example: adding a new parameter ``is_yellow`` servers/{ID}?is_yellow=True
+
+  - the list of query parameter values for non free form fields
+
+    Example: parameter filter_by takes a small set of constants/enums "A",
+    "B", "C". Adding support for new enum "D".
+
+  - new headers accepted on a request
+
+- the Response
+
+  - the list of attributes and data structures returned
+
+    Example: adding a new attribute 'locked': True/False to the output
+    of servers/{ID}
+
+  - the allowed values of non free form fields
+
+    Example: adding a new allowed ``status`` to servers/{ID}
+
+  - the list of status codes allowed for a particular request
+
+    Example: an API previously could return 200, 400, 403, 404 and the
+    change would make the API now also be allowed to return 409.
+
+    See [#f2]_ for the 400 and 403 cases.
+
+  - changing a status code on a particular response
+
+    Example: changing the return code of an API from 501 to 400.
+
+    .. note:: Fixing a bug so that a 400+ code is returned rather than a 500
+      does not require a microversion change. It's assumed that clients are not
+      expected to handle a 500 response and therefore should not need to opt-in
+      to microversion changes that fixes a 500 response from happening.
+      According to the OpenStack API Working Group, a
+      **500 Internal Server Error** should **not** be returned to the user for
+      failures due to user error that can be fixed by changing the request on
+      the client side. See [#f1]_.
+
+  - new headers returned on a response
+
+The following flow chart attempts to walk through the process of "do
+we need a microversion".
+
+
+.. graphviz::
+
+   digraph states {
+
+    label="Do I need a microversion?"
+
+    silent_fail[shape="diamond", style="", group=g1, label="Did we silently
+   fail to do what is asked?"];
+    ret_500[shape="diamond", style="", group=g1, label="Did we return a 500
+   before?"];
+    new_error[shape="diamond", style="", group=g1, label="Are we changing what
+    status code is returned?"];
+    new_attr[shape="diamond", style="", group=g1, label="Did we add or remove an
+    attribute to a payload?"];
+    new_param[shape="diamond", style="", group=g1, label="Did we add or remove
+    an accepted query string parameter or value?"];
+    new_resource[shape="diamond", style="", group=g1, label="Did we add or remove a
+   resource url?"];
+
+
+   no[shape="box", style=rounded, label="No microversion needed"];
+   yes[shape="box", style=rounded, label="Yes, you need a microversion"];
+   no2[shape="box", style=rounded, label="No microversion needed, it's
+   a bug"];
+
+   silent_fail -> ret_500[label=" no"];
+   silent_fail -> no2[label="yes"];
+
+    ret_500 -> no2[label="yes [1]"];
+    ret_500 -> new_error[label=" no"];
+
+    new_error -> new_attr[label=" no"];
+    new_error -> yes[label="yes"];
+
+    new_attr -> new_param[label=" no"];
+    new_attr -> yes[label="yes"];
+
+    new_param -> new_resource[label=" no"];
+    new_param -> yes[label="yes"];
+
+    new_resource -> no[label=" no"];
+    new_resource -> yes[label="yes"];
+
+   {rank=same; yes new_attr}
+   {rank=same; no2 ret_500}
+   {rank=min; silent_fail}
+   }
+
+
+**Footnotes**
+
+.. [#f1] When fixing 500 errors that previously caused stack traces, try
+  to map the new error into the existing set of errors that API call
+  could previously return (400 if nothing else is appropriate). Changing
+  the set of allowed status codes from a request is changing the
+  contract, and should be part of a microversion (except in [#f2]_).
+
+  The reason why we are so strict on contract is that we'd like
+  application writers to be able to know, for sure, what the contract is
+  at every microversion in Nova. If they do not, they will need to write
+  conditional code in their application to handle ambiguities.
+
+  When in doubt, consider application authors. If it would work with no
+  client side changes on both Nova versions, you probably don't need a
+  microversion. If, on the other hand, there is any ambiguity, a
+  microversion is probably needed.
+
+.. [#f2] The exception to not needing a microversion when returning a
+  previously unspecified error code is the 400 and 403 cases. This is
+  considered OK to return even if previously unspecified in the code since
+  it's implied given keystone authentication can fail with a 403 and API
+  validation can fail with a 400 for invalid json request body.
 
 
 In Code
@@ -60,7 +201,7 @@ This method would only be available if the caller had specified an
 ``X-OpenStack-Nova-API-Version`` of <= ``2.4``. If ``2.5`` or later
 is specified the server will respond with ``HTTP/404``.
 
-Changing a method's behaviour
+Changing a method's behavior
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 In the controller class::
@@ -123,12 +264,12 @@ When not using decorators
 ~~~~~~~~~~~~~~~~~~~~~~~~~
 
 When you don't want to use the ``@api_version`` decorator on a method
-or you want to change behaviour within a method (say it leads to
+or you want to change behavior within a method (say it leads to
 simpler or simply a lot less code) you can directly test for the
 requested version with a method as long as you have access to the api
 request object (commonly called ``req``). Every API method has an
 api_version_request object attached to the req object and that can be
-used to modify behaviour based on its value::
+used to modify behavior based on its value::
 
     def index(self, req):
         <common code>
@@ -172,6 +313,10 @@ necessary to add changes to other places which describe your change:
 
 * Update the expected versions in affected tests, for example in
   ``nova/tests/unit/api/openstack/compute/test_versions.py``.
+
+* Update the get versions api sample files:
+  ``doc/api_samples/versions/versions-get-resp.json`` and
+  ``nova/tests/functional/api_samples/versions/versions-get-resp.json.tpl``.
 
 Allocating a microversion
 -------------------------

@@ -12,8 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
-
 import mock
 import six
 
@@ -46,14 +44,15 @@ class _TestBlockDeviceMappingObject(object):
             fake_bdm['instance'] = instance
         return fake_bdm
 
-    def _test_save(self, cell_type=None):
+    def _test_save(self, cell_type=None, update_device_name=False):
         if cell_type:
             self.flags(enable=True, cell_type=cell_type, group='cells')
         else:
             self.flags(enable=False, group='cells')
 
+        create = False
         fake_bdm = self.fake_bdm()
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(
                 db, 'block_device_mapping_update', return_value=fake_bdm),
             mock.patch.object(
@@ -62,11 +61,21 @@ class _TestBlockDeviceMappingObject(object):
             bdm_object = objects.BlockDeviceMapping(context=self.context)
             bdm_object.id = 123
             bdm_object.volume_id = 'fake_volume_id'
+            if update_device_name:
+                bdm_object.device_name = '/dev/vda'
+                create = None
             bdm_object.save()
 
-            bdm_update_mock.assert_called_once_with(
-                    self.context, 123, {'volume_id': 'fake_volume_id'},
-                    legacy=False)
+            if update_device_name:
+                bdm_update_mock.assert_called_once_with(
+                        self.context, 123,
+                        {'volume_id': 'fake_volume_id',
+                         'device_name': '/dev/vda'},
+                        legacy=False)
+            else:
+                bdm_update_mock.assert_called_once_with(
+                        self.context, 123, {'volume_id': 'fake_volume_id'},
+                        legacy=False)
             if cell_type != 'compute':
                 self.assertFalse(cells_update_mock.called)
             else:
@@ -74,7 +83,8 @@ class _TestBlockDeviceMappingObject(object):
                 self.assertTrue(len(cells_update_mock.call_args[0]) > 1)
                 self.assertIsInstance(cells_update_mock.call_args[0][1],
                                       block_device_obj.BlockDeviceMapping)
-                self.assertEqual(cells_update_mock.call_args[1], {})
+                self.assertEqual(cells_update_mock.call_args[1], {'create':
+                    create})
 
     def test_save_nocells(self):
         self._test_save()
@@ -85,11 +95,14 @@ class _TestBlockDeviceMappingObject(object):
     def test_save_computecell(self):
         self._test_save(cell_type='compute')
 
+    def test_save_computecell_device_name_changed(self):
+        self._test_save(cell_type='compute', update_device_name=True)
+
     def test_save_instance_changed(self):
-        bdm_object = objects.BlockDeviceMapping()
+        bdm_object = objects.BlockDeviceMapping(context=self.context)
         bdm_object.instance = objects.Instance()
         self.assertRaises(exception.ObjectActionError,
-                          bdm_object.save, self.context)
+                          bdm_object.save)
 
     @mock.patch.object(db, 'block_device_mapping_update', return_value=None)
     def test_save_not_found(self, bdm_update):
@@ -136,7 +149,8 @@ class _TestBlockDeviceMappingObject(object):
         get_by_vol_id.assert_called_once_with(self.context, 'fake-volume-id',
                                               ['instance'])
 
-    def _test_create_mocked(self, cell_type=None, update_or_create=False):
+    def _test_create_mocked(self, cell_type=None, update_or_create=False,
+            device_name=None):
         if cell_type:
             self.flags(enable=True, cell_type=cell_type, group='cells')
         else:
@@ -144,9 +158,11 @@ class _TestBlockDeviceMappingObject(object):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
                   'destination_type': 'volume',
                   'instance_uuid': 'fake-instance'}
+        if device_name:
+            values['device_name'] = device_name
         fake_bdm = fake_block_device.FakeDbBlockDeviceDict(values)
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(
                     db, 'block_device_mapping_create', return_value=fake_bdm),
             mock.patch.object(
@@ -172,7 +188,7 @@ class _TestBlockDeviceMappingObject(object):
                 else:
                     bdm_create_mock.assert_called_once_with(
                             self.context, values, legacy=False)
-                if cell_type == 'compute':
+                if cell_type == 'compute' and 'device_name' in values:
                     self.assertEqual(1, cells_update_mock.call_count)
                     self.assertTrue(len(cells_update_mock.call_args[0]) > 1)
                     self.assertEqual(cells_update_mock.call_args[0][0],
@@ -202,6 +218,9 @@ class _TestBlockDeviceMappingObject(object):
     def test_update_or_create_computecell(self):
         self._test_create_mocked(cell_type='compute', update_or_create=True)
 
+    def test_device_name_compute_cell(self):
+        self._test_create_mocked(cell_type='compute', device_name='/dev/xvdb')
+
     def test_create(self):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
                   'destination_type': 'volume',
@@ -222,16 +241,16 @@ class _TestBlockDeviceMappingObject(object):
         bdm.create()
 
         self.assertRaises(exception.ObjectActionError,
-                          bdm.create, self.context)
+                          bdm.create)
 
     def test_create_fails_instance(self):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
                   'destination_type': 'volume',
                   'instance_uuid': 'fake-instance',
                   'instance': objects.Instance()}
-        bdm = objects.BlockDeviceMapping(**values)
+        bdm = objects.BlockDeviceMapping(context=self.context, **values)
         self.assertRaises(exception.ObjectActionError,
-                          bdm.create, self.context)
+                          bdm.create)
 
     def _test_destroy_mocked(self, cell_type=None):
         values = {'source_type': 'volume', 'volume_id': 'fake-vol-id',
@@ -241,7 +260,7 @@ class _TestBlockDeviceMappingObject(object):
             self.flags(enable=True, cell_type=cell_type, group='cells')
         else:
             self.flags(enable=False, group='cells')
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(db, 'block_device_mapping_destroy'),
             mock.patch.object(cells_rpcapi.CellsAPI, 'bdm_destroy_at_top')
         ) as (bdm_del, cells_destroy):
@@ -264,6 +283,26 @@ class _TestBlockDeviceMappingObject(object):
 
     def test_destroy_computecell(self):
         self._test_destroy_mocked(cell_type='compute')
+
+    def test_is_image_true(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         source_type='image')
+        self.assertTrue(bdm.is_image)
+
+    def test_is_image_false(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         source_type='snapshot')
+        self.assertFalse(bdm.is_image)
+
+    def test_is_volume_true(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         destination_type='volume')
+        self.assertTrue(bdm.is_volume)
+
+    def test_is_volume_false(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         destination_type='local')
+        self.assertFalse(bdm.is_volume)
 
 
 class TestBlockDeviceMappingObject(test_objects._LocalTest,

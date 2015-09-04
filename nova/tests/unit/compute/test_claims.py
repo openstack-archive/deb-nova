@@ -27,6 +27,7 @@ from nova import exception
 from nova import objects
 from nova.pci import manager as pci_manager
 from nova import test
+from nova.tests.unit import fake_instance
 from nova.tests.unit.pci import fakes as pci_fakes
 
 
@@ -36,7 +37,7 @@ class FakeResourceHandler(object):
 
     def test_resources(self, usage, limits):
         self.test_called = True
-        self.usage_is_itype = usage.get('name') is 'fakeitype'
+        self.usage_is_itype = usage.get('name') == 'fakeitype'
         return []
 
 
@@ -51,7 +52,7 @@ class DummyTracker(object):
     def abort_instance_claim(self, *args, **kwargs):
         self.icalled = True
 
-    def drop_resize_claim(self, *args, **kwargs):
+    def drop_move_claim(self, *args, **kwargs):
         self.rcalled = True
 
     def new_pci_tracker(self):
@@ -65,6 +66,7 @@ class ClaimTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(ClaimTestCase, self).setUp()
+        self.context = context.RequestContext('fake-user', 'fake-project')
         self.resources = self._fake_resources()
         self.tracker = DummyTracker()
 
@@ -85,7 +87,7 @@ class ClaimTestCase(test.NoDBTestCase):
         with mock.patch.object(
                 db, 'instance_extra_get_by_instance_uuid',
                 return_value=db_numa_topology):
-            return claims.Claim('context', instance, self.tracker,
+            return claims.Claim(self.context, instance, self.tracker,
                                 self.resources, overhead=overhead,
                                 limits=limits)
 
@@ -100,7 +102,7 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_topology': None
         }
         instance.update(**kwargs)
-        return instance
+        return fake_instance.fake_instance_obj(self.context, **instance)
 
     def _fake_instance_type(self, **kwargs):
         instance_type = {
@@ -112,7 +114,7 @@ class ClaimTestCase(test.NoDBTestCase):
             'ephemeral_gb': 2
         }
         instance_type.update(**kwargs)
-        return instance_type
+        return objects.Flavor(**instance_type)
 
     def _fake_resources(self, values=None):
         resources = {
@@ -191,7 +193,8 @@ class ClaimTestCase(test.NoDBTestCase):
                 memory_mb=16384)
 
     @pci_fakes.patch_pci_whitelist
-    def test_pci_pass(self, mock_get):
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance')
+    def test_pci_pass(self, mock_get_by_instance, mock_get):
         dev_dict = {
             'compute_node_id': 1,
             'address': 'a',
@@ -200,16 +203,18 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_node': 0,
             'status': 'available'}
         self.tracker.new_pci_tracker()
-        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        self.tracker.pci_tracker._set_hvdevs([dev_dict])
         claim = self._claim()
         request = objects.InstancePCIRequest(count=1,
             spec=[{'vendor_id': 'v', 'product_id': 'p'}])
-        mock_get.return_value = objects.InstancePCIRequests(
-            requests=[request])
+        requests = objects.InstancePCIRequests(requests=[request])
+        mock_get.return_value = requests
+        mock_get_by_instance.return_value = requests
         self.assertIsNone(claim._test_pci())
 
     @pci_fakes.patch_pci_whitelist
-    def test_pci_fail(self, mock_get):
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance')
+    def test_pci_fail(self, mock_get_by_instance, mock_get):
         dev_dict = {
             'compute_node_id': 1,
             'address': 'a',
@@ -218,12 +223,13 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_node': 1,
             'status': 'available'}
         self.tracker.new_pci_tracker()
-        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        self.tracker.pci_tracker._set_hvdevs([dev_dict])
         claim = self._claim()
         request = objects.InstancePCIRequest(count=1,
             spec=[{'vendor_id': 'v', 'product_id': 'p'}])
-        mock_get.return_value = objects.InstancePCIRequests(
-            requests=[request])
+        requests = objects.InstancePCIRequests(requests=[request])
+        mock_get.return_value = requests
+        mock_get_by_instance.return_value = requests
         claim._test_pci()
 
     @pci_fakes.patch_pci_whitelist
@@ -236,7 +242,7 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_node': 0,
             'status': 'available'}
         self.tracker.new_pci_tracker()
-        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        self.tracker.pci_tracker._set_hvdevs([dev_dict])
         claim = self._claim()
         self.assertIsNone(claim._test_pci())
 
@@ -272,7 +278,8 @@ class ClaimTestCase(test.NoDBTestCase):
                     numa_topology=huge_instance)
 
     @pci_fakes.patch_pci_whitelist
-    def test_numa_topology_with_pci(self, mock_get):
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance')
+    def test_numa_topology_with_pci(self, mock_get_by_instance, mock_get):
         dev_dict = {
             'compute_node_id': 1,
             'address': 'a',
@@ -281,20 +288,22 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_node': 1,
             'status': 'available'}
         self.tracker.new_pci_tracker()
-        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        self.tracker.pci_tracker._set_hvdevs([dev_dict])
         request = objects.InstancePCIRequest(count=1,
             spec=[{'vendor_id': 'v', 'product_id': 'p'}])
-        mock_get.return_value = objects.InstancePCIRequests(
-            requests=[request])
+        requests = objects.InstancePCIRequests(requests=[request])
+        mock_get.return_value = requests
+        mock_get_by_instance.return_value = requests
 
         huge_instance = objects.InstanceNUMATopology(
                 cells=[objects.InstanceNUMACell(
                     id=1, cpuset=set([1, 2]), memory=512)])
 
-        self._claim(numa_topology= huge_instance)
+        self._claim(numa_topology=huge_instance)
 
     @pci_fakes.patch_pci_whitelist
-    def test_numa_topology_with_pci_fail(self, mock_get):
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance')
+    def test_numa_topology_with_pci_fail(self, mock_get_by_instance, mock_get):
         dev_dict = {
             'compute_node_id': 1,
             'address': 'a',
@@ -310,12 +319,13 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_node': 2,
             'status': 'available'}
         self.tracker.new_pci_tracker()
-        self.tracker.pci_tracker.set_hvdevs([dev_dict, dev_dict2])
+        self.tracker.pci_tracker._set_hvdevs([dev_dict, dev_dict2])
 
         request = objects.InstancePCIRequest(count=2,
             spec=[{'vendor_id': 'v', 'product_id': 'p'}])
-        mock_get.return_value = objects.InstancePCIRequests(
-            requests=[request])
+        requests = objects.InstancePCIRequests(requests=[request])
+        mock_get.return_value = requests
+        mock_get_by_instance.return_value = requests
 
         huge_instance = objects.InstanceNUMATopology(
                 cells=[objects.InstanceNUMACell(
@@ -326,7 +336,10 @@ class ClaimTestCase(test.NoDBTestCase):
                           numa_topology=huge_instance)
 
     @pci_fakes.patch_pci_whitelist
-    def test_numa_topology_with_pci_no_numa_info(self, mock_get):
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance')
+    def test_numa_topology_with_pci_no_numa_info(self,
+                                                 mock_get_by_instance,
+                                                 mock_get):
         dev_dict = {
             'compute_node_id': 1,
             'address': 'a',
@@ -335,12 +348,13 @@ class ClaimTestCase(test.NoDBTestCase):
             'numa_node': None,
             'status': 'available'}
         self.tracker.new_pci_tracker()
-        self.tracker.pci_tracker.set_hvdevs([dev_dict])
+        self.tracker.pci_tracker._set_hvdevs([dev_dict])
 
         request = objects.InstancePCIRequest(count=1,
             spec=[{'vendor_id': 'v', 'product_id': 'p'}])
-        mock_get.return_value = objects.InstancePCIRequests(
-            requests=[request])
+        requests = objects.InstancePCIRequests(requests=[request])
+        mock_get.return_value = requests
+        mock_get_by_instance.return_value = requests
 
         huge_instance = objects.InstanceNUMATopology(
                 cells=[objects.InstanceNUMACell(
@@ -363,24 +377,24 @@ class ClaimTestCase(test.NoDBTestCase):
         return claim
 
 
-class ResizeClaimTestCase(ClaimTestCase):
+class MoveClaimTestCase(ClaimTestCase):
 
     def setUp(self):
-        super(ResizeClaimTestCase, self).setUp()
+        super(MoveClaimTestCase, self).setUp()
         self.instance = self._fake_instance()
         self.get_numa_constraint_patch = None
 
     def _claim(self, limits=None, overhead=None, **kwargs):
-        instance_type = self._fake_instance_type(**kwargs)
         numa_constraint = kwargs.pop('numa_topology', None)
+        instance_type = self._fake_instance_type(**kwargs)
         if overhead is None:
             overhead = {'memory_mb': 0}
         with mock.patch(
                 'nova.virt.hardware.numa_get_constraints',
                 return_value=numa_constraint):
-            return claims.ResizeClaim('context', self.instance, instance_type,
-                                      {}, self.tracker, self.resources,
-                                      overhead=overhead, limits=limits)
+            return claims.MoveClaim(self.context, self.instance, instance_type,
+                                     {}, self.tracker, self.resources,
+                                     overhead=overhead, limits=limits)
 
     def _set_pci_request(self, claim):
         request = [{'count': 1,

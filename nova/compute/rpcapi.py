@@ -298,6 +298,9 @@ class ComputeAPI(object):
 
         * 4.0  - Remove 3.x compatibility
         * 4.1  - Make prep_resize() and resize_instance() send Flavor object
+        * 4.2  - Add migration argument to live_migration()
+        * 4.3  - Added get_mks_console method
+        * 4.4  - Make refresh_instance_security_rules send an instance object
     '''
 
     VERSION_ALIASES = {
@@ -490,6 +493,13 @@ class ComputeAPI(object):
         return cctxt.call(ctxt, 'get_rdp_console',
                           instance=instance, console_type=console_type)
 
+    def get_mks_console(self, ctxt, instance, console_type):
+        version = '4.3'
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        return cctxt.call(ctxt, 'get_mks_console',
+                          instance=instance, console_type=console_type)
+
     def get_serial_console(self, ctxt, instance, console_type):
         version = '4.0'
         cctxt = self.client.prepare(server=_compute_host(None, instance),
@@ -531,12 +541,15 @@ class ComputeAPI(object):
         cctxt.cast(ctxt, 'inject_network_info', instance=instance)
 
     def live_migration(self, ctxt, instance, dest, block_migration, host,
-                       migrate_data=None):
-        version = '4.0'
+                       migration, migrate_data=None):
+        args = {'migration': migration}
+        version = '4.2'
+        if not self.client.can_send_version(version):
+            version = '4.0'
         cctxt = self.client.prepare(server=host, version=version)
         cctxt.cast(ctxt, 'live_migration', instance=instance,
                    dest=dest, block_migration=block_migration,
-                   migrate_data=migrate_data)
+                   migrate_data=migrate_data, **args)
 
     def pause_instance(self, ctxt, instance):
         version = '4.0'
@@ -783,7 +796,11 @@ class ComputeAPI(object):
                 version=version)
         cctxt.cast(ctxt, 'suspend_instance', instance=instance)
 
-    def terminate_instance(self, ctxt, instance, bdms, reservations=None):
+    def terminate_instance(self, ctxt, instance, bdms, reservations=None,
+                           delete_type=None):
+        # NOTE(rajesht): The `delete_type` parameter is passed because
+        # the method signature has to match with `terminate_instance()`
+        # method of cells rpcapi.
         version = '4.0'
         cctxt = self.client.prepare(server=_compute_host(None, instance),
                 version=version)
@@ -913,10 +930,11 @@ class ComputeAPI(object):
                    security_group_id=security_group_id)
 
     def refresh_instance_security_rules(self, ctxt, host, instance):
-        version = '4.0'
-        # TODO(danms): This needs to be fixed for objects!
-        instance_p = jsonutils.to_primitive(instance)
+        version = '4.4'
+        if not self.client.can_send_version(version):
+            version = '4.0'
+            instance = objects_base.obj_to_primitive(instance)
         cctxt = self.client.prepare(server=_compute_host(None, instance),
                 version=version)
         cctxt.cast(ctxt, 'refresh_instance_security_rules',
-                   instance=instance_p)
+                   instance=instance)

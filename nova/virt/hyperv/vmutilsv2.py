@@ -28,6 +28,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.virt.hyperv import constants
+from nova.virt.hyperv import hostutils
 from nova.virt.hyperv import vmutils
 
 CONF = cfg.CONF
@@ -59,6 +60,8 @@ class VMUtilsV2(vmutils.VMUtils):
     _ETHERNET_PORT_ALLOCATION_SETTING_DATA_CLASS = \
     'Msvm_EthernetPortAllocationSettingData'
 
+    _VIRT_DISK_CONNECTION_ATTR = "HostResource"
+
     _AUTOMATIC_STARTUP_ACTION_NONE = 2
 
     _vm_power_states_map = {constants.HYPERV_VM_STATE_ENABLED: 2,
@@ -69,6 +72,12 @@ class VMUtilsV2(vmutils.VMUtils):
                             constants.HYPERV_VM_STATE_SUSPENDED: 6}
 
     def __init__(self, host='.'):
+        if sys.platform == 'win32':
+            # A separate WMI class for VM serial ports has been introduced
+            # in Windows 10 / Windows Server 2016
+            if hostutils.HostUtils().check_min_windows_version(10, 0):
+                self._SERIAL_PORT_SETTING_DATA_CLASS = (
+                    "Msvm_SerialPortSettingData")
         super(VMUtilsV2, self).__init__(host)
 
     def _init_hyperv_wmi_conn(self, host):
@@ -321,3 +330,8 @@ class VMUtilsV2(vmutils.VMUtils):
                      if sasd.ResourceSubType == self._DVD_DISK_RES_SUB_TYPE]
 
         return dvd_paths
+
+    def _get_instance_notes(self, vm_name):
+        vm = self._lookup_vm_check(vm_name)
+        vmsettings = self._get_vm_setting_data(vm)
+        return [note for note in vmsettings.Notes if note]

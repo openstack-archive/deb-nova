@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.i18n import _LW
@@ -22,16 +21,6 @@ from nova.scheduler import filters
 from nova.scheduler.filters import utils
 
 LOG = logging.getLogger(__name__)
-
-ram_allocation_ratio_opt = cfg.FloatOpt('ram_allocation_ratio',
-        default=1.5,
-        help='Virtual ram to physical ram allocation ratio which affects '
-             'all ram filters. This configuration specifies a global ratio '
-             'for RamFilter. For AggregateRamFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found.')
-
-CONF = cfg.CONF
-CONF.register_opt(ram_allocation_ratio_opt)
 
 
 class BaseRamFilter(filters.BaseHostFilter):
@@ -45,6 +34,17 @@ class BaseRamFilter(filters.BaseHostFilter):
         requested_ram = instance_type['memory_mb']
         free_ram_mb = host_state.free_ram_mb
         total_usable_ram_mb = host_state.total_usable_ram_mb
+
+        # Do not allow an instance to overcommit against itself, only against
+        # other instances.
+        if not total_usable_ram_mb >= requested_ram:
+            LOG.debug("%(host_state)s does not have %(requested_ram)s MB "
+                      "usable ram before overcommit, it only has "
+                      "%(usable_ram)s MB.",
+                      {'host_state': host_state,
+                       'requested_ram': requested_ram,
+                       'usable_ram': total_usable_ram_mb})
+            return False
 
         ram_allocation_ratio = self._get_ram_allocation_ratio(host_state,
                                                           filter_properties)
@@ -69,7 +69,7 @@ class RamFilter(BaseRamFilter):
     """Ram Filter with over subscription flag."""
 
     def _get_ram_allocation_ratio(self, host_state, filter_properties):
-        return CONF.ram_allocation_ratio
+        return host_state.ram_allocation_ratio
 
 
 class AggregateRamFilter(BaseRamFilter):
@@ -85,9 +85,9 @@ class AggregateRamFilter(BaseRamFilter):
 
         try:
             ratio = utils.validate_num_values(
-                aggregate_vals, CONF.ram_allocation_ratio, cast_to=float)
+                aggregate_vals, host_state.ram_allocation_ratio, cast_to=float)
         except ValueError as e:
             LOG.warning(_LW("Could not decode ram_allocation_ratio: '%s'"), e)
-            ratio = CONF.ram_allocation_ratio
+            ratio = host_state.ram_allocation_ratio
 
         return ratio

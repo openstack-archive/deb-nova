@@ -27,6 +27,7 @@ if sys.platform == 'win32':
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import uuidutils
 import six
 from six.moves import range
 
@@ -79,14 +80,21 @@ class VMUtils(object):
     _RESOURCE_ALLOC_SETTING_DATA_CLASS = 'Msvm_ResourceAllocationSettingData'
     _PROCESSOR_SETTING_DATA_CLASS = 'Msvm_ProcessorSettingData'
     _MEMORY_SETTING_DATA_CLASS = 'Msvm_MemorySettingData'
+    _SERIAL_PORT_SETTING_DATA_CLASS = _RESOURCE_ALLOC_SETTING_DATA_CLASS
     _STORAGE_ALLOC_SETTING_DATA_CLASS = _RESOURCE_ALLOC_SETTING_DATA_CLASS
     _SYNTHETIC_ETHERNET_PORT_SETTING_DATA_CLASS = \
     'Msvm_SyntheticEthernetPortSettingData'
     _AFFECTED_JOB_ELEMENT_CLASS = "Msvm_AffectedJobElement"
+    _COMPUTER_SYSTEM_CLASS = "Msvm_ComputerSystem"
+
+    _VM_ENABLED_STATE_PROP = "EnabledState"
 
     _SHUTDOWN_COMPONENT = "Msvm_ShutdownComponent"
     _VIRTUAL_SYSTEM_CURRENT_SETTINGS = 3
     _AUTOMATIC_STARTUP_ACTION_NONE = 0
+
+    _PHYS_DISK_CONNECTION_ATTR = "HostResource"
+    _VIRT_DISK_CONNECTION_ATTR = "Connection"
 
     _vm_power_states_map = {constants.HYPERV_VM_STATE_ENABLED: 2,
                             constants.HYPERV_VM_STATE_DISABLED: 3,
@@ -689,9 +697,11 @@ class VMUtils(object):
         if is_physical:
             class_name = self._RESOURCE_ALLOC_SETTING_DATA_CLASS
             res_sub_type = self._PHYS_DISK_RES_SUB_TYPE
+            conn_attr = self._PHYS_DISK_CONNECTION_ATTR
         else:
             class_name = self._STORAGE_ALLOC_SETTING_DATA_CLASS
             res_sub_type = self._HARD_DISK_RES_SUB_TYPE
+            conn_attr = self._VIRT_DISK_CONNECTION_ATTR
 
         disk_resources = self._conn.query("SELECT * FROM %(class_name)s "
                                           "WHERE ResourceSubType = "
@@ -700,9 +710,9 @@ class VMUtils(object):
                                            "res_sub_type": res_sub_type})
 
         for disk_resource in disk_resources:
-            if disk_resource.HostResource:
-                if disk_resource.HostResource[0].lower() == disk_path.lower():
-                    return disk_resource
+            conn = getattr(disk_resource, conn_attr, None)
+            if conn and conn[0].lower() == disk_path.lower():
+                return disk_resource
 
     def get_mounted_disk_by_drive_number(self, device_number):
         mounted_disks = self._conn.query("SELECT * FROM Msvm_DiskDrive "
@@ -729,7 +739,8 @@ class VMUtils(object):
 
     def get_free_controller_slot(self, scsi_controller_path):
         attached_disks = self.get_attached_disks(scsi_controller_path)
-        used_slots = [int(disk.AddressOnParent) for disk in attached_disks]
+        used_slots = [int(self._get_disk_resource_address(disk))
+                      for disk in attached_disks]
 
         for slot in range(constants.SCSI_CONTROLLER_SLOTS_NUMBER):
             if slot not in used_slots:
@@ -746,7 +757,7 @@ class VMUtils(object):
         vmsettings = vm.associators(
             wmi_result_class=self._VIRTUAL_SYSTEM_SETTING_DATA_CLASS)
         rasds = vmsettings[0].associators(
-            wmi_result_class=self._RESOURCE_ALLOC_SETTING_DATA_CLASS)
+            wmi_result_class=self._SERIAL_PORT_SETTING_DATA_CLASS)
         serial_port = (
             [r for r in rasds if
              r.ResourceSubType == self._SERIAL_PORT_RES_SUB_TYPE][0])
@@ -766,3 +777,53 @@ class VMUtils(object):
             if v.EnabledState == constants.HYPERV_VM_STATE_ENABLED]
 
         return active_vm_names
+
+    def get_vm_power_state_change_listener(self, timeframe, filtered_states):
+        field = self._VM_ENABLED_STATE_PROP
+        query = self._get_event_wql_query(cls=self._COMPUTER_SYSTEM_CLASS,
+                                          field=field,
+                                          timeframe=timeframe,
+                                          filtered_states=filtered_states)
+        return self._conn.Msvm_ComputerSystem.watch_for(raw_wql=query,
+                                                        fields=[field])
+
+    def _get_event_wql_query(self, cls, field,
+                             timeframe, filtered_states=None):
+        """Return a WQL query used for polling WMI events.
+
+            :param cls: the WMI class polled for events
+            :param field: the field checked
+            :param timeframe: check for events that occurred in
+                              the specified timeframe
+            :param filtered_states: only catch events triggered when a WMI
+                                    object transitioned into one of those
+                                    states.
+        """
+        query = ("SELECT %(field)s, TargetInstance "
+                 "FROM __InstanceModificationEvent "
+                 "WITHIN %(timeframe)s "
+                 "WHERE TargetInstance ISA '%(class)s' "
+                 "AND TargetInstance.%(field)s != "
+                 "PreviousInstance.%(field)s" %
+                    {'class': cls,
+                     'field': field,
+                     'timeframe': timeframe})
+        if filtered_states:
+            checks = ["TargetInstance.%s = '%s'" % (field, state)
+                      for state in filtered_states]
+            query += " AND (%s)" % " OR ".join(checks)
+        return query
+
+    def _get_instance_notes(self, vm_name):
+        vm = self._lookup_vm_check(vm_name)
+        vmsettings = self._get_vm_setting_data(vm)
+        return [note for note in vmsettings.Notes.split('\n') if note]
+
+    def get_instance_uuid(self, vm_name):
+        instance_notes = self._get_instance_notes(vm_name)
+        if instance_notes and uuidutils.is_uuid_like(instance_notes[0]):
+            return instance_notes[0]
+
+    def get_vm_power_state(self, vm_enabled_state):
+        return self._enabled_states_map.get(vm_enabled_state,
+                                            constants.HYPERV_VM_STATE_OTHER)

@@ -34,10 +34,8 @@ def all_things_equal(obj_a, obj_b):
     return True
 
 
-# TODO(berrange): Remove NovaObjectDictCompat
 @base.NovaObjectRegistry.register
-class NUMACell(base.NovaObject,
-               base.NovaObjectDictCompat):
+class NUMACell(base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added pinned_cpus and siblings fields
     # Version 1.2: Added mempages field
@@ -82,12 +80,18 @@ class NUMACell(base.NovaObject,
         return self.memory - self.memory_usage
 
     def pin_cpus(self, cpus):
+        if cpus - self.cpuset:
+            raise exception.CPUPinningUnknown(requested=list(cpus),
+                                              cpuset=list(self.pinned_cpus))
         if self.pinned_cpus & cpus:
             raise exception.CPUPinningInvalid(requested=list(cpus),
                                               pinned=list(self.pinned_cpus))
         self.pinned_cpus |= cpus
 
     def unpin_cpus(self, cpus):
+        if cpus - self.cpuset:
+            raise exception.CPUPinningUnknown(requested=list(cpus),
+                                              cpuset=list(self.pinned_cpus))
         if (self.pinned_cpus & cpus) != cpus:
             raise exception.CPUPinningInvalid(requested=list(cpus),
                                               pinned=list(self.pinned_cpus))
@@ -131,10 +135,8 @@ class NUMACell(base.NovaObject,
         raise exception.MemoryPageSizeNotSupported(pagesize=pagesize)
 
 
-# TODO(berrange): Remove NovaObjectDictCompat
 @base.NovaObjectRegistry.register
-class NUMAPagesTopology(base.NovaObject,
-                        base.NovaObjectDictCompat):
+class NUMAPagesTopology(base.NovaObject):
     # Version 1.0: Initial version
     VERSION = '1.0'
 
@@ -179,10 +181,10 @@ class NUMATopology(base.NovaObject,
     }
 
     @classmethod
-    def obj_from_primitive(cls, primitive):
+    def obj_from_primitive(cls, primitive, context=None):
         if 'nova_object.name' in primitive:
             obj_topology = super(NUMATopology, cls).obj_from_primitive(
-                primitive)
+                primitive, context=context)
         else:
             # NOTE(sahid): This compatibility code needs to stay until we can
             # guarantee that there are no cases of the old format stored in

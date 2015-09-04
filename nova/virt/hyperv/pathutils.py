@@ -16,6 +16,7 @@
 import os
 import shutil
 import sys
+import time
 
 if sys.platform == 'win32':
     import wmi
@@ -45,11 +46,29 @@ CONF.register_opts(hyperv_opts, 'hyperv')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 
 ERROR_INVALID_NAME = 123
+ERROR_DIR_IS_NOT_EMPTY = 145
 
 
 class PathUtils(object):
     def __init__(self):
-        self._smb_conn = wmi.WMI(moniker=r"root\Microsoft\Windows\SMB")
+        self._set_smb_conn()
+
+    @property
+    def _smb_conn(self):
+        if self._smb_conn_attr:
+            return self._smb_conn_attr
+        raise vmutils.HyperVException(_("The SMB WMI namespace is not "
+                                        "available on this OS version."))
+
+    def _set_smb_conn(self):
+        # The following namespace is not available prior to Windows
+        # Server 2012. utilsfactory is not used in order to avoid a
+        # circular dependency.
+        try:
+            self._smb_conn_attr = wmi.WMI(
+                moniker=r"root\Microsoft\Windows\SMB")
+        except wmi.x_wmi:
+            self._smb_conn_attr = None
 
     def open(self, path, mode):
         """Wrapper on __builtin__.open used to simplify unit testing."""
@@ -99,7 +118,17 @@ class PathUtils(object):
                 self.rename(src, os.path.join(dest_dir, fname))
 
     def rmtree(self, path):
-        shutil.rmtree(path)
+        # This will be removed once support for Windows Server 2008R2 is
+        # stopped
+        for i in range(5):
+            try:
+                shutil.rmtree(path)
+                return
+            except WindowsError as e:
+                if e.winerror == ERROR_DIR_IS_NOT_EMPTY:
+                    time.sleep(1)
+                else:
+                    raise e
 
     def get_instances_dir(self, remote_server=None):
         local_instance_path = os.path.normpath(CONF.instances_path)
@@ -232,8 +261,8 @@ class PathUtils(object):
         except wmi.x_wmi as exc:
             err_msg = (_(
                 'Unable to mount SMBFS share: %(smbfs_share)s '
-                'WMI exception: %(wmi_exc)s'), {'smbfs_share': smbfs_share,
-                                                'wmi_exc': exc})
+                'WMI exception: %(wmi_exc)s') % {'smbfs_share': smbfs_share,
+                                                 'wmi_exc': exc})
             raise vmutils.HyperVException(err_msg)
 
     def unmount_smb_share(self, smbfs_share, force=False):
@@ -256,4 +285,4 @@ class PathUtils(object):
                 # case.
                 if force:
                     raise vmutils.HyperVException(
-                        _("Could not unmount share: %s"), smbfs_share)
+                        _("Could not unmount share: %s") % smbfs_share)

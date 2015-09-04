@@ -21,11 +21,21 @@ from nova import utils
 from nova.virt import hardware
 
 
+NULLABLE_STRING_FIELDS = ['name', 'checksum', 'owner',
+                          'container_format', 'disk_format']
+NULLABLE_INTEGER_FIELDS = ['size', 'virtual_size']
+
+
 @base.NovaObjectRegistry.register
 class ImageMeta(base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: updated ImageMetaProps
-    VERSION = '1.1'
+    # Version 1.2: ImageMetaProps version 1.2
+    # Version 1.3: ImageMetaProps version 1.3
+    # Version 1.4: ImageMetaProps version 1.4
+    # Version 1.5: ImageMetaProps version 1.5
+    # Version 1.6: ImageMetaProps version 1.6
+    VERSION = '1.6'
 
     # These are driven by what the image client API returns
     # to Nova from Glance. This is defined in the glance
@@ -34,7 +44,10 @@ class ImageMeta(base.NovaObject):
     # self, file, schema - Nova does not appear to ever use
     # these field; locations - modelling the arbitrary
     # data in the 'metadata' subfield is non-trivial as
-    # there's no clear spec
+    # there's no clear spec.
+    #
+    # TODO(ft): In version 2.0, these fields should be nullable:
+    # name, checksum, owner, size, virtual_size, container_format, disk_format
     #
     fields = {
         'id': fields.UUIDField(),
@@ -59,7 +72,13 @@ class ImageMeta(base.NovaObject):
 
     obj_relationships = {
         'properties': [('1.0', '1.0'),
-                       ('1.1', '1.1')],
+                       ('1.1', '1.1'),
+                       ('1.2', '1.2'),
+                       ('1.3', '1.3'),
+                       ('1.4', '1.4'),
+                       ('1.5', '1.5'),
+                       ('1.6', '1.6'),
+                       ],
     }
 
     @classmethod
@@ -83,6 +102,18 @@ class ImageMeta(base.NovaObject):
             objects.ImageMetaProps.from_dict(
                 image_meta.get("properties", {}))
 
+        # Some fields are nullable in Glance DB schema, but was not marked that
+        # in ImageMeta initially by mistake. To keep compatibility with compute
+        # nodes which are run with previous versions these fields are still
+        # not nullable in ImageMeta, but the code below converts None to
+        # approppriate empty values.
+        for fld in NULLABLE_STRING_FIELDS:
+            if fld in image_meta and image_meta[fld] is None:
+                image_meta[fld] = ''
+        for fld in NULLABLE_INTEGER_FIELDS:
+            if fld in image_meta and image_meta[fld] is None:
+                image_meta[fld] = 0
+
         return cls(**image_meta)
 
     @classmethod
@@ -92,7 +123,7 @@ class ImageMeta(base.NovaObject):
         :param instance: Instance object
 
         Creates a new object instance, initializing from the
-        system metadata "image_" properties associated with
+        system metadata "image_*" properties associated with
         instance
 
         :returns: an ImageMeta instance
@@ -106,6 +137,11 @@ class ImageMeta(base.NovaObject):
 class ImageMetaProps(base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: added os_require_quiesce field
+    # Version 1.2: added img_hv_type and img_hv_requested_version fields
+    # Version 1.3: HVSpec version 1.1
+    # Version 1.4: added hw_vif_multiqueue_enabled field
+    # Version 1.5: added os_admin_user field
+    # Version 1.6: Added 'lxc' and 'uml' enum types to DiskBusField
     VERSION = ImageMeta.VERSION
 
     # Maximum number of NUMA nodes permitted for the guest topology
@@ -216,6 +252,9 @@ class ImageMetaProps(base.NovaObject):
         # none
         'hw_watchdog_action': fields.WatchdogActionField(),
 
+        # boolean - If true, this will enable the virtio-multiqueue feature
+        'hw_vif_multiqueue_enabled': fields.FlexibleBooleanField(),
+
         # if true download using bittorrent
         'img_bittorrent': fields.FlexibleBooleanField(),
 
@@ -242,6 +281,12 @@ class ImageMetaProps(base.NovaObject):
         # Compression level for images. (1-9)
         'img_compression_level': fields.IntegerField(),
 
+        # hypervisor supported version, eg. '>=2.6'
+        'img_hv_requested_version': fields.VersionPredicateField(),
+
+        # type of the hypervisor, eg kvm, ironic, xen
+        'img_hv_type': fields.HVTypeField(),
+
         # boolean flag to set space-saving or performance behavior on the
         # Datastore
         'img_linked_clone': fields.FlexibleBooleanField(),
@@ -265,6 +310,9 @@ class ImageMetaProps(base.NovaObject):
 
         # integer value 1
         'img_version': fields.IntegerField(),
+
+        # string of username with admin privileges
+        'os_admin_user': fields.StringField(),
 
         # string of boot time command line arguments for the guest kernel
         'os_command_line': fields.StringField(),
@@ -318,6 +366,7 @@ class ImageMetaProps(base.NovaObject):
         'block_device_mapping': 'img_block_device_mapping',
         'bdm_v2': 'img_bdm_v2',
         'root_device_name': 'img_root_device_name',
+        'hypervisor_version_requires': 'img_hv_requested_version',
     }
 
     # TODO(berrange): Need to run this from a data migration

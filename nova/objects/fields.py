@@ -13,6 +13,7 @@
 #    under the License.
 
 from collections import OrderedDict
+from distutils import versionpredicate
 
 import netaddr
 from oslo_utils import strutils
@@ -54,6 +55,8 @@ SetOfIntegersField = fields.SetOfIntegersField
 ListOfSetsOfIntegersField = fields.ListOfSetsOfIntegersField
 ListOfDictOfNullableStringsField = fields.ListOfDictOfNullableStringsField
 DictProxyField = fields.DictProxyField
+ObjectField = fields.ObjectField
+ListOfObjectsField = fields.ListOfObjectsField
 
 
 # NOTE(danms): These are things we need to import for some of our
@@ -66,6 +69,7 @@ FieldType = fields.FieldType
 Set = fields.Set
 Dict = fields.Dict
 List = fields.List
+Object = fields.Object
 
 
 class Architecture(Enum):
@@ -82,6 +86,50 @@ class Architecture(Enum):
             msg = _("Architecture name '%s' is not valid") % value
             raise ValueError(msg)
         return super(Architecture, self).coerce(obj, attr, value)
+
+
+class BlockDeviceDestinationType(Enum):
+    """Represents possible destination_type values for a BlockDeviceMapping."""
+
+    LOCAL = 'local'
+    VOLUME = 'volume'
+
+    ALL = (LOCAL, VOLUME)
+
+    def __init__(self):
+        super(BlockDeviceDestinationType, self).__init__(
+            valid_values=BlockDeviceDestinationType.ALL)
+
+
+class BlockDeviceSourceType(Enum):
+    """Represents the possible source_type values for a BlockDeviceMapping."""
+
+    BLANK = 'blank'
+    IMAGE = 'image'
+    SNAPSHOT = 'snapshot'
+    VOLUME = 'volume'
+
+    ALL = (BLANK, IMAGE, SNAPSHOT, VOLUME)
+
+    def __init__(self):
+        super(BlockDeviceSourceType, self).__init__(
+            valid_values=BlockDeviceSourceType.ALL)
+
+
+class BlockDeviceType(Enum):
+    """Represents possible device_type values for a BlockDeviceMapping."""
+
+    CDROM = 'cdrom'
+    DISK = 'disk'
+    FLOPPY = 'floppy'
+    FS = 'fs'
+    LUN = 'lun'
+
+    ALL = (CDROM, DISK, FLOPPY, FS, LUN)
+
+    def __init__(self):
+        super(BlockDeviceType, self).__init__(
+            valid_values=BlockDeviceType.ALL)
 
 
 class CPUAllocationPolicy(Enum):
@@ -129,8 +177,10 @@ class DiskBus(Enum):
     USB = "usb"
     VIRTIO = "virtio"
     XEN = "xen"
+    LXC = "lxc"
+    UML = "uml"
 
-    ALL = (FDC, IDE, SATA, SCSI, USB, VIRTIO, XEN)
+    ALL = (FDC, IDE, SATA, SCSI, USB, VIRTIO, XEN, LXC, UML)
 
     def __init__(self):
         super(DiskBus, self).__init__(
@@ -287,6 +337,84 @@ class WatchdogAction(Enum):
             valid_values=WatchdogAction.ALL)
 
 
+class MonitorMetricType(Enum):
+
+    CPU_FREQUENCY = "cpu.frequency"
+    CPU_USER_TIME = "cpu.user.time"
+    CPU_KERNEL_TIME = "cpu.kernel.time"
+    CPU_IDLE_TIME = "cpu.idle.time"
+    CPU_IOWAIT_TIME = "cpu.iowait.time"
+    CPU_USER_PERCENT = "cpu.user.percent"
+    CPU_KERNEL_PERCENT = "cpu.kernel.percent"
+    CPU_IDLE_PERCENT = "cpu.idle.percent"
+    CPU_IOWAIT_PERCENT = "cpu.iowait.percent"
+    CPU_PERCENT = "cpu.percent"
+    NUMA_MEM_BW_MAX = "numa.membw.max"
+    NUMA_MEM_BW_CURRENT = "numa.membw.current"
+
+    ALL = (
+        CPU_FREQUENCY,
+        CPU_USER_TIME,
+        CPU_KERNEL_TIME,
+        CPU_IDLE_TIME,
+        CPU_IOWAIT_TIME,
+        CPU_USER_PERCENT,
+        CPU_KERNEL_PERCENT,
+        CPU_IDLE_PERCENT,
+        CPU_IOWAIT_PERCENT,
+        CPU_PERCENT,
+        NUMA_MEM_BW_MAX,
+        NUMA_MEM_BW_CURRENT,
+    )
+
+    def __init__(self):
+        super(MonitorMetricType, self).__init__(
+            valid_values=MonitorMetricType.ALL)
+
+
+# NOTE(sbauza): Remove this on next release of oslo.versionedobjects
+class VersionPredicate(fields.String):
+    @staticmethod
+    def coerce(obj, attr, value):
+        try:
+            versionpredicate.VersionPredicate('check (%s)' % value)
+        except ValueError:
+            raise ValueError(_('Version %(val)s is not a valid predicate in '
+                               'field %(attr)s') %
+                             {'val': value, 'attr': attr})
+        return value
+
+
+class PciDeviceStatus(Enum):
+
+    AVAILABLE = "available"
+    CLAIMED = "claimed"
+    ALLOCATED = "allocated"
+    REMOVED = "removed"  # The device has been hot-removed and not yet deleted
+    DELETED = "deleted"  # The device is marked not available/deleted.
+
+    ALL = (AVAILABLE, CLAIMED, ALLOCATED, REMOVED, DELETED)
+
+    def __init__(self):
+        super(PciDeviceStatus, self).__init__(
+            valid_values=PciDeviceStatus.ALL)
+
+
+class PciDeviceType(Enum):
+
+    # NOTE(jaypipes): It's silly that the word "type-" is in these constants,
+    # but alas, these were the original constant strings used...
+    STANDARD = "type-PCI"
+    SRIOV_PF = "type-PF"
+    SRIOV_VF = "type-VF"
+
+    ALL = (STANDARD, SRIOV_PF, SRIOV_VF)
+
+    def __init__(self):
+        super(PciDeviceType, self).__init__(
+            valid_values=PciDeviceType.ALL)
+
+
 # NOTE(danms): Remove this on next release of oslo.versionedobjects
 class FlexibleBoolean(fields.Boolean):
     @staticmethod
@@ -370,54 +498,6 @@ class IPV6Network(IPNetwork):
             raise ValueError(six.text_type(e))
 
 
-# FIXME(danms): Remove this after we convert to oslo.versionedobjects' registry
-class Object(FieldType):
-    def __init__(self, obj_name, **kwargs):
-        self._obj_name = obj_name
-        super(Object, self).__init__(**kwargs)
-
-    def coerce(self, obj, attr, value):
-        try:
-            obj_name = value.obj_name()
-        except AttributeError:
-            obj_name = ""
-
-        if obj_name != self._obj_name:
-            raise ValueError(_('An object of type %(type)s is required '
-                               'in field %(attr)s') %
-                             {'type': self._obj_name, 'attr': attr})
-        return value
-
-    @staticmethod
-    def to_primitive(obj, attr, value):
-        return value.obj_to_primitive()
-
-    @staticmethod
-    def from_primitive(obj, attr, value):
-        # FIXME(danms): Avoid circular import from base.py
-        from nova.objects import base as obj_base
-        # NOTE (ndipanov): If they already got hydrated by the serializer, just
-        # pass them back unchanged
-        if isinstance(value, obj_base.NovaObject):
-            return value
-        return obj_base.NovaObject.obj_from_primitive(value, obj._context)
-
-    def describe(self):
-        return "Object<%s>" % self._obj_name
-
-    def stringify(self, value):
-        if 'uuid' in value.fields:
-            ident = '(%s)' % (value.obj_attr_is_set('uuid') and value.uuid or
-                              'UNKNOWN')
-        elif 'id' in value.fields:
-            ident = '(%s)' % (value.obj_attr_is_set('id') and value.id or
-                              'UNKNOWN')
-        else:
-            ident = ''
-
-        return '%s%s' % (self._obj_name, ident)
-
-
 class NetworkModel(FieldType):
     @staticmethod
     def coerce(obj, attr, value):
@@ -441,6 +521,24 @@ class NetworkModel(FieldType):
     def stringify(self, value):
         return 'NetworkModel(%s)' % (
             ','.join([str(vif['id']) for vif in value]))
+
+
+class NonNegativeFloat(FieldType):
+    @staticmethod
+    def coerce(obj, attr, value):
+        v = float(value)
+        if v < 0:
+            raise ValueError(_('Value must be >= 0 for field %s') % attr)
+        return v
+
+
+class NonNegativeInteger(FieldType):
+    @staticmethod
+    def coerce(obj, attr, value):
+        v = int(value)
+        if v < 0:
+            raise ValueError(_('Value must be >= 0 for field %s') % attr)
+        return v
 
 
 class AutoTypedField(fields.Field):
@@ -484,6 +582,18 @@ class BaseEnumField(AutoTypedField):
 
 class ArchitectureField(BaseEnumField):
     AUTO_TYPE = Architecture()
+
+
+class BlockDeviceDestinationTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceDestinationType()
+
+
+class BlockDeviceSourceTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceSourceType()
+
+
+class BlockDeviceTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceType()
 
 
 class CPUAllocationPolicyField(BaseEnumField):
@@ -538,6 +648,23 @@ class WatchdogActionField(BaseEnumField):
     AUTO_TYPE = WatchdogAction()
 
 
+class MonitorMetricTypeField(BaseEnumField):
+    AUTO_TYPE = MonitorMetricType()
+
+
+# FIXME(sbauza): Remove this after oslo.versionedobjects gets it
+class VersionPredicateField(AutoTypedField):
+    AUTO_TYPE = VersionPredicate()
+
+
+class PciDeviceStatusField(BaseEnumField):
+    AUTO_TYPE = PciDeviceStatus()
+
+
+class PciDeviceTypeField(BaseEnumField):
+    AUTO_TYPE = PciDeviceType()
+
+
 # FIXME(danms): Remove this after oslo.versionedobjects gets it
 # This is a flexible interpretation of boolean
 # values using common user friendly semantics for
@@ -580,15 +707,14 @@ class ListOfIntegersField(AutoTypedField):
     AUTO_TYPE = List(fields.Integer())
 
 
-# FIXME(danms): Remove this after we convert to oslo.versionedobjects' registry
-class ObjectField(AutoTypedField):
-    def __init__(self, objtype, **kwargs):
-        self.AUTO_TYPE = Object(objtype)
-        super(ObjectField, self).__init__(**kwargs)
+# FIXME(sbauza): Remove this after oslo.versionedobjects releases it
+class DictOfListOfStringsField(AutoTypedField):
+    AUTO_TYPE = Dict(List(fields.String()))
 
 
-# FIXME(danms): Remove this after we convert to oslo.versionedobjects' registry
-class ListOfObjectsField(AutoTypedField):
-    def __init__(self, objtype, **kwargs):
-        self.AUTO_TYPE = List(Object(objtype))
-        super(ListOfObjectsField, self).__init__(**kwargs)
+class NonNegativeFloatField(AutoTypedField):
+    AUTO_TYPE = NonNegativeFloat()
+
+
+class NonNegativeIntegerField(AutoTypedField):
+    AUTO_TYPE = NonNegativeInteger()

@@ -189,6 +189,10 @@ class PolicyNotAuthorized(Forbidden):
     msg_fmt = _("Policy doesn't allow %(action)s to be performed.")
 
 
+class VolumeLimitExceeded(Forbidden):
+    msg_fmt = _("Volume resource quota exceeded")
+
+
 class ImageNotActive(NovaException):
     # NOTE(jruzicka): IncorrectState is used for volumes only in EC2,
     # but it still seems like the most appropriate option.
@@ -277,6 +281,11 @@ class VolumeNotCreated(NovaException):
     msg_fmt = _("Volume %(volume_id)s did not finish being created"
                 " even after we waited %(seconds)s seconds or %(attempts)s"
                 " attempts. And its status is %(volume_status)s.")
+
+
+class VolumeEncryptionNotSupported(Invalid):
+    msg_fmt = _("Volume encryption is not supported for %(volume_type)s "
+                "volume %(volume_id)s")
 
 
 class InvalidKeypair(Invalid):
@@ -746,6 +755,13 @@ class VifDetailsMissingVhostuserSockPath(Invalid):
                 " for vif %(vif_id)s")
 
 
+class VifDetailsMissingMacvtapParameters(Invalid):
+    msg_fmt = _("Parameters %(missing_params)s not present in"
+                " vif_details for vif %(vif_id)s. Check your Neutron"
+                " configuration to validate that the macvtap parameters are"
+                " correct.")
+
+
 class DatastoreNotFound(NotFound):
     msg_fmt = _("Could not find the datastore reference(s) which the VM uses.")
 
@@ -882,6 +898,11 @@ class FloatingIpAllocateFailed(NovaException):
 
 class FloatingIpAssociateFailed(NovaException):
     msg_fmt = _("Floating IP %(address)s association has failed.")
+
+
+class FloatingIpBadRequest(Invalid):
+    ec2_code = "UnsupportedOperation"
+    msg_fmt = _("The floating IP request failed with a BadRequest")
 
 
 class CannotDisassociateAutoAssignedFloatingIP(NovaException):
@@ -1239,7 +1260,24 @@ class FlavorMemoryTooSmall(NovaException):
 
 
 class FlavorDiskTooSmall(NovaException):
-    msg_fmt = _("Flavor's disk is too small for requested image.")
+    msg_fmt = _("The created instance's disk would be too small.")
+
+
+class FlavorDiskSmallerThanImage(FlavorDiskTooSmall):
+    msg_fmt = _("Flavor's disk is too small for requested image. Flavor disk "
+                "is %(flavor_size)i bytes, image is %(image_size)i bytes.")
+
+
+class FlavorDiskSmallerThanMinDisk(FlavorDiskTooSmall):
+    msg_fmt = _("Flavor's disk is smaller than the minimum size specified in "
+                "image metadata. Flavor disk is %(flavor_size)i bytes, "
+                "minimum size is %(image_min_disk)i bytes.")
+
+
+class VolumeSmallerThanMinDisk(FlavorDiskTooSmall):
+    msg_fmt = _("Volume is smaller than the minimum size specified in image "
+                "metadata. Volume size is %(volume_size)i bytes, minimum "
+                "size is %(image_min_disk)i bytes.")
 
 
 class InsufficientFreeMemory(NovaException):
@@ -1248,6 +1286,10 @@ class InsufficientFreeMemory(NovaException):
 
 class NoValidHost(NovaException):
     msg_fmt = _("No valid host was found. %(reason)s")
+
+
+class MaxRetriesExceeded(NoValidHost):
+    msg_fmt = _("Exceeded maximum number of retries. %(reason)s")
 
 
 class QuotaError(NovaException):
@@ -1398,13 +1440,8 @@ class ConfigDriveMountFailed(NovaException):
 
 
 class ConfigDriveUnknownFormat(NovaException):
-    msg_fmt = _("Unknown config drive format %(format)s for %(os_type)s "
-                "os type. Valid options are: iso9660, vfat or None.")
-
-
-class ConfigDriveUnsupportedFormat(NovaException):
-    msg_fmt = _("Unsupported config drive format %(format)s "
-                "for %(image_type)s image type. Image path: %(image_path)")
+    msg_fmt = _("Unknown config drive format %(format)s. Select one of "
+                "iso9660 or vfat.")
 
 
 class InterfaceAttachFailed(Invalid):
@@ -1427,9 +1464,18 @@ class InstanceUserDataMalformed(NovaException):
     msg_fmt = _("User data needs to be valid base 64.")
 
 
-class UnexpectedTaskStateError(NovaException):
-    msg_fmt = _("Unexpected task state: expecting %(expected)s but "
-                "the actual state is %(actual)s")
+class InstanceUpdateConflict(NovaException):
+    msg_fmt = _("Conflict updating instance %(instance_uuid)s. "
+                "Expected: %(expected)s. Actual: %(actual)s")
+
+
+class UnknownInstanceUpdateConflict(InstanceUpdateConflict):
+    msg_fmt = _("Conflict updating instance %(instance_uuid)s, but we were "
+                "unable to determine the cause")
+
+
+class UnexpectedTaskStateError(InstanceUpdateConflict):
+    pass
 
 
 class UnexpectedDeletingTaskStateError(UnexpectedTaskStateError):
@@ -1443,11 +1489,6 @@ class InstanceActionNotFound(NovaException):
 
 class InstanceActionEventNotFound(NovaException):
     msg_fmt = _("Event %(event)s not found for action id %(action_id)s")
-
-
-class UnexpectedVMStateError(NovaException):
-    msg_fmt = _("Unexpected VM state: expecting %(expected)s but "
-                "the actual state is %(actual)s")
 
 
 class CryptoCAFileNotFound(FileNotFound):
@@ -1506,25 +1547,16 @@ class InstanceFaultRollback(NovaException):
         super(InstanceFaultRollback, self).__init__(message % inner_exception)
 
 
-class UnsupportedObjectError(NovaException):
-    msg_fmt = _('Unsupported object type %(objtype)s')
+class InstanceUpdateConflict(NovaException):
+    msg_fmt = _('Conflict updating instance %(instance_uuid)s')
 
 
 class OrphanedObjectError(NovaException):
     msg_fmt = _('Cannot call %(method)s on orphaned %(objtype)s object')
 
 
-class IncompatibleObjectVersion(NovaException):
-    msg_fmt = _('Version %(objver)s of %(objname)s is not supported. The '
-                'maximum supported version is: %(supported)s')
-
-
 class ObjectActionError(NovaException):
     msg_fmt = _('Object action %(action)s failed because: %(reason)s')
-
-
-class ObjectFieldInvalid(NovaException):
-    msg_fmt = _('Field %(field)s of %(objname)s is not an instance of Field')
 
 
 class CoreAPIMissing(NovaException):
@@ -1559,6 +1591,10 @@ class InstanceGroupMemberNotFound(NotFound):
 
 class InstanceGroupPolicyNotFound(NotFound):
     msg_fmt = _("Instance group %(group_uuid)s has no policy %(policy)s.")
+
+
+class InstanceGroupSaveException(NovaException):
+    msg_fmt = _("%(field)s should not be part of the updates.")
 
 
 class PluginRetriesExceeded(NovaException):
@@ -1771,6 +1807,11 @@ class NumaTopologyNotFound(NotFound):
     msg_fmt = _("Instance %(instance_uuid)s does not specify a NUMA topology")
 
 
+class MigrationContextNotFound(NotFound):
+    msg_fmt = _("Instance %(instance_uuid)s does not specify a migration "
+                "context.")
+
+
 class SocketPortRangeExhaustedException(NovaException):
     msg_fmt = _("Not able to acquire a free port for %(host)s")
 
@@ -1811,8 +1852,15 @@ class InvalidConnectionInfo(Invalid):
 
 
 class InstanceQuiesceNotSupported(Invalid):
-    msg_fmt = _('Quiescing is not supported in instance %(instance_id)s: '
-                '%(reason)s')
+    msg_fmt = _('Quiescing is not supported in instance %(instance_id)s')
+
+
+class QemuGuestAgentNotEnabled(Invalid):
+    msg_fmt = _('QEMU guest agent is not enabled')
+
+
+class SetAdminPasswdNotSupported(Invalid):
+    msg_fmt = _('Set admin password is not supported')
 
 
 class MemoryPageSizeInvalid(Invalid):
@@ -1835,6 +1883,11 @@ class CPUPinningNotSupported(Invalid):
 class CPUPinningInvalid(Invalid):
     msg_fmt = _("Cannot pin/unpin cpus %(requested)s from the following "
                 "pinned set %(pinned)s")
+
+
+class CPUPinningUnknown(Invalid):
+    msg_fmt = _("CPU set to pin/unpin %(requested)s must be a subset of "
+                "known CPU set %(cpuset)s")
 
 
 class ImageCPUPinningForbidden(Forbidden):
@@ -1876,3 +1929,7 @@ class UnsupportedImageModel(Invalid):
 
 class DatabaseMigrationError(NovaException):
     msg_fmt = _("Database migration failed: %(reason)s")
+
+
+class HostMappingNotFound(Invalid):
+    msg_fmt = _("Host '%(name)s' is not mapped to any cell")

@@ -42,19 +42,27 @@ from nova import wsgi as base_wsgi
 
 api_opts = [
         cfg.BoolOpt('enabled',
-                    default=False,
-                    help='Whether the V3 API is enabled or not'),
+                    default=True,
+                    help='DEPRECATED: Whether the V2.1 API is enabled or not. '
+                    'This option will be removed in the near future.',
+                    deprecated_for_removal=True, deprecated_group='osapi_v21'),
         cfg.ListOpt('extensions_blacklist',
                     default=[],
-                    help='A list of v3 API extensions to never load. '
-                    'Specify the extension aliases here.'),
+                    help='DEPRECATED: A list of v2.1 API extensions to never '
+                    'load. Specify the extension aliases here. '
+                    'This option will be removed in the near future. '
+                    'After that point you have to run all of the API.',
+                    deprecated_for_removal=True, deprecated_group='osapi_v21'),
         cfg.ListOpt('extensions_whitelist',
                     default=[],
-                    help='If the list is not empty then a v3 API extension '
-                    'will only be loaded if it exists in this list. Specify '
-                    'the extension aliases here.')
+                    help='DEPRECATED: If the list is not empty then a v2.1 '
+                    'API extension will only be loaded if it exists in this '
+                    'list. Specify the extension aliases here. '
+                    'This option will be removed in the near future. '
+                    'After that point you have to run all of the API.',
+                    deprecated_for_removal=True, deprecated_group='osapi_v21')
 ]
-api_opts_group = cfg.OptGroup(name='osapi_v3', title='API v3 Options')
+api_opts_group = cfg.OptGroup(name='osapi_v21', title='API v2.1 Options')
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -126,6 +134,47 @@ class FaultWrapper(base_wsgi.Middleware):
             return req.get_response(self.application)
         except Exception as ex:
             return self._error(ex, req)
+
+
+class LegacyV2CompatibleWrapper(base_wsgi.Middleware):
+
+    def _filter_request_headers(self, req):
+        """For keeping same behavior with v2 API, ignores microversions
+        HTTP header X-OpenStack-Nova-API-Version in the request.
+        """
+
+        if wsgi.API_VERSION_REQUEST_HEADER in req.headers:
+            del req.headers[wsgi.API_VERSION_REQUEST_HEADER]
+        return req
+
+    def _filter_response_headers(self, response):
+        """For keeping same behavior with v2 API, filter out microversions
+        HTTP header and microversions field in header 'Vary'.
+        """
+
+        if wsgi.API_VERSION_REQUEST_HEADER in response.headers:
+            del response.headers[wsgi.API_VERSION_REQUEST_HEADER]
+
+        if 'Vary' in response.headers:
+            vary_headers = response.headers['Vary'].split(',')
+            filtered_vary = []
+            for vary in vary_headers:
+                vary = vary.strip()
+                if vary == wsgi.API_VERSION_REQUEST_HEADER:
+                    continue
+                filtered_vary.append(vary)
+            if filtered_vary:
+                response.headers['Vary'] = ','.join(filtered_vary)
+            else:
+                del response.headers['Vary']
+        return response
+
+    @webob.dec.wsgify(RequestClass=wsgi.Request)
+    def __call__(self, req):
+        req.set_legacy_v2()
+        req = self._filter_request_headers(req)
+        response = req.get_response(self.application)
+        return self._filter_response_headers(response)
 
 
 class APIMapper(routes.Mapper):
@@ -276,31 +325,40 @@ class APIRouterV21(base_wsgi.Router):
         def _check_load_extension(ext):
             if (self.init_only is None or ext.obj.alias in
                 self.init_only) and isinstance(ext.obj,
-                                               extensions.V3APIExtensionBase):
+                                               extensions.V21APIExtensionBase):
 
                 # Check whitelist is either empty or if not then the extension
                 # is in the whitelist
-                if (not CONF.osapi_v3.extensions_whitelist or
-                        ext.obj.alias in CONF.osapi_v3.extensions_whitelist):
+                if (not CONF.osapi_v21.extensions_whitelist or
+                        ext.obj.alias in CONF.osapi_v21.extensions_whitelist):
 
                     # Check the extension is not in the blacklist
-                    if ext.obj.alias not in CONF.osapi_v3.extensions_blacklist:
+                    blacklist = CONF.osapi_v21.extensions_blacklist
+                    if ext.obj.alias not in blacklist:
                         return self._register_extension(ext)
             return False
 
-        if not CONF.osapi_v3.enabled:
+        if not CONF.osapi_v21.enabled:
             LOG.info(_LI("V3 API has been disabled by configuration"))
+            LOG.warning(_LW("In the M release you must run the v2.1 API."))
             return
+
+        if (CONF.osapi_v21.extensions_blacklist or
+                CONF.osapi_v21.extensions_whitelist):
+            LOG.warning(
+                _LW('In the M release you must run all of the API. '
+                'The concept of API extensions will be removed from '
+                'the codebase to ensure there is a single Compute API.'))
 
         self.init_only = init_only
         LOG.debug("v3 API Extension Blacklist: %s",
-                  CONF.osapi_v3.extensions_blacklist)
+                  CONF.osapi_v21.extensions_blacklist)
         LOG.debug("v3 API Extension Whitelist: %s",
-                  CONF.osapi_v3.extensions_whitelist)
+                  CONF.osapi_v21.extensions_whitelist)
 
         in_blacklist_and_whitelist = set(
-            CONF.osapi_v3.extensions_whitelist).intersection(
-                CONF.osapi_v3.extensions_blacklist)
+            CONF.osapi_v21.extensions_whitelist).intersection(
+                CONF.osapi_v21.extensions_blacklist)
         if len(in_blacklist_and_whitelist) != 0:
             LOG.warning(_LW("Extensions in both blacklist and whitelist: %s"),
                         list(in_blacklist_and_whitelist))

@@ -105,6 +105,7 @@ class CachingSchedulerTestCase(test_scheduler.SchedulerTestCase):
             "root_gb": 1,
             "ephemeral_gb": 1,
             "vcpus": 1,
+            "swap": 0,
         }
         instance_properties = {
             "os_type": "linux",
@@ -127,11 +128,15 @@ class CachingSchedulerTestCase(test_scheduler.SchedulerTestCase):
             'host_%s' % index,
             'node_%s' % index)
         host_state.free_ram_mb = 50000
+        host_state.total_usable_ram_mb = 50000
+        host_state.free_disk_mb = 4096
         host_state.service = {
             "disabled": False,
             "updated_at": timeutils.utcnow(),
             "created_at": timeutils.utcnow(),
         }
+        host_state.cpu_allocation_ratio = 16.0
+        host_state.ram_allocation_ratio = 1.5
         return host_state
 
     @mock.patch('nova.db.instance_extra_get_by_instance_uuid',

@@ -60,7 +60,7 @@ fake_compute_node = {
     'deleted_at': None,
     'deleted': False,
     'id': 123,
-    'service_id': 456,
+    'service_id': None,
     'host': 'fake',
     'vcpus': 4,
     'memory_mb': 4096,
@@ -83,6 +83,8 @@ fake_compute_node = {
     'numa_topology': fake_numa_topology_db_format,
     'supported_instances': fake_supported_hv_specs_db_format,
     'pci_stats': fake_pci,
+    'cpu_allocation_ratio': 16.0,
+    'ram_allocation_ratio': 1.5,
     }
 # FIXME(sbauza) : For compatibility checking, to be removed once we are sure
 # that all computes are running latest DB version with host field in it.
@@ -156,7 +158,9 @@ class _TestComputeNodeObject(object):
     @mock.patch.object(db, 'compute_node_get')
     def test_get_by_id_with_host_field_not_in_db(self, mock_cn_get,
                                                  mock_obj_svc_get):
-        fake_compute_node_with_no_host = fake_compute_node.copy()
+        fake_compute_node_with_svc_id = fake_compute_node.copy()
+        fake_compute_node_with_svc_id['service_id'] = 123
+        fake_compute_node_with_no_host = fake_compute_node_with_svc_id.copy()
         host = fake_compute_node_with_no_host.pop('host')
         fake_service = service.Service(id=123)
         fake_service.host = host
@@ -165,7 +169,7 @@ class _TestComputeNodeObject(object):
         mock_obj_svc_get.return_value = fake_service
 
         compute = compute_node.ComputeNode.get_by_id(self.context, 123)
-        self.compare_obj(compute, fake_compute_node,
+        self.compare_obj(compute, fake_compute_node_with_svc_id,
                          subs=self.subs(),
                          comparators=self.comparators())
 
@@ -316,8 +320,7 @@ class _TestComputeNodeObject(object):
         compute = compute_node.ComputeNode(context=self.context)
         compute.service_id = 456
         compute.create()
-        self.assertRaises(exception.ObjectActionError, compute.create,
-                          self.context)
+        self.assertRaises(exception.ObjectActionError, compute.create)
 
     def test_save(self):
         self.mox.StubOutWithMock(db, 'compute_node_update')
@@ -459,6 +462,20 @@ class _TestComputeNodeObject(object):
         primitive = compute.obj_to_primitive(target_version='1.8')
         self.assertNotIn('pci_device_pools', primitive)
 
+    @mock.patch('nova.objects.Service.get_by_compute_host')
+    def test_compat_service_id(self, mock_get):
+        mock_get.return_value = objects.Service(id=1)
+        compute = objects.ComputeNode(host='fake-host', service_id=None)
+        primitive = compute.obj_to_primitive(target_version='1.12')
+        self.assertEqual(1, primitive['nova_object.data']['service_id'])
+
+    @mock.patch('nova.objects.Service.get_by_compute_host')
+    def test_compat_service_id_compute_host_not_found(self, mock_get):
+        mock_get.side_effect = exception.ComputeHostNotFound(host='fake-host')
+        compute = objects.ComputeNode(host='fake-host', service_id=None)
+        primitive = compute.obj_to_primitive(target_version='1.12')
+        self.assertEqual(-1, primitive['nova_object.data']['service_id'])
+
     def test_update_from_virt_driver(self):
         # copy in case the update has a side effect
         resources = copy.deepcopy(fake_resources)
@@ -495,6 +512,46 @@ class _TestComputeNodeObject(object):
         compute = compute_node.ComputeNode()
         self.assertRaises(ValueError,
                           compute.update_from_virt_driver, resources)
+
+    def test_compat_allocation_ratios(self):
+        compute = compute_node.ComputeNode()
+        primitive = compute.obj_to_primitive(target_version='1.13')
+        self.assertNotIn('cpu_allocation_ratio', primitive)
+        self.assertNotIn('ram_allocation_ratio', primitive)
+
+    def test_compat_allocation_ratios_old_compute(self):
+        self.flags(cpu_allocation_ratio=2.0, ram_allocation_ratio=3.0)
+        compute_dict = fake_compute_node.copy()
+        # old computes don't provide allocation ratios to the table
+        compute_dict['cpu_allocation_ratio'] = None
+        compute_dict['ram_allocation_ratio'] = None
+        cls = objects.ComputeNode
+        compute = cls._from_db_object(self.context, cls(), compute_dict)
+
+        self.assertEqual(2.0, compute.cpu_allocation_ratio)
+        self.assertEqual(3.0, compute.ram_allocation_ratio)
+
+    def test_compat_allocation_ratios_default_values(self):
+        compute_dict = fake_compute_node.copy()
+        # new computes provide allocation ratios defaulted to 0.0
+        compute_dict['cpu_allocation_ratio'] = 0.0
+        compute_dict['ram_allocation_ratio'] = 0.0
+        cls = objects.ComputeNode
+        compute = cls._from_db_object(self.context, cls(), compute_dict)
+
+        self.assertEqual(16.0, compute.cpu_allocation_ratio)
+        self.assertEqual(1.5, compute.ram_allocation_ratio)
+
+    def test_compat_allocation_ratios_old_compute_default_values(self):
+        compute_dict = fake_compute_node.copy()
+        # old computes don't provide allocation ratios to the table
+        compute_dict['cpu_allocation_ratio'] = None
+        compute_dict['ram_allocation_ratio'] = None
+        cls = objects.ComputeNode
+        compute = cls._from_db_object(self.context, cls(), compute_dict)
+
+        self.assertEqual(16.0, compute.cpu_allocation_ratio)
+        self.assertEqual(1.5, compute.ram_allocation_ratio)
 
 
 class TestComputeNodeObject(test_objects._LocalTest,

@@ -285,52 +285,40 @@ class PaginationParamsTest(test.NoDBTestCase):
 
 class MiscFunctionsTest(test.TestCase):
 
-    def test_remove_major_version_from_href(self):
-        fixture = 'http://www.testsite.com/v1/images'
-        expected = 'http://www.testsite.com/images'
-        actual = common.remove_version_from_href(fixture)
-        self.assertEqual(actual, expected)
-
-    def test_remove_version_from_href(self):
-        fixture = 'http://www.testsite.com/v1.1/images'
-        expected = 'http://www.testsite.com/images'
-        actual = common.remove_version_from_href(fixture)
-        self.assertEqual(actual, expected)
-
-    def test_remove_version_from_href_2(self):
-        fixture = 'http://www.testsite.com/v1.1/'
-        expected = 'http://www.testsite.com/'
-        actual = common.remove_version_from_href(fixture)
-        self.assertEqual(actual, expected)
-
-    def test_remove_version_from_href_3(self):
-        fixture = 'http://www.testsite.com/v10.10'
+    def remove_trailing_version_from_href(self):
+        fixture = 'http://www.testsite.com/v1.1'
         expected = 'http://www.testsite.com'
-        actual = common.remove_version_from_href(fixture)
+        actual = common.remove_trailing_version_from_href(fixture)
         self.assertEqual(actual, expected)
 
-    def test_remove_version_from_href_4(self):
+    def remove_trailing_version_from_href_2(self):
+        fixture = 'http://www.testsite.com/compute/v1.1'
+        expected = 'http://www.testsite.com/compute'
+        actual = common.remove_trailing_version_from_href(fixture)
+        self.assertEqual(actual, expected)
+
+    def remove_trailing_version_from_href_3(self):
         fixture = 'http://www.testsite.com/v1.1/images/v10.5'
-        expected = 'http://www.testsite.com/images/v10.5'
-        actual = common.remove_version_from_href(fixture)
+        expected = 'http://www.testsite.com/v1.1/images'
+        actual = common.remove_trailing_version_from_href(fixture)
         self.assertEqual(actual, expected)
 
-    def test_remove_version_from_href_bad_request(self):
-        fixture = 'http://www.testsite.com/1.1/images'
+    def remove_trailing_version_from_href_bad_request(self):
+        fixture = 'http://www.testsite.com/v1.1/images'
         self.assertRaises(ValueError,
-                          common.remove_version_from_href,
+                          common.remove_trailing_version_from_href,
                           fixture)
 
-    def test_remove_version_from_href_bad_request_2(self):
-        fixture = 'http://www.testsite.com/v/images'
+    def remove_trailing_version_from_href_bad_request_2(self):
+        fixture = 'http://www.testsite.com/images/v'
         self.assertRaises(ValueError,
-                          common.remove_version_from_href,
+                          common.remove_trailing_version_from_href,
                           fixture)
 
-    def test_remove_version_from_href_bad_request_3(self):
+    def remove_trailing_version_from_href_bad_request_3(self):
         fixture = 'http://www.testsite.com/v1.1images'
         self.assertRaises(ValueError,
-                          common.remove_version_from_href,
+                          common.remove_trailing_version_from_href,
                           fixture)
 
     def test_get_id_from_href_with_int_url(self):
@@ -473,6 +461,26 @@ class MiscFunctionsTest(test.TestCase):
                      task_states.RESIZE_MIGRATING,
                      task_states.RESIZE_PREP])
         self.assertEqual(expected, actual)
+
+    def test_is_all_tenants_true(self):
+        for value in ('', '1', 'true', 'True'):
+            search_opts = {'all_tenants': value}
+            self.assertTrue(common.is_all_tenants(search_opts))
+            self.assertIn('all_tenants', search_opts)
+
+    def test_is_all_tenants_false(self):
+        for value in ('0', 'false', 'False'):
+            search_opts = {'all_tenants': value}
+            self.assertFalse(common.is_all_tenants(search_opts))
+            self.assertIn('all_tenants', search_opts)
+
+    def test_is_all_tenants_missing(self):
+        self.assertFalse(common.is_all_tenants({}))
+
+    def test_is_all_tenants_invalid(self):
+        search_opts = {'all_tenants': 'wonk'}
+        self.assertRaises(exception.InvalidInput, common.is_all_tenants,
+                          search_opts)
 
 
 class TestCollectionLinks(test.NoDBTestCase):

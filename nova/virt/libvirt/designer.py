@@ -24,7 +24,7 @@ import six
 from nova.pci import utils as pci_utils
 
 
-def set_vif_guest_frontend_config(conf, mac, model, driver):
+def set_vif_guest_frontend_config(conf, mac, model, driver, queues=None):
     """Populate a LibvirtConfigGuestInterface instance
     with guest frontend details.
     """
@@ -33,6 +33,8 @@ def set_vif_guest_frontend_config(conf, mac, model, driver):
         conf.model = model
     if driver is not None:
         conf.driver_name = driver
+    if queues is not None:
+        conf.vhost_queues = queues
 
 
 def set_vif_host_backend_bridge_config(conf, brname, tapname=None):
@@ -133,13 +135,21 @@ def set_vif_host_backend_hw_veb(conf, net_type, devname, vlan,
         conf.target_dev = tapname
 
 
-def set_vif_host_backend_direct_config(conf, devname):
+def set_vif_host_backend_ib_hostdev_config(conf, pci_slot):
+    """Populate a LibvirtConfigGuestInterface instance
+    with hostdev Interface.
+    """
+    conf.domain, conf.bus, conf.slot, conf.function = (
+        pci_utils.get_pci_address_fields(pci_slot))
+
+
+def set_vif_host_backend_direct_config(conf, devname, mode="passthrough"):
     """Populate a LibvirtConfigGuestInterface instance
     with direct Interface.
     """
 
     conf.net_type = "direct"
-    conf.source_mode = "passthrough"
+    conf.source_mode = mode
     conf.source_dev = devname
     conf.model = "virtio"
 

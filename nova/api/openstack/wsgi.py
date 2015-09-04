@@ -75,6 +75,9 @@ VER_METHOD_ATTR = 'versioned_methods'
 API_VERSION_REQUEST_HEADER = 'X-OpenStack-Nova-API-Version'
 
 
+ENV_LEGACY_V2 = 'openstack.legacy_v2'
+
+
 def get_supported_content_types():
     return _SUPPORTED_CONTENT_TYPES
 
@@ -83,7 +86,7 @@ def get_media_map():
     return dict(_MEDIA_TYPE_MAP.items())
 
 
-class Request(webob.Request):
+class Request(wsgi.Request):
     """Add some OpenStack API-specific logic to the base webob.Request."""
 
     def __init__(self, *args, **kwargs):
@@ -236,6 +239,12 @@ class Request(webob.Request):
         else:
             self.api_version_request = api_version.APIVersionRequest(
                 api_version.DEFAULT_API_VERSION)
+
+    def set_legacy_v2(self):
+        self.environ[ENV_LEGACY_V2] = True
+
+    def is_legacy_v2(self):
+        return self.environ.get(ENV_LEGACY_V2, False)
 
 
 class ActionDispatcher(object):

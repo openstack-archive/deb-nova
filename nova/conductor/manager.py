@@ -17,6 +17,7 @@
 import copy
 import itertools
 
+from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
@@ -33,6 +34,7 @@ from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.conductor.tasks import live_migrate
+from nova.conductor.tasks import migrate
 from nova.db import base
 from nova import exception
 from nova.i18n import _, _LE, _LW
@@ -43,11 +45,14 @@ from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import base as nova_object
 from nova import quota
+from nova import rpc
 from nova.scheduler import client as scheduler_client
 from nova.scheduler import utils as scheduler_utils
+from nova import servicegroup
 from nova import utils
 
 LOG = logging.getLogger(__name__)
+CONF = cfg.CONF
 
 # Instead of having a huge list of arguments to instance_update(), we just
 # accept a dict of fields to update and use this whitelist to validate it.
@@ -78,7 +83,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    target = messaging.Target(version='2.1')
+    target = messaging.Target(version='2.2')
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -106,6 +111,7 @@ class ConductorManager(manager.Manager):
             self._compute_api = compute_api.API()
         return self._compute_api
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     @messaging.expected_exceptions(KeyError, ValueError,
                                    exception.InvalidUUID,
                                    exception.InstanceNotFound,
@@ -250,8 +256,7 @@ class ConductorManager(manager.Manager):
         result = self.db.instance_fault_create(context, values)
         return jsonutils.to_primitive(result)
 
-    # NOTE(kerrin): The last_refreshed argument is unused by this method
-    # and can be removed in v3.0 of the RPC API.
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
                          wr_bytes, instance, last_refreshed, update_totals):
         vol_usage = self.db.vol_usage_update(context, vol_id,
@@ -264,6 +269,8 @@ class ConductorManager(manager.Manager):
                                              update_totals)
 
         # We have just updated the database, so send the notification now
+        vol_usage = objects.VolumeUsage._from_db_object(
+            context, objects.VolumeUsage(), vol_usage)
         self.notifier.info(context, 'volume.usage',
                            compute_utils.usage_volume_info(vol_usage))
 
@@ -340,11 +347,13 @@ class ConductorManager(manager.Manager):
         svc = self.db.service_update(context, service['id'], values)
         return jsonutils.to_primitive(svc)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def task_log_get(self, context, task_name, begin, end, host, state):
         result = self.db.task_log_get(context, task_name, begin, end, host,
                                       state)
         return jsonutils.to_primitive(result)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def task_log_begin_task(self, context, task_name, begin, end, host,
                             task_items, message):
         result = self.db.task_log_begin_task(context.elevated(), task_name,
@@ -352,6 +361,7 @@ class ConductorManager(manager.Manager):
                                              message)
         return jsonutils.to_primitive(result)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def task_log_end_task(self, context, task_name, begin, end, host,
                           errors, message):
         result = self.db.task_log_end_task(context.elevated(), task_name,
@@ -377,6 +387,7 @@ class ConductorManager(manager.Manager):
     def security_groups_trigger_handler(self, context, event, args):
         self.security_group_api.trigger_handler(event, context, *args)
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def security_groups_trigger_members_refresh(self, context, group_ids):
         self.security_group_api.trigger_members_refresh(context, group_ids)
 
@@ -471,6 +482,16 @@ class ConductorManager(manager.Manager):
     def object_backport(self, context, objinst, target_version):
         return objinst.obj_to_primitive(target_version=target_version)
 
+    def object_backport_versions(self, context, objinst, object_versions):
+        target = object_versions[objinst.obj_name()]
+        LOG.debug('Backporting %(obj)s to %(ver)s with versions %(manifest)s',
+                  obj=objinst.obj_name(), ver=target,
+                  manifest=','.join(
+                      ['%s=%s' % (name, ver)
+                       for name, ver in object_versions.items()]))
+        return objinst.obj_to_primitive(target_version=target,
+                                        version_manifest=object_versions)
+
 
 class ComputeTaskManager(base.Base):
     """Namespace for compute methods.
@@ -487,7 +508,9 @@ class ComputeTaskManager(base.Base):
         super(ComputeTaskManager, self).__init__()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.image_api = image.API()
+        self.servicegroup_api = servicegroup.API()
         self.scheduler_client = scheduler_client.SchedulerClient()
+        self.notifier = rpc.get_notifier('compute', CONF.host)
 
     @messaging.expected_exceptions(exception.NoValidHost,
                                    exception.ComputeServiceUnavailable,
@@ -513,7 +536,7 @@ class ComputeTaskManager(base.Base):
             instance = objects.Instance._from_db_object(
                 context, objects.Instance(), instance,
                 expected_attrs=attrs)
-        # NOTE(melwitt): Remove this in version 2.0 of the RPC API
+        # NOTE: Remove this when we drop support for v1 of the RPC API
         if flavor and not isinstance(flavor, objects.Flavor):
             # Code downstream may expect extra_specs to be populated since it
             # is receiving an object, so lookup the flavor to ensure this.
@@ -538,17 +561,11 @@ class ComputeTaskManager(base.Base):
 
         request_spec = scheduler_utils.build_request_spec(
             context, image, [instance], instance_type=flavor)
-
-        quotas = objects.Quotas.from_reservations(context,
-                                                  reservations,
-                                                  instance=instance)
+        task = self._build_cold_migrate_task(context, instance, flavor,
+                                             filter_properties, request_spec,
+                                             reservations, clean_shutdown)
         try:
-            scheduler_utils.setup_instance_group(context, request_spec,
-                                                 filter_properties)
-            scheduler_utils.populate_retry(filter_properties, instance.uuid)
-            hosts = self.scheduler_client.select_destinations(
-                    context, request_spec, filter_properties)
-            host_state = hosts[0]
+            task.execute()
         except exception.NoValidHost as ex:
             vm_state = instance.vm_state
             if not vm_state:
@@ -557,10 +574,9 @@ class ComputeTaskManager(base.Base):
             self._set_vm_state_and_notify(context, instance.uuid,
                                           'migrate_server',
                                           updates, ex, request_spec)
-            quotas.rollback()
 
             # if the flavor IDs match, it's migrate; otherwise resize
-            if flavor['id'] == instance.instance_type_id:
+            if flavor.id == instance.instance_type_id:
                 msg = _("No valid host found for cold migrate")
             else:
                 msg = _("No valid host found for resize")
@@ -574,21 +590,6 @@ class ComputeTaskManager(base.Base):
                 self._set_vm_state_and_notify(context, instance.uuid,
                                               'migrate_server',
                                               updates, ex, request_spec)
-                quotas.rollback()
-
-        try:
-            scheduler_utils.populate_filter_properties(filter_properties,
-                                                       host_state)
-            # context is not serializable
-            filter_properties.pop('context', None)
-
-            (host, node) = (host_state['host'], host_state['nodename'])
-            self.compute_rpcapi.prep_resize(
-                context, image, instance,
-                flavor, host,
-                reservations, request_spec=request_spec,
-                filter_properties=filter_properties, node=node,
-                clean_shutdown=clean_shutdown)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
                 updates = {'vm_state': instance.vm_state,
@@ -596,7 +597,6 @@ class ComputeTaskManager(base.Base):
                 self._set_vm_state_and_notify(context, instance.uuid,
                                               'migrate_server',
                                               updates, ex, request_spec)
-                quotas.rollback()
 
     def _set_vm_state_and_notify(self, context, instance_uuid, method, updates,
                                  ex, request_spec):
@@ -621,9 +621,25 @@ class ComputeTaskManager(base.Base):
                      expected_task_state=task_states.MIGRATING,),
                 ex, request_spec, self.db)
 
+        migration = objects.Migration(context=context.elevated())
+        migration.dest_compute = destination
+        migration.status = 'pre-migrating'
+        migration.instance_uuid = instance.uuid
+        migration.source_compute = instance.host
+        migration.migration_type = 'live-migration'
+        if instance.obj_attr_is_set('flavor'):
+            migration.old_instance_type_id = instance.flavor.id
+            migration.new_instance_type_id = instance.flavor.id
+        else:
+            migration.old_instance_type_id = instance.instance_type_id
+            migration.new_instance_type_id = instance.instance_type_id
+        migration.create()
+
+        task = self._build_live_migrate_task(context, instance, destination,
+                                             block_migration, disk_over_commit,
+                                             migration)
         try:
-            live_migrate.execute(context, instance, destination,
-                             block_migration, disk_over_commit)
+            task.execute()
         except (exception.NoValidHost,
                 exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
@@ -639,6 +655,8 @@ class ComputeTaskManager(base.Base):
             with excutils.save_and_reraise_exception():
                 # TODO(johngarbutt) - eventually need instance actions here
                 _set_vm_state(context, instance, ex, instance.vm_state)
+                migration.status = 'error'
+                migration.save()
         except Exception as ex:
             LOG.error(_LE('Migration of instance %(instance_id)s to host'
                           ' %(dest)s unexpectedly failed.'),
@@ -646,7 +664,27 @@ class ComputeTaskManager(base.Base):
                       exc_info=True)
             _set_vm_state(context, instance, ex, vm_states.ERROR,
                           instance.task_state)
+            migration.status = 'failed'
+            migration.save()
             raise exception.MigrationError(reason=six.text_type(ex))
+
+    def _build_live_migrate_task(self, context, instance, destination,
+                                 block_migration, disk_over_commit, migration):
+        return live_migrate.LiveMigrationTask(context, instance,
+                                              destination, block_migration,
+                                              disk_over_commit, migration,
+                                              self.compute_rpcapi,
+                                              self.servicegroup_api,
+                                              self.scheduler_client)
+
+    def _build_cold_migrate_task(self, context, instance, flavor,
+                                 filter_properties, request_spec, reservations,
+                                 clean_shutdown):
+        return migrate.MigrationTask(context, instance, flavor,
+                                     filter_properties, request_spec,
+                                     reservations, clean_shutdown,
+                                     self.compute_rpcapi,
+                                     self.scheduler_client)
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
@@ -833,6 +871,9 @@ class ComputeTaskManager(base.Base):
                         LOG.warning(_LW("Server with unsupported policy "
                                         "cannot be rebuilt"),
                                     instance=instance)
+
+            compute_utils.notify_about_instance_usage(
+                self.notifier, context, instance, "rebuild.scheduled")
 
             self.compute_rpcapi.rebuild_instance(context,
                     instance=instance,

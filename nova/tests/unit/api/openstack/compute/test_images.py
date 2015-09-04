@@ -24,8 +24,8 @@ import mock
 import six.moves.urllib.parse as urlparse
 import webob
 
-from nova.api.openstack.compute import images
-from nova.api.openstack.compute.plugins.v3 import images as images_v21
+from nova.api.openstack.compute import images as images_v21
+from nova.api.openstack.compute.legacy_v2 import images
 from nova.api.openstack.compute.views import images as images_view
 from nova import exception
 from nova.image import glance
@@ -44,9 +44,9 @@ class ImagesControllerTestV21(test.NoDBTestCase):
     """Test of the OpenStack API /images application controller w/Glance.
     """
     image_controller_class = images_v21.ImagesController
-    url_base = '/v3'
-    bookmark_base = ''
-    http_request = fakes.HTTPRequestV3
+    url_base = '/v2/fake'
+    bookmark_base = '/fake'
+    http_request = fakes.HTTPRequestV21
 
     def setUp(self):
         """Run before each test."""
@@ -410,8 +410,6 @@ class ImagesControllerTestV21(test.NoDBTestCase):
 
 class ImagesControllerTestV2(ImagesControllerTestV21):
     image_controller_class = images.Controller
-    url_base = '/v2/fake'
-    bookmark_base = '/fake'
     http_request = fakes.HTTPRequest
 
     def _check_response(self, controller_method, response, expected_code):

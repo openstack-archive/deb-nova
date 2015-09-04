@@ -19,6 +19,7 @@ import mock
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_utils import units
+import unittest2
 
 from nova import exception
 from nova.tests.unit import fake_instance
@@ -780,13 +781,14 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         mock_set_vm_state.assert_called_once_with(
             mock_instance, constants.HYPERV_VM_STATE_ENABLED)
 
-    def _test_power_off(self, timeout):
+    def _test_power_off(self, timeout, set_state_expected=True):
         instance = fake_instance.fake_instance_obj(self.context)
         with mock.patch.object(self._vmops, '_set_vm_state') as mock_set_state:
             self._vmops.power_off(instance, timeout)
 
-            mock_set_state.assert_called_once_with(
-                instance, constants.HYPERV_VM_STATE_DISABLED)
+            if set_state_expected:
+                mock_set_state.assert_called_once_with(
+                    instance, constants.HYPERV_VM_STATE_DISABLED)
 
     def test_power_off_hard(self):
         self._test_power_off(timeout=0)
@@ -807,6 +809,11 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         mock_soft_shutdown.assert_called_once_with(
             instance, 1, vmops.SHUTDOWN_TIME_INCREMENT)
         self.assertFalse(mock_set_state.called)
+
+    @mock.patch("nova.virt.hyperv.vmops.VMOps._soft_shutdown")
+    def test_power_off_unexisting_instance(self, mock_soft_shutdown):
+        mock_soft_shutdown.side_effect = exception.NotFound
+        self._test_power_off(timeout=1, set_state_expected=False)
 
     @mock.patch('nova.virt.hyperv.vmops.VMOps._set_vm_state')
     def test_power_on(self, mock_set_vm_state):
@@ -965,6 +972,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             self._vmops._MAX_CONSOLE_LOG_FILE_SIZE)
         fake_iothread.return_value.start.assert_called_once_with()
 
+    @unittest2.skip('mock_open in 1.2 read only works once 1475661')
     @mock.patch("os.path.exists")
     def test_get_console_output(self, fake_path_exists):
         mock_instance = fake_instance.fake_instance_obj(self.context)
@@ -974,7 +982,8 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             mock.sentinel.FAKE_PATH, mock.sentinel.FAKE_PATH_ARCHIVED)
 
         with mock.patch('nova.virt.hyperv.vmops.open',
-                        mock.mock_open(read_data=self.FAKE_LOG), create=True):
+                        mock.mock_open(read_data=self.FAKE_LOG),
+                        create=True):
             instance_log = self._vmops.get_console_output(mock_instance)
             # get_vm_console_log_paths returns 2 paths.
             self.assertEqual(self.FAKE_LOG * 2, instance_log)

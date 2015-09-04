@@ -47,29 +47,44 @@ neutron_opts = [
     cfg.StrOpt('url',
                default='http://127.0.0.1:9696',
                help='URL for connecting to neutron'),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('admin_user_id',
+               deprecated_for_removal=True,
                help='User id for connecting to neutron in admin context. '
                     'DEPRECATED: specify an auth_plugin and appropriate '
                     'credentials instead.'),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('admin_username',
+               deprecated_for_removal=True,
                help='Username for connecting to neutron in admin context '
                     'DEPRECATED: specify an auth_plugin and appropriate '
                     'credentials instead.'),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('admin_password',
+               deprecated_for_removal=True,
                help='Password for connecting to neutron in admin context '
                     'DEPRECATED: specify an auth_plugin and appropriate '
                     'credentials instead.',
                secret=True),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('admin_tenant_id',
+               deprecated_for_removal=True,
                help='Tenant id for connecting to neutron in admin context '
                     'DEPRECATED: specify an auth_plugin and appropriate '
                     'credentials instead.'),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('admin_tenant_name',
+               deprecated_for_removal=True,
                help='Tenant name for connecting to neutron in admin context. '
                     'This option will be ignored if neutron_admin_tenant_id '
                     'is set. Note that with Keystone V3 tenant names are '
@@ -78,15 +93,21 @@ neutron_opts = [
                     'credentials instead.'),
     cfg.StrOpt('region_name',
                help='Region name for connecting to neutron in admin context'),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('admin_auth_url',
                default='http://localhost:5000/v2.0',
+               deprecated_for_removal=True,
                help='Authorization URL for connecting to neutron in admin '
                     'context. DEPRECATED: specify an auth_plugin and '
                     'appropriate credentials instead.'),
-    # deprecated in Kilo, may be removed in Liberty.
+    # deprecated in Kilo, may be removed in Mitaka
+    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
+    # deprecated_for_removal for this flag so no warnings were emitted.
     cfg.StrOpt('auth_strategy',
                default='keystone',
+               deprecated_for_removal=True,
                help='Authorization strategy for connecting to neutron in '
                     'admin context. DEPRECATED: specify an auth_plugin and '
                     'appropriate credentials instead. If an auth_plugin is '
@@ -296,6 +317,14 @@ class API(base_api.NetworkAPI):
             LOG.debug('Successfully created port: %s', port_id,
                       instance=instance)
             return port_id
+        except neutron_client_exc.InvalidIpForNetworkClient:
+            LOG.warning(_LW('Neutron error: %(ip)s is not a valid ip address '
+                            'for network %(network_id)s.'),
+                        {'ip': fixed_ip, 'network_id': network_id})
+            msg = (_('Fixed IP %(ip)s is not a valid ip address for '
+                     'network %(network_id)s.') %
+                   {'ip': fixed_ip, 'network_id': network_id})
+            raise exception.InvalidInput(reason=msg)
         except neutron_client_exc.IpAddressInUseClient:
             LOG.warning(_LW('Neutron error: Fixed IP %s is '
                             'already in use.'), fixed_ip)
@@ -350,6 +379,10 @@ class API(base_api.NetworkAPI):
             port_client = (neutron if not port_binding else
                            get_client(context, admin=True))
         for port_id in ports:
+            # A port_id is optional in the NetworkRequest object so check here
+            # in case the caller forgot to filter the list.
+            if port_id is None:
+                continue
             port_req_body = {'port': {'device_id': '', 'device_owner': ''}}
             if port_binding:
                 port_req_body['port']['binding:host_id'] = None
@@ -812,10 +845,12 @@ class API(base_api.NetworkAPI):
 
         :param context - Request context.
         :param port_id - The id of port to be queried.
-        :returns: A dict containing port data keyed by 'port'.
-                  e.g. {'port': {'port_id': 'abcd',
-                                 'fixed_ip_address': '1.2.3.4'}}
+        :returns: A dict containing port data keyed by 'port', e.g.
 
+        ::
+
+            {'port': {'port_id': 'abcd',
+                      'fixed_ip_address': '1.2.3.4'}}
         """
         return dict(port=self._show_port(context, port_id))
 
@@ -827,7 +862,7 @@ class API(base_api.NetworkAPI):
         :param neutron_client - A neutron client.
         :param fields - The condition fields to query port data.
         :returns: A dict of port data.
-                  e.g. {'port_id': 'abcd', 'fixed_ip_address': '1.2.3.4'}}
+                  e.g. {'port_id': 'abcd', 'fixed_ip_address': '1.2.3.4'}
         """
         if not neutron_client:
             neutron_client = get_client(context)
@@ -842,37 +877,21 @@ class API(base_api.NetworkAPI):
         except neutron_client_exc.Unauthorized:
             raise exception.Forbidden()
         except neutron_client_exc.NeutronClientException as exc:
-            msg = (_("Failed to access port %(port_id)s: %(reason)s"),
+            msg = (_("Failed to access port %(port_id)s: %(reason)s") %
                    {'port_id': port_id, 'reason': exc})
             raise exception.NovaException(message=msg)
 
-    def get_instance_nw_info(self, context, instance, networks=None,
-                             port_ids=None, use_slave=False,
-                             admin_client=None,
-                             preexisting_port_ids=None):
-        """Return network information for specified instance
-           and update cache.
-        """
-        # NOTE(geekinutah): It would be nice if use_slave had us call
-        #                   special APIs that pummeled slaves instead of
-        #                   the master. For now we just ignore this arg.
-        with lockutils.lock('refresh_cache-%s' % instance.uuid):
-            result = self._get_instance_nw_info(context, instance, networks,
-                                                port_ids, admin_client,
-                                                preexisting_port_ids)
-            base_api.update_instance_cache_with_nw_info(self, context,
-                                                        instance,
-                                                        nw_info=result,
-                                                        update_cells=False)
-        return result
-
     def _get_instance_nw_info(self, context, instance, networks=None,
                               port_ids=None, admin_client=None,
-                              preexisting_port_ids=None):
+                              preexisting_port_ids=None, **kwargs):
         # NOTE(danms): This is an inner method intended to be called
         # by other code that updates instance nwinfo. It *must* be
         # called with the refresh_cache-%(instance_uuid) lock held!
         LOG.debug('_get_instance_nw_info()', instance=instance)
+        # Ensure that we have an up to date copy of the instance info cache.
+        # Otherwise multiple requests could collide and cause cache
+        # corruption.
+        compute_utils.refresh_info_cache_for_instance(context, instance)
         nw_info = self._build_network_info_model(context, instance, networks,
                                                  port_ids, admin_client,
                                                  preexisting_port_ids)
@@ -1132,10 +1151,10 @@ class API(base_api.NetworkAPI):
             else:
                 free_ports = quotas.get('port') - len(ports)
                 if free_ports < 0:
-                    msg = (_("The number of defined ports: %(ports)d"
-                                      "is over the limit: %(quota)d"),
-                                      {'ports': len(ports),
-                                       'quota': quotas.get('port')})
+                    msg = (_("The number of defined ports: %(ports)d "
+                             "is over the limit: %(quota)d") %
+                           {'ports': len(ports),
+                            'quota': quotas.get('port')})
                     raise exception.PortLimitExceeded(msg)
                 ports_needed = ports_needed_per_instance * num_instances
                 if free_ports >= ports_needed:
@@ -1401,6 +1420,8 @@ class API(base_api.NetworkAPI):
             raise exception.NoMoreFloatingIps(six.text_type(e))
         except neutron_client_exc.OverQuotaClient as e:
             raise exception.FloatingIpLimitExceeded(six.text_type(e))
+        except neutron_client_exc.BadRequest as e:
+            raise exception.FloatingIpBadRequest(six.text_type(e))
 
         return fip['floatingip']['floating_ip_address']
 
@@ -1798,6 +1819,24 @@ class API(base_api.NetworkAPI):
                     with excutils.save_and_reraise_exception():
                         LOG.exception(_LE("Unable to update host of port %s"),
                                       p['id'])
+
+    def update_instance_vnic_index(self, context, instance, vif, index):
+        """Update instance vnic index.
+
+        When the 'VNIC index' extension is supported this method will update
+        the vnic index of the instance on the port.
+        """
+        self._refresh_neutron_extensions_cache(context)
+        if constants.VNIC_INDEX_EXT in self.extensions:
+            neutron = get_client(context)
+            port_req_body = {'port': {'vnic_index': index}}
+            try:
+                neutron.update_port(vif['id'], port_req_body)
+            except Exception:
+                with excutils.save_and_reraise_exception():
+                    LOG.exception(_LE('Unable to update instance VNIC index '
+                                      'for port %s.'),
+                                  vif['id'], instance=instance)
 
 
 def _ensure_requested_network_ordering(accessor, unordered, preferred):

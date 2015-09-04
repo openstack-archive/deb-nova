@@ -53,7 +53,6 @@ from nova.tests.unit import test_flavors
 from nova.tests.unit import utils
 from nova.tests.unit.virt.vmwareapi import fake as vmwareapi_fake
 from nova.tests.unit.virt.vmwareapi import stubs
-from nova import utils as nova_utils
 from nova.virt import driver as v_driver
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import driver
@@ -170,9 +169,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         super(VMwareAPIVMTestCase, self).setUp()
         vm_util.vm_refs_cache_reset()
         self.context = context.RequestContext('fake', 'fake', is_admin=False)
-        cluster_name = 'test_cluster'
-        cluster_name2 = 'test_cluster2'
-        self.flags(cluster_name=[cluster_name, cluster_name2],
+        self.flags(cluster_name='test_cluster',
                    host_ip='test_url',
                    host_username='test_username',
                    host_password='test_pass',
@@ -189,12 +186,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         nova.tests.unit.image.fake.stub_out_image_service(self.stubs)
         self.conn = driver.VMwareVCDriver(None, False)
         self._set_exception_vars()
-        self.node_name = self.conn._resources.keys()[0]
-        self.node_name2 = self.conn._resources.keys()[1]
-        if self.conn._resources[self.node_name2]['name'] == cluster_name2:
-            self.ds = 'ds1'
-        else:
-            self.ds = 'ds2'
+        self.node_name = self.conn._nodename
+        self.ds = 'ds1'
 
         self.vim = vmwareapi_fake.FakeVim()
 
@@ -319,8 +312,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(self.attempts, 2)
 
     def _get_instance_type_by_name(self, type):
-        for instance_type in test_flavors.DEFAULT_FLAVORS:
-            if instance_type['name'] == type:
+        for instance_type in test_flavors.DEFAULT_FLAVOR_OBJS:
+            if instance_type.name == type:
                 return instance_type
         if type == 'm1.micro':
             return {'memory_mb': 128, 'root_gb': 0, 'deleted_at': None,
@@ -588,7 +581,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.iso_index = 0
 
         def fake_create_config_drive(instance, injected_files, password,
-                                     data_store_name, folder, uuid, cookies):
+                                     network_info, data_store_name,
+                                     folder, uuid, cookies):
             return 'fake-config-drive'
 
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
@@ -613,10 +607,10 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def test_ephemeral_disk_attach_from_bdi(self):
         ephemerals = [{'device_type': 'disk',
-                       'disk_bus': 'lsiLogic',
+                       'disk_bus': constants.DEFAULT_ADAPTER_TYPE,
                        'size': 25},
                       {'device_type': 'disk',
-                       'disk_bus': 'lsiLogic',
+                       'disk_bus': constants.DEFAULT_ADAPTER_TYPE,
                        'size': 25}]
         bdi = {'ephemerals': ephemerals}
         self._create_vm(bdi=bdi, ephemeral=50)
@@ -641,7 +635,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.cd_attach_called = False
 
         def fake_create_config_drive(instance, injected_files, password,
-                                     data_store_name, folder, uuid, cookies):
+                                     network_info, data_store_name,
+                                     folder, uuid, cookies):
+
             return 'fake-config-drive'
 
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
@@ -678,6 +674,25 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(vm_states.STOPPED, self.instance.vm_state)
         mock_detach_volume.assert_called_once_with(
             connection_info, self.instance, 'fake-name')
+        mock_destroy.assert_called_once_with(self.instance, True)
+
+    @mock.patch.object(vmops.VMwareVMOps, 'power_off',
+                       side_effect=vexc.ManagedObjectNotFoundException())
+    @mock.patch.object(vmops.VMwareVMOps, 'destroy')
+    def test_destroy_with_attached_volumes_missing(self,
+                                                   mock_destroy,
+                                                   mock_power_off):
+        self._create_vm()
+        connection_info = {'data': 'fake-data', 'serial': 'volume-fake-id'}
+        bdm = [{'connection_info': connection_info,
+                'disk_bus': 'fake-bus',
+                'device_name': 'fake-name',
+                'mount_device': '/dev/sdb'}]
+        bdi = {'block_device_mapping': bdm, 'root_device_name': '/dev/sda'}
+        self.assertNotEqual(vm_states.STOPPED, self.instance.vm_state)
+        self.conn.destroy(self.context, self.instance, self.network_info,
+                          block_device_info=bdi)
+        mock_power_off.assert_called_once_with(self.instance)
         mock_destroy.assert_called_once_with(self.instance, True)
 
     @mock.patch.object(driver.VMwareVCDriver, 'detach_volume',
@@ -1517,8 +1532,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         if config_drive:
             def fake_create_config_drive(instance, injected_files, password,
-                                         data_store_name, folder,
-                                         instance_uuid, cookies):
+                                         network_info, data_store_name,
+                                         folder, instance_uuid, cookies):
                 self.assertTrue(uuidutils.is_uuid_like(instance['uuid']))
                 return str(ds_obj.DatastorePath(data_store_name,
                                                  instance_uuid, 'fake.iso'))
@@ -1704,42 +1719,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._create_vm()
         connection_info = self._test_vmdk_connection_info('vmdk')
 
-        adapter_type = constants.DEFAULT_ADAPTER_TYPE
-        disk_type = constants.DEFAULT_DISK_TYPE
-        vmdk_info = vm_util.VmdkInfo('fake-path', adapter_type, disk_type, 64,
-                                     'fake-device')
-        with contextlib.nested(
-            mock.patch.object(vm_util, 'get_vm_ref',
-                              return_value=mock.sentinel.vm_ref),
-            mock.patch.object(volumeops.VMwareVolumeOps, '_get_volume_ref',
-                              return_value=mock.sentinel.volume_ref),
-            mock.patch.object(volumeops.VMwareVolumeOps,
-                              '_get_vmdk_backed_disk_device',
-                              return_value=mock.sentinel.disk_device),
-            mock.patch.object(vm_util, 'get_vmdk_info',
-                              return_value=vmdk_info),
-            mock.patch.object(volumeops.VMwareVolumeOps,
-                              '_consolidate_vmdk_volume'),
-            mock.patch.object(volumeops.VMwareVolumeOps,
-                              'detach_disk_from_vm')
-        ) as (get_vm_ref, get_volume_ref, get_vmdk_backed_disk_device,
-              get_vmdk_info, consolidate_vmdk_volume, detach_disk_from_vm):
+        with mock.patch.object(volumeops.VMwareVolumeOps,
+                               'detach_volume') as detach_volume:
             self.conn.detach_volume(connection_info, self.instance,
                                     '/dev/vdc', encryption=None)
-
-            get_vm_ref.assert_called_once_with(self.conn._session,
-                                               self.instance)
-            get_volume_ref.assert_called_once_with(
-                connection_info['data']['volume'])
-            get_vmdk_backed_disk_device.assert_called_once_with(
-                mock.sentinel.vm_ref, connection_info['data'])
-            self.assertTrue(get_vmdk_info.called)
-            consolidate_vmdk_volume.assert_called_once_with(self.instance,
-                mock.sentinel.vm_ref, mock.sentinel.disk_device,
-                mock.sentinel.volume_ref, adapter_type=adapter_type,
-                disk_type=disk_type)
-            detach_disk_from_vm.assert_called_once_with(mock.sentinel.vm_ref,
-                self.instance, mock.sentinel.disk_device)
+            detach_volume.assert_called_once_with(connection_info,
+                                                  self.instance)
 
     def test_volume_attach_iscsi(self):
         self._create_vm()
@@ -1990,18 +1975,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         instances = self.conn.list_instances()
         self.assertEqual(0, len(instances))
 
-    def test_list_instances_from_nodes(self):
-        # Create instance on node1
-        self._create_vm(self.node_name)
-        # Create instances on the other node
-        self._create_vm(self.node_name2, num_instances=2)
-        self._create_vm(self.node_name2, num_instances=3)
-        node1_vmops = self.conn._get_vmops_for_compute_node(self.node_name)
-        node2_vmops = self.conn._get_vmops_for_compute_node(self.node_name2)
-        self.assertEqual(1, len(node1_vmops.list_instances()))
-        self.assertEqual(2, len(node2_vmops.list_instances()))
-        self.assertEqual(3, len(self.conn.list_instances()))
-
     def _setup_mocks_for_session(self, mock_init):
         mock_init.return_value = None
 
@@ -2027,20 +2000,17 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                           self.conn.set_host_enabled, 'state')
 
     def test_datastore_regex_configured(self):
-        for node in self.conn._resources.keys():
-            self.assertEqual(self.conn._datastore_regex,
-                    self.conn._resources[node]['vmops']._datastore_regex)
-            self.assertEqual(self.conn._datastore_regex,
-                    self.conn._resources[node]['vcstate']._datastore_regex)
+        self.assertEqual(self.conn._datastore_regex,
+                self.conn._vmops._datastore_regex)
+        self.assertEqual(self.conn._datastore_regex,
+                self.conn._vc_state._datastore_regex)
 
     @mock.patch('nova.virt.vmwareapi.ds_util.get_datastore')
     def test_datastore_regex_configured_vcstate(self, mock_get_ds_ref):
-        self.assertEqual(2, len(self.conn._resources.keys()))
-        for node in self.conn._resources.keys():
-            vcstate = self.conn._resources[node]['vcstate']
-            self.conn.get_available_resource(node)
-            mock_get_ds_ref.assert_called_with(
-                vcstate._session, vcstate._cluster, vcstate._datastore_regex)
+        vcstate = self.conn._vc_state
+        self.conn.get_available_resource(self.node_name)
+        mock_get_ds_ref.assert_called_with(
+            vcstate._session, vcstate._cluster, vcstate._datastore_regex)
 
     def test_get_available_resource(self):
         stats = self.conn.get_available_resource(self.node_name)
@@ -2060,41 +2030,14 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         # Tests if we raise an exception for Invalid Regular Expression in
         # vmware_datastore_regex
-        self.flags(cluster_name=['test_cluster'], datastore_regex='fake-ds(01',
+        self.flags(cluster_name='test_cluster', datastore_regex='fake-ds(01',
                    group='vmware')
         self.assertRaises(exception.InvalidInput, driver.VMwareVCDriver, None)
 
     def test_get_available_nodes(self):
         nodelist = self.conn.get_available_nodes()
-        self.assertEqual(len(nodelist), 2)
+        self.assertEqual(len(nodelist), 1)
         self.assertIn(self.node_name, nodelist)
-        self.assertIn(self.node_name2, nodelist)
-
-    def test_spawn_multiple_node(self):
-
-        def fake_is_neutron():
-            return False
-
-        self.stubs.Set(nova_utils, 'is_neutron', fake_is_neutron)
-        uuid1 = uuidutils.generate_uuid()
-        uuid2 = uuidutils.generate_uuid()
-        self._create_vm(node=self.node_name, num_instances=1,
-                        uuid=uuid1)
-        info = self._get_info(uuid=uuid1)
-        self._check_vm_info(info, power_state.RUNNING)
-        self.conn.destroy(self.context, self.instance, self.network_info)
-        self._create_vm(node=self.node_name2, num_instances=1,
-                        uuid=uuid2)
-        info = self._get_info(uuid=uuid2)
-        self._check_vm_info(info, power_state.RUNNING)
-
-    def test_spawn_invalid_node(self):
-        self._create_instance(node='InvalidNodeName')
-        self.assertRaises(exception.NotFound, self.conn.spawn,
-                          self.context, self.instance, self.image,
-                          injected_files=[], admin_password=None,
-                          network_info=self.network_info,
-                          block_device_info=None)
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
                        'from_image')
@@ -2261,7 +2204,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                           self.instance)
 
     def test_datastore_dc_map(self):
-        vmops = self.conn._resources[self.node_name]['vmops']
+        vmops = self.conn._vmops
         self.assertEqual({}, vmops._datastore_dc_mapping)
         self._create_vm()
         # currently there are 2 data stores
@@ -2302,28 +2245,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                     vmwareapi_fake._FAKE_VCENTER_UUID),
                          self.conn._create_nodename(test_mor),
                          "VC driver failed to create the proper node name")
-
-    def test_normalize_nodename_old(self):
-        test_mor = "domain-26"
-        sample_cluster_names = ["Cluster1",
-                                "Cluster:2",
-                                "Cluster:3)",
-                                "(Cluster:4",
-                                "(Cluster:5)",
-                                "Test Cluster"]
-
-        for cluster_name in sample_cluster_names:
-            old_format = "%s(%s)" % (test_mor, cluster_name)
-            self.assertEqual(self.conn._create_nodename(test_mor),
-                             self.conn._normalize_nodename(old_format),
-                             'VC driver failed to normalize cluster name %s' %
-                                 cluster_name)
-
-    def test_normalize_nodename_new(self):
-        # Assert that _normalize_nodename doesn't touch the new format
-        test_mor = "domain-26"
-        nodename = "%s.%s" % (test_mor, vmwareapi_fake._FAKE_VCENTER_UUID)
-        self.assertEqual(nodename, self.conn._normalize_nodename(nodename))
 
     @mock.patch.object(driver.LOG, 'warning')
     def test_min_version(self, mock_warning):

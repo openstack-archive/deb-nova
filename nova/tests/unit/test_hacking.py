@@ -431,27 +431,6 @@ class HackingTestCase(test.NoDBTestCase):
         self._assert_has_errors(code, checks.check_api_version_decorator,
                                 expected_errors=[(2, 0, "N332")])
 
-    def test_oslo_namespace_imports_check(self):
-        code = """
-               from oslo.concurrency import processutils
-               """
-        self._assert_has_errors(code, checks.check_oslo_namespace_imports,
-                                expected_errors=[(1, 0, "N333")])
-
-    def test_oslo_namespace_imports_check_2(self):
-        code = """
-               from oslo import i18n
-               """
-        self._assert_has_errors(code, checks.check_oslo_namespace_imports,
-                                expected_errors=[(1, 0, "N333")])
-
-    def test_oslo_namespace_imports_check_3(self):
-        code = """
-               import oslo.messaging
-               """
-        self._assert_has_errors(code, checks.check_oslo_namespace_imports,
-                                expected_errors=[(1, 0, "N333")])
-
     def test_oslo_assert_raises_regexp(self):
         code = """
                self.assertRaisesRegexp(ValueError,
@@ -539,7 +518,7 @@ class HackingTestCase(test.NoDBTestCase):
                except NotImplementedError:
                    common.raise_http_not_implemented_error()
                """
-        filename = "nova/api/openstack/compute/plugins/v3/test.py"
+        filename = "nova/api/openstack/compute/v21/test.py"
         self._assert_has_no_errors(code, checks.check_http_not_implemented,
                                    filename=filename)
 
@@ -552,6 +531,27 @@ class HackingTestCase(test.NoDBTestCase):
         self._assert_has_errors(code, checks.check_http_not_implemented,
                                 expected_errors=errors, filename=filename)
 
-        filename = "nova/api/openstack/compute/contrib/test.py"
+        filename = "nova/api/openstack/compute/legacy_v2/test.py"
         self._assert_has_no_errors(code, checks.check_http_not_implemented,
                                    filename=filename)
+
+    def test_check_greenthread_spawns(self):
+        errors = [(1, 0, "N340")]
+
+        code = "greenthread.spawn(func, arg1, kwarg1=kwarg1)"
+        self._assert_has_errors(code, checks.check_greenthread_spawns,
+                                expected_errors=errors)
+
+        code = "greenthread.spawn_n(func, arg1, kwarg1=kwarg1)"
+        self._assert_has_errors(code, checks.check_greenthread_spawns,
+                                expected_errors=errors)
+
+        code = "eventlet.greenthread.spawn(func, arg1, kwarg1=kwarg1)"
+        self._assert_has_errors(code, checks.check_greenthread_spawns,
+                                expected_errors=errors)
+
+        code = "nova.utils.spawn(func, arg1, kwarg1=kwarg1)"
+        self._assert_has_no_errors(code, checks.check_greenthread_spawns)
+
+        code = "nova.utils.spawn_n(func, arg1, kwarg1=kwarg1)"
+        self._assert_has_no_errors(code, checks.check_greenthread_spawns)

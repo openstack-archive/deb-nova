@@ -103,6 +103,9 @@ class NetworkAPI(object):
         * NOTE: remove unused method associate_floating_ip()
         * NOTE: remove unused method disassociate_floating_ip()
         * NOTE: remove unused method associate()
+
+        * 1.14 - Add mac parameter to release_fixed_ip().
+        * 1.15 - Convert set_network_host() to use Network objects.
     '''
 
     VERSION_ALIASES = {
@@ -242,9 +245,12 @@ class NetworkAPI(object):
                                 teardown=teardown)
 
     def set_network_host(self, ctxt, network_ref):
-        network_ref_p = jsonutils.to_primitive(network_ref)
-        return self.client.call(ctxt, 'set_network_host',
-                                network_ref=network_ref_p)
+        version = '1.15'
+        if not self.client.can_send_version(version):
+            version = '1.0'
+            network_ref = objects_base.obj_to_primitive(network_ref)
+        cctxt = self.client.prepare(version=version)
+        return cctxt.call(ctxt, 'set_network_host', network_ref=network_ref)
 
     def rpc_setup_network_on_host(self, ctxt, network_id, teardown, host):
         # NOTE(tr3buchet): the call is just to wait for completion
@@ -305,9 +311,15 @@ class NetworkAPI(object):
         cctxt = self.client.prepare(server=host)
         cctxt.cast(ctxt, 'lease_fixed_ip', address=address)
 
-    def release_fixed_ip(self, ctxt, address, host):
-        cctxt = self.client.prepare(server=host)
-        cctxt.cast(ctxt, 'release_fixed_ip', address=address)
+    def release_fixed_ip(self, ctxt, address, host, mac):
+        kwargs = {}
+        if self.client.can_send_version('1.14'):
+            version = '1.14'
+            kwargs['mac'] = mac
+        else:
+            version = '1.0'
+        cctxt = self.client.prepare(server=host, version=version)
+        cctxt.cast(ctxt, 'release_fixed_ip', address=address, **kwargs)
 
     def migrate_instance_start(self, ctxt, instance_uuid, rxtx_factor,
                                project_id, source_compute, dest_compute,

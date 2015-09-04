@@ -2,7 +2,7 @@
     "server": {
         "OS-DCF:diskConfig": "AUTO",
         "accessIPv4": "1.2.3.4",
-        "accessIPv6": "fe80::100",
+        "accessIPv6": "80fe::",
         "addresses": {
             "private": [
                 {

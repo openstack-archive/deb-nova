@@ -27,6 +27,7 @@ from nova.cells import manager
 from nova.compute import api as compute_api
 from nova.compute import cells_api as compute_cells_api
 from nova.compute import flavors
+from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import context
 from nova import db
@@ -138,17 +139,18 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
     def test_error_evacuate(self):
         self.skipTest("Test is incompatible with cells.")
 
-    def test_delete_instance_no_cell(self):
+    def _test_delete_instance_no_cell(self, method_name):
         cells_rpcapi = self.compute_api.cells_rpcapi
         self.mox.StubOutWithMock(cells_rpcapi,
                                  'instance_delete_everywhere')
         inst = self._create_fake_instance_obj()
+        delete_type = method_name == 'soft_delete' and 'soft' or 'hard'
         cells_rpcapi.instance_delete_everywhere(self.context,
-                inst, 'hard')
+                inst, delete_type)
         self.mox.ReplayAll()
         self.stubs.Set(self.compute_api.network_api, 'deallocate_for_instance',
                        lambda *a, **kw: None)
-        self.compute_api.delete(self.context, inst)
+        getattr(self.compute_api, method_name)(self.context, inst)
 
     def test_delete_instance_no_cell_constraint_failure_does_not_loop(self):
         with mock.patch.object(self.compute_api.cells_rpcapi,
@@ -241,16 +243,13 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         _test()
 
     def test_soft_delete_instance_no_cell(self):
-        cells_rpcapi = self.compute_api.cells_rpcapi
-        self.mox.StubOutWithMock(cells_rpcapi,
-                                 'instance_delete_everywhere')
-        inst = self._create_fake_instance_obj()
-        cells_rpcapi.instance_delete_everywhere(self.context,
-                inst, 'soft')
-        self.mox.ReplayAll()
-        self.stubs.Set(self.compute_api.network_api, 'deallocate_for_instance',
-                       lambda *a, **kw: None)
-        self.compute_api.soft_delete(self.context, inst)
+        self._test_delete_instance_no_cell('soft_delete')
+
+    def test_delete_instance_no_cell(self):
+        self._test_delete_instance_no_cell('delete')
+
+    def test_force_delete_instance_no_cell(self):
+        self._test_delete_instance_no_cell('force_delete')
 
     def test_get_migrations(self):
         filters = {'cell_name': 'ChildCell', 'status': 'confirmed'}
@@ -330,11 +329,13 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
     @mock.patch.object(compute_api.API, '_check_and_transform_bdm')
     @mock.patch.object(compute_api.API, '_get_image')
     @mock.patch.object(compute_api.API, '_validate_and_build_base_options')
-    def test_build_instances(self, _validate, _get_image, _check_bdm,
+    @mock.patch.object(compute_api.API, '_checks_for_create_and_rebuild')
+    def test_build_instances(self, _checks_for_create_and_rebuild,
+                             _validate, _get_image, _check_bdm,
                              _provision, _record_action_start):
         _get_image.return_value = (None, 'fake-image')
         _validate.return_value = ({}, 1)
-        _check_bdm.return_value = 'bdms'
+        _check_bdm.return_value = objects.BlockDeviceMappingList()
         _provision.return_value = 'instances'
 
         self.compute_api.create(self.context, 'fake-flavor', 'fake-image')
@@ -345,13 +346,14 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
 
     @mock.patch.object(compute_api.API, '_record_action_start')
     @mock.patch.object(compute_api.API, '_resize_cells_support')
-    @mock.patch.object(compute_api.API, '_reserve_quota_delta')
-    @mock.patch.object(compute_api.API, '_upsize_quota_delta')
+    @mock.patch.object(compute_utils, 'reserve_quota_delta')
+    @mock.patch.object(compute_utils, 'upsize_quota_delta')
     @mock.patch.object(objects.Instance, 'save')
     @mock.patch.object(flavors, 'extract_flavor')
     @mock.patch.object(compute_api.API, '_check_auto_disk_config')
-    def test_resize_instance(self, _check, _extract, _save, _upsize, _reserve,
-                             _cells, _record):
+    @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
+    def test_resize_instance(self, _bdms, _check, _extract, _save, _upsize,
+                             _reserve, _cells, _record):
         flavor = objects.Flavor(**test_flavor.fake_flavor)
         _extract.return_value = flavor
         orig_system_metadata = {}
@@ -403,7 +405,7 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
                  "properties": {'architecture': 'x86_64'}}
         admin_pass = ''
         files_to_inject = []
-        bdms = []
+        bdms = objects.BlockDeviceMappingList()
 
         _get_image.return_value = (None, image)
         bdm_get_by_instance_uuid.return_value = bdms

@@ -32,6 +32,26 @@ class PathUtilsTestCase(test_base.HyperVBaseTestCase):
 
         self._pathutils = pathutils.PathUtils()
 
+    def _test_smb_conn(self, smb_available=True):
+        self._mock_wmi.x_wmi = Exception
+        self._mock_wmi.WMI.side_effect = None if smb_available else Exception
+
+        self._pathutils._set_smb_conn()
+
+        if smb_available:
+            expected_conn = self._mock_wmi.WMI.return_value
+            self.assertEqual(expected_conn, self._pathutils._smb_conn)
+        else:
+            self.assertRaises(vmutils.HyperVException,
+                              getattr,
+                              self._pathutils, '_smb_conn')
+
+    def test_smb_conn_available(self):
+        self._test_smb_conn()
+
+    def test_smb_conn_unavailable(self):
+        self._test_smb_conn(smb_available=False)
+
     @mock.patch.object(pathutils.PathUtils, 'rename')
     @mock.patch.object(os.path, 'isfile')
     @mock.patch.object(os, 'listdir')
@@ -135,6 +155,24 @@ class PathUtilsTestCase(test_base.HyperVBaseTestCase):
 
     def test_force_unmount_smb_share(self):
         self._test_unmount_smb_share(force=True)
+
+    @mock.patch('time.sleep')
+    @mock.patch('shutil.rmtree')
+    def test_rmtree(self, mock_rmtree, mock_sleep):
+        class WindowsError(Exception):
+            def __init__(self, winerror=None):
+                self.winerror = winerror
+
+        mock_rmtree.side_effect = [WindowsError(
+            pathutils.ERROR_DIR_IS_NOT_EMPTY), True]
+        fake_windows_error = WindowsError
+        with mock.patch('__builtin__.WindowsError',
+                        fake_windows_error, create=True):
+            self._pathutils.rmtree(mock.sentinel.FAKE_PATH)
+
+        mock_rmtree.assert_has_calls([mock.call(mock.sentinel.FAKE_PATH),
+                                      mock.call(mock.sentinel.FAKE_PATH)])
+        mock_sleep.assert_called_once_with(1)
 
     @mock.patch('os.path.join')
     def test_get_instances_sub_dir(self, fake_path_join):

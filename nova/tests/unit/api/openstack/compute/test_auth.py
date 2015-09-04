@@ -1,3 +1,4 @@
+# Copyright 2013 IBM Corp.
 # Copyright 2010 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -20,40 +21,40 @@ from nova import test
 from nova.tests.unit.api.openstack import fakes
 
 
-class TestNoAuthMiddleware(test.NoDBTestCase):
+class TestNoAuthMiddlewareV3(test.NoDBTestCase):
 
     def setUp(self):
-        super(TestNoAuthMiddleware, self).setUp()
+        super(TestNoAuthMiddlewareV3, self).setUp()
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_networking(self.stubs)
 
     def test_authorize_user(self):
-        req = webob.Request.blank('/v2')
+        req = webob.Request.blank('/v2/fake')
         req.headers['X-Auth-User'] = 'user1'
         req.headers['X-Auth-Key'] = 'user1_key'
         req.headers['X-Auth-Project-Id'] = 'user1_project'
-        result = req.get_response(fakes.wsgi_app(use_no_auth=True))
+        result = req.get_response(fakes.wsgi_app_v21(use_no_auth=True))
         self.assertEqual(result.status, '204 No Content')
         self.assertEqual(result.headers['X-Server-Management-Url'],
-            "http://localhost/v2/user1_project")
+            "http://localhost/v2/fake")
 
     def test_authorize_user_trailing_slash(self):
         # make sure it works with trailing slash on the request
-        req = webob.Request.blank('/v2/')
+        req = webob.Request.blank('/v2/fake/')
         req.headers['X-Auth-User'] = 'user1'
         req.headers['X-Auth-Key'] = 'user1_key'
         req.headers['X-Auth-Project-Id'] = 'user1_project'
-        result = req.get_response(fakes.wsgi_app(use_no_auth=True))
+        result = req.get_response(fakes.wsgi_app_v21(use_no_auth=True))
         self.assertEqual(result.status, '204 No Content')
         self.assertEqual(result.headers['X-Server-Management-Url'],
-            "http://localhost/v2/user1_project")
+            "http://localhost/v2/fake")
 
     def test_auth_token_no_empty_headers(self):
-        req = webob.Request.blank('/v2')
+        req = webob.Request.blank('/v2/fake')
         req.headers['X-Auth-User'] = 'user1'
         req.headers['X-Auth-Key'] = 'user1_key'
         req.headers['X-Auth-Project-Id'] = 'user1_project'
-        result = req.get_response(fakes.wsgi_app(use_no_auth=True))
+        result = req.get_response(fakes.wsgi_app_v21(use_no_auth=True))
         self.assertEqual(result.status, '204 No Content')
         self.assertNotIn('X-CDN-Management-Url', result.headers)
         self.assertNotIn('X-Storage-Url', result.headers)

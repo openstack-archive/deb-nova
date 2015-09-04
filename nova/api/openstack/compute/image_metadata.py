@@ -17,13 +17,18 @@ import six
 from webob import exc
 
 from nova.api.openstack import common
+from nova.api.openstack.compute.schemas import image_metadata
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.api import validation
 from nova import exception
 from nova.i18n import _
 import nova.image
 
+ALIAS = 'image-metadata'
 
-class Controller(object):
+
+class ImageMetadataController(wsgi.Controller):
     """The image metadata API controller for the OpenStack API."""
 
     def __init__(self):
@@ -38,12 +43,14 @@ class Controller(object):
             msg = _("Image not found.")
             raise exc.HTTPNotFound(explanation=msg)
 
+    @extensions.expected_errors((403, 404))
     def index(self, req, image_id):
         """Returns the list of metadata for a given instance."""
         context = req.environ['nova.context']
         metadata = self._get_image(context, image_id)['properties']
         return dict(metadata=metadata)
 
+    @extensions.expected_errors((403, 404))
     def show(self, req, image_id, id):
         context = req.environ['nova.context']
         metadata = self._get_image(context, image_id)['properties']
@@ -52,12 +59,13 @@ class Controller(object):
         else:
             raise exc.HTTPNotFound()
 
+    @extensions.expected_errors((400, 403, 404, 413))
+    @validation.schema(image_metadata.create)
     def create(self, req, image_id, body):
         context = req.environ['nova.context']
         image = self._get_image(context, image_id)
-        if 'metadata' in body:
-            for key, value in six.iteritems(body['metadata']):
-                image['properties'][key] = value
+        for key, value in six.iteritems(body['metadata']):
+            image['properties'][key] = value
         common.check_img_metadata_properties_quota(context,
                                                    image['properties'])
         try:
@@ -67,20 +75,15 @@ class Controller(object):
             raise exc.HTTPForbidden(explanation=e.format_message())
         return dict(metadata=image['properties'])
 
+    @extensions.expected_errors((400, 403, 404, 413))
+    @validation.schema(image_metadata.update)
     def update(self, req, image_id, id, body):
         context = req.environ['nova.context']
 
-        try:
-            meta = body['meta']
-        except KeyError:
-            expl = _('Incorrect request body format')
-            raise exc.HTTPBadRequest(explanation=expl)
+        meta = body['meta']
 
         if id not in meta:
             expl = _('Request body and URI mismatch')
-            raise exc.HTTPBadRequest(explanation=expl)
-        if len(meta) > 1:
-            expl = _('Request body contains too many items')
             raise exc.HTTPBadRequest(explanation=expl)
 
         image = self._get_image(context, image_id)
@@ -94,10 +97,12 @@ class Controller(object):
             raise exc.HTTPForbidden(explanation=e.format_message())
         return dict(meta=meta)
 
+    @extensions.expected_errors((400, 403, 404, 413))
+    @validation.schema(image_metadata.update_all)
     def update_all(self, req, image_id, body):
         context = req.environ['nova.context']
         image = self._get_image(context, image_id)
-        metadata = body.get('metadata', {})
+        metadata = body['metadata']
         common.check_img_metadata_properties_quota(context, metadata)
         image['properties'] = metadata
         try:
@@ -107,6 +112,7 @@ class Controller(object):
             raise exc.HTTPForbidden(explanation=e.format_message())
         return dict(metadata=metadata)
 
+    @extensions.expected_errors((403, 404))
     @wsgi.response(204)
     def delete(self, req, image_id, id):
         context = req.environ['nova.context']
@@ -122,5 +128,29 @@ class Controller(object):
             raise exc.HTTPForbidden(explanation=e.format_message())
 
 
-def create_resource():
-    return wsgi.Resource(Controller())
+class ImageMetadata(extensions.V21APIExtensionBase):
+    """Image Metadata API."""
+    name = "ImageMetadata"
+    alias = ALIAS
+    version = 1
+
+    def get_resources(self):
+        parent = {'member_name': 'image',
+                  'collection_name': 'images'}
+        resources = [extensions.ResourceExtension('metadata',
+                                                  ImageMetadataController(),
+                                                  member_name='image_meta',
+                                                  parent=parent,
+                                                  custom_routes_fn=
+                                                  self.image_metadata_map
+                                                  )]
+        return resources
+
+    def get_controller_extensions(self):
+        return []
+
+    def image_metadata_map(self, mapper, wsgi_resource):
+        mapper.connect("metadata",
+                       "/{project_id}/images/{image_id}/metadata",
+                       controller=wsgi_resource,
+                       action='update_all', conditions={"method": ['PUT']})

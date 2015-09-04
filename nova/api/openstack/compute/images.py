@@ -17,12 +17,15 @@ import webob.exc
 
 from nova.api.openstack import common
 from nova.api.openstack.compute.views import images as views_images
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import exception
 from nova.i18n import _
 import nova.image
 import nova.utils
 
+
+ALIAS = 'images'
 
 SUPPORTED_FILTERS = {
     'name': 'name',
@@ -35,13 +38,13 @@ SUPPORTED_FILTERS = {
 }
 
 
-class Controller(wsgi.Controller):
+class ImagesController(wsgi.Controller):
     """Base controller for retrieving/displaying images."""
 
     _view_builder_class = views_images.ViewBuilder
 
     def __init__(self, **kwargs):
-        super(Controller, self).__init__(**kwargs)
+        super(ImagesController, self).__init__(**kwargs)
         self._image_api = nova.image.API()
 
     def _get_filters(self, req):
@@ -71,6 +74,7 @@ class Controller(wsgi.Controller):
 
         return filters
 
+    @extensions.expected_errors(404)
     def show(self, req, id):
         """Return detailed information about a specific image.
 
@@ -81,13 +85,15 @@ class Controller(wsgi.Controller):
 
         try:
             image = self._image_api.get(context, id)
-        except (exception.NotFound, exception.InvalidImageRef):
+        except (exception.ImageNotFound, exception.InvalidImageRef):
             explanation = _("Image not found.")
             raise webob.exc.HTTPNotFound(explanation=explanation)
 
         req.cache_db_items('images', [image], 'id')
         return self._view_builder.show(req, image)
 
+    @extensions.expected_errors((403, 404))
+    @wsgi.response(204)
     def delete(self, req, id):
         """Delete an image, if allowed.
 
@@ -105,8 +111,8 @@ class Controller(wsgi.Controller):
             # raises HTTPForbidden.
             explanation = _("You are not allowed to delete the image.")
             raise webob.exc.HTTPForbidden(explanation=explanation)
-        return webob.exc.HTTPNoContent()
 
+    @extensions.expected_errors(400)
     def index(self, req):
         """Return an index listing of images available to the request.
 
@@ -124,6 +130,7 @@ class Controller(wsgi.Controller):
             raise webob.exc.HTTPBadRequest(explanation=e.format_message())
         return self._view_builder.index(req, images)
 
+    @extensions.expected_errors(400)
     def detail(self, req):
         """Return a detailed index listing of images available to the request.
 
@@ -142,9 +149,21 @@ class Controller(wsgi.Controller):
         req.cache_db_items('images', images, 'id')
         return self._view_builder.detail(req, images)
 
-    def create(self, *args, **kwargs):
-        raise webob.exc.HTTPMethodNotAllowed()
 
+class Images(extensions.V21APIExtensionBase):
+    """Proxying API for Images."""
 
-def create_resource():
-    return wsgi.Resource(Controller())
+    name = "Images"
+    alias = ALIAS
+    version = 1
+
+    def get_resources(self):
+        coll_actions = {'detail': 'GET'}
+        resource = extensions.ResourceExtension(ALIAS,
+                ImagesController(),
+                collection_actions=coll_actions)
+
+        return [resource]
+
+    def get_controller_extensions(self):
+        return []

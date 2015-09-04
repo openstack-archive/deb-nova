@@ -215,6 +215,11 @@ class ComputeRpcAPITestCase(test.NoDBTestCase):
                 instance=self.fake_instance_obj, console_type='serial',
                 version='4.0')
 
+    def test_get_mks_console(self):
+        self._test_compute_api('get_mks_console', 'call',
+                instance=self.fake_instance_obj, console_type='webmks',
+                version='4.3')
+
     def test_validate_console_port(self):
         self._test_compute_api('validate_console_port', 'call',
                 instance=self.fake_instance_obj, port="5900",
@@ -236,7 +241,8 @@ class ComputeRpcAPITestCase(test.NoDBTestCase):
         self._test_compute_api('live_migration', 'cast',
                 instance=self.fake_instance_obj, dest='dest',
                 block_migration='blockity_block', host='tsoh',
-                migrate_data={}, version='4.0')
+                migration='migration',
+                migrate_data={}, version='4.2')
 
     def test_post_live_migration_at_destination(self):
         self._test_compute_api('post_live_migration_at_destination', 'cast',
@@ -321,10 +327,10 @@ class ComputeRpcAPITestCase(test.NoDBTestCase):
                 security_group_id='id', host='host', version='4.0')
 
     def test_refresh_instance_security_rules(self):
-        expected_args = {'instance': self.fake_instance}
+        expected_args = {'instance': self.fake_instance_obj}
         self._test_compute_api('refresh_instance_security_rules', 'cast',
                 expected_args, host='fake_host',
-                instance=self.fake_instance_obj, version='4.0')
+                instance=self.fake_instance_obj, version='4.4')
 
     def test_remove_aggregate_host(self):
         self._test_compute_api('remove_aggregate_host', 'cast',

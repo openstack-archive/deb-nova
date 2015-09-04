@@ -35,6 +35,7 @@ from nova import db
 from nova import exception
 from nova.image import glance
 from nova.network import api as network_api
+from nova.network import model
 from nova import objects
 from nova.objects import block_device as block_device_obj
 from nova import rpc
@@ -46,11 +47,37 @@ from nova.tests.unit import fake_notifier
 from nova.tests.unit import fake_server_actions
 import nova.tests.unit.image.fake
 from nova.tests.unit.objects import test_flavor
+from nova.tests.unit.objects import test_migration
 from nova.virt import driver
 
 CONF = cfg.CONF
 CONF.import_opt('compute_manager', 'nova.service')
 CONF.import_opt('compute_driver', 'nova.virt.driver')
+
+
+def create_instance(context, user_id='fake', project_id='fake', params=None):
+    """Create a test instance."""
+    flavor = flavors.get_flavor_by_name('m1.tiny')
+    net_info = model.NetworkInfo([])
+    info_cache = objects.InstanceInfoCache(network_info=net_info)
+    inst = objects.Instance(context=context,
+                            image_ref=1,
+                            reservation_id='r-fakeres',
+                            user_id=user_id,
+                            project_id=project_id,
+                            instance_type_id=flavor.id,
+                            flavor=flavor,
+                            old_flavor=None,
+                            new_flavor=None,
+                            system_metadata={},
+                            ami_launch_index=0,
+                            root_gb=0,
+                            ephemeral_gb=0,
+                            info_cache=info_cache)
+    if params:
+        inst.update(params)
+    inst.create()
+    return inst
 
 
 class ComputeValidateDeviceTestCase(test.NoDBTestCase):
@@ -285,14 +312,10 @@ class DefaultDeviceNamesForInstanceTestCase(test.NoDBTestCase):
                   'source_type': 'blank',
                   'destination_type': 'volume',
                   'boot_index': -1})])
-        self.flavor = {'swap': 4}
         self.instance = {'uuid': 'fake_instance', 'ephemeral_gb': 2}
         self.is_libvirt = False
         self.root_device_name = '/dev/vda'
         self.update_called = False
-
-        def fake_extract_flavor(instance):
-            return self.flavor
 
         def fake_driver_matches(driver_string):
             if driver_string == 'libvirt.LibvirtDriver':
@@ -302,10 +325,6 @@ class DefaultDeviceNamesForInstanceTestCase(test.NoDBTestCase):
         self.patchers = []
         self.patchers.append(
                 mock.patch.object(objects.BlockDeviceMapping, 'save'))
-        self.patchers.append(
-                mock.patch.object(
-                    flavors, 'extract_flavor',
-                    new=mock.Mock(side_effect=fake_extract_flavor)))
         self.patchers.append(
                 mock.patch.object(driver,
                                   'compute_driver_matches',
@@ -434,31 +453,9 @@ class UsageInfoTestCase(test.TestCase):
         fake_network.set_stub_network_methods(self.stubs)
         fake_server_actions.stub_out_action_events(self.stubs)
 
-    def _create_instance(self, params=None):
-        """Create a test instance."""
-        params = params or {}
-        flavor = flavors.get_flavor_by_name('m1.tiny')
-        sys_meta = flavors.save_flavor_info({}, flavor)
-        inst = {}
-        inst['image_ref'] = 1
-        inst['reservation_id'] = 'r-fakeres'
-        inst['user_id'] = self.user_id
-        inst['project_id'] = self.project_id
-        inst['instance_type_id'] = flavor['id']
-        inst['system_metadata'] = sys_meta
-        inst['ami_launch_index'] = 0
-        inst['root_gb'] = 0
-        inst['ephemeral_gb'] = 0
-        inst['info_cache'] = {'network_info': '[]'}
-        inst.update(params)
-        return db.instance_create(self.context, inst)['id']
-
     def test_notify_usage_exists(self):
         # Ensure 'exists' notification generates appropriate usage data.
-        instance_id = self._create_instance()
-        instance = objects.Instance.get_by_id(self.context, instance_id,
-                                              expected_attrs=[
-                                                  'system_metadata'])
+        instance = create_instance(self.context)
         # Set some system metadata
         sys_metadata = {'image_md_key1': 'val1',
                         'image_md_key2': 'val2',
@@ -494,9 +491,7 @@ class UsageInfoTestCase(test.TestCase):
 
     def test_notify_usage_exists_deleted_instance(self):
         # Ensure 'exists' notification generates appropriate usage data.
-        instance_id = self._create_instance()
-        instance = objects.Instance.get_by_id(self.context, instance_id,
-                expected_attrs=['metadata', 'system_metadata', 'info_cache'])
+        instance = create_instance(self.context)
         # Set some system metadata
         sys_metadata = {'image_md_key1': 'val1',
                         'image_md_key2': 'val2',
@@ -504,9 +499,6 @@ class UsageInfoTestCase(test.TestCase):
         instance.system_metadata.update(sys_metadata)
         instance.save()
         self.compute.terminate_instance(self.context, instance, [], [])
-        instance = objects.Instance.get_by_id(
-                self.context.elevated(read_deleted='yes'), instance_id,
-                expected_attrs=['system_metadata'])
         compute_utils.notify_usage_exists(
             rpc.get_notifier('compute'), self.context, instance)
         msg = fake_notifier.NOTIFICATIONS[-1]
@@ -533,9 +525,7 @@ class UsageInfoTestCase(test.TestCase):
 
     def test_notify_usage_exists_instance_not_found(self):
         # Ensure 'exists' notification generates appropriate usage data.
-        instance_id = self._create_instance()
-        instance = objects.Instance.get_by_id(self.context, instance_id,
-                expected_attrs=['metadata', 'system_metadata', 'info_cache'])
+        instance = create_instance(self.context)
         self.compute.terminate_instance(self.context, instance, [], [])
         compute_utils.notify_usage_exists(
             rpc.get_notifier('compute'), self.context, instance)
@@ -561,9 +551,7 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEqual(payload['image_ref_url'], image_ref_url)
 
     def test_notify_about_instance_usage(self):
-        instance_id = self._create_instance()
-        instance = objects.Instance.get_by_id(self.context, instance_id,
-                expected_attrs=['metadata', 'system_metadata', 'info_cache'])
+        instance = create_instance(self.context)
         # Set some system metadata
         sys_metadata = {'image_md_key1': 'val1',
                         'image_md_key2': 'val2',
@@ -700,3 +688,129 @@ class ComputeUtilsTestCase(test.NoDBTestCase):
             addresses = compute_utils.get_machine_ips()
             self.assertEqual([], addresses)
         mock_ifaddresses.assert_called_once_with(iface)
+
+
+class ComputeUtilsQuotaDeltaTestCase(test.TestCase):
+    def setUp(self):
+        super(ComputeUtilsQuotaDeltaTestCase, self).setUp()
+        self.context = context.RequestContext('fake', 'fake')
+
+    def test_upsize_quota_delta(self):
+        old_flavor = flavors.get_flavor_by_name('m1.tiny')
+        new_flavor = flavors.get_flavor_by_name('m1.medium')
+
+        expected_deltas = {
+            'cores': new_flavor['vcpus'] - old_flavor['vcpus'],
+            'ram': new_flavor['memory_mb'] - old_flavor['memory_mb']
+        }
+
+        deltas = compute_utils.upsize_quota_delta(self.context, new_flavor,
+                                                  old_flavor)
+        self.assertEqual(expected_deltas, deltas)
+
+    def test_downsize_quota_delta(self):
+        inst = create_instance(self.context, params=None)
+        inst.old_flavor = flavors.get_flavor_by_name('m1.medium')
+        inst.new_flavor = flavors.get_flavor_by_name('m1.tiny')
+
+        expected_deltas = {
+            'cores': (inst.new_flavor['vcpus'] -
+                      inst.old_flavor['vcpus']),
+            'ram': (inst.new_flavor['memory_mb'] -
+                    inst.old_flavor['memory_mb'])
+        }
+
+        deltas = compute_utils.downsize_quota_delta(self.context, inst)
+        self.assertEqual(expected_deltas, deltas)
+
+    @mock.patch.object(objects.Flavor, 'get_by_id')
+    def test_reverse_quota_delta(self, mock_get_flavor):
+        inst = create_instance(self.context, params=None)
+        inst.old_flavor = flavors.get_flavor_by_name('m1.tiny')
+        inst.new_flavor = flavors.get_flavor_by_name('m1.medium')
+
+        expected_deltas = {
+            'cores': -1 * (inst.new_flavor['vcpus'] -
+                           inst.old_flavor['vcpus']),
+            'ram': -1 * (inst.new_flavor['memory_mb'] -
+                         inst.old_flavor['memory_mb'])
+        }
+        updates = {'old_instance_type_id': inst.old_flavor['id'],
+                   'new_instance_type_id': inst.new_flavor['id']}
+
+        fake_migration = test_migration.fake_db_migration(**updates)
+
+        def _flavor_get_by_id(context, type_id):
+            if type_id == updates['old_instance_type_id']:
+                return inst.old_flavor
+            else:
+                return inst.new_flavor
+
+        mock_get_flavor.side_effect = _flavor_get_by_id
+        deltas = compute_utils.reverse_upsize_quota_delta(self.context,
+                                                          fake_migration)
+        self.assertEqual(expected_deltas, deltas)
+
+    @mock.patch.object(objects.Quotas, 'reserve')
+    @mock.patch.object(objects.quotas, 'ids_from_instance')
+    def test_reserve_quota_delta(self, mock_ids_from_instance,
+                                 mock_reserve):
+        quotas = objects.Quotas(context=context)
+        inst = create_instance(self.context, params=None)
+        inst.old_flavor = flavors.get_flavor_by_name('m1.tiny')
+        inst.new_flavor = flavors.get_flavor_by_name('m1.medium')
+
+        mock_ids_from_instance.return_value = (inst.project_id, inst.user_id)
+        mock_reserve.return_value = quotas
+
+        deltas = compute_utils.upsize_quota_delta(self.context,
+                                                  inst.new_flavor,
+                                                  inst.old_flavor)
+        compute_utils.reserve_quota_delta(self.context, deltas, inst)
+        mock_reserve.assert_called_once_with(project_id=inst.project_id,
+                                             user_id=inst.user_id, **deltas)
+
+
+class ComputeUtilsMigrationTestCase(test.TestCase):
+    def setUp(self):
+        super(ComputeUtilsMigrationTestCase, self).setUp()
+        self.context = context.RequestContext('fake', 'fake')
+
+    def _test_get_resources(self):
+        old_flavor = flavors.get_flavor_by_name('m1.tiny')
+        new_flavor = flavors.get_flavor_by_name('m1.medium')
+
+        params = {'flavor': new_flavor, 'old_flavor': old_flavor,
+                  'new_flavor': new_flavor, 'vcpus': new_flavor['vcpus'],
+                  'memory_mb': new_flavor['memory_mb']}
+        instance = create_instance(self.context, params=params)
+
+        updates = {'old_instance_type_id': old_flavor['id'],
+                   'new_instance_type_id': new_flavor['id']}
+
+        fake_migration = test_migration.fake_db_migration(**updates)
+        migration = objects.Migration._from_db_object(self.context,
+                                                      objects.Migration(),
+                                                      fake_migration)
+        return old_flavor, migration, instance
+
+    @mock.patch.object(objects.Flavor, 'get_by_id')
+    def test_get_inst_attrs_from_migration(self, mock_get_flavor):
+        old_flavor, migration, instance = self._test_get_resources()
+        expected_result = (old_flavor['vcpus'], old_flavor['memory_mb'])
+
+        mock_get_flavor.return_value = old_flavor
+        result = compute_utils.get_inst_attrs_from_migration(migration,
+                                                             instance)
+        self.assertEqual(expected_result, result)
+
+    @mock.patch.object(objects.Flavor, 'get_by_id')
+    def test_get_inst_attrs_from_migration_flavor_not_found(
+            self, mock_get_flavor):
+        old_flavor, migration, instance = self._test_get_resources()
+        expected_result = (instance.vcpus, instance.memory_mb)
+
+        mock_get_flavor.side_effect = exception.FlavorNotFound(old_flavor.id)
+        result = compute_utils.get_inst_attrs_from_migration(migration,
+                                                             instance)
+        self.assertEqual(expected_result, result)

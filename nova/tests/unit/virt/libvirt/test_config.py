@@ -285,6 +285,7 @@ class LibvirtConfigGuestCPUNUMATest(LibvirtConfigBaseTest):
         cell.id = 0
         cell.cpus = set([0, 1])
         cell.memory = 1000000
+        cell.memAccess = "shared"
 
         obj.cells.append(cell)
 
@@ -292,14 +293,15 @@ class LibvirtConfigGuestCPUNUMATest(LibvirtConfigBaseTest):
         cell.id = 1
         cell.cpus = set([2, 3])
         cell.memory = 1500000
+        cell.memAccess = "private"
 
         obj.cells.append(cell)
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
             <numa>
-              <cell id="0" cpus="0-1" memory="1000000"/>
-              <cell id="1" cpus="2-3" memory="1500000"/>
+              <cell id="0" cpus="0-1" memory="1000000" memAccess="shared"/>
+              <cell id="1" cpus="2-3" memory="1500000" memAccess="private"/>
             </numa>
         """)
 
@@ -430,6 +432,7 @@ class LibvirtConfigGuestCPUTest(LibvirtConfigBaseTest):
         cell.id = 0
         cell.cpus = set([0, 1])
         cell.memory = 1000000
+        cell.memAccess = "private"
 
         numa.cells.append(cell)
 
@@ -446,7 +449,7 @@ class LibvirtConfigGuestCPUTest(LibvirtConfigBaseTest):
         self.assertXmlEqual(xml, """
             <cpu mode="host-model" match="exact">
               <numa>
-                <cell id="0" cpus="0-1" memory="1000000"/>
+                <cell id="0" cpus="0-1" memory="1000000" memAccess="private"/>
                 <cell id="1" cpus="2-3" memory="1500000"/>
               </numa>
             </cpu>
@@ -496,6 +499,7 @@ class LibvirtConfigGuestSysinfoTest(LibvirtConfigBaseTest):
         obj.system_version = "6.6.6"
         obj.system_serial = "123456"
         obj.system_uuid = "c7a5fdbd-edaf-9455-926a-d65c16db1809"
+        obj.system_family = "Anvils"
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
@@ -506,6 +510,7 @@ class LibvirtConfigGuestSysinfoTest(LibvirtConfigBaseTest):
                 <entry name="version">6.6.6</entry>
                 <entry name="serial">123456</entry>
                 <entry name="uuid">c7a5fdbd-edaf-9455-926a-d65c16db1809</entry>
+                <entry name="family">Anvils</entry>
               </system>
             </sysinfo>
         """)
@@ -516,6 +521,7 @@ class LibvirtConfigGuestSysinfoTest(LibvirtConfigBaseTest):
         obj.system_manufacturer = "Acme"
         obj.system_product = "Wile Coyote"
         obj.system_uuid = "c7a5fdbd-edaf-9455-926a-d65c16db1809"
+        obj.system_family = "Anvils"
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
@@ -527,6 +533,7 @@ class LibvirtConfigGuestSysinfoTest(LibvirtConfigBaseTest):
                 <entry name="manufacturer">Acme</entry>
                 <entry name="product">Wile Coyote</entry>
                 <entry name="uuid">c7a5fdbd-edaf-9455-926a-d65c16db1809</entry>
+                <entry name="family">Anvils</entry>
               </system>
             </sysinfo>
         """)
@@ -562,6 +569,76 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.source_path, '/tmp/hello')
         self.assertEqual(obj.target_dev, '/dev/hda')
         self.assertEqual(obj.target_bus, 'ide')
+        self.assertFalse(obj.readonly)
+        self.assertFalse(obj.shareable)
+
+    def test_config_file_readonly(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "file"
+        obj.source_path = "/tmp/hello"
+        obj.target_dev = "/dev/hda"
+        obj.target_bus = "ide"
+        obj.readonly = True
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="file" device="disk">
+              <source file="/tmp/hello"/>
+              <target bus="ide" dev="/dev/hda"/>
+              <readonly/>
+            </disk>""")
+
+    def test_config_file_parse_readonly(self):
+        xml = """<disk type="file" device="disk">
+                   <source file="/tmp/hello"/>
+                   <target bus="ide" dev="/dev/hda"/>
+                   <readonly/>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'file')
+        self.assertEqual(obj.source_path, '/tmp/hello')
+        self.assertEqual(obj.target_dev, '/dev/hda')
+        self.assertEqual(obj.target_bus, 'ide')
+        self.assertTrue(obj.readonly)
+        self.assertFalse(obj.shareable)
+
+    def test_config_file_shareable(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.source_type = "file"
+        obj.source_path = "/tmp/hello"
+        obj.target_dev = "/dev/hda"
+        obj.target_bus = "ide"
+        obj.shareable = True
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <disk type="file" device="disk">
+              <source file="/tmp/hello"/>
+              <target bus="ide" dev="/dev/hda"/>
+              <shareable/>
+            </disk>""")
+
+    def test_config_file_parse_shareable(self):
+        xml = """<disk type="file" device="disk">
+                   <source file="/tmp/hello"/>
+                   <target bus="ide" dev="/dev/hda"/>
+                   <shareable/>
+                 </disk>"""
+        xmldoc = etree.fromstring(xml)
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+
+        self.assertEqual(obj.source_type, 'file')
+        self.assertEqual(obj.source_path, '/tmp/hello')
+        self.assertEqual(obj.target_dev, '/dev/hda')
+        self.assertEqual(obj.target_bus, 'ide')
+        self.assertFalse(obj.readonly)
+        self.assertTrue(obj.shareable)
 
     def test_config_file_serial(self):
         obj = config.LibvirtConfigGuestDisk()
@@ -1187,6 +1264,24 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
                 <inbound average="1024000" peak="10240000" burst="1024000"/>
                 <outbound average="1024000" peak="10240000" burst="1024000"/>
               </bandwidth>
+            </interface>""")
+
+    def test_config_driver_options(self):
+        obj = config.LibvirtConfigGuestInterface()
+        obj.net_type = "ethernet"
+        obj.mac_addr = "DE:AD:BE:EF:CA:FE"
+        obj.model = "virtio"
+        obj.target_dev = "vnet0"
+        obj.driver_name = "vhost"
+        obj.vhost_queues = 4
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <interface type="ethernet">
+              <mac address="DE:AD:BE:EF:CA:FE"/>
+              <model type="virtio"/>
+              <driver name="vhost" queues="4"/>
+              <target dev="vnet0"/>
             </interface>""")
 
     def test_config_bridge(self):
@@ -2114,31 +2209,6 @@ class LibvirtConfigNodeDevicePciCapTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.fun_capability[1].device_addrs,
                          [(0, 10, 1, 1), ])
 
-    def test_config_read_only_disk(self):
-        obj = config.LibvirtConfigGuestDisk()
-        obj.source_type = "disk"
-        obj.source_device = "disk"
-        obj.driver_name = "kvm"
-        obj.target_dev = "/dev/hdc"
-        obj.target_bus = "virtio"
-        obj.readonly = True
-
-        xml = obj.to_xml()
-        self.assertXmlEqual(xml, """
-            <disk type="disk" device="disk">
-                <driver name="kvm"/>
-                <target bus="virtio" dev="/dev/hdc"/>
-                <readonly/>
-            </disk>""")
-
-        obj.readonly = False
-        xml = obj.to_xml()
-        self.assertXmlEqual(xml, """
-            <disk type="disk" device="disk">
-                <driver name="kvm"/>
-                <target bus="virtio" dev="/dev/hdc"/>
-            </disk>""")
-
 
 class LibvirtConfigNodeDevicePciSubFunctionCap(LibvirtConfigBaseTest):
 
@@ -2325,7 +2395,7 @@ class LibvirtConfigGuestMemoryBackingTest(LibvirtConfigBaseTest):
             <hugepages>
               <page size="2048" unit="KiB" nodeset="2-3"/>
             </hugepages>
-            <nosharedpages/>
+            <nosharepages/>
             <locked/>
           </memoryBacking>""")
 

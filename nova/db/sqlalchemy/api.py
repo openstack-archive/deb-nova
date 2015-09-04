@@ -30,6 +30,7 @@ from oslo_db import api as oslo_db_api
 from oslo_db import exception as db_exc
 from oslo_db import options as oslo_db_options
 from oslo_db.sqlalchemy import session as db_session
+from oslo_db.sqlalchemy import update_match
 from oslo_db.sqlalchemy import utils as sqlalchemyutils
 from oslo_log import log as logging
 from oslo_utils import excutils
@@ -38,9 +39,7 @@ from oslo_utils import uuidutils
 import six
 from six.moves import range
 from sqlalchemy import and_
-from sqlalchemy import Boolean
 from sqlalchemy.exc import NoSuchTableError
-from sqlalchemy import Integer
 from sqlalchemy import MetaData
 from sqlalchemy import or_
 from sqlalchemy.orm import aliased
@@ -57,7 +56,6 @@ from sqlalchemy.sql import false
 from sqlalchemy.sql import func
 from sqlalchemy.sql import null
 from sqlalchemy.sql import true
-from sqlalchemy import String
 
 from nova import block_device
 from nova.compute import task_states
@@ -128,7 +126,6 @@ CONF = cfg.CONF
 CONF.register_opts(db_opts)
 CONF.register_opts(oslo_db_options.database_opts, 'database')
 CONF.register_opts(api_db_opts, group='api_database')
-CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 
 LOG = logging.getLogger(__name__)
 
@@ -200,20 +197,6 @@ PER_PROJECT_QUOTAS = ['fixed_ips', 'floating_ips', 'networks']
 def get_backend():
     """The backend is this module itself."""
     return sys.modules[__name__]
-
-
-def require_admin_context(f):
-    """Decorator to require admin request context.
-
-    The first argument to the wrapped function must be the context.
-
-    """
-
-    @functools.wraps(f)
-    def wrapper(*args, **kwargs):
-        nova.context.require_admin_context(args[0])
-        return f(*args, **kwargs)
-    return wrapper
 
 
 def require_context(f):
@@ -393,7 +376,7 @@ class Constraint(object):
         self.conditions = conditions
 
     def apply(self, model, query):
-        for key, condition in self.conditions.iteritems():
+        for key, condition in self.conditions.items():
             for clause in condition.clauses(getattr(model, key)):
                 query = query.filter(clause)
         return query
@@ -694,30 +677,26 @@ def compute_node_statistics(context):
 ###################
 
 
-@require_admin_context
 def certificate_create(context, values):
     certificate_ref = models.Certificate()
-    for (key, value) in values.iteritems():
+    for (key, value) in values.items():
         certificate_ref[key] = value
     certificate_ref.save()
     return certificate_ref
 
 
-@require_admin_context
 def certificate_get_all_by_project(context, project_id):
     return model_query(context, models.Certificate, read_deleted="no").\
                    filter_by(project_id=project_id).\
                    all()
 
 
-@require_admin_context
 def certificate_get_all_by_user(context, user_id):
     return model_query(context, models.Certificate, read_deleted="no").\
                    filter_by(user_id=user_id).\
                    all()
 
 
-@require_admin_context
 def certificate_get_all_by_user_and_project(context, user_id, project_id):
     return model_query(context, models.Certificate, read_deleted="no").\
                    filter_by(user_id=user_id).\
@@ -847,7 +826,7 @@ def floating_ip_bulk_destroy(context, ips):
     # Delete the quotas, if needed.
     # Quota update happens in a separate transaction, so previous must have
     # been committed first.
-    for project_id, count in project_id_to_quota_count.iteritems():
+    for project_id, count in project_id_to_quota_count.items():
         try:
             reservations = quota.QUOTAS.reserve(context,
                                                 project_id=project_id,
@@ -1072,7 +1051,6 @@ def _dnsdomain_get_or_create(context, session, fqdomain):
     return domain_ref
 
 
-@require_admin_context
 def dnsdomain_register_for_zone(context, fqdomain, zone):
     session = get_session()
     with session.begin():
@@ -1082,7 +1060,6 @@ def dnsdomain_register_for_zone(context, fqdomain, zone):
         session.add(domain_ref)
 
 
-@require_admin_context
 def dnsdomain_register_for_project(context, fqdomain, project):
     session = get_session()
     with session.begin():
@@ -1092,7 +1069,6 @@ def dnsdomain_register_for_project(context, fqdomain, project):
         session.add(domain_ref)
 
 
-@require_admin_context
 def dnsdomain_unregister(context, fqdomain):
     model_query(context, models.DNSDomain).\
                  filter_by(domain=fqdomain).\
@@ -1106,7 +1082,6 @@ def dnsdomain_get_all(context):
 ###################
 
 
-@require_admin_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def fixed_ip_associate(context, address, instance_uuid, network_id=None,
@@ -1157,7 +1132,6 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
     return fixed_ip_ref
 
 
-@require_admin_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
@@ -1544,7 +1518,7 @@ def virtual_interface_get_all(context):
 def _metadata_refs(metadata_dict, meta_class):
     metadata_refs = []
     if metadata_dict:
-        for k, v in metadata_dict.iteritems():
+        for k, v in metadata_dict.items():
             metadata_ref = meta_class()
             metadata_ref['key'] = k
             metadata_ref['value'] = v
@@ -1592,13 +1566,13 @@ def _handle_objects_related_type_conversions(values):
             values[key] = str(values[key])
 
     datetime_keys = ('created_at', 'deleted_at', 'updated_at',
-                     'launched_at', 'terminated_at', 'scheduled_at')
+                     'launched_at', 'terminated_at')
     convert_objects_related_datetimes(values, *datetime_keys)
 
 
-def _check_instance_exists(context, session, instance_uuid):
+def _check_instance_exists_in_project(context, session, instance_uuid):
     if not model_query(context, models.Instance, session=session,
-                       read_deleted="no").filter_by(
+                       read_deleted="no", project_only=True).filter_by(
                        uuid=instance_uuid).first():
         raise exception.InstanceNotFound(instance_id=instance_uuid)
 
@@ -1718,6 +1692,13 @@ def instance_destroy(context, instance_uuid, constraint=None):
         model_query(context, models.InstanceExtra, session=session).\
                 filter_by(instance_uuid=instance_uuid).\
                 soft_delete()
+        model_query(context, models.InstanceSystemMetadata, session=session).\
+                filter_by(instance_uuid=instance_uuid).\
+                soft_delete()
+        # NOTE(snikitin): We can't use model_query here, because there is no
+        # column 'deleted' in 'tags' table.
+        session.query(models.Tag).filter_by(resource_id=instance_uuid).delete()
+
     return instance_ref
 
 
@@ -1817,7 +1798,7 @@ def _instances_fill_metadata(context, instances,
 
     filled_instances = []
     for inst in instances:
-        inst = dict(inst.iteritems())
+        inst = dict(inst)
         inst['system_metadata'] = sys_meta[inst['uuid']]
         inst['metadata'] = meta[inst['uuid']]
         if 'pci_devices' in manual_joins:
@@ -2062,13 +2043,9 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
     # paginate query
     if marker is not None:
         try:
-            if deleted:
-                marker = _instance_get_by_uuid(
+            marker = _instance_get_by_uuid(
                     context.elevated(read_deleted='yes'), marker,
                     session=session)
-            else:
-                marker = _instance_get_by_uuid(context,
-                                               marker, session=session)
         except exception.InstanceNotFound:
             raise exception.MarkerNotFound(marker)
     try:
@@ -2216,7 +2193,7 @@ def _exact_instance_filter(query, filters, legal_keys):
                         query = query.filter(column_attr.any(value=v))
 
             else:
-                for k, v in value.iteritems():
+                for k, v in value.items():
                     query = query.filter(column_attr.any(key=k))
                     query = query.filter(column_attr.any(value=v))
         elif isinstance(value, (list, tuple, set, frozenset)):
@@ -2385,8 +2362,7 @@ def instance_get_all_by_host_and_node(context, host, node,
         manual_joins = []
     else:
         candidates = ['system_metadata', 'metadata']
-        manual_joins = filter(lambda x: x in candidates,
-                              columns_to_join)
+        manual_joins = [x for x in columns_to_join if x in candidates]
         columns_to_join = list(set(columns_to_join) - set(candidates))
     return _instances_fill_metadata(context,
             _instance_get_all_query(
@@ -2395,11 +2371,19 @@ def instance_get_all_by_host_and_node(context, host, node,
                 filter_by(node=node).all(), manual_joins=manual_joins)
 
 
-@require_admin_context
 def instance_get_all_by_host_and_not_type(context, host, type_id=None):
     return _instances_fill_metadata(context,
         _instance_get_all_query(context).filter_by(host=host).
                    filter(models.Instance.instance_type_id != type_id).all())
+
+
+def instance_get_all_by_grantee_security_groups(context, group_ids):
+    return _instances_fill_metadata(context,
+        _instance_get_all_query(context).
+            join(models.Instance.security_groups).
+            filter(models.SecurityGroup.rules.any(
+                models.SecurityGroupIngressRule.group_id.in_(group_ids))).
+            all())
 
 
 @require_context
@@ -2417,7 +2401,6 @@ def instance_floating_address_get_all(context, instance_uuid):
 
 
 # NOTE(hanlind): This method can be removed as conductor RPC API moves to v2.0.
-@require_admin_context
 def instance_get_all_hung_in_rebooting(context, reboot_window):
     reboot_window = (timeutils.utcnow() -
                      datetime.timedelta(seconds=reboot_window))
@@ -2432,15 +2415,29 @@ def instance_get_all_hung_in_rebooting(context, reboot_window):
         manual_joins=[])
 
 
-@require_context
-def instance_update(context, instance_uuid, values):
-    instance_ref = _instance_update(context, instance_uuid, values)[1]
-    return instance_ref
+def _retry_instance_update():
+    """Wrap with oslo_db_api.wrap_db_retry, and also retry on
+    UnknownInstanceUpdateConflict.
+    """
+    exception_checker = \
+        lambda exc: isinstance(exc, (exception.UnknownInstanceUpdateConflict,))
+    return oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
+                                     exception_checker=exception_checker)
 
 
 @require_context
+@_retry_instance_update()
+def instance_update(context, instance_uuid, values, expected=None):
+    session = get_session()
+    with session.begin():
+        return _instance_update(context, session, instance_uuid,
+                                values, expected)
+
+
+@require_context
+@_retry_instance_update()
 def instance_update_and_get_original(context, instance_uuid, values,
-                                     columns_to_join=None):
+                                     columns_to_join=None, expected=None):
     """Set the given properties on an instance and update it. Return
     a shallow copy of the original instance reference, as well as the
     updated one.
@@ -2457,9 +2454,14 @@ def instance_update_and_get_original(context, instance_uuid, values,
 
     Raises NotFound if instance does not exist.
     """
-    return _instance_update(context, instance_uuid, values,
-                            copy_old_instance=True,
-                            columns_to_join=columns_to_join)
+    session = get_session()
+    with session.begin():
+        instance_ref = _instance_get_by_uuid(context, instance_uuid,
+                                             columns_to_join=columns_to_join,
+                                             session=session)
+        return (copy.copy(instance_ref),
+                _instance_update(context, session, instance_uuid, values,
+                                 expected, original=instance_ref))
 
 
 # NOTE(danms): This updates the instance's metadata list in-place and in
@@ -2476,10 +2478,19 @@ def _instance_metadata_update_in_place(context, instance, metadata_type, model,
         elif key not in metadata:
             to_delete.append(keyvalue)
 
-    for condemned in to_delete:
-        condemned.soft_delete(session=session)
+    # NOTE: we have to hard_delete here otherwise we will get more than one
+    # system_metadata record when we read deleted for an instance;
+    # regular metadata doesn't have the same problem because we don't
+    # allow reading deleted regular metadata anywhere.
+    if metadata_type == 'system_metadata':
+        for condemned in to_delete:
+            session.delete(condemned)
+            instance[metadata_type].remove(condemned)
+    else:
+        for condemned in to_delete:
+            condemned.soft_delete(session=session)
 
-    for key, value in metadata.iteritems():
+    for key, value in metadata.items():
         newitem = model()
         newitem.update({'key': key, 'value': value,
                         'instance_uuid': instance['uuid']})
@@ -2487,73 +2498,122 @@ def _instance_metadata_update_in_place(context, instance, metadata_type, model,
         instance[metadata_type].append(newitem)
 
 
-@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
-def _instance_update(context, instance_uuid, values, copy_old_instance=False,
-                     columns_to_join=None):
-    session = get_session()
-
+def _instance_update(context, session, instance_uuid, values, expected,
+                     original=None):
     if not uuidutils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(instance_uuid)
 
-    with session.begin():
-        instance_ref = _instance_get_by_uuid(context, instance_uuid,
-                                             session=session,
-                                             columns_to_join=columns_to_join)
-        if "expected_task_state" in values:
-            # it is not a db column so always pop out
-            expected = values.pop("expected_task_state")
-            if not isinstance(expected, (tuple, list, set)):
-                expected = (expected,)
-            actual_state = instance_ref["task_state"]
-            if actual_state not in expected:
-                if actual_state == task_states.DELETING:
-                    raise exception.UnexpectedDeletingTaskStateError(
-                            actual=actual_state, expected=expected)
-                else:
-                    raise exception.UnexpectedTaskStateError(
-                            actual=actual_state, expected=expected)
-        if "expected_vm_state" in values:
-            expected = values.pop("expected_vm_state")
-            if not isinstance(expected, (tuple, list, set)):
-                expected = (expected,)
-            actual_state = instance_ref["vm_state"]
-            if actual_state not in expected:
-                raise exception.UnexpectedVMStateError(actual=actual_state,
-                                                       expected=expected)
+    if expected is None:
+        expected = {}
+    else:
+        # Coerce all single values to singleton lists
+        expected = {k: [None] if v is None else sqlalchemyutils.to_list(v)
+                       for (k, v) in six.iteritems(expected)}
 
-        instance_hostname = instance_ref['hostname'] or ''
-        if ("hostname" in values and
-                values["hostname"].lower() != instance_hostname.lower()):
-                _validate_unique_server_name(context,
-                                             session,
-                                             values['hostname'])
+    # Extract 'expected_' values from values dict, as these aren't actually
+    # updates
+    for field in ('task_state', 'vm_state'):
+        expected_field = 'expected_%s' % field
+        if expected_field in values:
+            value = values.pop(expected_field, None)
+            # Coerce all single values to singleton lists
+            if value is None:
+                expected[field] = [None]
+            else:
+                expected[field] = sqlalchemyutils.to_list(value)
 
-        if copy_old_instance:
-            old_instance_ref = copy.copy(instance_ref)
+    # Values which need to be updated separately
+    metadata = values.pop('metadata', None)
+    system_metadata = values.pop('system_metadata', None)
+
+    _handle_objects_related_type_conversions(values)
+
+    # Hostname is potentially unique, but this is enforced in code rather
+    # than the DB. The query below races, but the number of users of
+    # osapi_compute_unique_server_name_scope is small, and a robust fix
+    # will be complex. This is intentionally left as is for the moment.
+    if 'hostname' in values:
+        _validate_unique_server_name(context, session, values['hostname'])
+
+    compare = models.Instance(uuid=instance_uuid, **expected)
+    try:
+        instance_ref = model_query(context, models.Instance,
+                                   project_only=True, session=session).\
+                       update_on_match(compare, 'uuid', values)
+    except update_match.NoRowsMatched:
+        # Update failed. Try to find why and raise a specific error.
+
+        # We should get here only because our expected values were not current
+        # when update_on_match executed. Having failed, we now have a hint that
+        # the values are out of date and should check them.
+
+        # This code is made more complex because we are using repeatable reads.
+        # If we have previously read the original instance in the current
+        # transaction, reading it again will return the same data, even though
+        # the above update failed because it has changed: it is not possible to
+        # determine what has changed in this transaction. In this case we raise
+        # UnknownInstanceUpdateConflict, which will cause the operation to be
+        # retried in a new transaction.
+
+        # Because of the above, if we have previously read the instance in the
+        # current transaction it will have been passed as 'original', and there
+        # is no point refreshing it. If we have not previously read the
+        # instance, we can fetch it here and we will get fresh data.
+        if original is None:
+            original = _instance_get_by_uuid(context, instance_uuid,
+                                             session=session)
+
+        conflicts_expected = {}
+        conflicts_actual = {}
+        for (field, expected_values) in six.iteritems(expected):
+            actual = original[field]
+            if actual not in expected_values:
+                conflicts_expected[field] = expected_values
+                conflicts_actual[field] = actual
+
+        # Exception properties
+        exc_props = {
+            'instance_uuid': instance_uuid,
+            'expected': conflicts_expected,
+            'actual': conflicts_actual
+        }
+
+        # There was a conflict, but something (probably the MySQL read view,
+        # but possibly an exceptionally unlikely second race) is preventing us
+        # from seeing what it is. When we go round again we'll get a fresh
+        # transaction and a fresh read view.
+        if len(conflicts_actual) == 0:
+            raise exception.UnknownInstanceUpdateConflict(**exc_props)
+
+        # Task state gets special handling for convenience. We raise the
+        # specific error UnexpectedDeletingTaskStateError or
+        # UnexpectedTaskStateError as appropriate
+        if 'task_state' in conflicts_actual:
+            conflict_task_state = conflicts_actual['task_state']
+            if conflict_task_state == task_states.DELETING:
+                exc = exception.UnexpectedDeletingTaskStateError
+            else:
+                exc = exception.UnexpectedTaskStateError
+
+        # Everything else is an InstanceUpdateConflict
         else:
-            old_instance_ref = None
+            exc = exception.InstanceUpdateConflict
 
-        metadata = values.get('metadata')
-        if metadata is not None:
-            _instance_metadata_update_in_place(context, instance_ref,
-                                               'metadata',
-                                               models.InstanceMetadata,
-                                               values.pop('metadata'),
-                                               session)
+        raise exc(**exc_props)
 
-        system_metadata = values.get('system_metadata')
-        if system_metadata is not None:
-            _instance_metadata_update_in_place(context, instance_ref,
-                                               'system_metadata',
-                                               models.InstanceSystemMetadata,
-                                               values.pop('system_metadata'),
-                                               session)
+    if metadata is not None:
+        _instance_metadata_update_in_place(context, instance_ref,
+                                           'metadata',
+                                           models.InstanceMetadata,
+                                           metadata, session)
 
-        _handle_objects_related_type_conversions(values)
-        instance_ref.update(values)
-        session.add(instance_ref)
+    if system_metadata is not None:
+        _instance_metadata_update_in_place(context, instance_ref,
+                                           'system_metadata',
+                                           models.InstanceSystemMetadata,
+                                           system_metadata, session)
 
-    return (old_instance_ref, instance_ref)
+    return instance_ref
 
 
 def instance_add_security_group(context, instance_uuid, security_group_id):
@@ -2661,7 +2721,8 @@ def instance_extra_get_by_instance_uuid(context, instance_uuid,
     query = model_query(context, models.InstanceExtra).\
         filter_by(instance_uuid=instance_uuid)
     if columns is None:
-        columns = ['numa_topology', 'pci_requests', 'flavor', 'vcpu_model']
+        columns = ['numa_topology', 'pci_requests', 'flavor', 'vcpu_model',
+                   'migration_context']
     for column in columns:
         query = query.options(undefer(column))
     instance_extra = query.first()
@@ -2684,7 +2745,6 @@ def key_pair_create(context, values):
 
 @require_context
 def key_pair_destroy(context, user_id, name):
-    nova.context.authorize_user_context(context, user_id)
     result = model_query(context, models.KeyPair).\
                          filter_by(user_id=user_id).\
                          filter_by(name=name).\
@@ -2695,7 +2755,6 @@ def key_pair_destroy(context, user_id, name):
 
 @require_context
 def key_pair_get(context, user_id, name):
-    nova.context.authorize_user_context(context, user_id)
     result = model_query(context, models.KeyPair).\
                      filter_by(user_id=user_id).\
                      filter_by(name=name).\
@@ -2709,14 +2768,13 @@ def key_pair_get(context, user_id, name):
 
 @require_context
 def key_pair_get_all_by_user(context, user_id):
-    nova.context.authorize_user_context(context, user_id)
     return model_query(context, models.KeyPair, read_deleted="no").\
                    filter_by(user_id=user_id).\
                    all()
 
 
+@require_context
 def key_pair_count_by_user(context, user_id):
-    nova.context.authorize_user_context(context, user_id)
     return model_query(context, models.KeyPair, read_deleted="no").\
                    filter_by(user_id=user_id).\
                    count()
@@ -2818,7 +2876,6 @@ def network_delete_safe(context, network_id):
         session.delete(network_ref)
 
 
-@require_admin_context
 def network_disassociate(context, network_id, disassociate_host,
                          disassociate_project):
     net_update = {}
@@ -3001,7 +3058,6 @@ def network_get_all_by_host(context, host):
                        all()
 
 
-@require_admin_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def network_set_host(context, network_id, host_id):
@@ -3164,8 +3220,6 @@ def quota_class_get_default(context):
 
 @require_context
 def quota_class_get_all_by_name(context, class_name):
-    nova.context.authorize_quota_class_context(context, class_name)
-
     rows = model_query(context, models.QuotaClass, read_deleted="no").\
                    filter_by(class_name=class_name).\
                    all()
@@ -3177,7 +3231,6 @@ def quota_class_get_all_by_name(context, class_name):
     return result
 
 
-@require_admin_context
 def quota_class_create(context, class_name, resource, limit):
     quota_class_ref = models.QuotaClass()
     quota_class_ref.class_name = class_name
@@ -3187,7 +3240,6 @@ def quota_class_create(context, class_name, resource, limit):
     return quota_class_ref
 
 
-@require_admin_context
 def quota_class_update(context, class_name, resource, limit):
     result = model_query(context, models.QuotaClass, read_deleted="no").\
                      filter_by(class_name=class_name).\
@@ -3695,7 +3747,6 @@ def quota_destroy_all_by_project(context, project_id):
                 soft_delete(synchronize_session=False)
 
 
-@require_admin_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 def reservation_expire(context):
     session = get_session()
@@ -4233,15 +4284,6 @@ def security_group_rule_get_by_security_group(context, security_group_id,
 
 
 @require_context
-def security_group_rule_get_by_security_group_grantee(context,
-                                                      security_group_id):
-
-    return (_security_group_rule_get_query(context).
-                         filter_by(group_id=security_group_id).
-                         all())
-
-
-@require_context
 def security_group_rule_create(context, values):
     return _security_group_rule_create(context, values)
 
@@ -4314,7 +4356,6 @@ def security_group_default_rule_list(context):
 ###################
 
 
-@require_admin_context
 def provider_fw_rule_create(context, rule):
     fw_rule_ref = models.ProviderFirewallRule()
     fw_rule_ref.update(rule)
@@ -4322,12 +4363,10 @@ def provider_fw_rule_create(context, rule):
     return fw_rule_ref
 
 
-@require_admin_context
 def provider_fw_rule_get_all(context):
     return model_query(context, models.ProviderFirewallRule).all()
 
 
-@require_admin_context
 def provider_fw_rule_destroy(context, rule_id):
     session = get_session()
     with session.begin():
@@ -4566,7 +4605,7 @@ def flavor_create(context, values, projects=None):
     specs = values.get('extra_specs')
     specs_refs = []
     if specs:
-        for k, v in specs.iteritems():
+        for k, v in specs.items():
             specs_ref = models.InstanceTypeExtraSpecs()
             specs_ref['key'] = k
             specs_ref['value'] = v
@@ -4851,7 +4890,7 @@ def flavor_extra_specs_update_or_create(context, flavor_id, specs,
                     existing_keys.add(key)
                     spec_ref.update({"value": specs[key]})
 
-                for key, value in specs.iteritems():
+                for key, value in specs.items():
                     if key in existing_keys:
                         continue
                     spec_ref = models.InstanceTypeExtraSpecs()
@@ -4986,7 +5025,8 @@ def _instance_system_metadata_get_multi(context, instance_uuids,
     if not instance_uuids:
         return []
     return model_query(context, models.InstanceSystemMetadata,
-                       session=session, use_slave=use_slave).\
+                       session=session, use_slave=use_slave,
+                       read_deleted='yes').\
                     filter(
             models.InstanceSystemMetadata.instance_uuid.in_(instance_uuids))
 
@@ -5131,14 +5171,15 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
                   'last_ctr_out': last_ctr_out,
                   'bw_in': bw_in,
                   'bw_out': bw_out}
-        rows = model_query(context, models.BandwidthUsage,
-                              session=session, read_deleted="yes").\
-                      filter_by(start_period=ts_values['start_period']).\
-                      filter_by(uuid=uuid).\
-                      filter_by(mac=mac).\
-                      update(values, synchronize_session=False)
-        if rows:
-            return
+        bw_usage = model_query(context, models.BandwidthUsage, session=session,
+                read_deleted='yes').\
+                        filter_by(start_period=ts_values['start_period']).\
+                        filter_by(uuid=uuid).\
+                        filter_by(mac=mac).first()
+
+        if bw_usage:
+            bw_usage.update(values)
+            return bw_usage
 
         bwusage = models.BandwidthUsage()
         bwusage.start_period = ts_values['start_period']
@@ -5155,6 +5196,7 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
             # NOTE(sirp): Possible race if two greenthreads attempt to create
             # the usage entry at the same time. First one wins.
             pass
+        return bwusage
 
 
 ####################
@@ -5543,7 +5585,7 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False,
                     already_existing_keys.add(key)
 
                 new_entries = []
-                for key, value in metadata.iteritems():
+                for key, value in metadata.items():
                     if key in already_existing_keys:
                         continue
                     new_entries.append({"key": key,
@@ -5610,7 +5652,7 @@ def instance_fault_create(context, values):
     fault_ref = models.InstanceFault()
     fault_ref.update(values)
     fault_ref.save()
-    return dict(fault_ref.iteritems())
+    return dict(fault_ref)
 
 
 def instance_fault_get_by_instance_uuids(context, instance_uuids):
@@ -5835,10 +5877,14 @@ def _ec2_instance_get_query(context, session=None):
 
 def _task_log_get_query(context, task_name, period_beginning,
                         period_ending, host=None, state=None, session=None):
+    values = {'period_beginning': period_beginning,
+              'period_ending': period_ending}
+    values = convert_objects_related_datetimes(values, *values.keys())
+
     query = model_query(context, models.TaskLog, session=session).\
                      filter_by(task_name=task_name).\
-                     filter_by(period_beginning=period_beginning).\
-                     filter_by(period_ending=period_ending)
+                     filter_by(period_beginning=values['period_beginning']).\
+                     filter_by(period_ending=values['period_ending'])
     if host is not None:
         query = query.filter_by(host=host)
     if state is not None:
@@ -5860,11 +5906,14 @@ def task_log_get_all(context, task_name, period_beginning, period_ending,
 
 def task_log_begin_task(context, task_name, period_beginning, period_ending,
                         host, task_items=None, message=None):
+    values = {'period_beginning': period_beginning,
+              'period_ending': period_ending}
+    values = convert_objects_related_datetimes(values, *values.keys())
 
     task = models.TaskLog()
     task.task_name = task_name
-    task.period_beginning = period_beginning
-    task.period_ending = period_ending
+    task.period_beginning = values['period_beginning']
+    task.period_ending = values['period_ending']
     task.host = host
     task.state = "RUNNING"
     if message:
@@ -5893,32 +5942,6 @@ def task_log_end_task(context, task_name, period_beginning, period_ending,
             raise exception.TaskNotRunning(task_name=task_name, host=host)
 
 
-def _get_default_deleted_value(table):
-    # TODO(dripton): It would be better to introspect the actual default value
-    # from the column, but I don't see a way to do that in the low-level APIs
-    # of SQLAlchemy 0.7.  0.8 has better introspection APIs, which we should
-    # use when Nova is ready to require 0.8.
-
-    # NOTE(snikitin): We have one table (tags) which is not
-    # subclass of NovaBase. That is way this table does not contain
-    # column 'deleted'
-    if 'deleted' not in table.c:
-        return
-
-    # NOTE(mikal): this is a little confusing. This method returns the value
-    # that a _not_deleted_ row would have.
-    deleted_column_type = table.c.deleted.type
-    if isinstance(deleted_column_type, Integer):
-        return 0
-    elif isinstance(deleted_column_type, Boolean):
-        return False
-    elif isinstance(deleted_column_type, String):
-        return ""
-    else:
-        return None
-
-
-@require_admin_context
 def archive_deleted_rows_for_table(context, tablename, max_rows):
     """Move up to max_rows rows from one tables to the corresponding
     shadow table. The context argument is only used for the decorator.
@@ -5987,7 +6010,6 @@ def archive_deleted_rows_for_table(context, tablename, max_rows):
     return rows_archived
 
 
-@require_admin_context
 def archive_deleted_rows(context, max_rows=None):
     """Move up to max_rows rows from production tables to the corresponding
     shadow tables.
@@ -6006,127 +6028,6 @@ def archive_deleted_rows(context, max_rows=None):
         if rows_archived >= max_rows:
             break
     return rows_archived
-
-
-def _augment_flavor_to_migrate(flavor_to_migrate, full_flavor):
-    """Make sure that extra_specs on the flavor to migrate is updated."""
-    if not flavor_to_migrate.obj_attr_is_set('extra_specs'):
-        flavor_to_migrate.extra_specs = {}
-    for key in full_flavor['extra_specs']:
-        if key not in flavor_to_migrate.extra_specs:
-            flavor_to_migrate.extra_specs[key] = \
-                    full_flavor.extra_specs[key]
-
-
-def _augment_flavors_to_migrate(instance, flavor_cache):
-    """Add extra_specs to instance flavors.
-
-    :param instance: Instance to be mined
-    :param flavor_cache:  Dict to persist flavors we look up from the DB
-    """
-
-    # NOTE(danms): Avoid circular import
-    from nova import objects
-
-    deleted_ctx = instance._context.elevated(read_deleted='yes')
-
-    for flavorprop in ['flavor', 'old_flavor', 'new_flavor']:
-        flavor = getattr(instance, flavorprop)
-        if flavor is None:
-            continue
-        flavorid = flavor.flavorid
-        if flavorid not in flavor_cache:
-            try:
-                flavor_cache[flavorid] = objects.Flavor.get_by_flavor_id(
-                    deleted_ctx, flavorid)
-            except exception.FlavorNotFound:
-                LOG.warn(_LW('Flavor %(flavorid)s not found for instance '
-                             'during migration; extra_specs will not be '
-                             'available'),
-                         {'flavorid': flavorid}, instance=instance)
-                continue
-        _augment_flavor_to_migrate(flavor, flavor_cache[flavorid])
-
-
-def _load_missing_flavor(instance, flavor_cache):
-    # NOTE(danms): Avoid circular import
-    from nova import objects
-
-    deleted_ctx = instance._context.elevated(read_deleted='yes')
-
-    flavor_cache_by_id = {flavor.id: flavor
-                          for flavor in flavor_cache.values()}
-    if instance.instance_type_id in flavor_cache_by_id:
-        instance.flavor = flavor_cache_by_id[instance.instance_type_id]
-    else:
-        instance.flavor = objects.Flavor.get_by_id(deleted_ctx,
-                                                   instance.instance_type_id)
-        flavor_cache[instance.flavor.flavorid] = instance.flavor
-    instance.old_flavor = None
-    instance.new_flavor = None
-
-
-@require_admin_context
-def migrate_flavor_data(context, max_count, flavor_cache, force=False):
-    # NOTE(danms): This is only ever run in nova-manage, and we need to avoid
-    # a circular import
-    from nova import objects
-
-    query = _instance_get_all_query(context, joins=['extra', 'extra.flavor']).\
-                outerjoin(models.Instance.extra).\
-                filter(models.InstanceExtra.flavor.is_(None))
-    if max_count is not None:
-        instances = query.limit(max_count)
-    else:
-        instances = query.all()
-
-    instances = _instances_fill_metadata(context, instances,
-                                         manual_joins=['system_metadata'])
-
-    count_all = 0
-    count_hit = 0
-    for db_instance in instances:
-        count_all += 1
-        instance = objects.Instance._from_db_object(
-            context, objects.Instance(), db_instance,
-            expected_attrs=['system_metadata', 'flavor'])
-        # NOTE(danms): Don't touch instances that are likely in the
-        # middle of some other operation. This is just a guess and not
-        # a lock. There is still a race here, although it's the same
-        # race as the normal code, since we use expected_task_state below.
-        if not force:
-            if instance.task_state is not None:
-                continue
-            if instance.vm_state in [vm_states.RESCUED, vm_states.RESIZED]:
-                continue
-
-        # NOTE(danms): If we have a really old instance with no flavor
-        # information at all, flavor will not have been set during load.
-        # If that's the case, look up the flavor by id (which implies that
-        # old_ and new_flavor are None). No need to augment with extra_specs
-        # since we're doing the lookup from scratch.
-        if not instance.obj_attr_is_set('flavor'):
-            try:
-                _load_missing_flavor(instance, flavor_cache)
-            except exception.FlavorNotFound:
-                LOG.error(_LE('Unable to lookup flavor for legacy instance; '
-                              'migration is not possible without manual '
-                              'intervention'),
-                          instance=instance)
-                continue
-        else:
-            _augment_flavors_to_migrate(instance, flavor_cache)
-        if instance.obj_what_changed():
-            if db_instance.get('extra') is None:
-                _instance_extra_create(context,
-                                       {'instance_uuid': db_instance['uuid']})
-                LOG.debug(
-                    'Created instance_extra for %s' % db_instance['uuid'])
-            instance.save(expected_task_state=[instance.task_state],
-                          expected_vm_state=[instance.vm_state])
-            count_hit += 1
-
-    return count_all, count_hit
 
 
 ####################
@@ -6483,7 +6384,7 @@ def instance_tag_add(context, instance_uuid, tag):
 
     try:
         with session.begin(subtransactions=True):
-            _check_instance_exists(context, session, instance_uuid)
+            _check_instance_exists_in_project(context, session, instance_uuid)
             session.add(tag_ref)
     except db_exc.DBDuplicateEntry:
         # NOTE(snikitin): We should ignore tags duplicates
@@ -6496,7 +6397,7 @@ def instance_tag_set(context, instance_uuid, tags):
     session = get_session()
 
     with session.begin(subtransactions=True):
-        _check_instance_exists(context, session, instance_uuid)
+        _check_instance_exists_in_project(context, session, instance_uuid)
 
         existing = session.query(models.Tag.tag).filter_by(
             resource_id=instance_uuid).all()
@@ -6506,11 +6407,16 @@ def instance_tag_set(context, instance_uuid, tags):
         to_delete = existing - tags
         to_add = tags - existing
 
-        session.query(models.Tag).filter_by(resource_id=instance_uuid).filter(
-            models.Tag.tag.in_(to_delete)).delete(synchronize_session=False)
+        if to_delete:
+            session.query(models.Tag).filter_by(
+                resource_id=instance_uuid).filter(
+                models.Tag.tag.in_(to_delete)).delete(
+                synchronize_session=False)
 
-        data = [{'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
-        session.execute(models.Tag.__table__.insert(), data)
+        if to_add:
+            data = [
+                {'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
+            session.execute(models.Tag.__table__.insert(), data)
 
         return session.query(models.Tag).filter_by(
             resource_id=instance_uuid).all()
@@ -6520,7 +6426,7 @@ def instance_tag_get_by_instance_uuid(context, instance_uuid):
     session = get_session()
 
     with session.begin(subtransactions=True):
-        _check_instance_exists(context, session, instance_uuid)
+        _check_instance_exists_in_project(context, session, instance_uuid)
         return session.query(models.Tag).filter_by(
             resource_id=instance_uuid).all()
 
@@ -6529,7 +6435,7 @@ def instance_tag_delete(context, instance_uuid, tag):
     session = get_session()
 
     with session.begin(subtransactions=True):
-        _check_instance_exists(context, session, instance_uuid)
+        _check_instance_exists_in_project(context, session, instance_uuid)
         result = session.query(models.Tag).filter_by(
             resource_id=instance_uuid, tag=tag).delete()
 
@@ -6542,5 +6448,15 @@ def instance_tag_delete_all(context, instance_uuid):
     session = get_session()
 
     with session.begin(subtransactions=True):
-        _check_instance_exists(context, session, instance_uuid)
+        _check_instance_exists_in_project(context, session, instance_uuid)
         session.query(models.Tag).filter_by(resource_id=instance_uuid).delete()
+
+
+def instance_tag_exists(context, instance_uuid, tag):
+    session = get_session()
+
+    with session.begin(subtransactions=True):
+        _check_instance_exists_in_project(context, session, instance_uuid)
+        q = session.query(models.Tag).filter_by(
+            resource_id=instance_uuid, tag=tag)
+        return session.query(q.exists()).scalar()

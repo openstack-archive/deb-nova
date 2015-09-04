@@ -19,11 +19,12 @@ Management class for Storage-related functions (attach, detach, etc).
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_vmware import exceptions as oslo_vmw_exceptions
 from oslo_vmware import vim_util as vutil
 
 from nova.compute import vm_states
 from nova import exception
-from nova.i18n import _, _LI
+from nova.i18n import _, _LI, _LW
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import vim_util
 from nova.virt.vmwareapi import vm_util
@@ -42,7 +43,7 @@ class VMwareVolumeOps(object):
     def attach_disk_to_vm(self, vm_ref, instance,
                           adapter_type, disk_type, vmdk_path=None,
                           disk_size=None, linked_clone=False,
-                          device_name=None):
+                          device_name=None, disk_io_limits=None):
         """Attach disk to VM by reconfiguration."""
         instance_name = instance.name
         client_factory = self._session.vim.client.factory
@@ -58,7 +59,7 @@ class VMwareVolumeOps(object):
         vmdk_attach_config_spec = vm_util.get_vmdk_attach_config_spec(
                                     client_factory, disk_type, vmdk_path,
                                     disk_size, linked_clone, controller_key,
-                                    unit_number, device_name)
+                                    unit_number, device_name, disk_io_limits)
         if controller_spec:
             vmdk_attach_config_spec.deviceChange.append(controller_spec)
 
@@ -367,7 +368,7 @@ class VMwareVolumeOps(object):
         driver_type = connection_info['driver_volume_type']
         LOG.debug("Volume attach. Driver type: %s", driver_type,
                   instance=instance)
-        if driver_type == 'vmdk':
+        if driver_type == constants.DISK_FORMAT_VMDK:
             self._attach_volume_vmdk(connection_info, instance, adapter_type)
         elif driver_type == 'iscsi':
             self._attach_volume_iscsi(connection_info, instance, adapter_type)
@@ -459,11 +460,29 @@ class VMwareVolumeOps(object):
         host = self._get_host_of_vm(vm_ref)
         res_pool = self._get_res_pool_of_host(host)
         datastore = device.backing.datastore
-        self._relocate_vmdk_volume(volume_ref, res_pool, datastore, host)
+        detached = False
+        LOG.debug("Relocating volume's backing: %(backing)s to resource "
+                  "pool: %(rp)s, datastore: %(ds)s, host: %(host)s.",
+                  {'backing': volume_ref, 'rp': res_pool, 'ds': datastore,
+                   'host': host})
+        try:
+            self._relocate_vmdk_volume(volume_ref, res_pool, datastore, host)
+        except oslo_vmw_exceptions.FileNotFoundException:
+            # Volume's vmdk was moved; remove the device so that we can
+            # relocate the volume.
+            LOG.warn(_LW("Virtual disk: %s of volume's backing not found."),
+                     original_device_path, exc_info=True)
+            LOG.debug("Removing disk device of volume's backing and "
+                      "reattempting relocate.")
+            self.detach_disk_from_vm(volume_ref, instance, original_device)
+            detached = True
+            self._relocate_vmdk_volume(volume_ref, res_pool, datastore, host)
 
-        # Delete the original disk from the volume_ref
-        self.detach_disk_from_vm(volume_ref, instance, original_device,
-                                 destroy_disk=True)
+        # Volume's backing is relocated now; detach the old vmdk if not done
+        # already.
+        if not detached:
+            self.detach_disk_from_vm(volume_ref, instance, original_device,
+                                     destroy_disk=True)
 
         # Attach the current volume to the volume_ref
         self.attach_disk_to_vm(volume_ref, instance,
@@ -511,6 +530,11 @@ class VMwareVolumeOps(object):
                                       disk_type=vmdk.disk_type)
 
         self.detach_disk_from_vm(vm_ref, instance, device)
+
+        # Remove key-value pair <volume_id, vmdk_uuid> from instance's
+        # extra config. Setting value to empty string will remove the key.
+        self._update_volume_details(vm_ref, data['volume_id'], "")
+
         LOG.debug("Detached VMDK: %s", connection_info, instance=instance)
 
     def _detach_volume_iscsi(self, connection_info, instance):
@@ -542,7 +566,7 @@ class VMwareVolumeOps(object):
         driver_type = connection_info['driver_volume_type']
         LOG.debug("Volume detach. Driver type: %s", driver_type,
                   instance=instance)
-        if driver_type == 'vmdk':
+        if driver_type == constants.DISK_FORMAT_VMDK:
             self._detach_volume_vmdk(connection_info, instance)
         elif driver_type == 'iscsi':
             self._detach_volume_iscsi(connection_info, instance)
@@ -555,7 +579,7 @@ class VMwareVolumeOps(object):
         driver_type = connection_info['driver_volume_type']
         LOG.debug("Root volume attach. Driver type: %s", driver_type,
                   instance=instance)
-        if driver_type == 'vmdk':
+        if driver_type == constants.DISK_FORMAT_VMDK:
             vm_ref = vm_util.get_vm_ref(self._session, instance)
             data = connection_info['data']
             # Get the volume ref

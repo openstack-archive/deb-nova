@@ -31,7 +31,7 @@ from nova.api import openstack as openstack_api
 from nova.api.openstack import api_version_request as api_version
 from nova.api.openstack import auth
 from nova.api.openstack import compute
-from nova.api.openstack.compute import limits
+from nova.api.openstack.compute.legacy_v2 import limits
 from nova.api.openstack.compute import versions
 from nova.api.openstack import urlmap
 from nova.api.openstack import wsgi as os_wsgi
@@ -43,6 +43,8 @@ from nova.db.sqlalchemy import models
 from nova import exception as exc
 import nova.netconf
 from nova.network import api as network_api
+from nova import objects
+from nova.objects import base
 from nova import quota
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_network
@@ -103,9 +105,12 @@ def wsgi_app(inner_app_v2=None, fake_auth_context=None,
 
 
 def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
-        use_no_auth=False, ext_mgr=None, init_only=None):
+        use_no_auth=False, ext_mgr=None, init_only=None, v2_compatible=False):
     if not inner_app_v21:
         inner_app_v21 = compute.APIRouterV21(init_only)
+
+    if v2_compatible:
+        inner_app_v21 = openstack_api.LegacyV2CompatibleWrapper(inner_app_v21)
 
     if use_no_auth:
         api_v21 = openstack_api.FaultWrapper(auth.NoAuthMiddlewareV3(
@@ -121,6 +126,7 @@ def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
     mapper = urlmap.URLMap()
     mapper['/v2'] = api_v21
     mapper['/v2.1'] = api_v21
+    mapper['/'] = openstack_api.FaultWrapper(versions.Versions())
     return mapper
 
 
@@ -151,11 +157,9 @@ def stub_out_rate_limiting(stubs):
         super(limits.RateLimitingMiddleware, self).__init__(app)
         self.application = app
 
-    stubs.Set(nova.api.openstack.compute.limits.RateLimitingMiddleware,
-        '__init__', fake_rate_init)
-
-    stubs.Set(nova.api.openstack.compute.limits.RateLimitingMiddleware,
-        '__call__', fake_wsgi)
+    v2_limits = nova.api.openstack.compute.legacy_v2.limits
+    stubs.Set(v2_limits.RateLimitingMiddleware, '__init__', fake_rate_init)
+    stubs.Set(v2_limits.RateLimitingMiddleware, '__call__', fake_wsgi)
 
 
 def stub_out_instance_quota(stubs, allowed, quota, resource='instances'):
@@ -276,11 +280,11 @@ class HTTPRequest(os_wsgi.Request):
         return out
 
 
-class HTTPRequestV3(os_wsgi.Request):
+class HTTPRequestV21(os_wsgi.Request):
 
     @staticmethod
     def blank(*args, **kwargs):
-        kwargs['base_url'] = 'http://localhost/v3'
+        kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
         version = kwargs.pop('version', os_wsgi.DEFAULT_API_VERSION)
         out = os_wsgi.Request.blank(*args, **kwargs)
@@ -384,6 +388,13 @@ def fake_instance_get(**kwargs):
     return _return_server
 
 
+def fake_compute_get(**kwargs):
+    def _return_server_obj(context, uuid, want_objects=False,
+                           expected_attrs=None):
+        return stub_instance_obj(context, **kwargs)
+    return _return_server_obj
+
+
 def fake_actions_to_locked_server(self, context, instance, *args, **kwargs):
     raise exc.InstanceIsLocked(instance_uuid=instance['uuid'])
 
@@ -427,7 +438,23 @@ def fake_instance_get_all_by_filters(num_servers=5, **kwargs):
     return _return_servers
 
 
-def stub_instance(id, user_id=None, project_id=None, host=None,
+def fake_compute_get_all(num_servers=5, **kwargs):
+    def _return_servers_objs(context, search_opts=None, limit=None,
+                             marker=None, want_objects=False,
+                             expected_attrs=None, sort_keys=None,
+                             sort_dirs=None):
+        db_insts = fake_instance_get_all_by_filters()(None,
+                                                      limit=limit,
+                                                      marker=marker)
+        expected = ['metadata', 'system_metadata', 'flavor',
+                    'info_cache', 'security_groups']
+        return base.obj_make_list(context, objects.InstanceList(),
+                                  objects.Instance, db_insts,
+                                  expected_attrs=expected)
+    return _return_servers_objs
+
+
+def stub_instance(id=1, user_id=None, project_id=None, host=None,
                   node=None, vm_state=None, task_state=None,
                   reservation_id="", uuid=FAKE_UUID, image_ref="10",
                   flavor_id="1", name=None, key_name='',
@@ -442,7 +469,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
                   availability_zone='', locked_by=None, cleaned=False,
                   memory_mb=0, vcpus=0, root_gb=0, ephemeral_gb=0,
                   instance_type=None, launch_index=0, kernel_id="",
-                  ramdisk_id="", user_data=None):
+                  ramdisk_id="", user_data=None, system_metadata=None):
     if user_id is None:
         user_id = 'fake_user'
     if project_id is None:
@@ -457,6 +484,7 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
 
     inst_type = flavors.get_flavor_by_flavor_id(int(flavor_id))
     sys_meta = flavors.save_flavor_info({}, inst_type)
+    sys_meta.update(system_metadata or {})
 
     if host is not None:
         host = str(host)
@@ -479,14 +507,13 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
 
     info_cache = create_info_cache(nw_cache)
 
-    if instance_type is not None:
-        flavorinfo = jsonutils.dumps({
-            'cur': instance_type.obj_to_primitive(),
-            'old': None,
-            'new': None,
-        })
-    else:
-        flavorinfo = None
+    if instance_type is None:
+        instance_type = flavors.get_default_flavor()
+    flavorinfo = jsonutils.dumps({
+        'cur': instance_type.obj_to_primitive(),
+        'old': None,
+        'new': None,
+    })
 
     instance = {
         "id": int(id),
@@ -519,7 +546,6 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
         "user_data": user_data,
         "reservation_id": reservation_id,
         "mac_address": "",
-        "scheduled_at": timeutils.utcnow(),
         "launched_at": launched_at,
         "terminated_at": terminated_at,
         "availability_zone": availability_zone,
@@ -557,6 +583,17 @@ def stub_instance(id, user_id=None, project_id=None, host=None,
     instance['info_cache']['instance_uuid'] = instance['uuid']
 
     return instance
+
+
+def stub_instance_obj(ctxt, *args, **kwargs):
+    db_inst = stub_instance(*args, **kwargs)
+    expected = ['metadata', 'system_metadata', 'flavor',
+                'info_cache', 'security_groups']
+    inst = objects.Instance._from_db_object(ctxt, objects.Instance(),
+                                            db_inst,
+                                            expected_attrs=expected)
+    inst.fault = None
+    return inst
 
 
 def stub_volume(id, **kwargs):

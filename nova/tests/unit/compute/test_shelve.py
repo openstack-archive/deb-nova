@@ -19,6 +19,7 @@ from nova.compute import claims
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import db
+from nova import objects
 from nova.tests.unit.compute import test_compute
 from nova.tests.unit.image import fake as fake_image
 
@@ -271,13 +272,16 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.assertEqual(self.compute.host, instance.host)
         self.assertFalse(instance.auto_disk_config)
 
-    def test_unshelve_volume_backed(self):
+    @mock.patch('nova.utils.get_image_from_system_metadata')
+    def test_unshelve_volume_backed(self, mock_image_meta):
         instance = self._create_fake_instance_obj()
         node = test_compute.NODENAME
         limits = {}
         filter_properties = {'limits': limits}
         instance.task_state = task_states.UNSHELVING
         instance.save()
+        image_meta = {'properties': {'base_image_ref': 'fake_id'}}
+        mock_image_meta.return_value = image_meta
 
         self.mox.StubOutWithMock(self.compute, '_notify_about_instance_usage')
         self.mox.StubOutWithMock(self.compute, '_prep_block_device')
@@ -314,7 +318,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.rt.instance_claim(self.context, instance, limits).AndReturn(
                 claims.Claim(self.context, instance, self.rt,
                              _fake_resources()))
-        self.compute.driver.spawn(self.context, instance, None,
+        self.compute.driver.spawn(self.context, instance, image_meta,
                 injected_files=[], admin_password=None,
                 network_info=[],
                 block_device_info='fake_bdm')
@@ -327,6 +331,13 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
             mock_save.side_effect = check_save
             self.compute.unshelve_instance(self.context, instance, image=None,
                     filter_properties=filter_properties, node=node)
+
+    @mock.patch.object(objects.InstanceList, 'get_by_filters')
+    def test_shelved_poll_none_offloaded(self, mock_get_by_filters):
+        # Test instances are not offloaded when shelved_offload_time is -1
+        CONF.set_override('shelved_offload_time', -1)
+        self.compute._poll_shelved_instances(self.context)
+        self.assertEqual(0, mock_get_by_filters.call_count)
 
     def test_shelved_poll_none_exist(self):
         self.mox.StubOutWithMock(self.compute.driver, 'destroy')

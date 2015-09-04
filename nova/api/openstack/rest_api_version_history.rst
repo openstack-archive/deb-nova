@@ -7,7 +7,7 @@ verbose one which has enough information to be suitable for use in
 user documentation.
 
 2.1
-----
+---
 
   This is the initial version of the v2.1 API which supports
   microversions. The V2.1 API is from the REST API users's point of
@@ -56,3 +56,70 @@ user documentation.
   Show the ``reserved`` status on a ``FixedIP`` object in the ``os-fixed-ips`` API
   extension. The extension allows one to ``reserve`` and ``unreserve`` a fixed IP
   but the show method does not report the current status.
+
+2.5
+---
+
+  Before version 2.5, the command ``nova list --ip6 xxx`` returns all servers
+  for non-admins, as the filter option is silently discarded. There is no
+  reason to treat ip6 different from ip, though, so we just add this
+  option to the allowed list.
+
+2.6
+---
+
+  A new API for getting remote console is added::
+
+    POST /servers/<uuid>/remote-consoles
+    {
+      "remote_console": {
+        "protocol": ["vnc"|"rdp"|"serial"|"spice"],
+        "type": ["novnc"|"xpvnc"|"rdp-html5"|"spice-html5"|"serial"]
+      }
+    }
+
+  Example response::
+
+    {
+      "remote_console": {
+        "protocol": "vnc",
+        "type": "novnc",
+        "url": "http://example.com:6080/vnc_auto.html?token=XYZ"
+      }
+    }
+
+  The old APIs 'os-getVNCConsole', 'os-getSPICEConsole', 'os-getSerialConsole'
+  and 'os-getRDPConsole' are removed.
+
+2.7
+---
+
+  Check the ``is_public`` attribute of a flavor before adding tenant access
+  to it. Reject the request with HTTPConflict error.
+
+2.8
+---
+  Add 'mks' protocol and 'webmks' type for remote consoles.
+
+2.9
+---
+
+  Add a new ``locked`` attribute to the detailed view of
+  servers. ``locked`` will be ``true`` if anyone is currently holding
+  a lock on the server, ``false`` otherwise.
+
+2.10
+----
+
+  Added user_id parameter to os-keypairs plugin, as well as a new property
+  in the request body, for the create operation.
+
+  Administrators will be able to list, get details and delete keypairs owned by
+  users other than themselves and to create new keypairs on behalf of their
+  users.
+
+2.11
+----
+
+  Exposed attribute ``forced_down`` for ``os-services``.
+  Added ability to change the ``forced_down`` attribute by calling an update.

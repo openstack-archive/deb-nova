@@ -18,37 +18,43 @@ import webob
 
 from nova.api.openstack import common
 from nova.api.openstack.compute.views import flavors as flavors_view
+from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.compute import flavors
 from nova import exception
 from nova.i18n import _
 from nova import utils
 
+ALIAS = 'flavors'
 
-class Controller(wsgi.Controller):
+
+class FlavorsController(wsgi.Controller):
     """Flavor controller for the OpenStack API."""
 
-    _view_builder_class = flavors_view.ViewBuilder
+    _view_builder_class = flavors_view.V3ViewBuilder
 
+    @extensions.expected_errors(400)
     def index(self, req):
         """Return all flavors in brief."""
         limited_flavors = self._get_flavors(req)
         return self._view_builder.index(req, limited_flavors)
 
+    @extensions.expected_errors(400)
     def detail(self, req):
         """Return all flavors in detail."""
         limited_flavors = self._get_flavors(req)
         req.cache_db_flavors(limited_flavors)
         return self._view_builder.detail(req, limited_flavors)
 
+    @extensions.expected_errors(404)
     def show(self, req, id):
         """Return data about the given flavor id."""
+        context = req.environ['nova.context']
         try:
-            context = req.environ['nova.context']
             flavor = flavors.get_flavor_by_flavor_id(id, ctxt=context)
             req.cache_db_flavor(flavor)
-        except exception.NotFound:
-            raise webob.exc.HTTPNotFound()
+        except exception.FlavorNotFound as e:
+            raise webob.exc.HTTPNotFound(explanation=e.format_message())
 
         return self._view_builder.show(req, flavor)
 
@@ -87,14 +93,15 @@ class Controller(wsgi.Controller):
             try:
                 filters['min_memory_mb'] = int(req.params['minRam'])
             except ValueError:
-                msg = _('Invalid minRam filter [%s]') % req.params['minRam']
+                msg = _('Invalid min_ram filter [%s]') % req.params['minRam']
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
         if 'minDisk' in req.params:
             try:
                 filters['min_root_gb'] = int(req.params['minDisk'])
             except ValueError:
-                msg = _('Invalid minDisk filter [%s]') % req.params['minDisk']
+                msg = (_('Invalid minDisk filter [%s]') %
+                       req.params['minDisk'])
                 raise webob.exc.HTTPBadRequest(explanation=msg)
 
         try:
@@ -108,5 +115,24 @@ class Controller(wsgi.Controller):
         return limited_flavors
 
 
-def create_resource():
-    return wsgi.Resource(Controller())
+class Flavors(extensions.V21APIExtensionBase):
+    """Flavors Extension."""
+    name = "Flavors"
+    alias = ALIAS
+    version = 1
+
+    def get_resources(self):
+        collection_actions = {'detail': 'GET'}
+        member_actions = {'action': 'POST'}
+
+        resources = [
+            extensions.ResourceExtension(ALIAS,
+                                         FlavorsController(),
+                                         member_name='flavor',
+                                         collection_actions=collection_actions,
+                                         member_actions=member_actions)
+            ]
+        return resources
+
+    def get_controller_extensions(self):
+        return []

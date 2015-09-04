@@ -24,6 +24,7 @@ from oslo_log import log
 import six
 
 from nova import block_device
+from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova import exception
@@ -347,35 +348,21 @@ def get_nw_info_for_instance(instance):
     return instance.info_cache.network_info
 
 
-def has_audit_been_run(context, conductor, host, timestamp=None):
-    begin, end = utils.last_completed_audit_period(before=timestamp)
-    task_log = conductor.task_log_get(context, "instance_usage_audit",
-                                      begin, end, host)
-    if task_log:
-        return True
-    else:
-        return False
+def refresh_info_cache_for_instance(context, instance):
+    """Refresh the info cache for an instance.
 
-
-def start_instance_usage_audit(context, conductor, begin, end, host,
-                               num_instances):
-    conductor.task_log_begin_task(context, "instance_usage_audit", begin,
-                                  end, host, num_instances,
-                                  "Instance usage audit started...")
-
-
-def finish_instance_usage_audit(context, conductor, begin, end, host, errors,
-                                message):
-    conductor.task_log_end_task(context, "instance_usage_audit", begin, end,
-                                host, errors, message)
+    :param instance: The instance object.
+    """
+    if instance.info_cache is not None:
+        instance.info_cache.refresh()
 
 
 def usage_volume_info(vol_usage):
     def null_safe_str(s):
         return str(s) if s else ''
 
-    tot_refreshed = vol_usage['tot_last_refreshed']
-    curr_refreshed = vol_usage['curr_last_refreshed']
+    tot_refreshed = vol_usage.tot_last_refreshed
+    curr_refreshed = vol_usage.curr_last_refreshed
     if tot_refreshed and curr_refreshed:
         last_refreshed_time = max(tot_refreshed, curr_refreshed)
     elif tot_refreshed:
@@ -385,18 +372,18 @@ def usage_volume_info(vol_usage):
         last_refreshed_time = curr_refreshed
 
     usage_info = dict(
-          volume_id=vol_usage['volume_id'],
-          tenant_id=vol_usage['project_id'],
-          user_id=vol_usage['user_id'],
-          availability_zone=vol_usage['availability_zone'],
-          instance_id=vol_usage['instance_uuid'],
+          volume_id=vol_usage.volume_id,
+          tenant_id=vol_usage.project_id,
+          user_id=vol_usage.user_id,
+          availability_zone=vol_usage.availability_zone,
+          instance_id=vol_usage.instance_uuid,
           last_refreshed=null_safe_str(last_refreshed_time),
-          reads=vol_usage['tot_reads'] + vol_usage['curr_reads'],
-          read_bytes=vol_usage['tot_read_bytes'] +
-                vol_usage['curr_read_bytes'],
-          writes=vol_usage['tot_writes'] + vol_usage['curr_writes'],
-          write_bytes=vol_usage['tot_write_bytes'] +
-                vol_usage['curr_write_bytes'])
+          reads=vol_usage.tot_reads + vol_usage.curr_reads,
+          read_bytes=vol_usage.tot_read_bytes +
+                vol_usage.curr_read_bytes,
+          writes=vol_usage.tot_writes + vol_usage.curr_writes,
+          write_bytes=vol_usage.tot_write_bytes +
+                vol_usage.curr_write_bytes)
 
     return usage_info
 
@@ -434,6 +421,99 @@ def get_machine_ips():
         except ValueError:
             pass
     return addresses
+
+
+def resize_quota_delta(context, new_flavor, old_flavor, sense, compare):
+    """Calculate any quota adjustment required at a particular point
+    in the resize cycle.
+
+    :param context: the request context
+    :param new_flavor: the target instance type
+    :param old_flavor: the original instance type
+    :param sense: the sense of the adjustment, 1 indicates a
+                  forward adjustment, whereas -1 indicates a
+                  reversal of a prior adjustment
+    :param compare: the direction of the comparison, 1 indicates
+                    we're checking for positive deltas, whereas
+                    -1 indicates negative deltas
+    """
+    def _quota_delta(resource):
+        return sense * (new_flavor[resource] - old_flavor[resource])
+
+    deltas = {}
+    if compare * _quota_delta('vcpus') > 0:
+        deltas['cores'] = _quota_delta('vcpus')
+    if compare * _quota_delta('memory_mb') > 0:
+        deltas['ram'] = _quota_delta('memory_mb')
+
+    return deltas
+
+
+def upsize_quota_delta(context, new_flavor, old_flavor):
+    """Calculate deltas required to adjust quota for an instance upsize.
+    """
+    return resize_quota_delta(context, new_flavor, old_flavor, 1, 1)
+
+
+def reverse_upsize_quota_delta(context, migration_ref):
+    """Calculate deltas required to reverse a prior upsizing
+    quota adjustment.
+    """
+    old_flavor = objects.Flavor.get_by_id(
+        context, migration_ref['old_instance_type_id'])
+    new_flavor = objects.Flavor.get_by_id(
+        context, migration_ref['new_instance_type_id'])
+
+    return resize_quota_delta(context, new_flavor, old_flavor, -1, -1)
+
+
+def downsize_quota_delta(context, instance):
+    """Calculate deltas required to adjust quota for an instance downsize.
+    """
+    old_flavor = instance.get_flavor('old')
+    new_flavor = instance.get_flavor('new')
+    return resize_quota_delta(context, new_flavor, old_flavor, 1, -1)
+
+
+def reserve_quota_delta(context, deltas, instance):
+    """If there are deltas to reserve, construct a Quotas object and
+    reserve the deltas for the given project.
+
+    :param context:    The nova request context.
+    :param deltas:     A dictionary of the proposed delta changes.
+    :param instance:   The instance we're operating on, so that
+                       quotas can use the correct project_id/user_id.
+    :return: nova.objects.quotas.Quotas
+    """
+    quotas = objects.Quotas(context=context)
+    if deltas:
+        project_id, user_id = objects.quotas.ids_from_instance(context,
+                                                               instance)
+        quotas.reserve(project_id=project_id, user_id=user_id,
+                       **deltas)
+    return quotas
+
+
+def get_inst_attrs_from_migration(migration, instance):
+    """Get the instance vcpus and memory_mb attributes.
+
+    Provides instance vcpus and memory_mb attributes according to
+    old flavor type using migration object if old flavor exists.
+    """
+    instance_vcpus = instance.vcpus
+    instance_memory_mb = instance.memory_mb
+
+    old_inst_type_id = migration.old_instance_type_id
+    try:
+        old_inst_type = flavors.get_flavor(old_inst_type_id)
+    except exception.FlavorNotFound:
+        LOG.warning(_LW("Flavor %d not found"), old_inst_type_id)
+    else:
+        instance_vcpus = old_inst_type.vcpus
+        vram_mb = old_inst_type.extra_specs.get('hw_video:ram_max_mb', 0)
+        instance_memory_mb = old_inst_type.memory_mb + vram_mb
+
+    return instance_vcpus, instance_memory_mb
 
 
 def remove_shelved_keys_from_system_metadata(instance):

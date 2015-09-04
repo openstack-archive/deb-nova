@@ -19,6 +19,7 @@ import hashlib
 from oslo_log import log as logging
 from oslo_utils import timeutils
 
+from nova.api.openstack import api_version_request
 from nova.api.openstack import common
 from nova.api.openstack.compute.views import addresses as views_addresses
 from nova.api.openstack.compute.views import flavors as views_flavors
@@ -49,6 +50,11 @@ class ViewBuilder(common.ViewBuilder):
         "ERROR", "DELETED"
     )
 
+    # These are the lazy-loadable instance attributes required for showing
+    # details about an instance. Add to this list as new things need to be
+    # shown.
+    _show_expected_attrs = ['flavor', 'info_cache', 'metadata']
+
     def __init__(self):
         """Initialize view builder."""
         super(ViewBuilder, self).__init__()
@@ -78,6 +84,26 @@ class ViewBuilder(common.ViewBuilder):
                                          self._collection_name),
             },
         }
+
+    def get_show_expected_attrs(self, expected_attrs=None):
+        """Returns a list of lazy-loadable expected attributes used by show
+
+        This should be used when getting the instances from the database so
+        that the necessary attributes are pre-loaded before needing to build
+        the show response where lazy-loading can fail if an instance was
+        deleted.
+
+        :param list expected_attrs: The list of expected attributes that will
+            be requested in addition to what this view builder requires. This
+            method will merge the two lists and return what should be
+            ultimately used when getting an instance from the database.
+        :returns: merged and sorted list of expected attributes
+        """
+        if expected_attrs is None:
+            expected_attrs = []
+        # NOTE(mriedem): We sort the list so we can have predictable test
+        # results.
+        return sorted(list(set(self._show_expected_attrs + expected_attrs)))
 
     def show(self, request, instance):
         """Detailed view of a single instance."""
@@ -279,5 +305,10 @@ class ViewBuilderV3(ViewBuilder):
 
         if server["server"]["status"] in self._progress_statuses:
             server["server"]["progress"] = instance.get("progress", 0)
+
+        if (request.api_version_request >=
+                api_version_request.APIVersionRequest("2.9")):
+            server["server"]["locked"] = (True if instance["locked_by"]
+                                          else False)
 
         return server

@@ -24,6 +24,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
+from oslo_utils import fileutils
 from oslo_utils import strutils
 from oslo_utils import units
 import six
@@ -33,15 +34,14 @@ from nova.i18n import _
 from nova.i18n import _LE, _LI
 from nova import image
 from nova import keymgr
-from nova.openstack.common import fileutils
 from nova import utils
 from nova.virt.disk import api as disk
 from nova.virt.image import model as imgmodel
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
-from nova.virt.libvirt import dmcrypt
-from nova.virt.libvirt import lvm
-from nova.virt.libvirt import rbd_utils
+from nova.virt.libvirt.storage import dmcrypt
+from nova.virt.libvirt.storage import lvm
+from nova.virt.libvirt.storage import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
 
 __imagebackend_opts = [
@@ -80,8 +80,9 @@ CONF.import_opt('cipher', 'nova.compute.api',
                 group='ephemeral_storage_encryption')
 CONF.import_opt('key_size', 'nova.compute.api',
                 group='ephemeral_storage_encryption')
-CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume', group='libvirt')
-CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume', group='libvirt')
+CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume.net', group='libvirt')
+CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume.net',
+                group='libvirt')
 
 LOG = logging.getLogger(__name__)
 IMAGE_API = image.API()
@@ -142,7 +143,7 @@ class Image(object):
         pass
 
     def libvirt_info(self, disk_bus, disk_dev, device_type, cache_mode,
-            extra_specs, hypervisor_version):
+                     extra_specs, hypervisor_version):
         """Get `LibvirtConfigGuestDisk` filled for this image.
 
         :disk_dev: Disk bus device name
@@ -150,6 +151,7 @@ class Image(object):
         :device_type: Device type for this image.
         :cache_mode: Caching mode for this image
         :extra_specs: Instance type extra specs dict.
+        :hypervisor_version: the hypervisor version
         """
         info = vconfig.LibvirtConfigGuestDisk()
         info.source_type = self.source_type
@@ -164,6 +166,11 @@ class Image(object):
         info.driver_name = driver_name
         info.source_path = self.path
 
+        self.disk_qos(info, extra_specs)
+
+        return info
+
+    def disk_qos(self, info, extra_specs):
         tune_items = ['disk_read_bytes_sec', 'disk_read_iops_sec',
             'disk_write_bytes_sec', 'disk_write_iops_sec',
             'disk_total_bytes_sec', 'disk_total_iops_sec']
@@ -172,7 +179,6 @@ class Image(object):
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in tune_items:
                     setattr(info, scope[1], value)
-        return info
 
     def libvirt_fs_info(self, target, driver_type=None):
         """Get `LibvirtConfigGuestFilesys` filled for this image.
@@ -280,7 +286,8 @@ class Image(object):
             LOG.error(msg % {'base': base,
                               'base_size': base_size,
                               'size': size})
-            raise exception.FlavorDiskTooSmall()
+            raise exception.FlavorDiskSmallerThanImage(
+                flavor_size=base_size, image_size=size)
 
     def get_disk_size(self, name):
         return disk.get_disk_size(name)
@@ -383,6 +390,23 @@ class Image(object):
         :returns: an instance of nova.virt.image.model.Image
         """
         raise NotImplementedError()
+
+    def import_file(self, instance, local_file, remote_name):
+        """Import an image from local storage into this backend.
+
+        Import a local file into the store used by this image type. Note that
+        this is a noop for stores using local disk (the local file is
+        considered "in the store").
+
+        If the image already exists it will be overridden by the new file
+
+        :param local_file: path to the file to import
+        :param remote_name: the name for the file in the store
+        """
+
+        # NOTE(mikal): this is a noop for now for all stores except RBD, but
+        # we should talk about if we want this functionality for everything.
+        pass
 
 
 class Raw(Image):
@@ -728,6 +752,9 @@ class Rbd(Image):
         if auth_enabled:
             info.auth_secret_type = 'ceph'
             info.auth_secret_uuid = CONF.libvirt.rbd_secret_uuid
+
+        self.disk_qos(info, extra_specs)
+
         return info
 
     def _can_fallocate(self):
@@ -766,11 +793,6 @@ class Rbd(Image):
         return True
 
     def clone(self, context, image_id_or_uri):
-        if not self.driver.supports_layering():
-            reason = _('installed version of librbd does not support cloning')
-            raise exception.ImageUnacceptable(image_id=image_id_or_uri,
-                                              reason=reason)
-
         image_meta = IMAGE_API.get(context, image_id_or_uri,
                                    include_locations=True)
         locations = image_meta['locations']
@@ -805,6 +827,12 @@ class Rbd(Image):
                                  self.rbd_user,
                                  secret,
                                  servers)
+
+    def import_file(self, instance, local_file, remote_name):
+        name = '%s_%s' % (instance.uuid, remote_name)
+        if self.check_image_exists():
+            self.driver.remove_image(name)
+        self.driver.import_image(local_file, name)
 
 
 class Ploop(Image):

@@ -23,11 +23,11 @@ import os
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import fileutils
 
 from nova import exception
 from nova.i18n import _, _LE
 from nova import image
-from nova.openstack.common import fileutils
 from nova.openstack.common import imageutils
 from nova import utils
 
@@ -116,7 +116,8 @@ def fetch_to_raw(context, image_href, path, user_id, project_id, max_size=0):
                       {'base': path,
                        'disk_size': disk_size,
                        'size': max_size})
-            raise exception.FlavorDiskTooSmall()
+            raise exception.FlavorDiskSmallerThanImage(
+                flavor_size=max_size, image_size=disk_size)
 
         if fmt != "raw" and CONF.force_raw_images:
             staged = "%s.converted" % path

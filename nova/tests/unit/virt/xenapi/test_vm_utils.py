@@ -26,6 +26,7 @@ from oslo_config import cfg
 from oslo_config import fixture as config_fixture
 from oslo_utils import timeutils
 from oslo_utils import units
+from oslo_utils import uuidutils
 import six
 
 from nova.compute import flavors
@@ -35,6 +36,7 @@ from nova import context
 from nova import exception
 from nova import objects
 from nova import test
+from nova.tests.unit import fake_flavor
 from nova.tests.unit import fake_instance
 from nova.tests.unit.objects import test_flavor
 from nova.tests.unit.virt.xenapi import stubs
@@ -282,8 +284,7 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
                 self.session, 'call_plugin_serialized_with_retry')
         func = self.session.call_plugin_serialized_with_retry(
                 'glance', 'download_vhd', 0, mox.IgnoreArg(), mox.IgnoreArg(),
-                extra_headers={'X-Service-Catalog': '[]',
-                               'X-Auth-Token': 'auth_token',
+                extra_headers={'X-Auth-Token': 'auth_token',
                                'X-Roles': '',
                                'X-Tenant-Id': None,
                                'X-User-Id': None,
@@ -387,7 +388,8 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
 
         self.mox.StubOutWithMock(vm_utils, '_check_vdi_size')
         vm_utils._check_vdi_size(self.context, self.session, self.instance,
-                "vdi").AndRaise(exception.FlavorDiskTooSmall)
+                "vdi").AndRaise(exception.FlavorDiskSmallerThanImage(
+                flavor_size=0, image_size=1))
 
         self.mox.StubOutWithMock(self.session, 'call_xenapi')
         self.session.call_xenapi("VDI.get_by_uuid", "vdi").AndReturn("ref")
@@ -398,7 +400,7 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
 
         self.mox.ReplayAll()
 
-        self.assertRaises(exception.FlavorDiskTooSmall,
+        self.assertRaises(exception.FlavorDiskSmallerThanImage,
                 vm_utils._fetch_vhd_image, self.context, self.session,
                 self.instance, 'image_id')
 
@@ -471,6 +473,10 @@ class TestImageCompression(VMUtilsTestBase):
 
 
 class ResizeHelpersTestCase(VMUtilsTestBase):
+    def setUp(self):
+        super(ResizeHelpersTestCase, self).setUp()
+        self.context = context.RequestContext('user', 'project')
+
     def test_repair_filesystem(self):
         self.mox.StubOutWithMock(utils, 'execute')
 
@@ -494,7 +500,7 @@ class ResizeHelpersTestCase(VMUtilsTestBase):
         utils.execute('parted', '--script', path, 'mkpart',
             'primary', '%ds' % start, '%ds' % end, run_as_root=True)
 
-    def _call_parted_boot_flag(sef, path):
+    def _call_parted_boot_flag(self, path):
         utils.execute('parted', '--script', path, 'set', '1',
             'boot', 'on', run_as_root=True)
 
@@ -571,9 +577,9 @@ class ResizeHelpersTestCase(VMUtilsTestBase):
         vm_utils._resize_part_and_fs("fake", 0, 20, 30, "")
 
     def test_resize_disk_throws_on_zero_size(self):
-        self.assertRaises(exception.ResizeError,
-                vm_utils.resize_disk, "session", "instance", "vdi_ref",
-                {"root_gb": 0})
+        flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0)
+        self.assertRaises(exception.ResizeError, vm_utils.resize_disk,
+                          "session", "instance", "vdi_ref", flavor)
 
     def test_auto_config_disk_returns_early_on_zero_size(self):
         vm_utils.try_auto_configure_disk("bad_session", "bad_vdi_ref", 0)
@@ -624,7 +630,7 @@ class CheckVDISizeTestCase(VMUtilsTestBase):
         with mock.patch.object(self.instance, 'get_flavor') as get:
             self.flavor.root_gb = 1
             get.return_value = self.flavor
-            self.assertRaises(exception.FlavorDiskTooSmall,
+            self.assertRaises(exception.FlavorDiskSmallerThanImage,
                               vm_utils._check_vdi_size, self.context,
                               self.session, self.instance, self.vdi_uuid)
 
@@ -1117,7 +1123,7 @@ class GenerateDiskTestCase(VMUtilsTestBase):
             utils.execute('parted', '--script', '/dev/fakedev', 'mklabel',
                           'msdos', check_exit_code=False, run_as_root=True)
             utils.execute('parted', '--script', '/dev/fakedev', '--', 'mkpart',
-                          'primary', '0', '-0',
+                          'primary', '2048s', '-0',
                           check_exit_code=False, run_as_root=True)
             vm_utils.os.path.exists('/dev/mapper/fakedev1').AndReturn(True)
             utils.trycmd('kpartx', '-a', '/dev/fakedev',
@@ -1126,7 +1132,7 @@ class GenerateDiskTestCase(VMUtilsTestBase):
             utils.execute('parted', '--script', '/dev/fakedev', 'mklabel',
                           'msdos', check_exit_code=True, run_as_root=True)
             utils.execute('parted', '--script', '/dev/fakedev', '--', 'mkpart',
-                          'primary', '0', '-0',
+                          'primary', '2048s', '-0',
                           check_exit_code=True, run_as_root=True)
 
     def _check_vdi(self, vdi_ref, check_attached=True):
@@ -1987,16 +1993,34 @@ class ImportMigratedDisksTestCase(VMUtilsTestBase):
     @mock.patch.object(vm_utils, '_import_migrated_vhds')
     def test_import_migrate_ephemeral_disks(self, mock_migrate):
         mock_migrate.return_value = "foo"
-        instance = {"uuid": "uuid", "name": "name", "ephemeral_gb": 4000}
+        instance = objects.Instance(id=1, uuid=uuidutils.generate_uuid())
+        instance.old_flavor = objects.Flavor(ephemeral_gb=4000)
 
         result = vm_utils._import_migrate_ephemeral_disks("s", instance)
 
         self.assertEqual({'4': 'foo', '5': 'foo'}, result)
-        expected_calls = [mock.call("s", instance, "uuid_ephemeral_1",
-                                    "ephemeral", "name ephemeral (1)"),
-                          mock.call("s", instance, "uuid_ephemeral_2",
-                                    "ephemeral", "name ephemeral (2)")]
+        inst_uuid = instance.uuid
+        inst_name = instance.name
+        expected_calls = [mock.call("s", instance,
+                                    "%s_ephemeral_1" % inst_uuid,
+                                    "ephemeral",
+                                    "%s ephemeral (1)" % inst_name),
+                          mock.call("s", instance,
+                                    "%s_ephemeral_2" % inst_uuid,
+                                    "ephemeral",
+                                    "%s ephemeral (2)" % inst_name)]
         self.assertEqual(expected_calls, mock_migrate.call_args_list)
+
+    @mock.patch.object(vm_utils, 'get_ephemeral_disk_sizes')
+    def test_import_migrate_ephemeral_disks_use_old_flavor(self,
+            mock_get_sizes):
+        mock_get_sizes.return_value = []
+        instance = objects.Instance(id=1, uuid=uuidutils.generate_uuid(),
+                ephemeral_gb=2000)
+        instance.old_flavor = objects.Flavor(ephemeral_gb=4000)
+
+        vm_utils._import_migrate_ephemeral_disks("s", instance)
+        mock_get_sizes.assert_called_once_with(4000)
 
     @mock.patch.object(vm_utils, '_set_vdi_info')
     @mock.patch.object(vm_utils, 'scan_default_sr')
@@ -2111,33 +2135,35 @@ class StripBaseMirrorTestCase(VMUtilsTestBase):
 
 class DeviceIdTestCase(VMUtilsTestBase):
     def test_device_id_is_none_if_not_specified_in_meta_data(self):
-        image_meta = {}
+        image_meta = objects.ImageMeta.from_dict({})
         session = mock.Mock()
         session.product_version = (6, 1, 0)
         self.assertIsNone(vm_utils.get_vm_device_id(session, image_meta))
 
     def test_get_device_id_if_hypervisor_version_is_greater_than_6_1(self):
-        image_meta = {'xenapi_device_id': '0002'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'properties': {'xenapi_device_id': '0002'}})
         session = mock.Mock()
         session.product_version = (6, 2, 0)
-        self.assertEqual('0002',
+        self.assertEqual(2,
                          vm_utils.get_vm_device_id(session, image_meta))
         session.product_version = (6, 3, 1)
-        self.assertEqual('0002',
+        self.assertEqual(2,
                          vm_utils.get_vm_device_id(session, image_meta))
 
     def test_raise_exception_if_device_id_not_supported_by_hyp_version(self):
-        image_meta = {'xenapi_device_id': '0002'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'properties': {'xenapi_device_id': '0002'}})
         session = mock.Mock()
         session.product_version = (6, 0)
         exc = self.assertRaises(exception.NovaException,
                                 vm_utils.get_vm_device_id, session, image_meta)
-        self.assertEqual("Device id 0002 specified is not supported by "
+        self.assertEqual("Device id 2 specified is not supported by "
                          "hypervisor version (6, 0)", exc.message)
         session.product_version = ('6a')
         exc = self.assertRaises(exception.NovaException,
                                 vm_utils.get_vm_device_id, session, image_meta)
-        self.assertEqual("Device id 0002 specified is not supported by "
+        self.assertEqual("Device id 2 specified is not supported by "
                          "hypervisor version 6a", exc.message)
 
 

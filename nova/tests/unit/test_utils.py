@@ -16,16 +16,15 @@ import datetime
 import functools
 import hashlib
 import importlib
+import logging
 import os
 import os.path
 import socket
-import StringIO
 import struct
 import tempfile
 
 import eventlet
 import mock
-from mox3 import mox
 import netaddr
 from oslo_concurrency import processutils
 from oslo_config import cfg
@@ -35,7 +34,6 @@ from oslo_utils import encodeutils
 from oslo_utils import timeutils
 from oslo_utils import units
 import six
-
 
 import nova
 from nova import context
@@ -95,35 +93,6 @@ class GenericUtilsTestCase(test.NoDBTestCase):
     def test_hostname_translate(self):
         hostname = "<}\x1fh\x10e\x08l\x02l\x05o\x12!{>"
         self.assertEqual("hello", utils.sanitize_hostname(hostname))
-
-    def test_read_cached_file(self):
-        self.mox.StubOutWithMock(os.path, "getmtime")
-        os.path.getmtime(mox.IgnoreArg()).AndReturn(1)
-        self.mox.ReplayAll()
-
-        cache_data = {"data": 1123, "mtime": 1}
-        data = utils.read_cached_file("/this/is/a/fake", cache_data)
-        self.assertEqual(cache_data["data"], data)
-
-    def test_read_modified_cached_file(self):
-        self.mox.StubOutWithMock(os.path, "getmtime")
-        os.path.getmtime(mox.IgnoreArg()).AndReturn(2)
-        self.mox.ReplayAll()
-
-        fake_contents = "lorem ipsum"
-        m = mock.mock_open(read_data=fake_contents)
-        with mock.patch("__builtin__.open", m, create=True):
-            cache_data = {"data": 1123, "mtime": 1}
-            self.reload_called = False
-
-            def test_reload(reloaded_data):
-                self.assertEqual(reloaded_data, fake_contents)
-                self.reload_called = True
-
-            data = utils.read_cached_file("/this/is/a/fake", cache_data,
-                                                    reload_func=test_reload)
-            self.assertEqual(data, fake_contents)
-            self.assertTrue(self.reload_called)
 
     def test_generate_password(self):
         password = utils.generate_password()
@@ -209,20 +178,38 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertEqual("localhost", utils.safe_ip_format("localhost"))
 
     def test_get_hash_str(self):
-        base_str = "foo"
+        base_str = b"foo"
+        base_unicode = u"foo"
         value = hashlib.md5(base_str).hexdigest()
         self.assertEqual(
             value, utils.get_hash_str(base_str))
+        self.assertEqual(
+            value, utils.get_hash_str(base_unicode))
 
     def test_use_rootwrap(self):
         self.flags(disable_rootwrap=False, group='workarounds')
         self.flags(rootwrap_config='foo')
-        cmd = utils._get_root_helper()
+        cmd = utils.get_root_helper()
         self.assertEqual('sudo nova-rootwrap foo', cmd)
+
+    @mock.patch('nova.utils.RootwrapProcessHelper')
+    def test_get_root_helper_proc(self, mock_proc_helper):
+        self.flags(use_rootwrap_daemon=False)
+        self.flags(rootwrap_config="/path/to/conf")
+        utils._get_rootwrap_helper()
+        mock_proc_helper.assert_called_once_with()
+
+    @mock.patch('nova.utils.RootwrapDaemonHelper')
+    def test_get_root_helper_daemon(self, mock_daemon_helper):
+        conf_path = '/path/to/conf'
+        self.flags(use_rootwrap_daemon=True)
+        self.flags(rootwrap_config=conf_path)
+        utils._get_rootwrap_helper()
+        mock_daemon_helper.assert_called_once_with(conf_path)
 
     def test_use_sudo(self):
         self.flags(disable_rootwrap=True, group='workarounds')
-        cmd = utils._get_root_helper()
+        cmd = utils.get_root_helper()
         self.assertEqual('sudo', cmd)
 
     def test_ssh_execute(self):
@@ -231,6 +218,214 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         with mock.patch('nova.utils.execute') as mock_method:
             utils.ssh_execute('remotehost', 'ls', '-l')
         mock_method.assert_called_once_with(*expected_args)
+
+
+class TestCachedFile(test.NoDBTestCase):
+    @mock.patch('os.path.getmtime', return_value=1)
+    def test_read_cached_file(self, getmtime):
+        utils._FILE_CACHE = {
+            '/this/is/a/fake': {"data": 1123, "mtime": 1}
+        }
+        fresh, data = utils.read_cached_file("/this/is/a/fake")
+        fdata = utils._FILE_CACHE['/this/is/a/fake']["data"]
+        self.assertEqual(fdata, data)
+
+    @mock.patch('os.path.getmtime', return_value=2)
+    def test_read_modified_cached_file(self, getmtime):
+
+        utils._FILE_CACHE = {
+            '/this/is/a/fake': {"data": 1123, "mtime": 1}
+        }
+
+        fake_contents = "lorem ipsum"
+
+        with mock.patch('six.moves.builtins.open',
+                        mock.mock_open(read_data=fake_contents)):
+            fresh, data = utils.read_cached_file("/this/is/a/fake")
+
+        self.assertEqual(data, fake_contents)
+        self.assertTrue(fresh)
+
+    def test_delete_cached_file(self):
+        filename = '/this/is/a/fake/deletion/of/cached/file'
+        utils._FILE_CACHE = {
+            filename: {"data": 1123, "mtime": 1}
+        }
+        self.assertIn(filename, utils._FILE_CACHE)
+        utils.delete_cached_file(filename)
+        self.assertNotIn(filename, utils._FILE_CACHE)
+
+    def test_delete_cached_file_not_exist(self):
+        # We expect that if cached file does not exist no Exception raised.
+        filename = '/this/is/a/fake/deletion/attempt/of/not/cached/file'
+        self.assertNotIn(filename, utils._FILE_CACHE)
+        utils.delete_cached_file(filename)
+        self.assertNotIn(filename, utils._FILE_CACHE)
+
+
+class RootwrapDaemonTesetCase(test.TestCase):
+    @mock.patch('oslo_rootwrap.client.Client')
+    def test_get_client(self, mock_client):
+        mock_conf = mock.MagicMock()
+        utils.RootwrapDaemonHelper(mock_conf)
+        mock_client.assert_called_once_with(
+            ["sudo", "nova-rootwrap-daemon", mock_conf])
+
+    @mock.patch('nova.utils.LOG.info')
+    def test_execute(self, mock_info):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(0, None, None))
+
+        daemon.execute('a', 1, foo='bar', run_as_root=True)
+        daemon.client.execute.assert_called_once_with(['a', '1'], None)
+        mock_info.assert_has_calls([mock.call(
+            u'Executing RootwrapDaemonHelper.execute cmd=[%(cmd)r] '
+            u'kwargs=[%(kwargs)r]',
+            {'cmd': u'a 1', 'kwargs': {'run_as_root': True, 'foo': 'bar'}})])
+
+    def test_execute_with_kwargs(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(0, None, None))
+
+        daemon.execute('a', 1, foo='bar', run_as_root=True, process_input=True)
+        daemon.client.execute.assert_called_once_with(['a', '1'], True)
+
+    def test_execute_fail(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(-2, None, None))
+
+        self.assertRaises(processutils.ProcessExecutionError,
+                          daemon.execute, 'b', 2)
+
+    def test_execute_pass_with_check_exit_code(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(-2, None, None))
+        daemon.execute('b', 2, check_exit_code=[-2])
+
+    def test_execute_fail_with_retry(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(-2, None, None))
+
+        self.assertRaises(processutils.ProcessExecutionError,
+                          daemon.execute, 'b', 2, attempts=2)
+        daemon.client.execute.assert_has_calls(
+            [mock.call(['b', '2'], None),
+             mock.call(['b', '2'], None)])
+
+    @mock.patch('nova.utils.LOG.log')
+    def test_execute_fail_and_logging(self, mock_log):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(-2, None, None))
+
+        self.assertRaises(processutils.ProcessExecutionError,
+                          daemon.execute, 'b', 2,
+                          attempts=2,
+                          loglevel=logging.CRITICAL,
+                          log_errors=processutils.LOG_ALL_ERRORS)
+        mock_log.assert_has_calls(
+            [
+                mock.call(logging.CRITICAL, u'Running cmd (subprocess): %s',
+                          u'b 2'),
+                mock.call(logging.CRITICAL,
+                          'CMD "%(sanitized_cmd)s" returned: %(return_code)s '
+                          'in %(end_time)0.3fs',
+                          {'sanitized_cmd': u'b 2', 'return_code': -2,
+                           'end_time': mock.ANY}),
+                mock.call(logging.CRITICAL,
+                          u'%(desc)r\ncommand: %(cmd)r\nexit code: %(code)r'
+                          u'\nstdout: %(stdout)r\nstderr: %(stderr)r',
+                          {'code': -2, 'cmd': u'b 2', 'stdout': u'None',
+                           'stderr': u'None', 'desc': None}),
+                mock.call(logging.CRITICAL, u'%r failed. Retrying.', u'b 2'),
+                mock.call(logging.CRITICAL, u'Running cmd (subprocess): %s',
+                          u'b 2'),
+                mock.call(logging.CRITICAL,
+                          'CMD "%(sanitized_cmd)s" returned: %(return_code)s '
+                          'in %(end_time)0.3fs',
+                          {'sanitized_cmd': u'b 2', 'return_code': -2,
+                           'end_time': mock.ANY}),
+                mock.call(logging.CRITICAL,
+                          u'%(desc)r\ncommand: %(cmd)r\nexit code: %(code)r'
+                          u'\nstdout: %(stdout)r\nstderr: %(stderr)r',
+                          {'code': -2, 'cmd': u'b 2', 'stdout': u'None',
+                           'stderr': u'None', 'desc': None}),
+                mock.call(logging.CRITICAL, u'%r failed. Not Retrying.',
+                          u'b 2')]
+        )
+
+    def test_trycmd(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(0, None, None))
+
+        daemon.trycmd('a', 1, foo='bar', run_as_root=True)
+        daemon.client.execute.assert_called_once_with(['a', '1'], None)
+
+    def test_trycmd_with_kwargs(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.execute = mock.Mock(return_value=('out', 'err'))
+
+        daemon.trycmd('a', 1, foo='bar', run_as_root=True,
+                      loglevel=logging.WARN,
+                      log_errors=True,
+                      process_input=True,
+                      delay_on_retry=False,
+                      attempts=5,
+                      check_exit_code=[200])
+        daemon.execute.assert_called_once_with('a', 1, attempts=5,
+                                               check_exit_code=[200],
+                                               delay_on_retry=False, foo='bar',
+                                               log_errors=True, loglevel=30,
+                                               process_input=True,
+                                               run_as_root=True)
+
+    def test_trycmd_fail(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(-2, None, None))
+
+        expected_err = six.text_type('''\
+Unexpected error while running command.
+Command: a 1
+Exit code: -2''')
+
+        out, err = daemon.trycmd('a', 1, foo='bar', run_as_root=True)
+        daemon.client.execute.assert_called_once_with(['a', '1'], None)
+        self.assertIn(expected_err, err)
+
+    def test_trycmd_fail_with_rety(self):
+        mock_conf = mock.MagicMock()
+        daemon = utils.RootwrapDaemonHelper(mock_conf)
+        daemon.client = mock.MagicMock()
+        daemon.client.execute = mock.Mock(return_value=(-2, None, None))
+
+        expected_err = six.text_type('''\
+Unexpected error while running command.
+Command: a 1
+Exit code: -2''')
+
+        out, err = daemon.trycmd('a', 1, foo='bar', run_as_root=True,
+                                 attempts=3)
+        self.assertIn(expected_err, err)
+        daemon.client.execute.assert_has_calls(
+            [mock.call(['a', '1'], None),
+             mock.call(['a', '1'], None),
+             mock.call(['a', '1'], None)])
 
 
 class VPNPingTestCase(test.NoDBTestCase):
@@ -245,7 +440,7 @@ class VPNPingTestCase(test.NoDBTestCase):
     def fake_reply_packet(self, pkt_id=0x40):
         return struct.pack(self.fmt, pkt_id, 0x0, self.session_id)
 
-    def setup_socket(sefl, mock_socket, return_value, side_effect=None):
+    def setup_socket(self, mock_socket, return_value, side_effect=None):
         socket_obj = mock.MagicMock()
         if side_effect is not None:
             socket_obj.recv.side_effect = side_effect
@@ -554,26 +749,26 @@ class LastBytesTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(LastBytesTestCase, self).setUp()
-        self.f = StringIO.StringIO('1234567890')
+        self.f = six.BytesIO(b'1234567890')
 
     def test_truncated(self):
         self.f.seek(0, os.SEEK_SET)
         out, remaining = utils.last_bytes(self.f, 5)
-        self.assertEqual(out, '67890')
+        self.assertEqual(out, b'67890')
         self.assertTrue(remaining > 0)
 
     def test_read_all(self):
         self.f.seek(0, os.SEEK_SET)
         out, remaining = utils.last_bytes(self.f, 1000)
-        self.assertEqual(out, '1234567890')
+        self.assertEqual(out, b'1234567890')
         self.assertFalse(remaining > 0)
 
     def test_seek_too_far_real_file(self):
         # StringIO doesn't raise IOError if you see past the start of the file.
-        flo = tempfile.TemporaryFile()
-        content = '1234567890'
-        flo.write(content)
-        self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
+        with tempfile.TemporaryFile() as flo:
+            content = b'1234567890'
+            flo.write(content)
+            self.assertEqual((content, 0), utils.last_bytes(flo, 1000))
 
 
 class MetadataToDictTestCase(test.NoDBTestCase):
@@ -587,11 +782,14 @@ class MetadataToDictTestCase(test.NoDBTestCase):
         self.assertEqual(utils.metadata_to_dict([]), {})
 
     def test_dict_to_metadata(self):
+        def sort_key(adict):
+            return sorted(adict.items())
+
+        metadata = utils.dict_to_metadata(dict(foo1='bar1', foo2='bar2'))
         expected = [{'key': 'foo1', 'value': 'bar1'},
                     {'key': 'foo2', 'value': 'bar2'}]
-        self.assertEqual(sorted(utils.dict_to_metadata(dict(foo1='bar1',
-                                                     foo2='bar2'))),
-                         sorted(expected))
+        self.assertEqual(sorted(metadata, key=sort_key),
+                         sorted(expected, key=sort_key))
 
     def test_dict_to_metadata_empty(self):
         self.assertEqual(utils.dict_to_metadata({}), [])
@@ -612,7 +810,7 @@ class WrappedCodeTestCase(test.NoDBTestCase):
             pass
 
         func = utils.get_wrapped_function(wrapped)
-        func_code = func.func_code
+        func_code = func.__code__
         self.assertEqual(4, len(func_code.co_varnames))
         self.assertIn('self', func_code.co_varnames)
         self.assertIn('instance', func_code.co_varnames)
@@ -626,7 +824,7 @@ class WrappedCodeTestCase(test.NoDBTestCase):
             pass
 
         func = utils.get_wrapped_function(wrapped)
-        func_code = func.func_code
+        func_code = func.__code__
         self.assertEqual(4, len(func_code.co_varnames))
         self.assertIn('self', func_code.co_varnames)
         self.assertIn('instance', func_code.co_varnames)
@@ -641,7 +839,7 @@ class WrappedCodeTestCase(test.NoDBTestCase):
             pass
 
         func = utils.get_wrapped_function(wrapped)
-        func_code = func.func_code
+        func_code = func.__code__
         self.assertEqual(4, len(func_code.co_varnames))
         self.assertIn('self', func_code.co_varnames)
         self.assertIn('instance', func_code.co_varnames)
@@ -759,7 +957,7 @@ class ValidateIntegerTestCase(test.NoDBTestCase):
                           max_value=54)
         self.assertRaises(exception.InvalidInput,
                           utils.validate_integer,
-                          unichr(129), "UnicodeError",
+                          six.unichr(129), "UnicodeError",
                           max_value=1000)
 
 
@@ -831,6 +1029,24 @@ class GetSystemMetadataFromImageTestCase(test.NoDBTestCase):
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertEqual(sys_meta[sys_key], expected)
 
+    def test_skip_image_properties(self):
+        image = self.get_image()
+        image["properties"] = {
+            "foo1": "bar", "foo2": "baz",
+            "mappings": "wizz", "img_block_device_mapping": "eek",
+        }
+
+        sys_meta = utils.get_system_metadata_from_image(image)
+
+        # Verify that we inherit all the image properties
+        for key, expected in six.iteritems(image["properties"]):
+            sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
+
+            if key in utils.SM_SKIP_KEYS:
+                self.assertNotIn(sys_key, sys_meta)
+            else:
+                self.assertEqual(sys_meta[sys_key], expected)
+
     def test_vhd_min_disk_image(self):
         image = self.get_image()
         flavor = self.get_flavor()
@@ -873,6 +1089,8 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         sys_meta = self.get_system_metadata()
         sys_meta["%soo1" % utils.SM_IMAGE_PROP_PREFIX] = "bar"
         sys_meta["%soo2" % utils.SM_IMAGE_PROP_PREFIX] = "baz"
+        sys_meta["%simg_block_device_mapping" %
+                 utils.SM_IMAGE_PROP_PREFIX] = "eek"
 
         image = utils.get_image_from_system_metadata(sys_meta)
 
@@ -887,6 +1105,8 @@ class GetImageFromSystemMetadataTestCase(test.NoDBTestCase):
         for key, value in six.iteritems(image["properties"]):
             sys_key = "%s%s" % (utils.SM_IMAGE_PROP_PREFIX, key)
             self.assertEqual(image["properties"][key], sys_meta[sys_key])
+
+        self.assertNotIn("img_block_device_mapping", image["properties"])
 
     def test_dont_inherit_empty_values(self):
         sys_meta = self.get_system_metadata()
@@ -925,6 +1145,18 @@ class GetImageMetadataFromVolumeTestCase(test.NoDBTestCase):
         image_meta = utils.get_image_metadata_from_volume(volume)
         self.assertEqual(5, image_meta["min_ram"])
         self.assertEqual(7, image_meta["min_disk"])
+
+    def test_suppress_not_image_properties(self):
+        properties = {"min_ram": "256", "min_disk": "128",
+                      "image_id": "fake_id", "image_name": "fake_name",
+                      "container_format": "ami", "disk_format": "ami",
+                      "size": "1234", "checksum": "fake_checksum"}
+        volume = {"volume_image_metadata": properties}
+        image_meta = utils.get_image_metadata_from_volume(volume)
+        self.assertEqual({}, image_meta["properties"])
+        self.assertEqual(0, image_meta["size"])
+        # volume's properties should not be touched
+        self.assertNotEqual({}, properties)
 
 
 class VersionTestCase(test.NoDBTestCase):
@@ -1028,7 +1260,7 @@ class SafeTruncateTestCase(test.NoDBTestCase):
         # Generate Chinese byte string whose length is 300. This Chinese UTF-8
         # character occupies 3 bytes. After truncating, the byte string length
         # should be 255.
-        msg = encodeutils.safe_decode('\xe8\xb5\xb5' * 100)
+        msg = u'\u8d75' * 100
         truncated_msg = utils.safe_truncate(msg, 255)
         byte_message = encodeutils.safe_encode(truncated_msg)
         self.assertEqual(255, len(byte_message))

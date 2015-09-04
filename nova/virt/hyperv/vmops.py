@@ -25,7 +25,9 @@ from eventlet import timeout as etimeout
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import excutils
+from oslo_utils import fileutils
 from oslo_utils import importutils
 from oslo_utils import units
 from oslo_utils import uuidutils
@@ -33,8 +35,6 @@ from oslo_utils import uuidutils
 from nova.api.metadata import base as instance_metadata
 from nova import exception
 from nova.i18n import _, _LI, _LE, _LW
-from nova.openstack.common import fileutils
-from nova.openstack.common import loopingcall
 from nova import utils
 from nova.virt import configdrive
 from nova.virt import hardware
@@ -372,7 +372,7 @@ class VMOps(object):
 
     def _create_config_drive(self, instance, injected_files, admin_password,
                              network_info):
-        if CONF.config_drive_format not in ('iso9660', None):
+        if CONF.config_drive_format != 'iso9660':
             raise vmutils.UnsupportedConfigDriveFormatException(
                 _('Invalid config_drive_format "%s"') %
                 CONF.config_drive_format)
@@ -537,11 +537,22 @@ class VMOps(object):
         LOG.debug("Power off instance", instance=instance)
         if retry_interval <= 0:
             retry_interval = SHUTDOWN_TIME_INCREMENT
-        if timeout and self._soft_shutdown(instance, timeout, retry_interval):
-            return
 
-        self._set_vm_state(instance,
-                           constants.HYPERV_VM_STATE_DISABLED)
+        try:
+            if timeout and self._soft_shutdown(instance,
+                                               timeout,
+                                               retry_interval):
+                return
+
+            self._set_vm_state(instance,
+                               constants.HYPERV_VM_STATE_DISABLED)
+        except exception.NotFound:
+            # The manager can call the stop API after receiving instance
+            # power off events. If this is triggered when the instance
+            # is being deleted, it might attempt to power off an unexisting
+            # instance. We'll just pass in this case.
+            LOG.debug("Instance not found. Skipping power off",
+                      instance=instance)
 
     def power_on(self, instance, block_device_info=None):
         """Power on the specified instance."""

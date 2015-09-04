@@ -189,7 +189,40 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
                                      ('DB Migration %i does not have a '
                                       'test. Please add one!') % version)
 
-        super(NovaMigrationsCheckers, self).migrate_up(version, with_data)
+        # NOTE(danms): This is a list of migrations where we allow dropping
+        # things. The rules for adding things here are very very specific.
+        # Chances are you don't meet the critera.
+        # Reviewers: DO NOT ALLOW THINGS TO BE ADDED HERE
+        exceptions = [
+            # 267 enforces non-nullable instance.uuid. This was mostly
+            # a special case because instance.uuid shouldn't be able
+            # to be nullable
+            267,
+
+            # 278 removes a FK restriction, so it's an alter operation
+            # that doesn't break existing users
+            278,
+
+            # 280 enforces non-null keypair name. This is really not
+            # something we should allow, but it's in the past
+            280,
+
+            # 292 drops completely orphaned tables with no users, so
+            # it can be done without affecting anything.
+            292,
+        ]
+        # Reviewers: DO NOT ALLOW THINGS TO BE ADDED HERE
+
+        # NOTE(danms): We only started requiring things be additive in
+        # kilo, so ignore all migrations before that point.
+        KILO_START = 265
+
+        if version >= KILO_START and version not in exceptions:
+            banned = ['Table', 'Column']
+        else:
+            banned = None
+        with nova_fixtures.BannedDBSchemaOperations(banned):
+            super(NovaMigrationsCheckers, self).migrate_up(version, with_data)
 
     def test_walk_versions(self):
         self.walk_versions(snake_walk=False, downgrade=False)
@@ -299,7 +332,10 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertFalse(quota_usages.c.resource.nullable)
 
         pci_devices = oslodbutils.get_table(engine, 'pci_devices')
-        self.assertTrue(pci_devices.c.deleted.nullable)
+        if engine.name == 'ibm_db_sa':
+            self.assertFalse(pci_devices.c.deleted.nullable)
+        else:
+            self.assertTrue(pci_devices.c.deleted.nullable)
         self.assertFalse(pci_devices.c.product_id.nullable)
         self.assertFalse(pci_devices.c.vendor_id.nullable)
         self.assertFalse(pci_devices.c.dev_type.nullable)
@@ -706,13 +742,63 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertIsInstance(shadow_services.c.last_seen_up.type,
                               sqlalchemy.types.DateTime)
 
-    def _pre_upgrade_294(self, engine):
+    def _pre_upgrade_295(self, engine):
         self.assertIndexNotExists(engine, 'virtual_interfaces',
                                   'virtual_interfaces_uuid_idx')
 
     def _check_295(self, engine, data):
         self.assertIndexMembers(engine, 'virtual_interfaces',
                                 'virtual_interfaces_uuid_idx', ['uuid'])
+
+    def _check_296(self, engine, data):
+        if engine.name == 'ibm_db_sa':
+            # Make sure the last FK in the list was created.
+            inspector = reflection.Inspector.from_engine(engine)
+            fkeys = inspector.get_foreign_keys('instance_extra')
+            fkey_names = [fkey['name'] for fkey in fkeys]
+            self.assertIn('fk_instance_extra_instance_uuid', fkey_names)
+
+    def _check_297(self, engine, data):
+        self.assertColumnExists(engine, 'services', 'forced_down')
+
+    def _check_298(self, engine, data):
+        # NOTE(nic): This is a MySQL-specific migration, and is a no-op from
+        # the point-of-view of unit tests, since they use SQLite
+        pass
+
+    def filter_metadata_diff(self, diff):
+        # Overriding the parent method to decide on certain attributes
+        # that maybe present in the DB but not in the models.py
+
+        def removed_column(element):
+            # Define a whitelist of columns that would be removed from the
+            # DB at a later release.
+            column_whitelist = {'instances': ['scheduled_at']}
+
+            if element[0] != 'remove_column':
+                return False
+
+            table_name, column = element[2], element[3]
+            return (table_name in column_whitelist and
+                    column.name in column_whitelist[table_name])
+
+        return [
+            element
+            for element in diff
+            if not removed_column(element)
+        ]
+
+    def _check_299(self, engine, data):
+        self.assertColumnExists(engine, 'services', 'version')
+
+    def _check_300(self, engine, data):
+        self.assertColumnExists(engine, 'instance_extra', 'migration_context')
+
+    def _check_301(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes',
+                                'cpu_allocation_ratio')
+        self.assertColumnExists(engine, 'compute_nodes',
+                                'ram_allocation_ratio')
 
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,

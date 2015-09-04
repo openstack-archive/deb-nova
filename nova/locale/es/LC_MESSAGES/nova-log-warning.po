@@ -5,20 +5,21 @@
 # Translators:
 # Adriana Chisco Landazábal <achisco94@gmail.com>, 2015
 # Jorge Guerrero <lavidadigital@gmail.com>, 2014
+# Pablo Sanchez <furybeat@gmail.com>, 2015
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-06-22 06:09+0000\n"
-"PO-Revision-Date: 2015-06-19 04:48+0000\n"
+"POT-Creation-Date: 2015-08-05 06:20+0000\n"
+"PO-Revision-Date: 2015-08-05 00:46+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
-"Language-Team: Spanish (http://www.transifex.com/projects/p/nova/language/"
+"Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
 "es/)\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 1.3\n"
+"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
 #, python-format
@@ -97,12 +98,6 @@ msgstr ""
 "migración en vivo por herencia. Error: %s"
 
 #, python-format
-msgid "AoE volume not yet found at: %(aoedevpath)s. Try number: %(tries)s"
-msgstr ""
-"El volumen AoE aún no se ha encontrado en: %(aoedevpath)s. Número de "
-"intentos: %(tries)s"
-
-#, python-format
 msgid "Arguments dropped when creating context: %s"
 msgstr "Argumentos descartados al crear contexto: %s"
 
@@ -124,10 +119,6 @@ msgstr "Se ha intentado eliminar la cadena %s que no existe"
 
 msgid "Bandwidth usage not supported by hypervisor."
 msgstr "Uso de ancho de banda no soportado por el hipervisor."
-
-#, python-format
-msgid "Cannot access 'scality_sofs_config': %s"
-msgstr "No se puede acceder a 'scality_sofs_config': %s"
 
 #, python-format
 msgid ""
@@ -153,9 +144,6 @@ msgid "Cannot destroy instance, operation time out"
 msgstr ""
 "No se puede destruir intsancia, tiempo de espera agotado para la operación"
 
-msgid "Cannot execute /sbin/mount.sofs"
-msgstr "No se puede ejecutar /sbin/mount.sofs"
-
 #, python-format
 msgid "Cannot get the metrics from %s."
 msgstr "No se pueden obtener las métricas de %s."
@@ -166,9 +154,6 @@ msgid ""
 msgstr ""
 "No se puede obtener el número de CPU porque esta función no está "
 "implementada para esta plataforma. "
-
-msgid "Cannot mount Scality SOFS, check syslog for errors"
-msgstr "No se puede montar Scality SOFS, compruebe syslog por si hay errores"
 
 msgid "Cannot purge SR with referenced VDIs"
 msgstr "No se puede depurar SR con las VDI referenciadas"
@@ -229,10 +214,6 @@ msgstr "No se ha podido determinar el nombre de iniciador iscsi "
 #, python-format
 msgid "Could not determine key: %s"
 msgstr "No se ha podido determinar la clave: %s"
-
-#, python-format
-msgid "Couldn't find multipath device %s"
-msgstr "No se puede encontrar el dispositivo multiruta %s"
 
 #, python-format
 msgid ""
@@ -348,14 +329,6 @@ msgid "Error while trying to clean up image %s"
 msgstr "Error al intentar limpiar imagen %s"
 
 #, python-format
-msgid ""
-"Excluding monitor %(monitor_name)s due to metric name overlap; overlapping "
-"metrics: %(overlap)s"
-msgstr ""
-"Excluyendo el monitor %(monitor_name)s debido a superposición de nombre de "
-"métrica; metricas superpuestas: %(overlap)s"
-
-#, python-format
 msgid "Expected to receive %(exp)s bytes, but actually %(act)s"
 msgstr "Se esperaba recibir %(exp)s bytes, se han recibido %(act)s"
 
@@ -440,14 +413,6 @@ msgid "Failed to power off instance"
 msgstr "Fallo al apagar la instancia"
 
 #, python-format
-msgid ""
-"Failed to remove multipath device descriptor %(dev_mapper)s. Exception "
-"message: %(msg)s"
-msgstr ""
-"Fallo al remover el descriptor del dispositivo multiruta %(dev_mapper)s. "
-"Mensaje de excepción: %(msg)s"
-
-#, python-format
 msgid "Failed to remove snapshot for VM %s"
 msgstr "No se ha podido eliminar la instantánea para VM %s"
 
@@ -479,14 +444,6 @@ msgstr ""
 "Se ha encontrado que los SR de este sistema son de tipo %s. Ignorando el "
 "identificador cow."
 
-#, python-format
-msgid ""
-"Fibre volume not yet found at: %(mount_device)s. Will rescan & retry.  Try "
-"number: %(tries)s"
-msgstr ""
-"El volumen de fibra aún no se ha encontrado en: %(mount_device)s. Se volverá "
-"a explorar y se reintentará. Número de intentos: %(tries)s"
-
 msgid "File injection into a boot from volume instance is not supported"
 msgstr ""
 "La inyección de archivo al arranque desde la instancia del volumen no está "
@@ -496,14 +453,6 @@ msgstr ""
 msgid "Flag sr_matching_filter '%s' does not respect formatting convention"
 msgstr ""
 "El distintivo sr_matching_filter '%s' no respeta el convenio de formato"
-
-#, python-format
-msgid ""
-"Flavor %(flavorid)s not found for instance during migration; extra_specs "
-"will not be available"
-msgstr ""
-"No se ha encontrado tipo %(flavorid)s para instancia durante migración; no "
-"estarán disponibles extra_specs"
 
 #, python-format
 msgid "Flavor %d not found"
@@ -575,14 +524,6 @@ msgstr "IP %s liberada que no está alquilada"
 #, python-format
 msgid "IP |%s| leased that isn't allocated"
 msgstr "IP |%s| alquilada que no está asignada"
-
-#, python-format
-msgid ""
-"ISCSI volume not yet found at: %(disk_dev)s. Will rescan & retry.  Try "
-"number: %(tries)s"
-msgstr ""
-"El volumen ISCSI aún no se ha encontrado en: %(disk_dev)s. Se volverá a "
-"explorar y se reintentará. Número de intentos: %(tries)s"
 
 #, python-format
 msgid "ISO creation tool '%s' does not exist."
@@ -679,18 +620,6 @@ msgid ""
 msgstr ""
 "La instancia %(instance)s utiliza un archivo de respaldo %(backing)s que no "
 "aparece en el servicio de la imagen"
-
-#, python-format
-msgid ""
-"Instance %(uuid)s appears to have been evacuated from this host to %(host)s. "
-"Not destroying it locally due to config setting \"workarounds."
-"destroy_after_evacuate\". If this is not correct, enable that option and "
-"restart nova-compute."
-msgstr ""
-"Parece que la instancia %(uuid)s ha sido evacuada desde este host hacia "
-"%(host)s. No destruir localmente a causa de la configuración \"workarounds."
-"destroy_after_evacuate\". Si esto es un error, habilite esa opción y "
-"reinicie nova-compute."
 
 #, python-format
 msgid ""
@@ -859,16 +788,8 @@ msgid "Migration operation was cancelled"
 msgstr "Se ha cancelado la operación de migración"
 
 #, python-format
-msgid "Monitor %(monitor_name)s cannot be used: %(ex)s"
-msgstr "El monitor %(monitor_name)s no puede ser utilizado: %(ex)s"
-
-#, python-format
 msgid "Mountpoint cannot be translated: %s"
 msgstr "Punto de montaje no puede ser traducido: %s"
-
-#, python-format
-msgid "Multipath call failed exit (%(code)s)"
-msgstr "La llamada a multivía de acceso no ha podido salir (%(code)s)"
 
 #, python-format
 msgid "Multiple base images for image: %s"
@@ -881,6 +802,13 @@ msgid ""
 msgstr ""
 "La red %(id)s no coincide con las redes de los inquilinos! El puerto del "
 "inquilino %(tenant_id)s será utilizado."
+
+#, python-format
+msgid ""
+"Neutron error: %(ip)s is not a valid ip address for network %(network_id)s."
+msgstr ""
+"Error de Neutron: %(ip)s no es una direccion ip valida para la red "
+"%(network_id)s."
 
 #, python-format
 msgid "Neutron error: Fixed IP %s is already in use."
@@ -900,6 +828,14 @@ msgstr "Error de Neutron: No hay más IPs fijas en red: %s"
 #, python-format
 msgid "Neutron error: Port quota exceeded in tenant: %s"
 msgstr "Error de Neutron: capacidad de puerto excedida en usuario: %s"
+
+#, python-format
+msgid "No Network for FixedIP: %s"
+msgstr "No hay red para la IP Fija : %s"
+
+#, python-format
+msgid "No VirtualInterface for FixedIP: %s"
+msgstr "No hay Interfaz Virtual para la IP Fija : %s"
 
 #, python-format
 msgid "No cell_name for %(method)s() from API"
@@ -937,14 +873,6 @@ msgstr "No hay más redes o IP fijas para asignar"
 #, python-format
 msgid "No service record for host %s"
 msgstr "Ningún registro de servicio para el host %s "
-
-#, python-format
-msgid ""
-"No useable transport found for iscsi iface %s. Falling back to default "
-"transport"
-msgstr ""
-"No se ha encontrado transporte útil para iscsi iface %s. Retrocediendo a "
-"transporte por defecto"
 
 msgid "No valid host found for rebuild"
 msgstr "No se ha encontrado un host válido para reconstruir"
@@ -1127,6 +1055,26 @@ msgstr ""
 msgid "Root disk file creation failed - %s"
 msgstr "Fallo al crear el archivo del disco raíz - %s"
 
+#, python-format
+msgid ""
+"Running Nova with a VMware vCenter version less than %(version)s is "
+"deprecated. The required minimum version of vCenter will be raised to "
+"%(version)s in the 13.0.0 release."
+msgstr ""
+"Se desaprueba la ejecución de Nova con una versión VMware vCenter inferior a "
+"%(version)s. La versión mínima requerida de vCenter será aumentada a "
+"%(version)s en el lanzamiento 13.0.0."
+
+#, python-format
+msgid ""
+"Running Nova with a libvirt version less than %(version)s is deprecated. The "
+"required minimum version of libvirt will be raised to %(version)s in the "
+"13.0.0 release."
+msgstr ""
+"Se desaprueba ejecutar Nova con una version de libvirt inferior a "
+"%(version)s. La version minima requerida de libvirt será aumentada a "
+"%(version)s en el lanzamiento 13.0.0."
+
 msgid ""
 "Running libvirt-lxc without user namespaces is dangerous. Containers spawned "
 "by Nova will be run as the host's root user. It is highly suggested that "
@@ -1150,11 +1098,6 @@ msgstr "Estableciendo instancia hacia estado %s"
 #, python-format
 msgid "Setting migration %(migration_id)s to error: %(reason)s"
 msgstr "Estableciendo la %(migration_id)s en error: %(reason)s"
-
-#, python-format
-msgid "Skip faulty line \"%(dev_line)s\" of multipath device %(mdev)s"
-msgstr ""
-"Omitir linea defectuosa \"%(dev_line)s\" de dispositivo multi-ruta  %(mdev)s"
 
 #, python-format
 msgid "Skipping detach because VBD for %s was not found"
@@ -1195,24 +1138,9 @@ msgstr ""
 "cambiar en el futuro, pero los implementadores actuales deben estar "
 "conscientes que su uso en producción puede ser riesgoso en este momento."
 
-msgid ""
-"The cells feature of Nova is considered experimental by the OpenStack "
-"project because it receives much less testing than the rest of Nova. This "
-"may change in the future, but current deployers should be aware that the use "
-"of it in production right now may be risky."
-msgstr ""
-"La característica de celdas en Nova se considera experimental por el "
-"proyecto OpenStack debido a que recibe muchas menos pruebas el resto de "
-"Nova. Esto puede cambiar en el futuro, pero los desplegadores actuales deben "
-"estar concientes que el uso en producción ahora puede ser riesgoso."
-
 #, python-format
 msgid "The following clusters could not be found in the vCenter %s"
 msgstr "Los siguientes clusters no pueden ser encontrados en el vcenter %s"
-
-#, python-format
-msgid "The following monitors have been disabled: %s"
-msgstr "Los siguientes monitores han sido deshabilitados: %s"
 
 msgid ""
 "The in tree EC2 API is deprecated as of Kilo release and may be removed in a "
@@ -1290,6 +1218,13 @@ msgstr ""
 
 #, python-format
 msgid ""
+"Treating negative config value (%(retries)s) for 'glance.num_retries' as 0."
+msgstr ""
+"Tratando como 0 el valor negativo de configuración (%(retries)s) para "
+"'glance.num_retries' ."
+
+#, python-format
+msgid ""
 "Treating negative config value (%(retries)s) for 'network_allocate_retries' "
 "as 0."
 msgstr ""
@@ -1331,10 +1266,6 @@ msgstr "URI %(uri)s no soporta listDevices: %(error)s"
 #, python-format
 msgid "Unable to delete %(file)s. Exception: %(ex)s"
 msgstr "Incapaz de remover %(file)s. Excepción: %(ex)s"
-
-#, python-format
-msgid "Unable to delete volume device %s"
-msgstr "Incapaz de eliminar el dispositivo de volumen %s"
 
 #, python-format
 msgid "Unable to dequalify.  %(name)s is not in %(domain)s.\n"
@@ -1418,9 +1349,6 @@ msgstr "VM no está presente, omitiendo destrucción... "
 msgid "VM is not present, skipping soft delete..."
 msgstr "VM no está presente, omitiendo supresión no permanente... "
 
-msgid "Value required for 'scality_sofs_config'"
-msgstr "Valor necesario para 'scality_sofs_config'"
-
 msgid ""
 "Value specified in conf file for xenserver.torrent_base_url does not contain "
 "a slash character, therefore it will not be used as part of the torrent URL. "
@@ -1493,16 +1421,6 @@ msgid ""
 msgstr ""
 "X-Instance-ID presente en cabecera requerida. Se debe habilitar la opción "
 "'service_metadata_proxy' para procesar esta cabecera"
-
-#, python-format
-msgid ""
-"X-Instance-ID-Signature: %(signature)s does not match the expected value: "
-"%(expected_signature)s for id: %(instance_id)s. Request From: "
-"%(remote_address)s"
-msgstr ""
-"X-Instance-ID-Signature: %(signature)s no coincide con el valor esperado: "
-"%(expected_signature)s para identificacón: %(instance_id)s. Solicitud desde "
-"%(remote_address)s"
 
 msgid ""
 "Your libvirt version does not support the VIR_DOMAIN_XML_MIGRATABLE flag, "
@@ -1609,12 +1527,6 @@ msgid "isLuks exited abnormally (status %(exit_code)s): %(stderr)s"
 msgstr "isLuks ha salido de manera anormal (estado%(exit_code)s): %(stderr)s"
 
 #, python-format
-msgid "multipath-tools probably work improperly. devices to remove = %s."
-msgstr ""
-"Es probable que multipath-tools no funciones de manera adecuada. "
-"dispositivos para eliminar = %s."
-
-#, python-format
 msgid "multiple fixed_ips exist, using the first IPv4 fixed_ip: %s"
 msgstr "existen múltiples fixed_ips, utilizando la primer IPv4 fixed_ip: %s"
 
@@ -1628,10 +1540,6 @@ msgid ""
 msgstr ""
 "No se encontró la dirección my_ip (%(my_ip)s) en ningna de las interfaces: "
 "%(ifaces)s"
-
-#, python-format
-msgid "pid %d not in child list"
-msgstr "El pid %d no está en la lista de hijos"
 
 #, python-format
 msgid "plug_vifs() failed %(cnt)d. Retry up to %(max_retry)d."
@@ -1656,15 +1564,6 @@ msgstr ""
 msgid "set_bootable is not implemented for the current driver"
 msgstr "set_bootable no está implementado en el controlador actual"
 
-msgid "systool is not installed"
-msgstr "systool no está instalado"
-
-#, python-format
-msgid "task %(func_name)r run outlasted interval by %(delay).2f sec"
-msgstr ""
-"la ejecución de tarea %(func_name)r ha durado %(delay).2f seg. más que el "
-"intervalo"
-
 #, python-format
 msgid ""
 "trying to inject a file into a non-running (state: %(current_state)s "
@@ -1688,18 +1587,6 @@ msgid ""
 msgstr ""
 "intentando hacer una instantánea de una instancia que no se está ejecutando: "
 "(estado: %(state)s se esperaba: %(running)s)"
-
-#, python-format
-msgid "unit_add call failed; exit code (%(code)s), stderr (%(stderr)s)"
-msgstr ""
-"Ha fallado la llamada a unit_add; código de salida (%(code)s), stderr "
-"(%(stderr)s)"
-
-#, python-format
-msgid "unit_remove call failed; exit code (%(code)s), stderr (%(stderr)s)"
-msgstr ""
-"Ha fallado la llamada a unit_remove; código de salida (%(code)s), stderr "
-"(%(stderr)s)"
 
 #, python-format
 msgid ""

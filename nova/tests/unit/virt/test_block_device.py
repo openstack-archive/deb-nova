@@ -21,6 +21,7 @@ import six
 from nova import block_device
 from nova import context
 from nova import exception
+from nova.objects import fields
 from nova import test
 from nova.tests.unit import fake_instance
 from nova.tests.unit import matchers
@@ -241,7 +242,11 @@ class TestDriverBlockDevice(test.NoDBTestCase):
         # Test the save method
         with mock.patch.object(test_bdm._bdm_obj, 'save') as save_mock:
             for fld, alias in six.iteritems(test_bdm._update_on_save):
-                test_bdm[alias or fld] = 'fake_changed_value'
+                # We can't set fake values on enums, like device_type,
+                # so skip those.
+                if not isinstance(test_bdm._bdm_obj.fields[fld],
+                                  fields.BaseEnumField):
+                    test_bdm[alias or fld] = 'fake_changed_value'
             test_bdm.save()
             for fld, alias in six.iteritems(test_bdm._update_on_save):
                 self.assertEqual(test_bdm[alias or fld],
@@ -464,6 +469,23 @@ class TestDriverBlockDevice(test.NoDBTestCase):
                         self.volume_api, self.virt_driver)
         self.assertThat(test_bdm['connection_info'],
                         matchers.DictMatches(expected_conn_info))
+
+    def test_volume_attach_update_size(self):
+        test_bdm = self.driver_classes['volume'](self.volume_bdm)
+        test_bdm.volume_size = None
+        volume = {'id': 'fake-volume-id-1',
+                  'attach_status': 'detached',
+                  'size': 42}
+
+        instance, expected_conn_info = self._test_volume_attach(
+                test_bdm, self.volume_bdm, volume)
+
+        self.mox.ReplayAll()
+
+        test_bdm.attach(self.context, instance,
+                        self.volume_api, self.virt_driver)
+        self.assertEqual(expected_conn_info, test_bdm['connection_info'])
+        self.assertEqual(42, test_bdm.volume_size)
 
     def test_volume_attach_check_attach_fails(self):
         test_bdm = self.driver_classes['volume'](
