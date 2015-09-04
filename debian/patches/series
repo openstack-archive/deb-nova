@@ -1,5 +1,3 @@
 path-to-the-xenhost.conf-fixup.patch
-install-missing-files.patch
 #fix-ubuntu-tests.patch
-using-deprecated-assertRaisesRegexp.patch
 Add_nova-idmapshift_to_rootwrap_filters.patch
