@@ -6,3 +6,4 @@ etc/nova/policy.json	etc/nova
 etc/nova/rootwrap.conf	etc/nova
 usr/bin/nova-manage
 usr/bin/nova-rootwrap
+usr/bin/nova-rootwrap-daemon
