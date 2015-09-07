@@ -53,7 +53,6 @@ endif
 override_dh_install:
 	python setup.py install -f --install-layout=deb --root=$(debroot)
 	mkdir -p $(debroot)/usr/share
-	mv $(site_packages_dir)/nova/locale $(debroot)/usr/share
 
 	rm debian/tmp/usr/bin/nova-api-os-compute
 	rm debian/tmp/usr/bin/nova-api-metadata

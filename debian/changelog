@@ -3,6 +3,7 @@ nova (1:12.0.0~b3-1) experimental; urgency=medium
   * New upstream release.
   * Fixed (build-)depends for this release.
   * Refreshed patches, deleted obsolete ones.
+  * Fixed install of nova/locale.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 04 Sep 2015 15:03:48 +0200
 
