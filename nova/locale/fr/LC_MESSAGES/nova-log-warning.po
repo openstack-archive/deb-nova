@@ -6,13 +6,15 @@
 # Frédéric <frosmont@free.fr>, 2014
 # Lucas Mascaro <mascaro.lucas@yahoo.fr>, 2015
 # Maxime COQUEREL <max.coquerel@gmail.com>, 2014
+# Corinne Verheyde <cverheyd@gmail.com>, 2015. #zanata
+# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova\n"
+"Project-Id-Version: nova 12.0.0.0b4.dev234\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-05 06:20+0000\n"
-"PO-Revision-Date: 2015-08-05 00:46+0000\n"
-"Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
+"POT-Creation-Date: 2015-09-18 06:26+0000\n"
+"PO-Revision-Date: 2015-09-13 01:37+0000\n"
+"Last-Translator: Corinne Verheyde <cverheyd@gmail.com>\n"
 "Language-Team: French (http://www.transifex.com/openstack/nova/language/"
 "fr/)\n"
 "Language: fr\n"
@@ -21,6 +23,7 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
+"X-Generator: Zanata 3.7.1\n"
 
 #, python-format
 msgid "%(cmd)s failed. Sleeping %(time)s seconds before retry."
@@ -30,18 +33,6 @@ msgstr ""
 #, python-format
 msgid "%(host_state)s has not been heard from in a while"
 msgstr "%(host_state)s n'a pas été entendu depuis un certain temps"
-
-#, python-format
-msgid "%(logprefix)sfailed to load json"
-msgstr "%(logprefix)s a échoué à charger json"
-
-#, python-format
-msgid "%(logprefix)sfile does not exist"
-msgstr "Le fichier %(logprefix)s n'existe pas"
-
-#, python-format
-msgid "%(logprefix)unexpected IOError when reading"
-msgstr "%(logprefix)u IOError inattendue lors de la lecture"
 
 #, python-format
 msgid "%(overs)s quota exceeded for %(pid)s, tried to resize instance."
@@ -512,11 +503,8 @@ msgstr ""
 "L'image %s n'est pas trouvée sur l'espace disque. Continuer sans injonction "
 "de données."
 
-#, python-format
-msgid "Image config drive option %(image_prop)s is invalid and will be ignored"
-msgstr ""
-"L'option de l'image de l'unité de configuration %(image_prop)s est invalide "
-"et sera ignorée"
+msgid "In the M release you must run the v2.1 API."
+msgstr "Dans la livraison M, vous devez utiliser l'API v2.1."
 
 #, python-format
 msgid ""
@@ -604,10 +592,6 @@ msgstr ""
 "Valeur des métadonnées %(value)s pour %(key)s n'est pas du type %(type)s. "
 "Utilisation de la valeur par défaut %(default)s."
 
-#, python-format
-msgid "Metric name unknown of %r"
-msgstr "Nom de la mesure inconnu de %r"
-
 msgid "Migration operation was cancelled"
 msgstr "La migration a été annulée."
 
@@ -674,10 +658,6 @@ msgstr "Pas de correspondance en essayant de mettre à jour BDM : %(bdm)s"
 
 msgid "No more network or fixed IP to be allocated"
 msgstr "Aucun réseau ou adresse IP fixes ne peuvent être alloués"
-
-#, python-format
-msgid "No service record for host %s"
-msgstr "Aucun enregistrement de service pour l'hôte %s"
 
 msgid "No valid host found for rebuild"
 msgstr "Hôte valide non trouvée pour la regénération."
@@ -862,10 +842,6 @@ msgstr ""
 "en production peut être risquée."
 
 #, python-format
-msgid "The following clusters could not be found in the vCenter %s"
-msgstr "Les clusters suivants ne peuvent pas être trouvés dans le vCenter %s"
-
-#, python-format
 msgid ""
 "The libvirt driver is not tested on %(type)s/%(arch)s by the OpenStack "
 "project and thus its quality can not be ensured. For more information, see: "
@@ -982,10 +958,6 @@ msgid "Unable to mount image %(image)s with error %(error)s. Cannot resize."
 msgstr ""
 "Impossible de monter %(image)s avec l'erreur %(error)s. Impossible de "
 "redimentionner."
-
-#, python-format
-msgid "Unable to retrieve value for %(path)s Reason: %(reason)s"
-msgstr "Impossible de récupérer les valeurs pour %(path)s Raison: %(reason)s"
 
 #, python-format
 msgid "Unexpected power state %d"

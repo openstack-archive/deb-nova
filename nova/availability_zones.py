@@ -167,13 +167,31 @@ def get_availability_zones(context, get_only_available=False,
 
 def get_instance_availability_zone(context, instance):
     """Return availability zone of specified instance."""
-    host = str(instance.get('host'))
+    host = instance.get('host')
     if not host:
-        return None
+        # Likely hasn't reached a viable compute node yet so give back the
+        # desired availability_zone in the instance record if the boot request
+        # specified one.
+        az = instance.get('availability_zone')
+        return az
 
     cache_key = _make_cache_key(host)
     cache = _get_cache()
     az = cache.get(cache_key)
+    az_inst = instance.get('availability_zone')
+    if az_inst is not None and az != az_inst:
+        # NOTE(sbauza): Cache is wrong, we need to invalidate it by fetching
+        # again the right AZ related to the aggregate the host belongs to.
+        # As the API is also calling this method for setting the instance
+        # AZ field, we don't need to update the instance.az field.
+        # This case can happen because the cache is populated before the
+        # instance has been assigned to the host so that it would keep the
+        # former reference which was incorrect. Instead of just taking the
+        # instance AZ information for refilling the cache, we prefer to
+        # invalidate the cache and fetch it again because there could be some
+        # corner cases where this method could be called before the instance
+        # has been assigned to the host also.
+        az = None
     if not az:
         elevated = context.elevated()
         az = get_host_availability_zone(elevated, host)

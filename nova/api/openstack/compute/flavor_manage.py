@@ -27,7 +27,7 @@ authorize = extensions.os_compute_authorizer(ALIAS)
 
 class FlavorManageController(wsgi.Controller):
     """The Flavor Lifecycle API controller for the OpenStack API."""
-    _view_builder_class = flavors_view.V3ViewBuilder
+    _view_builder_class = flavors_view.ViewBuilderV21
 
     def __init__(self):
         super(FlavorManageController, self).__init__()
@@ -54,7 +54,8 @@ class FlavorManageController(wsgi.Controller):
     # as this operation complete the creation of flavor resource.
     @wsgi.action("create")
     @extensions.expected_errors((400, 409, 500))
-    @validation.schema(flavor_manage.create)
+    @validation.schema(flavor_manage.create_v20, '2.0', '2.0')
+    @validation.schema(flavor_manage.create, '2.1')
     def _create(self, req, body):
         context = req.environ['nova.context']
         authorize(context)

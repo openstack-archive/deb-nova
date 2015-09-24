@@ -113,7 +113,7 @@ def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
         inner_app_v21 = openstack_api.LegacyV2CompatibleWrapper(inner_app_v21)
 
     if use_no_auth:
-        api_v21 = openstack_api.FaultWrapper(auth.NoAuthMiddlewareV3(
+        api_v21 = openstack_api.FaultWrapper(auth.NoAuthMiddleware(
               limits.RateLimitingMiddleware(inner_app_v21)))
     else:
         if fake_auth_context is not None:
@@ -171,9 +171,8 @@ def stub_out_instance_quota(stubs, allowed, quota, resource='instances'):
             usages = dict(instances=dict(in_use=0, reserved=0),
                           cores=dict(in_use=0, reserved=0),
                           ram=dict(in_use=0, reserved=0))
-            usages[resource]['in_use'] = (quotas[resource] * 0.9 -
-                                          allowed)
-            usages[resource]['reserved'] = quotas[resource] * 0.1
+            usages[resource]['in_use'] = (quotas[resource] * 9 // 10 - allowed)
+            usages[resource]['reserved'] = quotas[resource] // 10
             raise exc.OverQuota(overs=[resource], quotas=quotas,
                                 usages=usages)
     stubs.Set(QUOTAS, 'reserve', fake_reserve)

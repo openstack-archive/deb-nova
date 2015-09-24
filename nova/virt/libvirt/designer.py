@@ -45,7 +45,6 @@ def set_vif_host_backend_bridge_config(conf, brname, tapname=None):
     conf.source_dev = brname
     if tapname:
         conf.target_dev = tapname
-    conf.script = ""
 
 
 def set_vif_host_backend_ethernet_config(conf, tapname):
@@ -73,7 +72,6 @@ def set_vif_host_backend_ovs_config(conf, brname, interfaceid, tapname=None):
     conf.add_vport_param("interfaceid", interfaceid)
     if tapname:
         conf.target_dev = tapname
-    conf.script = ""
 
 
 def set_vif_host_backend_802qbg_config(conf, devname, managerid,

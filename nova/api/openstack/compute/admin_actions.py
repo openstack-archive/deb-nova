@@ -27,7 +27,7 @@ ALIAS = "os-admin-actions"
 
 # States usable in resetState action
 # NOTE: It is necessary to update the schema of nova/api/openstack/compute/
-# schemas/v3/reset_server_state.py, when updating this state_map.
+# schemas/reset_server_state.py, when updating this state_map.
 state_map = dict(active=vm_states.ACTIVE, error=vm_states.ERROR)
 
 authorize = extensions.os_compute_authorizer(ALIAS)
@@ -48,6 +48,8 @@ class AdminActionsController(wsgi.Controller):
         try:
             instance = common.get_instance(self.compute_api, context, id)
             self.compute_api.reset_network(context, instance)
+        except exception.InstanceUnknownCell as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
 
@@ -61,6 +63,8 @@ class AdminActionsController(wsgi.Controller):
         try:
             instance = common.get_instance(self.compute_api, context, id)
             self.compute_api.inject_network_info(context, instance)
+        except exception.InstanceUnknownCell as e:
+            raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
 

@@ -45,9 +45,17 @@ def get_attrname(name):
 
 class NovaObjectRegistry(ovoo_base.VersionedObjectRegistry):
     def registration_hook(self, cls, index):
-        # NOTE(danms): Set the *latest* version of this class
-        newest = self._registry._obj_classes[cls.obj_name()][0]
-        setattr(objects, cls.obj_name(), newest)
+        # NOTE(danms): This is called when an object is registered,
+        # and is responsible for maintaining nova.objects.$OBJECT
+        # as the highest-versioned implementation of a given object.
+        version = utils.convert_version_to_tuple(cls.VERSION)
+        if not hasattr(objects, cls.obj_name()):
+            setattr(objects, cls.obj_name(), cls)
+        else:
+            cur_version = utils.convert_version_to_tuple(
+                getattr(objects, cls.obj_name()).VERSION)
+            if version >= cur_version:
+                setattr(objects, cls.obj_name(), cls)
 
 
 remotable_classmethod = ovoo_base.remotable_classmethod
@@ -406,7 +414,7 @@ def serialize_args(fn):
                 else arg for arg in args]
         for k, v in six.iteritems(kwargs):
             if k == 'exc_val' and v:
-                kwargs[k] = str(v)
+                kwargs[k] = six.text_type(v)
             elif k == 'exc_tb' and v and not isinstance(v, six.string_types):
                 kwargs[k] = ''.join(traceback.format_tb(v))
             elif isinstance(v, datetime.datetime):

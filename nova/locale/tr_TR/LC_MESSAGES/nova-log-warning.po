@@ -3,21 +3,23 @@
 # This file is distributed under the same license as the nova project.
 #
 # Translators:
+# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova\n"
+"Project-Id-Version: nova 12.0.0.0b4.dev234\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-05 06:20+0000\n"
-"PO-Revision-Date: 2015-08-05 00:46+0000\n"
+"POT-Creation-Date: 2015-09-18 06:26+0000\n"
+"PO-Revision-Date: 2015-09-08 05:38+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language-Team: Turkish (Turkey) (http://www.transifex.com/openstack/nova/"
 "language/tr_TR/)\n"
-"Language: tr_TR\n"
+"Language: tr-TR\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
+"X-Generator: Zanata 3.7.1\n"
 
 #, python-format
 msgid ""
@@ -31,18 +33,6 @@ msgstr "%(cmd)s başarısız. Tekrar denemeden önce %(time)s saniye uyunuyor."
 #, python-format
 msgid "%(host_state)s has not been heard from in a while"
 msgstr "%(host_state)s'den yakın zamanda haber alınamadı"
-
-#, python-format
-msgid "%(logprefix)sfailed to load json"
-msgstr "%(logprefix)s json yükleyemedi"
-
-#, python-format
-msgid "%(logprefix)sfile does not exist"
-msgstr "%(logprefix)s dosyası mevcut değil."
-
-#, python-format
-msgid "%(logprefix)unexpected IOError when reading"
-msgstr "Okumada %(logprefix)unexpected IOError"
 
 #, python-format
 msgid "%(overs)s quota exceeded for %(pid)s, tried to resize instance."
@@ -381,10 +371,6 @@ msgid "Failed to get cluster references %s"
 msgstr "Küme başvuruları alınamıyor %s"
 
 #, python-format
-msgid "Failed to get resource pool references %s"
-msgstr "Kaynak havuzu başvuruları alınamıyor %s"
-
-#, python-format
 msgid "Failed to load extension %(classpath)s: %(exc)s"
 msgstr "%(classpath)s uzantısı yüklemede hata: %(exc)s"
 
@@ -568,12 +554,6 @@ msgstr "%s sebebiyle mantıksal sürücü temizliği göz ardı edildi"
 msgid "Image %s not found on disk storage. Continue without injecting data"
 msgstr "İmaj %s disk depolamada bulunamadı. Veri eklemeden devam et"
 
-#, python-format
-msgid "Image config drive option %(image_prop)s is invalid and will be ignored"
-msgstr ""
-"İmaj yapılandırma sürücüsü seçeneği %(image_prop)s geçersiz ve göz ardı "
-"edilecek"
-
 msgid "Image not found during snapshot"
 msgstr "İmaj anlık görüntü sırasında bulunamadı"
 
@@ -748,10 +728,6 @@ msgstr ""
 "%(key)s için metadata değeri %(value)s %(type)s türünde değil. Varsayılan "
 "değer %(default)s kullanılıyor."
 
-#, python-format
-msgid "Metric name unknown of %r"
-msgstr "%r ölçüt ismi bulunamıyor"
-
 msgid "Migration operation was cancelled"
 msgstr "Göç işlemi iptal edildi"
 
@@ -832,10 +808,6 @@ msgstr "BDM güncellenmeye çalışılırken eşleşme yok: %(bdm)s"
 
 msgid "No more network or fixed IP to be allocated"
 msgstr "Ayrılacak daha fazla ağ ya da sabit IP yok"
-
-#, python-format
-msgid "No service record for host %s"
-msgstr "%s istemcisi için servis kaydı yok"
 
 msgid "No valid host found for rebuild"
 msgstr "Yeniden inşa için geçerli bir istemci bulunamadı"
@@ -1075,14 +1047,6 @@ msgstr ""
 "eşleşmiyor."
 
 msgid ""
-"The \"cluster_name\" setting should have only one cluster name. The "
-"capability of allowing multiple clusters may be dropped in the Liberty "
-"release."
-msgstr ""
-"\"cluster_name\" ayarı yalnızca bir küme ismine sahip olmalı. Birden çok "
-"kümeye izin veren yetenek Liberty sürümünde kaldırılabilir."
-
-msgid ""
 "The ZooKeeper service group driver in Nova is not tested by the OpenStack "
 "project and thus its quality can not be ensured. This may change in the "
 "future, but current deployers should be aware that the use of it in "
@@ -1091,10 +1055,6 @@ msgstr ""
 "Nova'daki ZooKeeper servis grup sürücüsü OpenStack  projesi tarafından test "
 "edilmedi ve kalitesinden emin olunamaz. Bu durum gelecekte değişebilir, ama "
 "şu an kurulum yapanlar üretimde kullanımının riskli olabileceğini bilmeliler."
-
-#, python-format
-msgid "The following clusters could not be found in the vCenter %s"
-msgstr "Şu kümeler vCenter %s de bulunamadı"
 
 msgid ""
 "The in tree EC2 API is deprecated as of Kilo release and may be removed in a "
@@ -1244,10 +1204,6 @@ msgid "Unable to mount image %(image)s with error %(error)s. Cannot resize."
 msgstr ""
 "İmaj %(image)s bağlaması %(error)s hatasıyla yapılamadı. Yeniden "
 "boyutlandırılamıyor."
-
-#, python-format
-msgid "Unable to retrieve value for %(path)s Reason: %(reason)s"
-msgstr "%(path)s için değer alınamıyor Sebep: %(reason)s"
 
 msgid "Unable to update metadata, VM not found."
 msgstr "Metadata güncellenemiyor, VM bulunamadı."

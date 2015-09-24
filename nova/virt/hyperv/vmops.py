@@ -312,8 +312,8 @@ class VMOps(object):
         if root_vhd_path:
             self._attach_drive(instance_name, root_vhd_path, 0, ctrl_disk_addr,
                                controller_type)
-            ctrl_disk_addr += 1
 
+        ctrl_disk_addr = 1
         if eph_vhd_path:
             self._attach_drive(instance_name, eph_vhd_path, 0, ctrl_disk_addr,
                                controller_type)
@@ -346,10 +346,9 @@ class VMOps(object):
                                            ctrl_disk_addr, drive_type)
 
     def get_image_vm_generation(self, root_vhd_path, image_meta):
-        image_props = image_meta['properties']
         default_vm_gen = self._hostutils.get_default_vm_generation()
-        image_prop_vm = image_props.get(constants.IMAGE_PROP_VM_GEN,
-                                        default_vm_gen)
+        image_prop_vm = image_meta.properties.get(
+            'hw_machine_type', default_vm_gen)
         if image_prop_vm not in self._hostutils.get_supported_vm_types():
             LOG.error(_LE('Requested VM Generation %s is not supported on '
                          ' this OS.'), image_prop_vm)
@@ -446,7 +445,12 @@ class VMOps(object):
             if self._vmutils.vm_exists(instance_name):
 
                 # Stop the VM first.
+                self._vmutils.stop_vm_jobs(instance_name)
                 self.power_off(instance)
+
+                if network_info:
+                    for vif in network_info:
+                        self._vif_driver.unplug(instance, vif)
 
                 self._vmutils.destroy_vm(instance_name)
                 self._volumeops.disconnect_volumes(block_device_info)
@@ -546,7 +550,7 @@ class VMOps(object):
 
             self._set_vm_state(instance,
                                constants.HYPERV_VM_STATE_DISABLED)
-        except exception.NotFound:
+        except exception.InstanceNotFound:
             # The manager can call the stop API after receiving instance
             # power off events. If this is triggered when the instance
             # is being deleted, it might attempt to power off an unexisting
@@ -717,3 +721,54 @@ class VMOps(object):
             vm_name, remote_server=dest_host)
         for path in dvd_disk_paths:
             self._pathutils.copyfile(path, dest_path)
+
+    def _check_hotplug_available(self, instance):
+        """Check whether attaching an interface is possible for the given
+        instance.
+
+        :returns: True if attaching / detaching interfaces is possible for the
+                  given instance.
+        """
+        vm_state = self._get_vm_state(instance.name)
+        if vm_state == constants.HYPERV_VM_STATE_DISABLED:
+            # can attach / detach interface to stopped VMs.
+            return True
+
+        if not self._hostutils.check_min_windows_version(10, 0):
+            # TODO(claudiub): add set log level to error after string freeze.
+            LOG.debug("vNIC hot plugging is supported only in newer "
+                      "versions than Windows Hyper-V / Server 2012 R2.")
+            return False
+
+        if (self._vmutils.get_vm_generation(instance.name) ==
+                constants.VM_GEN_1):
+            # TODO(claudiub): add set log level to error after string freeze.
+            LOG.debug("Cannot hot plug vNIC to a first generation VM.",
+                      instance=instance)
+            return False
+
+        return True
+
+    def attach_interface(self, instance, vif):
+        if not self._check_hotplug_available(instance):
+            raise exception.InterfaceAttachFailed(instance_uuid=instance.uuid)
+
+        LOG.debug('Attaching vif: %s', vif['id'], instance=instance)
+        self._vmutils.create_nic(instance.name, vif['id'], vif['address'])
+        self._vif_driver.plug(instance, vif)
+
+    def detach_interface(self, instance, vif):
+        try:
+            if not self._check_hotplug_available(instance):
+                raise exception.InterfaceDetachFailed(
+                    instance_uuid=instance.uuid)
+
+            LOG.debug('Detaching vif: %s', vif['id'], instance=instance)
+            self._vif_driver.unplug(instance, vif)
+            self._vmutils.destroy_nic(instance.name, vif['id'])
+        except exception.NotFound:
+            # TODO(claudiub): add set log level to error after string freeze.
+            LOG.debug("Instance not found during detach interface. It "
+                      "might have been destroyed beforehand.",
+                      instance=instance)
+            raise exception.InterfaceDetachFailed(instance_uuid=instance.uuid)

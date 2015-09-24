@@ -38,9 +38,9 @@ class CellsUtilsTestCase(test.NoDBTestCase):
         @staticmethod
         def instance_get_all_by_filters(context, filters,
                 sort_key, sort_dir):
-            self.assertEqual(context, fake_context)
-            self.assertEqual(sort_key, 'deleted')
-            self.assertEqual(sort_dir, 'asc')
+            self.assertEqual(fake_context, context)
+            self.assertEqual('deleted', sort_key)
+            self.assertEqual('asc', sort_dir)
             call_info['got_filters'] = filters
             call_info['get_all'] += 1
             return ['fake_instance1', 'fake_instance2', 'fake_instance3']
@@ -51,38 +51,37 @@ class CellsUtilsTestCase(test.NoDBTestCase):
 
         instances = cells_utils.get_instances_to_sync(fake_context)
         self.assertTrue(inspect.isgenerator(instances))
-        self.assertEqual(len([x for x in instances]), 3)
-        self.assertEqual(call_info['get_all'], 1)
-        self.assertEqual(call_info['got_filters'], {})
-        self.assertEqual(call_info['shuffle'], 0)
+        self.assertEqual(3, len([x for x in instances]))
+        self.assertEqual(1, call_info['get_all'])
+        self.assertEqual({}, call_info['got_filters'])
+        self.assertEqual(0, call_info['shuffle'])
 
         instances = cells_utils.get_instances_to_sync(fake_context,
                                                       shuffle=True)
         self.assertTrue(inspect.isgenerator(instances))
-        self.assertEqual(len([x for x in instances]), 3)
-        self.assertEqual(call_info['get_all'], 2)
-        self.assertEqual(call_info['got_filters'], {})
-        self.assertEqual(call_info['shuffle'], 1)
+        self.assertEqual(3, len([x for x in instances]))
+        self.assertEqual(2, call_info['get_all'])
+        self.assertEqual({}, call_info['got_filters'])
+        self.assertEqual(1, call_info['shuffle'])
 
         instances = cells_utils.get_instances_to_sync(fake_context,
                 updated_since='fake-updated-since')
         self.assertTrue(inspect.isgenerator(instances))
-        self.assertEqual(len([x for x in instances]), 3)
-        self.assertEqual(call_info['get_all'], 3)
-        self.assertEqual(call_info['got_filters'],
-                {'changes-since': 'fake-updated-since'})
-        self.assertEqual(call_info['shuffle'], 1)
+        self.assertEqual(3, len([x for x in instances]))
+        self.assertEqual(3, call_info['get_all'])
+        self.assertEqual({'changes-since': 'fake-updated-since'},
+                         call_info['got_filters'])
+        self.assertEqual(1, call_info['shuffle'])
 
         instances = cells_utils.get_instances_to_sync(fake_context,
                 project_id='fake-project',
                 updated_since='fake-updated-since', shuffle=True)
         self.assertTrue(inspect.isgenerator(instances))
-        self.assertEqual(len([x for x in instances]), 3)
-        self.assertEqual(call_info['get_all'], 4)
-        self.assertEqual(call_info['got_filters'],
-                {'changes-since': 'fake-updated-since',
-                 'project_id': 'fake-project'})
-        self.assertEqual(call_info['shuffle'], 2)
+        self.assertEqual(3, len([x for x in instances]))
+        self.assertEqual(4, call_info['get_all'])
+        self.assertEqual({'changes-since': 'fake-updated-since',
+                 'project_id': 'fake-project'}, call_info['got_filters'])
+        self.assertEqual(2, call_info['shuffle'])
 
     def test_split_cell_and_item(self):
         path = 'australia', 'queensland', 'gold_coast'
@@ -105,10 +104,8 @@ class CellsUtilsTestCase(test.NoDBTestCase):
         self.assertEqual(cell, result_cell)
         self.assertEqual(item, result_item)
 
-    @mock.patch.object(objects.Service, 'get_by_id')
-    def test_add_cell_to_compute_node_no_service(self, mock_get_by_id):
-        fake_compute = objects.ComputeNode(id=1, host='fake', service_id=1)
-        mock_get_by_id.side_effect = exception.ServiceNotFound(service_id=1)
+    def test_add_cell_to_compute_node(self):
+        fake_compute = objects.ComputeNode(id=1, host='fake')
         cell_path = 'fake_path'
 
         proxy = cells_utils.add_cell_to_compute_node(fake_compute, cell_path)
@@ -117,25 +114,6 @@ class CellsUtilsTestCase(test.NoDBTestCase):
         self.assertEqual(cells_utils.cell_with_item(cell_path, 1), proxy.id)
         self.assertEqual(cells_utils.cell_with_item(cell_path, 'fake'),
                          proxy.host)
-        self.assertRaises(exception.ServiceNotFound, getattr, proxy, 'service')
-
-    @mock.patch.object(objects.Service, 'get_by_id')
-    def test_add_cell_to_compute_node_with_service(self, mock_get_by_id):
-        fake_compute = objects.ComputeNode(id=1, host='fake', service_id=1)
-        mock_get_by_id.return_value = objects.Service(id=1, host='fake-svc')
-        cell_path = 'fake_path'
-
-        proxy = cells_utils.add_cell_to_compute_node(fake_compute, cell_path)
-
-        self.assertIsInstance(proxy, cells_utils.ComputeNodeProxy)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 1), proxy.id)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 'fake'),
-                         proxy.host)
-        self.assertIsInstance(proxy.service, cells_utils.ServiceProxy)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 1),
-                         proxy.service.id)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 'fake-svc'),
-                         proxy.service.host)
 
     @mock.patch.object(objects.Service, 'obj_load_attr')
     def test_add_cell_to_service_no_compute_node(self, mock_get_by_id):

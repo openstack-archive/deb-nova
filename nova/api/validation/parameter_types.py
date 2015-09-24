@@ -40,6 +40,7 @@ def _get_all_chars():
     for i in range(0xFFFF):
         yield six.unichr(i)
 
+
 # build a regex that matches all printable characters. This allows
 # spaces in the middle of the name. Also note that the regexp below
 # deliberately allows the empty string. This is so only the constraint
@@ -47,12 +48,56 @@ def _get_all_chars():
 # empty string is tested. Otherwise it is not deterministic which
 # constraint fails and this causes issues for some unittests when
 # PYTHONHASHSEED is set randomly.
-_printable = ''.join(c for c in _get_all_chars() if _is_printable(c))
+def _get_printable(exclude=None):
+    if exclude is None:
+        exclude = []
+    return ''.join(c for c in _get_all_chars()
+                       if _is_printable(c) and c not in exclude)
+
+
 _printable_ws = ''.join(c for c in _get_all_chars()
                         if unicodedata.category(c) == "Zs")
 
-valid_name_regex = '^(?![%s])[%s]*(?<![%s])$' % (
-    re.escape(_printable_ws), re.escape(_printable), re.escape(_printable_ws))
+
+def _get_printable_no_ws(exclude=None):
+    if exclude is None:
+        exclude = []
+    return ''.join(c for c in _get_all_chars()
+                   if _is_printable(c) and
+                       unicodedata.category(c) != "Zs" and
+                       c not in exclude)
+
+valid_name_regex_base = '^(?![%s])[%s]*(?<![%s])$'
+
+
+valid_name_regex = valid_name_regex_base % (
+    re.escape(_printable_ws), re.escape(_get_printable()),
+    re.escape(_printable_ws))
+
+
+# This regex allows leading/trailing whitespace
+valid_name_leading_trailing_spaces_regex_base = (
+    "^[%(ws)s]*[%(no_ws)s]+[%(ws)s]*$|"
+    "^[%(ws)s]*[%(no_ws)s][%(no_ws)s%(ws)s]+[%(no_ws)s][%(ws)s]*$")
+
+
+valid_cell_name_regex = valid_name_regex_base % (
+    re.escape(_printable_ws),
+    re.escape(_get_printable(exclude=['!', '.', '@'])),
+    re.escape(_printable_ws))
+
+
+# cell's name disallow '!',  '.' and '@'.
+valid_cell_name_leading_trailing_spaces_regex = (
+    valid_name_leading_trailing_spaces_regex_base % {
+        'ws': re.escape(_printable_ws),
+        'no_ws': re.escape(_get_printable_no_ws(exclude=['!', '.', '@']))})
+
+
+valid_name_leading_trailing_spaces_regex = (
+    valid_name_leading_trailing_spaces_regex_base % {
+        'ws': re.escape(_printable_ws),
+        'no_ws': re.escape(_get_printable_no_ws())})
 
 
 boolean = {
@@ -100,12 +145,30 @@ hostname_or_ip_address = {
 
 
 name = {
-    # NOTE: Nova v3 API contains some 'name' parameters such
+    # NOTE: Nova v2.1 API contains some 'name' parameters such
     # as keypair, server, flavor, aggregate and so on. They are
     # stored in the DB and Nova specific parameters.
     # This definition is used for all their parameters.
     'type': 'string', 'minLength': 1, 'maxLength': 255,
     'pattern': valid_name_regex,
+}
+
+
+cell_name = {
+    'type': 'string', 'minLength': 1, 'maxLength': 255,
+    'pattern': valid_cell_name_regex,
+}
+
+
+cell_name_leading_trailing_spaces = {
+    'type': 'string', 'minLength': 1, 'maxLength': 255,
+    'pattern': valid_cell_name_leading_trailing_spaces_regex,
+}
+
+
+name_with_leading_trailing_spaces = {
+    'type': 'string', 'minLength': 1, 'maxLength': 255,
+    'pattern': valid_name_leading_trailing_spaces_regex,
 }
 
 

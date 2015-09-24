@@ -1085,7 +1085,7 @@ def dnsdomain_get_all(context):
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def fixed_ip_associate(context, address, instance_uuid, network_id=None,
-                       reserved=False):
+                       reserved=False, virtual_interface_id=None):
     """Keyword arguments:
     reserved -- should be a boolean value(True or False), exact value will be
     used to filter on the fixed ip address
@@ -1111,9 +1111,12 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
             raise exception.FixedIpAlreadyInUse(address=address,
                                                 instance_uuid=instance_uuid)
 
-        params = {'instance_uuid': instance_uuid}
+        params = {'instance_uuid': instance_uuid,
+                  'allocated': virtual_interface_id is not None}
         if not fixed_ip_ref.network_id:
             params['network_id'] = network_id
+        if virtual_interface_id:
+            params['virtual_interface_id'] = virtual_interface_id
 
         rows_updated = model_query(context, models.FixedIp, session=session,
                                    read_deleted="no").\
@@ -1135,7 +1138,7 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
-                            host=None):
+                            host=None, virtual_interface_id=None):
     if instance_uuid and not uuidutils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(uuid=instance_uuid)
 
@@ -1154,13 +1157,15 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
         if not fixed_ip_ref:
             raise exception.NoMoreFixedIps(net=network_id)
 
-        params = {}
+        params = {'allocated': virtual_interface_id is not None}
         if fixed_ip_ref['network_id'] is None:
             params['network_id'] = network_id
         if instance_uuid:
             params['instance_uuid'] = instance_uuid
         if host:
             params['host'] = host
+        if virtual_interface_id:
+            params['virtual_interface_id'] = virtual_interface_id
 
         rows_updated = model_query(context, models.FixedIp, session=session,
                                    read_deleted="no").\
@@ -2149,12 +2154,16 @@ def _regex_instance_filter(query, filters):
             continue
         if 'property' == type(column_attr).__name__:
             continue
+        filter_val = filters[filter_name]
+        # Sometimes the REGEX filter value is not a string
+        if not isinstance(filter_val, six.string_types):
+            filter_val = str(filter_val)
         if db_regexp_op == 'LIKE':
             query = query.filter(column_attr.op(db_regexp_op)(
-                                 '%' + str(filters[filter_name]) + '%'))
+                                 u'%' + filter_val + u'%'))
         else:
             query = query.filter(column_attr.op(db_regexp_op)(
-                                 str(filters[filter_name])))
+                                 filter_val))
     return query
 
 
@@ -3368,9 +3377,10 @@ def _get_project_user_quota_usages(context, session, project_id,
     rows = model_query(context, models.QuotaUsage,
                        read_deleted="no",
                        session=session).\
-                   filter_by(project_id=project_id).\
-                   with_lockmode('update').\
-                   all()
+        filter_by(project_id=project_id).\
+        order_by(models.QuotaUsage.id.asc()).\
+        with_lockmode('update').\
+        all()
     proj_result = dict()
     user_result = dict()
     # Get the total count of in_use,reserved
@@ -6037,7 +6047,7 @@ def _instance_group_get_query(context, model_class, id_field=None, id=None,
                               session=None, read_deleted=None):
     columns_to_join = {models.InstanceGroup: ['_policies', '_members']}
     query = model_query(context, model_class, session=session,
-                        read_deleted=read_deleted)
+                        read_deleted=read_deleted, project_only=True)
 
     for c in columns_to_join.get(model_class, []):
         query = query.options(joinedload(c))
@@ -6256,10 +6266,9 @@ def instance_group_members_add(context, group_uuid, members,
 
 def instance_group_member_delete(context, group_uuid, instance_id):
     id = _instance_group_id(context, group_uuid)
-    count = _instance_group_get_query(context,
-                                      models.InstanceGroupMember,
-                                      models.InstanceGroupMember.group_id,
-                                      id).\
+    count = _instance_group_model_get_query(context,
+                                            models.InstanceGroupMember,
+                                            id).\
                             filter_by(instance_id=instance_id).\
                             soft_delete()
     if count == 0:

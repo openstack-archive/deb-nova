@@ -16,6 +16,7 @@
 """Tests for compute resource tracking."""
 
 import copy
+import datetime
 import six
 import uuid
 
@@ -1089,9 +1090,10 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
         self.instance_type = self._fake_flavor_create()
         self.claim_method = self.tracker._move_claim
 
+    @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_abort(self, mock_get):
+    def test_abort(self, mock_get, mock_save):
         try:
             with self.claim_method(self.context, self.instance,
                     self.instance_type, limits=self.limits):
@@ -1103,10 +1105,12 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
         self._assert(0, 'local_gb_used')
         self._assert(0, 'vcpus_used')
         self.assertEqual(0, len(self.tracker.tracked_migrations))
+        mock_save.assert_called_once_with()
 
+    @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_additive_claims(self, mock_get):
+    def test_additive_claims(self, mock_get, mock_save):
 
         limits = self._limits(
               2 * FAKE_VIRT_MEMORY_WITH_OVERHEAD,
@@ -1114,20 +1118,25 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
               2 * FAKE_VIRT_VCPUS)
         self.claim_method(
             self.context, self.instance, self.instance_type, limits=limits)
+        mock_save.assert_called_once_with()
+        mock_save.reset_mock()
         instance2 = self._fake_instance_obj()
         self.claim_method(
             self.context, instance2, self.instance_type, limits=limits)
+        mock_save.assert_called_once_with()
 
         self._assert(2 * FAKE_VIRT_MEMORY_WITH_OVERHEAD, 'memory_mb_used')
         self._assert(2 * FAKE_VIRT_LOCAL_GB, 'local_gb_used')
         self._assert(2 * FAKE_VIRT_VCPUS, 'vcpus_used')
 
+    @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_revert(self, mock_get):
+    def test_revert(self, mock_get, mock_save):
         self.claim_method(
             self.context, self.instance, self.instance_type,
             image_meta={}, limits=self.limits)
+        mock_save.assert_called_once_with()
         self.tracker.drop_move_claim(self.context, self.instance)
 
         self.assertEqual(0, len(self.tracker.tracked_instances))
@@ -1136,21 +1145,26 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
         self._assert(0, 'local_gb_used')
         self._assert(0, 'vcpus_used')
 
+    @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_move_type_not_tracked(self, mock_get):
-        self.claim_method(self.context, self.instance,
-                self.instance_type, limits=self.limits, move_type="evacuation")
+    def test_move_type_not_tracked(self, mock_get, mock_save):
+        self.claim_method(self.context, self.instance, self.instance_type,
+                          limits=self.limits, move_type="live-migration")
+        mock_save.assert_called_once_with()
 
         self._assert(0, 'memory_mb_used')
         self._assert(0, 'local_gb_used')
         self._assert(0, 'vcpus_used')
         self.assertEqual(0, len(self.tracker.tracked_migrations))
 
+    @mock.patch('nova.objects.Instance.save')
     @mock.patch.object(objects.Migration, 'save')
-    def test_existing_migration(self, save_mock):
-        migration = objects.Migration(self.context,
+    def test_existing_migration(self, save_mock, save_inst_mock):
+        migration = objects.Migration(self.context, id=42,
                                       instance_uuid=self.instance.uuid,
+                                      source_compute='fake-other-compute',
+                                      source_node='fake-other-node',
                                       status='accepted',
                                       migration_type='evacuation')
         self.claim_method(self.context, self.instance, self.instance_type,
@@ -1158,8 +1172,9 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
         self.assertEqual(self.tracker.host, migration.dest_compute)
         self.assertEqual(self.tracker.nodename, migration.dest_node)
         self.assertEqual("pre-migrating", migration.status)
-        self.assertEqual(0, len(self.tracker.tracked_migrations))
+        self.assertEqual(1, len(self.tracker.tracked_migrations))
         save_mock.assert_called_once_with()
+        save_inst_mock.assert_called_once_with()
 
 
 class ResizeClaimTestCase(_MoveClaimTestCase):
@@ -1404,3 +1419,105 @@ class StatsInvalidTypeTestCase(BaseTrackerTestCase):
         self.assertRaises(ValueError,
                           self.tracker.update_available_resource,
                           context=self.context)
+
+
+class UpdateUsageFromMigrationsTestCase(BaseTrackerTestCase):
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage_from_migration')
+    def test_no_migrations(self, mock_update_usage):
+        migrations = []
+        self.tracker._update_usage_from_migrations(self.context, migrations)
+        self.assertFalse(mock_update_usage.called)
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage_from_migration')
+    @mock.patch('nova.objects.instance.Instance.get_by_uuid')
+    def test_instance_not_found(self, mock_get_instance, mock_update_usage):
+        mock_get_instance.side_effect = exception.InstanceNotFound(
+            instance_id='some_id',
+        )
+        migration = objects.Migration(
+            context=self.context,
+            instance_uuid='some_uuid',
+        )
+        self.tracker._update_usage_from_migrations(self.context, [migration])
+        mock_get_instance.assert_called_once_with(self.context, 'some_uuid')
+        self.assertFalse(mock_update_usage.called)
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage_from_migration')
+    @mock.patch('nova.objects.instance.Instance.get_by_uuid')
+    def test_update_usage_called(self, mock_get_instance, mock_update_usage):
+        instance = self._fake_instance_obj()
+        mock_get_instance.return_value = instance
+        migration = objects.Migration(
+            context=self.context,
+            instance_uuid=instance.uuid,
+        )
+        self.tracker._update_usage_from_migrations(self.context, [migration])
+        mock_get_instance.assert_called_once_with(self.context, instance.uuid)
+        mock_update_usage.assert_called_once_with(
+            self.context, instance, None, migration)
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage_from_migration')
+    @mock.patch('nova.objects.instance.Instance.get_by_uuid')
+    def test_flavor_not_found(self, mock_get_instance, mock_update_usage):
+        mock_update_usage.side_effect = exception.FlavorNotFound(flavor_id='')
+        instance = self._fake_instance_obj()
+        mock_get_instance.return_value = instance
+        migration = objects.Migration(
+            context=self.context,
+            instance_uuid=instance.uuid,
+        )
+        self.tracker._update_usage_from_migrations(self.context, [migration])
+        mock_get_instance.assert_called_once_with(self.context, instance.uuid)
+        mock_update_usage.assert_called_once_with(
+            self.context, instance, None, migration)
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage_from_migration')
+    @mock.patch('nova.objects.instance.Instance.get_by_uuid')
+    def test_not_resizing_state(self, mock_get_instance, mock_update_usage):
+        instance = self._fake_instance_obj()
+        instance.vm_state = vm_states.ACTIVE
+        instance.task_state = task_states.SUSPENDING
+        mock_get_instance.return_value = instance
+        migration = objects.Migration(
+            context=self.context,
+            instance_uuid=instance.uuid,
+        )
+        self.tracker._update_usage_from_migrations(self.context, [migration])
+        mock_get_instance.assert_called_once_with(self.context, instance.uuid)
+        self.assertFalse(mock_update_usage.called)
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage_from_migration')
+    @mock.patch('nova.objects.instance.Instance.get_by_uuid')
+    def test_use_most_recent(self, mock_get_instance, mock_update_usage):
+        instance = self._fake_instance_obj()
+        mock_get_instance.return_value = instance
+        migration_2002 = objects.Migration(
+            id=2002,
+            context=self.context,
+            instance_uuid=instance.uuid,
+            updated_at=datetime.datetime(2002, 1, 1, 0, 0, 0),
+        )
+        migration_2003 = objects.Migration(
+            id=2003,
+            context=self.context,
+            instance_uuid=instance.uuid,
+            updated_at=datetime.datetime(2003, 1, 1, 0, 0, 0),
+        )
+        migration_2001 = objects.Migration(
+            id=2001,
+            context=self.context,
+            instance_uuid=instance.uuid,
+            updated_at=datetime.datetime(2001, 1, 1, 0, 0, 0),
+        )
+        self.tracker._update_usage_from_migrations(
+            self.context, [migration_2002, migration_2003, migration_2001])
+        mock_get_instance.assert_called_once_with(self.context, instance.uuid)
+        mock_update_usage.assert_called_once_with(
+            self.context, instance, None, migration_2003)

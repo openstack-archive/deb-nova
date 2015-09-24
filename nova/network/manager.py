@@ -910,10 +910,9 @@ class NetworkManager(manager.Manager):
                               {'address': address, 'network': network['id'],
                                'cidr': network['cidr']},
                               instance=instance)
-                    fip = objects.FixedIP.associate(context,
-                                                    str(address),
-                                                    instance_id,
-                                                    network['id'])
+                    fip = objects.FixedIP.associate(
+                            context, str(address), instance_id, network['id'],
+                            vif_id=vif.id)
                 else:
                     LOG.debug('Associating instance with fixed IP from pool '
                               'in network %(network)s on subnet %(cidr)s.' %
@@ -921,14 +920,12 @@ class NetworkManager(manager.Manager):
                                'cidr': network['cidr']},
                               instance=instance)
                     fip = objects.FixedIP.associate_pool(
-                        context.elevated(), network['id'], instance_id)
+                        context.elevated(), network['id'], instance_id,
+                        vif_id=vif.id)
                     LOG.debug('Associated instance with fixed IP: %s', fip,
                               instance=instance)
                     address = str(fip.address)
 
-                fip.allocated = True
-                fip.virtual_interface_id = vif.id
-                fip.save()
                 cleanup.append(functools.partial(fip.disassociate, context))
 
                 LOG.debug('Refreshing security group members for instance.',
@@ -1074,7 +1071,8 @@ class NetworkManager(manager.Manager):
                     if (instance_uuid == fixed_ip_ref.instance_uuid and
                             not fixed_ip_ref.leased):
                         LOG.debug('Explicitly disassociating fixed IP %s from '
-                                  'instance.', instance_uuid=instance_uuid)
+                                  'instance.', address,
+                                  instance_uuid=instance_uuid)
                         fixed_ip_ref.disassociate()
                 else:
                     # We can't try to free the IP address so just call teardown
@@ -1997,22 +1995,20 @@ class VlanManager(RPCAllocateFixedIP, floating_ips.FloatingIP, NetworkManager):
             address = network['vpn_private_address']
             fip = objects.FixedIP.associate(context, str(address),
                                             instance_id, network['id'],
-                                            reserved=True)
+                                            reserved=True,
+                                            vif_id=vif.id)
         else:
             address = kwargs.get('address', None)
             if address:
                 fip = objects.FixedIP.associate(context, str(address),
                                                 instance_id,
-                                                network['id'])
+                                                network['id'],
+                                                vif_id=vif.id)
             else:
-                fip = objects.FixedIP.associate_pool(context,
-                                                     network['id'],
-                                                     instance_id)
+                fip = objects.FixedIP.associate_pool(
+                        context, network['id'], instance_id,
+                        vif_id=vif.id)
         address = fip.address
-
-        fip.allocated = True
-        fip.virtual_interface_id = vif.id
-        fip.save()
 
         if not kwargs.get('vpn', None):
             self._do_trigger_security_group_members_refresh_for_instance(

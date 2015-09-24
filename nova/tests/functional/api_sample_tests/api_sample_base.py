@@ -18,7 +18,7 @@ from oslo_config import cfg
 import testscenarios
 
 from nova.api import openstack
-from nova.api.openstack import API_V3_CORE_EXTENSIONS  # noqa
+from nova.api.openstack import API_V21_CORE_EXTENSIONS  # noqa
 from nova.api.openstack import compute
 from nova import test
 from nova.tests.functional import api_paste_fixture
@@ -29,7 +29,7 @@ from nova.tests.unit import fake_utils
 CONF = cfg.CONF
 
 
-class ApiSampleTestBaseV3(testscenarios.WithScenarios,
+class ApiSampleTestBaseV21(testscenarios.WithScenarios,
                           api_samples_test_base.ApiSampleTestBase):
     _api_version = 'v2'
     sample_dir = None
@@ -47,7 +47,7 @@ class ApiSampleTestBaseV3(testscenarios.WithScenarios,
             # Set the whitelist to ensure only the extensions we are
             # interested in are loaded so the api samples don't include
             # data from extensions we are not interested in
-            whitelist = API_V3_CORE_EXTENSIONS.copy()
+            whitelist = API_V21_CORE_EXTENSIONS.copy()
             if self.extension_name:
                 whitelist.add(self.extension_name)
             if self.extra_extensions_to_load:
@@ -69,8 +69,7 @@ class ApiSampleTestBaseV3(testscenarios.WithScenarios,
         elif (self._test == 'v2' and self._api_version == 'v2'):
             # override /v2 in compatibility mode with v2 legacy
             self.useFixture(api_paste_fixture.ApiPasteLegacyV2Fixture())
-
-        super(ApiSampleTestBaseV3, self).setUp()
+        super(ApiSampleTestBaseV21, self).setUp()
         self.useFixture(test.SampleNetworks(host=self.network.host))
         fake_network.stub_compute_with_ips(self.stubs)
         fake_utils.stub_out_utils_spawn_n(self.stubs)

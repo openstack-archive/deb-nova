@@ -58,6 +58,7 @@ class DsPathMatcher(object):
 class VMwareVMOpsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(VMwareVMOpsTestCase, self).setUp()
+        ds_util.dc_cache_reset()
         vmwareapi_fake.reset()
         stubs.set_stubs(self.stubs)
         self.flags(enabled=True, group='vnc')
@@ -74,7 +75,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 ref=fake_ds_ref, name='fake_ds',
                 capacity=10 * units.Gi,
                 freespace=10 * units.Gi)
-        self._dc_info = vmops.DcInfo(
+        self._dc_info = ds_util.DcInfo(
                 ref='fake_dc_ref', name='fake_dc',
                 vmFolder='fake_vm_folder')
         cluster = vmwareapi_fake.create_cluster('fake_cluster', fake_ds_ref)
@@ -179,7 +180,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         ds_ref = mock.Mock()
         ds_ref.value = 1
         dc_ref = mock.Mock()
-        ops._datastore_dc_mapping[ds_ref.value] = vmops.DcInfo(
+        ds_util._DS_DC_MAPPING[ds_ref.value] = ds_util.DcInfo(
                 ref=dc_ref,
                 name='fake-name',
                 vmFolder='fake-folder')
@@ -249,7 +250,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
     def test_create_vm_snapshot(self):
 
-        method_list = ['CreateSnapshot_Task', 'get_dynamic_property']
+        method_list = ['CreateSnapshot_Task', 'get_object_property']
 
         def fake_call_method(module, method, *args, **kwargs):
             expected_method = method_list.pop(0)
@@ -259,10 +260,10 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 self.assertFalse(kwargs['memory'])
                 self.assertTrue(kwargs['quiesce'])
                 return 'fake_snapshot_task'
-            elif (expected_method == 'get_dynamic_property'):
+            elif (expected_method == 'get_object_property'):
                 task_info = mock.Mock()
                 task_info.result = "fake_snapshot_ref"
-                self.assertEqual(('fake_snapshot_task', 'Task', 'info'), args)
+                self.assertEqual(('fake_snapshot_task', 'info'), args)
                 return task_info
 
         with contextlib.nested(
@@ -384,7 +385,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             dc_info = _vcvmops.get_datacenter_ref_and_name(instance_ds_ref)
 
             if ds_ref:
-                self.assertEqual(1, len(_vcvmops._datastore_dc_mapping))
+                self.assertEqual(1, len(ds_util._DS_DC_MAPPING))
                 calls = [mock.call(vim_util, "get_objects", "Datacenter",
                                    ["name", "datastore", "vmFolder"]),
                          mock.call(vutil, 'continue_retrieval',
@@ -424,6 +425,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         mock_get_ds_by_ref.return_value = ds
         mock_find_rescue.return_value = 'fake-rescue-device'
         mock_get_boot_spec.return_value = 'fake-boot-spec'
+        vm_ref = vmwareapi_fake.ManagedObjectReference()
+        mock_get_vm_ref.return_value = vm_ref
 
         device = vmwareapi_fake.DataObject()
         backing = vmwareapi_fake.DataObject()
@@ -447,7 +450,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
             mock_power_off.assert_called_once_with(self._session,
                                                    self._instance,
-                                                   'fake-ref')
+                                                   vm_ref)
 
             uuid = self._instance.image_ref
             cache_path = ds.build_path('vmware_base', uuid, uuid + '.vmdk')
@@ -455,16 +458,16 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
             mock_disk_copy.assert_called_once_with(self._session, dc_info.ref,
                              cache_path, rescue_path)
-            _volumeops.attach_disk_to_vm.assert_called_once_with('fake-ref',
+            _volumeops.attach_disk_to_vm.assert_called_once_with(vm_ref,
                              self._instance, mock.ANY, mock.ANY, rescue_path)
             mock_get_boot_spec.assert_called_once_with(mock.ANY,
                                                        'fake-rescue-device')
             mock_reconfigure.assert_called_once_with(self._session,
-                                                     'fake-ref',
+                                                     vm_ref,
                                                      'fake-boot-spec')
             mock_power_on.assert_called_once_with(self._session,
                                                   self._instance,
-                                                  vm_ref='fake-ref')
+                                                  vm_ref=vm_ref)
 
     def test_unrescue_power_on(self):
         self._test_unrescue(True)
@@ -478,9 +481,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         vm_ref = mock.Mock()
 
         def fake_call_method(module, method, *args, **kwargs):
-            expected_args = (vm_ref, 'VirtualMachine',
-                             'config.hardware.device')
-            self.assertEqual('get_dynamic_property', method)
+            expected_args = (vm_ref, 'config.hardware.device')
+            self.assertEqual('get_object_property', method)
             self.assertEqual(expected_args, args)
 
         with contextlib.nested(
@@ -586,8 +588,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                 'fake-disk',
                                 'fake-capacity',
                                 device)
-        dc_info = vmops.DcInfo(ref='fake_ref', name='fake',
-                               vmFolder='fake_folder')
+        dc_info = ds_util.DcInfo(ref='fake_ref', name='fake',
+                                 vmFolder='fake_folder')
         extra_specs = vm_util.ExtraSpecs()
         fake_get_extra_specs.return_value = extra_specs
         with contextlib.nested(
@@ -706,8 +708,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                 'fake-disk',
                                 self._instance.root_gb * units.Gi,
                                 device)
-        dc_info = vmops.DcInfo(ref='fake_ref', name='fake',
-                               vmFolder='fake_folder')
+        dc_info = ds_util.DcInfo(ref='fake_ref', name='fake',
+                                 vmFolder='fake_folder')
         with mock.patch.object(self._vmops, 'get_datacenter_ref_and_name',
             return_value=dc_info) as fake_get_dc_ref_and_name:
             self._vmops._volumeops = mock.Mock()
@@ -775,8 +777,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                 'fake-disk',
                                 'fake-capacity',
                                 device)
-        dc_info = vmops.DcInfo(ref='fake_ref', name='fake',
-                               vmFolder='fake_folder')
+        dc_info = ds_util.DcInfo(ref='fake_ref', name='fake',
+                                 vmFolder='fake_folder')
         with contextlib.nested(
             mock.patch.object(self._vmops, 'get_datacenter_ref_and_name',
                               return_value=dc_info),
@@ -1106,8 +1108,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         with mock.patch.object(self._session, '_call_method',
                                mock_call_method):
             ret = self._vmops._get_ds_browser(moref)
-            mock_call_method.assert_called_once_with(vim_util,
-                'get_dynamic_property', moref, 'Datastore', 'browser')
+            mock_call_method.assert_called_once_with(vutil,
+                'get_object_property', moref, 'browser')
             self.assertIs(ds_browser, ret)
             self.assertIs(ds_browser, cache.get(moref.value))
 
@@ -1267,7 +1269,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         # are waiting on additional refactoring pertaining to image
         # handling/manipulation. Till then, we continue to assert on the
         # sequence of VIM operations invoked.
-        expected_methods = ['get_dynamic_property',
+        expected_methods = ['get_object_property',
                             'SearchDatastore_Task',
                             'CreateVirtualDisk_Task',
                             'DeleteDatastoreFile_Task',

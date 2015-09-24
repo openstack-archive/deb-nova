@@ -15,6 +15,7 @@
 #    under the License.
 #
 
+import copy
 import time
 import uuid
 
@@ -135,8 +136,8 @@ deprecations = {'cafile': [cfg.DeprecatedOpt('ca_certificates_file',
                 'timeout': [cfg.DeprecatedOpt('url_timeout',
                                               group=NEUTRON_GROUP)]}
 
-session.Session.register_conf_options(CONF, NEUTRON_GROUP,
-                                      deprecated_opts=deprecations)
+_neutron_options = session.Session.register_conf_options(
+    CONF, NEUTRON_GROUP, deprecated_opts=deprecations)
 auth.register_conf_options(CONF, NEUTRON_GROUP)
 
 
@@ -149,6 +150,25 @@ soft_external_network_attach_authorize = extensions.soft_core_authorizer(
 
 _SESSION = None
 _ADMIN_AUTH = None
+
+
+def list_opts():
+    list = copy.deepcopy(_neutron_options)
+    list.insert(0, auth.get_common_conf_options()[0])
+    # NOTE(dims): There are a lot of auth plugins, we just generate
+    # the config options for a few common ones
+    plugins = ['password', 'v2password', 'v3password']
+    for name in plugins:
+        for plugin_option in auth.get_plugin_class(name).get_options():
+            found = False
+            for option in list:
+                if option.name == plugin_option.name:
+                    found = True
+                    break
+            if not found:
+                list.append(plugin_option)
+    list.sort(key=lambda x: x.name)
+    return [(NEUTRON_GROUP, list)]
 
 
 def reset_state():
@@ -295,6 +315,7 @@ class API(base_api.NetworkAPI):
         :raises PortLimitExceeded: If neutron fails with an OverQuota error.
         :raises NoMoreFixedIps: If neutron fails with
             IpAddressGenerationFailure error.
+        :raises: PortBindingFailed: If port binding failed.
         """
         try:
             if fixed_ip:
@@ -313,7 +334,12 @@ class API(base_api.NetworkAPI):
                 port_req_body['port']['mac_address'] = mac_address
             if dhcp_opts is not None:
                 port_req_body['port']['extra_dhcp_opts'] = dhcp_opts
-            port_id = port_client.create_port(port_req_body)['port']['id']
+            port = port_client.create_port(port_req_body)
+            port_id = port['port']['id']
+            if (port['port'].get('binding:vif_type') ==
+                network_model.VIF_TYPE_BINDING_FAILED):
+                port_client.delete_port(port_id)
+                raise exception.PortBindingFailed(port_id=port_id)
             LOG.debug('Successfully created port: %s', port_id,
                       instance=instance)
             return port_id
@@ -461,6 +487,12 @@ class API(base_api.NetworkAPI):
                     # instance.
                     if port.get('device_id'):
                         raise exception.PortInUse(port_id=request.port_id)
+
+                    # Make sure the port is usable
+                    if (port.get('binding:vif_type') ==
+                        network_model.VIF_TYPE_BINDING_FAILED):
+                        raise exception.PortBindingFailed(
+                            port_id=request.port_id)
 
                     if hypervisor_macs is not None:
                         if port['mac_address'] not in hypervisor_macs:

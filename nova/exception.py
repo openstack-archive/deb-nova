@@ -782,6 +782,11 @@ class PortNotFree(Invalid):
     msg_fmt = _("No free port available for instance %(instance)s.")
 
 
+class PortBindingFailed(Invalid):
+    msg_fmt = _("Binding failed for port %(port_id)s, please check neutron "
+                "logs for more information.")
+
+
 class FixedIpExists(NovaException):
     msg_fmt = _("Fixed ip %(address)s already exists.")
 
@@ -1305,7 +1310,7 @@ class QuotaError(NovaException):
 
 class TooManyInstances(QuotaError):
     msg_fmt = _("Quota exceeded for %(overs)s: Requested %(req)s,"
-                " but already used %(used)d of %(allowed)d %(resource)s")
+                " but already used %(used)s of %(allowed)s %(overs)s")
 
 
 class FloatingIpLimitExceeded(QuotaError):
@@ -1545,10 +1550,6 @@ class InstanceFaultRollback(NovaException):
         message = _("Instance rollback performed due to: %s")
         self.inner_exception = inner_exception
         super(InstanceFaultRollback, self).__init__(message % inner_exception)
-
-
-class InstanceUpdateConflict(NovaException):
-    msg_fmt = _('Conflict updating instance %(instance_uuid)s')
 
 
 class OrphanedObjectError(NovaException):

@@ -84,6 +84,7 @@ from nova.tests.unit import fake_server_actions
 from nova.tests.unit.image import fake as fake_image
 from nova.tests.unit import matchers
 from nova.tests.unit.objects import test_flavor
+from nova.tests.unit.objects import test_instance_numa_topology
 from nova.tests.unit.objects import test_migration
 from nova.tests.unit import utils as test_utils
 from nova import utils
@@ -1352,6 +1353,24 @@ class ComputeTestCase(BaseTestCase):
         def test_fn(_self, context, instance):
             self.assertIsInstance(instance, objects.Instance)
             self.assertEqual(instance.uuid, db_inst['uuid'])
+            self.assertEqual(instance.metadata, db_inst['metadata'])
+            self.assertEqual(instance.system_metadata,
+                             db_inst['system_metadata'])
+        test_fn(None, self.context, instance=db_inst)
+
+    def test_object_compat_no_metas(self):
+        # Tests that we don't try to set metadata/system_metadata on the
+        # instance object using fields that aren't in the db object.
+        db_inst = fake_instance.fake_db_instance()
+        db_inst.pop('metadata', None)
+        db_inst.pop('system_metadata', None)
+
+        @compute_manager.object_compat
+        def test_fn(_self, context, instance):
+            self.assertIsInstance(instance, objects.Instance)
+            self.assertEqual(instance.uuid, db_inst['uuid'])
+            self.assertNotIn('metadata', instance)
+            self.assertNotIn('system_metadata', instance)
         test_fn(None, self.context, instance=db_inst)
 
     def test_object_compat_more_positional_args(self):
@@ -1361,6 +1380,9 @@ class ComputeTestCase(BaseTestCase):
         def test_fn(_self, context, instance, pos_arg_1, pos_arg_2):
             self.assertIsInstance(instance, objects.Instance)
             self.assertEqual(instance.uuid, db_inst['uuid'])
+            self.assertEqual(instance.metadata, db_inst['metadata'])
+            self.assertEqual(instance.system_metadata,
+                             db_inst['system_metadata'])
             self.assertEqual(pos_arg_1, 'fake_pos_arg1')
             self.assertEqual(pos_arg_2, 'fake_pos_arg2')
 
@@ -4964,30 +4986,6 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual(payload['image_ref_url'], image_ref_url)
         self.compute.terminate_instance(self.context, instance, [], [])
 
-    def test_prep_resize_instance_migration_error_on_same_host(self):
-        """Ensure prep_resize raise a migration error if destination is set on
-        the same source host and allow_resize_to_same_host is false
-        """
-        self.flags(host="foo", allow_resize_to_same_host=False)
-
-        instance = self._create_fake_instance_obj()
-
-        reservations = self._ensure_quota_reservations_rolledback(instance)
-
-        self.compute.build_and_run_instance(self.context, instance, {}, {}, {},
-                                            block_device_mapping=[])
-        instance.host = self.compute.host
-        instance.save()
-        instance_type = flavors.get_default_flavor()
-
-        self.assertRaises(exception.MigrationError, self.compute.prep_resize,
-                          self.context, instance=instance,
-                          instance_type=instance_type, image={},
-                          reservations=reservations, request_spec={},
-                          filter_properties={}, node=None,
-                          clean_shutdown=True)
-        self.compute.terminate_instance(self.context, instance, [], [])
-
     def test_prep_resize_instance_migration_error_on_none_host(self):
         """Ensure prep_resize raises a migration error if destination host is
         not defined
@@ -5151,7 +5149,7 @@ class ComputeTestCase(BaseTestCase):
     def test_resize_instance_forced_shutdown(self):
         self._test_resize_instance(clean_shutdown=False)
 
-    def _test_confirm_resize(self, power_on):
+    def _test_confirm_resize(self, power_on, numa_topology=None):
         # Common test case method for confirm_resize
         def fake(*args, **kwargs):
             pass
@@ -5191,6 +5189,7 @@ class ComputeTestCase(BaseTestCase):
 
         instance.vm_state = old_vm_state
         instance.power_state = p_state
+        instance.numa_topology = numa_topology
         instance.save()
 
         new_instance_type_ref = flavors.get_flavor_by_flavor_id(3)
@@ -5203,6 +5202,11 @@ class ComputeTestCase(BaseTestCase):
         migration = objects.Migration.get_by_instance_and_status(
                 self.context.elevated(),
                 instance.uuid, 'pre-migrating')
+        migration_context = objects.MigrationContext.get_by_instance_uuid(
+            self.context.elevated(), instance.uuid)
+        self.assertIsInstance(migration_context.old_numa_topology,
+                              numa_topology.__class__)
+        self.assertIsNone(migration_context.new_numa_topology)
 
         # NOTE(mriedem): ensure prep_resize set old_vm_state in system_metadata
         sys_meta = instance.system_metadata
@@ -5223,6 +5227,9 @@ class ComputeTestCase(BaseTestCase):
         instance_type_ref = db.flavor_get(self.context,
                 instance.instance_type_id)
         self.assertEqual(instance_type_ref['flavorid'], '3')
+        # Prove that the NUMA topology has also been updated to that of the new
+        # flavor - meaning None
+        self.assertIsNone(instance.numa_topology)
 
         # Finally, confirm the resize and verify the new flavor is applied
         instance.task_state = None
@@ -5239,6 +5246,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual('fake-mini', migration.source_compute)
         self.assertEqual(old_vm_state, instance.vm_state)
         self.assertIsNone(instance.task_state)
+        self.assertIsNone(instance.migration_context)
         self.assertEqual(p_state, instance.power_state)
         self.compute.terminate_instance(self.context, instance, [], [])
 
@@ -5248,8 +5256,15 @@ class ComputeTestCase(BaseTestCase):
     def test_confirm_resize_from_stopped(self):
         self._test_confirm_resize(power_on=False)
 
+    def test_confirm_resize_with_migration_context(self):
+        numa_topology = (
+            test_instance_numa_topology.get_fake_obj_numa_topology(
+                self.context))
+        self._test_confirm_resize(power_on=True, numa_topology=numa_topology)
+
     def _test_finish_revert_resize(self, power_on,
-                                   remove_old_vm_state=False):
+                                   remove_old_vm_state=False,
+                                   numa_topology=None):
         """Convenience method that does most of the work for the
         test_finish_revert_resize tests.
         :param power_on -- True if testing resize from ACTIVE state, False if
@@ -5294,6 +5309,7 @@ class ComputeTestCase(BaseTestCase):
 
         instance.host = 'foo'
         instance.vm_state = old_vm_state
+        instance.numa_topology = numa_topology
         instance.save()
 
         new_instance_type_ref = flavors.get_flavor_by_flavor_id(3)
@@ -5307,6 +5323,10 @@ class ComputeTestCase(BaseTestCase):
         migration = objects.Migration.get_by_instance_and_status(
                 self.context.elevated(),
                 instance.uuid, 'pre-migrating')
+        migration_context = objects.MigrationContext.get_by_instance_uuid(
+            self.context.elevated(), instance.uuid)
+        self.assertIsInstance(migration_context.old_numa_topology,
+                              numa_topology.__class__)
 
         # NOTE(mriedem): ensure prep_resize set old_vm_state in system_metadata
         sys_meta = instance.system_metadata
@@ -5326,6 +5346,9 @@ class ComputeTestCase(BaseTestCase):
         # Prove that the instance size is now the new size
         instance_type_ref = flavors.get_flavor_by_flavor_id(3)
         self.assertEqual(instance_type_ref['flavorid'], '3')
+        # Prove that the NUMA topology has also been updated to that of the new
+        # flavor - meaning None
+        self.assertIsNone(instance.numa_topology)
 
         instance.task_state = task_states.RESIZE_REVERTING
         instance.save()
@@ -5355,6 +5378,7 @@ class ComputeTestCase(BaseTestCase):
         self.assertEqual(instance_type_ref['flavorid'], '1')
         self.assertEqual(instance.host, migration.source_compute)
         self.assertEqual(migration.dest_compute, migration.source_compute)
+        self.assertIsInstance(instance.numa_topology, numa_topology.__class__)
 
         if remove_old_vm_state:
             self.assertEqual(vm_states.ACTIVE, instance.vm_state)
@@ -5373,6 +5397,13 @@ class ComputeTestCase(BaseTestCase):
         # finish_revert_resize
         self._test_finish_revert_resize(power_on=False,
                                         remove_old_vm_state=True)
+
+    def test_finish_revert_resize_migration_context(self):
+        numa_topology = (
+            test_instance_numa_topology.get_fake_obj_numa_topology(
+                self.context))
+        self._test_finish_revert_resize(power_on=True,
+                                        numa_topology=numa_topology)
 
     def _test_cleanup_stored_instance_types(self, old, new, revert=False):
         instance = self._create_fake_instance_obj()
@@ -5410,23 +5441,6 @@ class ComputeTestCase(BaseTestCase):
     def test_get_by_flavor_id(self):
         flavor_type = flavors.get_flavor_by_flavor_id(1)
         self.assertEqual(flavor_type['name'], 'm1.tiny')
-
-    def test_resize_same_source_fails(self):
-        """Ensure instance fails to migrate when source and destination are
-        the same host.
-        """
-        instance = self._create_fake_instance_obj()
-        reservations = self._ensure_quota_reservations_rolledback(instance)
-        self.compute.build_and_run_instance(self.context, instance, {}, {}, {},
-                                            block_device_mapping=[])
-        instance.refresh()
-        instance_type = flavors.get_default_flavor()
-        self.assertRaises(exception.MigrationError, self.compute.prep_resize,
-                self.context, instance=instance,
-                instance_type=instance_type, image={},
-                reservations=reservations, request_spec={},
-                filter_properties={}, node=None, clean_shutdown=True)
-        self.compute.terminate_instance(self.context, instance, [], [])
 
     def test_resize_instance_handles_migration_error(self):
         # Ensure vm_state is ERROR when error occurs.
@@ -7696,6 +7710,8 @@ class ComputeAPITestCase(BaseTestCase):
 
         group = objects.InstanceGroup(self.context)
         group.uuid = str(uuid.uuid4())
+        group.project_id = self.context.project_id
+        group.user_id = self.context.user_id
         group.create()
 
         inst_type = flavors.get_default_flavor()
@@ -8835,6 +8851,22 @@ class ComputeAPITestCase(BaseTestCase):
             fake_v2_bdms, False)
         self.assertEqual(len(transformed_bdm), 1)
 
+        # Image BDM overrides mappings
+        base_options['image_ref'] = FAKE_IMAGE_REF
+        image_meta = {
+            'properties': {
+                'mappings': [
+                    {'virtual': 'ephemeral0', 'device': 'vdb'}],
+                'bdm_v2': True,
+                'block_device_mapping': [
+                    {'device_name': '/dev/vdb', 'source_type': 'blank',
+                     'destination_type': 'volume', 'volume_size': 1}]}}
+        transformed_bdm = self.compute_api._check_and_transform_bdm(
+            self.context, base_options, {}, image_meta, 1, 1, [], False)
+        self.assertEqual(1, len(transformed_bdm))
+        self.assertEqual('volume', transformed_bdm[0]['destination_type'])
+        self.assertEqual('/dev/vdb', transformed_bdm[0]['device_name'])
+
     def test_volume_size(self):
         ephemeral_size = 2
         swap_size = 3
@@ -9083,7 +9115,7 @@ class ComputeAPITestCase(BaseTestCase):
         params = {'vm_state': vm_states.RESCUED}
         instance = self._create_fake_instance_obj(params=params)
 
-        volume = {'id': 1, 'attach_status': 'in-use',
+        volume = {'id': 1, 'attach_status': 'attached',
                   'instance_uuid': instance['uuid']}
 
         self.assertRaises(exception.InstanceInvalidState,
@@ -9525,7 +9557,8 @@ class ComputeAPITestCase(BaseTestCase):
         # Ensure volume can be detached from instance
         called = {}
         instance = self._create_fake_instance_obj()
-        volume = {'id': 1, 'attach_status': 'in-use',
+        # Set attach_status to 'fake' as nothing is reading the value.
+        volume = {'id': 1, 'attach_status': 'fake',
                   'instance_uuid': instance['uuid']}
 
         def fake_check_detach(*args, **kwargs):
@@ -9569,7 +9602,7 @@ class ComputeAPITestCase(BaseTestCase):
                     'launched_at': timeutils.utcnow(),
                     'vm_state': vm_states.ACTIVE,
                     'task_state': None})
-        volume = {'id': 1, 'attach_status': 'in-use',
+        volume = {'id': 1, 'attach_status': 'attached',
                   'instance_uuid': 'uuid2'}
 
         self.assertRaises(exception.VolumeUnattached,
@@ -9582,8 +9615,8 @@ class ComputeAPITestCase(BaseTestCase):
                     'launched_at': timeutils.utcnow(),
                     'vm_state': vm_states.SUSPENDED,
                     'task_state': None})
-        volume = {'id': 1, 'attach_status': 'in-use',
-                  'instance_uuid': 'uuid2'}
+        # Unused
+        volume = {}
 
         self.assertRaises(exception.InstanceInvalidState,
                           self.compute_api.detach_volume, self.context,
@@ -11146,11 +11179,17 @@ class EvacuateHostTestCase(BaseTestCase):
         db.instance_destroy(self.context, self.inst.uuid)
         super(EvacuateHostTestCase, self).tearDown()
 
-    def _rebuild(self, on_shared_storage=True):
+    def _rebuild(self, on_shared_storage=True, migration=None,
+                 send_node=False):
         network_api = self.compute.network_api
         ctxt = context.get_admin_context()
         mock_context = mock.Mock()
         mock_context.elevated.return_value = ctxt
+
+        node = limits = None
+        if send_node:
+            node = NODENAME
+            limits = {}
 
         @mock.patch.object(network_api, 'setup_networks_on_host')
         @mock.patch.object(network_api, 'setup_instance_network_on_host')
@@ -11164,7 +11203,8 @@ class EvacuateHostTestCase(BaseTestCase):
             self.compute.rebuild_instance(
                 mock_context, self.inst, orig_image_ref,
                 image_ref, injected_files, 'newpass', {}, bdms, recreate=True,
-                on_shared_storage=on_shared_storage)
+                on_shared_storage=on_shared_storage, migration=migration,
+                scheduled_node=node, limits=limits)
             mock_setup_networks_on_host.assert_called_once_with(
                 ctxt, self.inst, self.inst.host)
             mock_setup_instance_network_on_host.assert_called_once_with(
@@ -11210,6 +11250,19 @@ class EvacuateHostTestCase(BaseTestCase):
         instance = db.instance_get(self.context, self.inst.id)
         self.assertEqual(instance['host'], self.compute.host)
         self.assertIsNone(instance['node'])
+
+    def test_rebuild_on_host_node_passed(self):
+        patch_get_info = mock.patch.object(self.compute, '_get_compute_info')
+        patch_on_disk = mock.patch.object(
+            self.compute.driver, 'instance_on_disk', return_value=True)
+        with patch_get_info as get_compute_info, patch_on_disk:
+            self._rebuild(send_node=True)
+            self.assertEqual(0, get_compute_info.call_count)
+
+        # Should be on destination host and node set to what was passed in
+        instance = db.instance_get(self.context, self.inst.id)
+        self.assertEqual(instance['host'], self.compute.host)
+        self.assertEqual(instance['node'], NODENAME)
 
     def test_rebuild_with_instance_in_stopped_state(self):
         """Confirm evacuate scenario updates vm_state to stopped
@@ -11379,6 +11432,79 @@ class EvacuateHostTestCase(BaseTestCase):
         self.mox.ReplayAll()
 
         self._rebuild(on_shared_storage=None)
+
+    def test_rebuild_migration_passed_in(self):
+        migration = mock.Mock(spec=objects.Migration)
+
+        patch_spawn = mock.patch.object(self.compute.driver, 'spawn')
+        patch_on_disk = mock.patch.object(
+            self.compute.driver, 'instance_on_disk', return_value=True)
+        with patch_spawn, patch_on_disk:
+            self._rebuild(migration=migration)
+
+        self.assertEqual('done', migration.status)
+        migration.save.assert_called_once_with()
+
+    def test_rebuild_migration_node_passed_in(self):
+        patch_spawn = mock.patch.object(self.compute.driver, 'spawn')
+        patch_on_disk = mock.patch.object(
+            self.compute.driver, 'instance_on_disk', return_value=True)
+        with patch_spawn, patch_on_disk:
+            self._rebuild(send_node=True)
+
+        migrations = objects.MigrationList.get_in_progress_by_host_and_node(
+            self.context, self.compute.host, NODENAME)
+        self.assertEqual(1, len(migrations))
+        migration = migrations[0]
+        self.assertEqual("evacuation", migration.migration_type)
+        self.assertEqual("pre-migrating", migration.status)
+
+    def test_rebuild_migration_claim_fails(self):
+        migration = mock.Mock(spec=objects.Migration)
+
+        patch_spawn = mock.patch.object(self.compute.driver, 'spawn')
+        patch_on_disk = mock.patch.object(
+            self.compute.driver, 'instance_on_disk', return_value=True)
+        patch_claim = mock.patch.object(
+            self.compute._resource_tracker_dict[NODENAME], 'rebuild_claim',
+            side_effect=exception.ComputeResourcesUnavailable(reason="boom"))
+        with patch_spawn, patch_on_disk, patch_claim:
+            self.assertRaises(exception.BuildAbortException,
+                              self._rebuild, migration=migration,
+                              send_node=True)
+        self.assertEqual("failed", migration.status)
+        migration.save.assert_called_once_with()
+
+    def test_rebuild_fails_migration_failed(self):
+        migration = mock.Mock(spec=objects.Migration)
+
+        patch_spawn = mock.patch.object(self.compute.driver, 'spawn')
+        patch_on_disk = mock.patch.object(
+            self.compute.driver, 'instance_on_disk', return_value=True)
+        patch_claim = mock.patch.object(
+            self.compute._resource_tracker_dict[NODENAME], 'rebuild_claim')
+        patch_rebuild = mock.patch.object(
+            self.compute, '_do_rebuild_instance_with_claim',
+            side_effect=test.TestingException())
+        with patch_spawn, patch_on_disk, patch_claim, patch_rebuild:
+            self.assertRaises(test.TestingException,
+                              self._rebuild, migration=migration,
+                              send_node=True)
+        self.assertEqual("failed", migration.status)
+        migration.save.assert_called_once_with()
+
+    def test_rebuild_numa_migration_context_honoured(self):
+        numa_topology = (
+            test_instance_numa_topology.get_fake_obj_numa_topology(
+                self.context))
+        self.inst.numa_topology = numa_topology
+        patch_spawn = mock.patch.object(self.compute.driver, 'spawn')
+        patch_on_disk = mock.patch.object(
+            self.compute.driver, 'instance_on_disk', return_value=True)
+        with patch_spawn, patch_on_disk:
+            self._rebuild(send_node=True)
+        self.assertIsNone(self.inst.numa_topology)
+        self.assertIsNone(self.inst.migration_context)
 
 
 class ComputeInjectedFilesTestCase(BaseTestCase):

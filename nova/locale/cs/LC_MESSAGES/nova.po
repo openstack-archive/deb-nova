@@ -7,13 +7,15 @@
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2011
 # Jaroslav Lichtblau <dragonlord@seznam.cz>, 2014
 # Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2013,2015
+# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
+# Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version:  nova\n"
+"Project-Id-Version: nova 12.0.0.0b4.dev260\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-12 06:30+0000\n"
-"PO-Revision-Date: 2015-08-12 06:27+0000\n"
-"Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
+"POT-Creation-Date: 2015-09-22 07:45+0000\n"
+"PO-Revision-Date: 2015-09-21 08:43+0000\n"
+"Last-Translator: Zbyněk Schwarz <zbynek.schwarz@gmail.com>\n"
 "Language-Team: Czech (http://www.transifex.com/openstack/nova/language/cs/)\n"
 "Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2\n"
 "MIME-Version: 1.0\n"
@@ -44,8 +46,26 @@ msgid "%(cidr)s is not a valid ip network."
 msgstr "%(cidr)s není platná síť ip."
 
 #, python-format
+msgid ""
+"%(desc)r\n"
+"command: %(cmd)r\n"
+"exit code: %(code)r\n"
+"stdout: %(stdout)r\n"
+"stderr: %(stderr)r"
+msgstr ""
+"%(desc)r\n"
+"příkaz: %(cmd)r\n"
+"kód ukončení: %(code)r\n"
+"stdandardní výstup: %(stdout)r\n"
+"chybový výstup: %(stderr)r"
+
+#, python-format
 msgid "%(err)s"
 msgstr "%(err)s"
+
+#, python-format
+msgid "%(field)s should not be part of the updates."
+msgstr "%(field)s by nemělo být součástí aktualizací."
 
 #, python-format
 msgid "%(fieldname)s missing field type"
@@ -117,6 +137,14 @@ msgstr ""
 "Hodnota %(worker_name)s ve %(workers)s je neplatná, musí být větší než 0"
 
 #, python-format
+msgid "%r failed. Not Retrying."
+msgstr "%r selhalo. Nebude zopakováno."
+
+#, python-format
+msgid "%r failed. Retrying."
+msgstr "%r selhalo. Opakování."
+
+#, python-format
 msgid "%s does not support disk hotplug."
 msgstr "%s nepodporuje zapojování disku za běhu."
 
@@ -143,6 +171,10 @@ msgstr "%s není podporováno."
 #, python-format
 msgid "%s must be either 'MANUAL' or 'AUTO'."
 msgstr "%s musí být buď 'MANUAL' nebo 'AUTO'."
+
+#, python-format
+msgid "'%(other)s' should be an instance of '%(cls)s'"
+msgstr "'%(other)s' by měla být instancí '%(cls)s'"
 
 #, python-format
 msgid "'%s' is either missing or empty."
@@ -291,16 +323,8 @@ msgid "Aggregates does not have %s action"
 msgstr "Agregáty nemají činnost %s"
 
 #, python-format
-msgid "All clusters specified %s were not found in the vCenter"
-msgstr "Žádný z clusterů zadaných v %s nebyl nalezen ve vCenter"
-
-#, python-format
 msgid "An error has occurred when calling the iscsi initiator: %s"
 msgstr "Při volání zavaděče iscsi nastala chyba: %s"
-
-#, python-format
-msgid "An object of type %(type)s is required in field %(attr)s"
-msgstr "Objekt typu %(type)s je vyžadován v poli %(attr)s"
 
 msgid "An unexpected error has occurred."
 msgstr "Objevila se neočekávaná chyba."
@@ -408,6 +432,14 @@ msgstr "Špatný formát id svazku: id není v platném formátu (%s)"
 msgid "Binary"
 msgstr "Binární soubor"
 
+#, python-format
+msgid ""
+"Binding failed for port %(port_id)s, please check neutron logs for more "
+"information."
+msgstr ""
+"Svázání portu %(port_id)s selhalo, pro další informace zkontrolujte prosím "
+"záznamy neutron."
+
 msgid "Blank components"
 msgstr "Prázdné součásti"
 
@@ -507,6 +539,14 @@ msgstr "Počet CPU %(cpuset)s není přidělen k žádným uzlům"
 #, python-format
 msgid "CPU pinning is not supported by the host: %(reason)s"
 msgstr "Připnutí CPU není hostitelem podporováno: %(reason)s"
+
+#, python-format
+msgid ""
+"CPU set to pin/unpin %(requested)s must be a subset of known CPU set "
+"%(cpuset)s"
+msgstr ""
+"CPU nastaveno na připnutí/odepnutí %(requested)s musí být podsadou známé "
+"sady CPU %(cpuset)s"
 
 msgid "Can not add access to a public flavor."
 msgstr "Nelze zpřístupnit veřejnou konfiguraci"
@@ -727,8 +767,8 @@ msgstr "Zpráva buňky dosáhla maximálního počtu skoků: %(hop_count)s"
 msgid "Cell name cannot be empty"
 msgstr "Název buňky nemůůže být prázdný"
 
-msgid "Cell name cannot contain '!' or '.'"
-msgstr "Název buňky nesmí obsahovat '!' či '.'"
+msgid "Cell name cannot contain '!', '.' or '@'"
+msgstr "Název buňky nemůže obsahovat '!', '.' nebo '@'"
 
 msgid "Cell type must be 'parent' or 'child'"
 msgstr "Typ buňky musí být buď 'parent' nebo 'child'"
@@ -795,10 +835,6 @@ msgid ""
 msgstr ""
 "Konfigurace vyžaduje konkrétní model procesu, ale současný hypervizor "
 "libvirt '%s' nepodporuje výběr modelů procesoru"
-
-#, python-format
-msgid "Conflict updating instance %(instance_uuid)s"
-msgstr "Konflikt při aktualizaci instance %(instance_uuid)s"
 
 #, python-format
 msgid ""
@@ -1606,8 +1642,23 @@ msgstr "Konfigurace s názvem %(flavor_name)s nemohla být nalezena."
 msgid "Flavor with name %(name)s already exists."
 msgstr "Konfigurace s názvem %(name)s již existuje."
 
-msgid "Flavor's disk is too small for requested image."
-msgstr "Disk konfigurace je na požadovaný obraz příliš malý."
+#, python-format
+msgid ""
+"Flavor's disk is smaller than the minimum size specified in image metadata. "
+"Flavor disk is %(flavor_size)i bytes, minimum size is %(image_min_disk)i "
+"bytes."
+msgstr ""
+"Disk konfigurace je menší, než minimální zadaná velikost zadaná v popisných "
+"datech obrazu. Disk konfigurace má %(flavor_size)i bajtů, minimální velikost "
+"je %(image_min_disk)i bajtů."
+
+#, python-format
+msgid ""
+"Flavor's disk is too small for requested image. Flavor disk is "
+"%(flavor_size)i bytes, image is %(image_size)i bytes."
+msgstr ""
+"Disk konfigurace je pro požadovaný obraz příliš malý.  Disk konfigurace má "
+"%(flavor_size)i bajtů, obraz má %(image_size)i bajtů."
 
 msgid "Flavor's memory is too small for requested image."
 msgstr "Paměť konfigurace je na požadovaný obraz příliš malá."
@@ -1750,18 +1801,6 @@ msgstr "Hostitel nepodporuje hosty s nastavenou topologií NUMA"
 
 msgid "Host does not support guests with custom memory page sizes"
 msgstr "Hostitel nepodporuje hosty s vlastní velikostí stránek paměti"
-
-#, python-format
-msgid "Host filter forcing available hosts to %s"
-msgstr "Filtr hostitelů si vynutil dostupnost hostitelů na %s"
-
-#, python-format
-msgid "Host filter forcing available nodes to %s"
-msgstr "Filtr hostitelů vynucuje dostupnost uzlů na %s"
-
-#, python-format
-msgid "Host filter ignoring hosts: %s"
-msgstr "Filtr hostitelů ignoruje hostitele: %s"
 
 msgid "Host parameter must be specified"
 msgstr "Parametr host musí být zadán"
@@ -1930,7 +1969,7 @@ msgid "Inconsistency in cell routing: %(reason)s"
 msgstr "Nesoulad ve směrování buňky: %(reason)s"
 
 msgid "Incorrect request body format"
-msgstr "Nsprávný formát těla požadavku"
+msgstr "Nesprávný formát těla požadavku"
 
 #, python-format
 msgid "Info cache for instance %(instance_uuid)s could not be found."
@@ -1954,7 +1993,7 @@ msgstr "Instanci %(instance_id)s nelze zachránit: %(reason)s"
 
 #, python-format
 msgid "Instance %(instance_id)s could not be found."
-msgstr "Instance %(instance_id)s nemohla být nastavena."
+msgstr "Instance %(instance_id)s nemohla být nalezena."
 
 #, python-format
 msgid "Instance %(instance_id)s has no tag '%(tag)s'"
@@ -1979,6 +2018,10 @@ msgstr "Instance %(instance_id)s je nepřijatelná: %(reason)s"
 #, python-format
 msgid "Instance %(instance_uuid)s does not specify a NUMA topology"
 msgstr "Instance %(instance_uuid)s neurčuje topologii NUMA"
+
+#, python-format
+msgid "Instance %(instance_uuid)s does not specify a migration context."
+msgstr "Instance %(instance_uuid)s neurčuje kontext přesunu."
 
 #, python-format
 msgid "Instance %(instance_uuid)s doesn't have fixed ip '%(ip)s'."
@@ -2209,6 +2252,10 @@ msgstr "Neplatná položka: '%s'; Očekáváno dict"
 #, python-format
 msgid "Invalid entry: '%s'; Expecting list or dict"
 msgstr "Neplatná položka: '%s'; Očekáváno list nebo dict"
+
+#, python-format
+msgid "Invalid event name %s"
+msgstr "Neplatný název události %s"
 
 #, python-format
 msgid "Invalid event status `%s'"
@@ -3009,12 +3056,6 @@ msgid "No host available on cluster"
 msgstr "V clusteru není dostupný žádný hostitel"
 
 #, python-format
-msgid "No hosts matched due to not matching 'force_hosts' value of '%s'"
-msgstr ""
-"Žádní hostitelé neodpovídají, protože nebyla nalezena shoda s hodnotou '%s' "
-"ve 'force_hosts'"
-
-#, python-format
 msgid "No hypervisor matching '%s' could be found."
 msgstr "Nemohl být nalezen žádný hypervizor shodující se s '%s'."
 
@@ -3047,12 +3088,6 @@ msgstr "Žádné sítě nejsou určeny."
 
 msgid "No networks found"
 msgstr "Nenalezeny žádné sítě"
-
-#, python-format
-msgid "No nodes matched due to not matching 'force_nodes' value of '%s'"
-msgstr ""
-"Žádné uzly neodpovídají, protože nebyla nalezena shoda s hodnotou '%s' ve "
-"'force_hosts'"
 
 msgid "No nova entries in syslog!"
 msgstr "Žádné položky nova v záznamu systému!"
@@ -3389,11 +3424,11 @@ msgstr "Kvóta nemohla být nalezena."
 
 #, python-format
 msgid ""
-"Quota exceeded for %(overs)s: Requested %(req)s, but already used %(used)d "
-"of %(allowed)d %(resource)s"
+"Quota exceeded for %(overs)s: Requested %(req)s, but already used %(used)s "
+"of %(allowed)s %(overs)s"
 msgstr ""
 "Kvóta překročena pro %(overs)s: Požadováno %(req)s, ale již je použito "
-"%(used)d z %(allowed)d %(resource)s"
+"%(used)s z %(allowed)s %(overs)s"
 
 #, python-format
 msgid "Quota exceeded for resources: %(overs)s"
@@ -3618,6 +3653,10 @@ msgid ""
 msgstr ""
 "Spuštění Nova s typem virtualizace qemu/kvm na s390/s390x vyžaduje libvirt "
 "verze %(libvirt_ver)s a verzí qemu %(qemu_ver)s, nebo novější"
+
+#, python-format
+msgid "Running cmd (subprocess): %s"
+msgstr "Spouštění příkazu (podproces): %s"
 
 #, python-format
 msgid "Scheduler Host Filter %(filter_name)s could not be found."
@@ -3927,6 +3966,9 @@ msgstr "Soubor JSON určující zásady."
 msgid "The PCI address %(address)s has an incorrect format."
 msgstr "PCI adresa %(address)s je ve špatném formátu."
 
+msgid "The SMB WMI namespace is not available on this OS version."
+msgstr "Jmenný prostor SMB WMI není v této verzi OS dostupný."
+
 msgid ""
 "The Windows account running nova-compute on this Hyper-V host doesn't have "
 "the required permissions to create or operate the virtual machine."
@@ -3942,9 +3984,15 @@ msgstr ""
 "Chyba výše naznačuje, že databáze nebyla vytvořena.\n"
 "Prosím vytvořte ji pomocí 'nova-manage db sync' před zadáním tohoto příkazu."
 
+msgid "The backlog must be more than 0"
+msgstr "parametr backlog musí být větší než 0."
+
 #, python-format
 msgid "The console port range %(min_port)d-%(max_port)d is exhausted."
 msgstr "Rozsah portů konzole %(min_port)d-%(max_port)d je vyčerpán."
+
+msgid "The created instance's disk would be too small."
+msgstr "Vytvořený disk instance by byl příliš malý."
 
 msgid "The current driver does not support preserving ephemeral partitions."
 msgstr "Současný ovladač nepodporuje zachování efemerních oddílů."
@@ -3959,6 +4007,9 @@ msgstr "Kopírování souboru z %(src)s do %(dest)s selhalo"
 #, python-format
 msgid "The firewall filter for %s does not exist"
 msgstr "Filtr brány firewall pro %s neexistuje"
+
+msgid "The floating IP request failed with a BadRequest"
+msgstr "Žádost o plovoucí IP selhala s chybou Špatný požadavek."
 
 #, python-format
 msgid "The group %(group_name)s must be configured with an id."
@@ -4019,7 +4070,7 @@ msgstr ""
 "Velikost sítě je %(network_size)s"
 
 #, python-format
-msgid "The number of defined ports: %(ports)dis over the limit: %(quota)d"
+msgid "The number of defined ports: %(ports)d is over the limit: %(quota)d"
 msgstr "Počet zadaných portů: %(ports)d přesahuje limit: %(quota)d"
 
 msgid "The only partition should be partition 1."
@@ -4056,13 +4107,13 @@ msgid "The requested functionality is not supported."
 msgstr "Požadovaná funkce není podporována."
 
 #, python-format
-msgid "The resource %s does not exist"
-msgstr "Zdroj %s neexistuje"
-
-#, python-format
 msgid ""
 "The service from servicegroup driver %(driver)s is temporarily unavailable."
 msgstr "Služba ze skupiny ovladače %(driver)s je dočasně nedostupná."
+
+#, python-format
+msgid "The specified cluster '%s' was not found in vCenter"
+msgstr "Zadaný cluster '%s' nebyl nalezen ve vCenter"
 
 msgid ""
 "The string containing the reason for disabling the service contains invalid "
@@ -4194,6 +4245,12 @@ msgstr "Vypršel časový limit při čekání na vytvoření zařízení %s"
 
 msgid "Timeout waiting for response from cell"
 msgstr "Při čekání na odpověď od buňky vypršel čas"
+
+#, python-format
+msgid "Timeout while checking if we can live migrate to host: %s"
+msgstr ""
+"Při kontrole možnosti přesunu za provozu na hostitele %s vypršel časový "
+"limit."
 
 msgid "Timestamp failed validation."
 msgstr "Časové razítko neprošlo ověřením."
@@ -4365,6 +4422,12 @@ msgstr "Nelze získat doménu dns"
 msgid "Unable to get dns entry"
 msgstr "Nelze získat záznam dns"
 
+msgid "Unable to get host UUID: /etc/machine-id does not exist"
+msgstr "Nelze získat UUID hostitele: /etc/machine-id neexistuje"
+
+msgid "Unable to get host UUID: /etc/machine-id is empty"
+msgstr "Nelze získat UUID hostitele: /etc/machine-id je prázdné"
+
 msgid "Unable to get rdp console, functionality not implemented"
 msgstr "Nelze získat konzoli rdp, funkce není zavedena"
 
@@ -4498,14 +4561,6 @@ msgstr ""
 #, python-format
 msgid "Unexpected aggregate action %s"
 msgstr "Neočekávaná činnost agregátu %s"
-
-#, python-format
-msgid ""
-"Unexpected sysinfo_serial setting '%(actual)s'. Permitted values are "
-"%(expect)s'"
-msgstr ""
-"Neočekávané nastavení sysinfo_serial '%(actual)s'. Povolené hodnoty jsou "
-"'%(expect)s'"
 
 msgid "Unexpected type adding stats"
 msgstr "Neočekávaný typ při přidávání statistik"
@@ -4706,6 +4761,10 @@ msgstr ""
 "Hodnota (%(value)s) pro parametr Skupiny %(property)s je neplatný. Obsah je "
 "omezen na '%(allowed)s'."
 
+#, python-format
+msgid "Value must be >= 0 for field %s"
+msgstr "Hodnota musí být pro pole %s >= 0"
+
 msgid "Value required for 'scality_sofs_config'"
 msgstr "Je třeba zadat hodnotu pro 'scality_sofs_config'"
 
@@ -4786,6 +4845,15 @@ msgid ""
 "Volume encryption is not supported for %(volume_type)s volume %(volume_id)s"
 msgstr ""
 "Šifrování svazku není podporováno v %(volume_type)s svazku %(volume_id)s"
+
+#, python-format
+msgid ""
+"Volume is smaller than the minimum size specified in image metadata. Volume "
+"size is %(volume_size)i bytes, minimum size is %(image_min_disk)i bytes."
+msgstr ""
+"Svazek je menší, než minimální zadaná velikost zadaná v popisných datech "
+"obrazu. Svazek má %(volume_size)i bajtů, minimální velikost je "
+"%(image_min_disk)i bajtů."
 
 msgid "Volume must be attached in order to detach."
 msgstr "Pro odpojení svazku musí být nejdříve připojen."
@@ -4903,6 +4971,17 @@ msgstr "Pro použití obrazů LVM byste měli zadat příznak  images_volume_gro
 msgid ""
 "Your libvirt version does not support the VIR_DOMAIN_XML_MIGRATABLE flag or "
 "your destination node does not support retrieving listen addresses.  In "
+"order for live migration to work properly you must either disable serial "
+"console or upgrade your libvirt version."
+msgstr ""
+"Vaše verze libvirt nepodporuje příznak VIR_DOMAIN_XML_MIGRATABLE nebo váš "
+"cílový uzel nepodporuje získávání adres pro odposlech. Aby mohl přesun za "
+"provozu správně fungovat, musíte buď zakázat sériovou konzoli nebo "
+"aktualizovat vaši verzi libvirt."
+
+msgid ""
+"Your libvirt version does not support the VIR_DOMAIN_XML_MIGRATABLE flag or "
+"your destination node does not support retrieving listen addresses.  In "
 "order for live migration to work properly, you must configure the graphics "
 "(VNC and/or SPICE) listen addresses to be either the catch-all address "
 "(0.0.0.0 or ::) or the local address (127.0.0.1 or ::1)."
@@ -4992,9 +5071,6 @@ msgstr "Objekt createImage vyžaduje vlastnost name"
 #, python-format
 msgid "destination is %(target_cell)s but routing_path is %(routing_path)s"
 msgstr "cíl je %(target_cell)s ale cesta směrování je %(routing_path)s"
-
-msgid "destination same as source!"
-msgstr "cíl stejný jako zdroj!"
 
 msgid "disk"
 msgstr "disk"
@@ -5198,6 +5274,16 @@ msgstr "uzel"
 #, python-format
 msgid "not able to execute ssh command: %s"
 msgstr "nelze spustit příkaz ssh: %s"
+
+msgid ""
+"nova-idmapshift is a tool that properly sets the ownership of a filesystem "
+"for use with linux user namespaces.  This tool can only be used with linux "
+"lxc containers.  See the man page for details."
+msgstr ""
+"nova-idmapshift je nástroj pro správné nastavení vlastnictví souborového "
+"systému v rámci jmenných prostorů uživatelů linux. Tento nástroj lze použít "
+"pouze u kontejnerů lxc v linux. Pro další informace si prohlédněte stránky "
+"uživatelské příručky."
 
 msgid "onSharedStorage must be specified."
 msgstr "onSharedStorage musí být zadáno."

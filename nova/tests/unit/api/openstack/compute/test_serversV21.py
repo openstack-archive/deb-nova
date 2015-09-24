@@ -40,13 +40,12 @@ from nova.api.openstack.compute import disk_config
 from nova.api.openstack.compute import extension_info
 from nova.api.openstack.compute import ips
 from nova.api.openstack.compute import keypairs
-from nova.api.openstack.compute.schemas import disk_config \
-        as disk_config_schema
 from nova.api.openstack.compute.schemas import servers as servers_schema
 from nova.api.openstack.compute import servers
 from nova.api.openstack.compute import views
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi as os_wsgi
+from nova import availability_zones
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova.compute import task_states
@@ -1400,6 +1399,19 @@ class ServersControllerTestV29(ServersControllerTest):
         self._test_list_server_detail_with_lock('not_locked',
                                                 'not_locked')
 
+    @mock.patch.object(compute_api.API, 'get_all')
+    def test_get_servers_remove_non_search_options(self, get_all_mock):
+        req = fakes.HTTPRequestV21.blank('/servers'
+                                         '?sort_key=id1&sort_dir=asc'
+                                         '&sort_key=id2&sort_dir=desc'
+                                         '&limit=1&marker=123',
+                                         use_admin_context=True)
+        self.controller.index(req)
+        kwargs = get_all_mock.call_args[1]
+        search_opts = kwargs['search_opts']
+        for key in ('sort_key', 'sort_dir', 'limit', 'marker'):
+            self.assertNotIn(key, search_opts)
+
 
 class ServersControllerDeleteTest(ControllerTest):
 
@@ -1519,6 +1531,32 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
         self.req = fakes.HTTPRequest.blank('/fake/servers/a/action')
         self.req.method = 'POST'
         self.req.headers["content-type"] = "application/json"
+
+    def test_rebuild_instance_name_with_spaces_in_the_middle(self):
+        self.body['rebuild']['name'] = 'abc   def'
+        self.req.body = jsonutils.dumps(self.body)
+        self.controller._action_rebuild(self.req, FAKE_UUID, body=self.body)
+
+    def test_rebuild_instance_name_with_leading_trailing_spaces(self):
+        self.body['rebuild']['name'] = '  abc   def  '
+        self.req.body = jsonutils.dumps(self.body)
+        self.assertRaises(exception.ValidationError,
+                          self.controller._action_rebuild,
+                          self.req, FAKE_UUID, body=self.body)
+
+    def test_rebuild_instance_name_with_leading_trailing_spaces_compat_mode(
+            self):
+        self.body['rebuild']['name'] = '  abc  def  '
+        self.req.body = jsonutils.dumps(self.body)
+        self.req.set_legacy_v2()
+
+        def fake_rebuild(*args, **kwargs):
+            self.assertEqual('abc  def', kwargs['display_name'])
+
+        with mock.patch.object(compute_api.API, 'rebuild') as mock_rebuild:
+            mock_rebuild.side_effect = fake_rebuild
+            self.controller._action_rebuild(self.req, FAKE_UUID,
+                                            body=self.body)
 
     def test_rebuild_instance_with_blank_metadata_key(self):
         self.body['rebuild']['metadata'][''] = 'world'
@@ -1821,6 +1859,38 @@ class ServersControllerUpdateTest(ControllerTest):
         req.body = jsonutils.dumps(body)
         self.assertRaises(exception.ValidationError, self.controller.update,
                           req, FAKE_UUID, body=body)
+
+    def test_update_server_name_with_spaces_in_the_middle(self):
+        self.stubs.Set(db, 'instance_get',
+                fakes.fake_instance_get(name='server_test'))
+        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'name': 'abc   def'}}
+        req.body = jsonutils.dumps(body)
+        self.controller.update(req, FAKE_UUID, body=body)
+
+    def test_update_server_name_with_leading_trailing_spaces(self):
+        self.stubs.Set(db, 'instance_get',
+                fakes.fake_instance_get(name='server_test'))
+        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'name': '  abc   def  '}}
+        req.body = jsonutils.dumps(body)
+        self.assertRaises(exception.ValidationError,
+                          self.controller.update, req, FAKE_UUID, body=body)
+
+    def test_update_server_name_with_leading_trailing_spaces_compat_mode(self):
+        self.stubs.Set(db, 'instance_get',
+                fakes.fake_instance_get(name='server_test'))
+        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'name': '  abc   def  '}}
+        req.body = jsonutils.dumps(body)
+        req.set_legacy_v2()
+        self.controller.update(req, FAKE_UUID, body=body)
 
     def test_update_server_admin_password_extra_arg(self):
         inst_dict = dict(name='server_test', admin_password='bacon')
@@ -2311,6 +2381,31 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPConflict,
                           self._test_create_extra, params)
 
+    def test_create_instance_secgroup_leading_trailing_spaces(self):
+        network = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'uuid': network}]
+        params = {'networks': requested_networks,
+                  'security_groups': [{'name': '  sg  '}]}
+
+        self.assertRaises(exception.ValidationError,
+                          self._test_create_extra, params)
+
+    def test_create_instance_secgroup_leading_trailing_spaces_compat_mode(
+            self):
+        network = 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee'
+        requested_networks = [{'uuid': network}]
+        params = {'networks': requested_networks,
+                  'security_groups': [{'name': '  sg  '}]}
+
+        def fake_create(*args, **kwargs):
+            self.assertEqual(['  sg  '], kwargs['security_group'])
+            return (objects.InstanceList(objects=[fakes.stub_instance_obj(
+                self.req.environ['nova.context'])]), None)
+
+        self.stubs.Set(compute_api.API, 'create', fake_create)
+        self.req.set_legacy_v2()
+        self._test_create_extra(params)
+
     def test_create_instance_with_networks_disabled_neutronv2(self):
         self.flags(network_api_class='nova.network.neutronv2.api.API')
         net_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
@@ -2364,6 +2459,33 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(exception.ValidationError, self.controller.create,
                           self.req, body=self.body)
 
+    def test_create_instance_name_with_spaces_in_the_middle(self):
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['name'] = 'abc    def'
+        self.body['server']['imageRef'] = image_href
+        self.req.body = jsonutils.dumps(self.body)
+        self.controller.create(self.req, body=self.body)
+
+    def test_create_instance_name_with_leading_trailing_spaces(self):
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['name'] = '   abc    def   '
+        self.body['server']['imageRef'] = image_href
+        self.req.body = jsonutils.dumps(self.body)
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create, self.req, body=self.body)
+
+    def test_create_instance_name_with_leading_trailing_spaces_in_compat_mode(
+            self):
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['name'] = '   abc    def   '
+        self.body['server']['imageRef'] = image_href
+        self.req.body = jsonutils.dumps(self.body)
+        self.req.set_legacy_v2()
+        self.controller.create(self.req, body=self.body)
+
     def test_create_instance_name_all_blank_spaces(self):
         # proper local hrefs must start with 'http://localhost/v2/'
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
@@ -2387,6 +2509,28 @@ class ServersControllerCreateTest(test.TestCase):
         req.headers["content-type"] = "application/json"
         self.assertRaises(exception.ValidationError,
                           self.controller.create, req, body=body)
+
+    def test_create_az_with_leading_trailing_spaces(self):
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['imageRef'] = image_href
+        self.body['server']['availability_zone'] = '  zone1  '
+        self.req.body = jsonutils.dumps(self.body)
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create, self.req, body=self.body)
+
+    def test_create_az_with_leading_trailing_spaces_in_compat_mode(
+            self):
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['name'] = '   abc    def   '
+        self.body['server']['imageRef'] = image_href
+        self.body['server']['availability_zones'] = '  zone1  '
+        self.req.body = jsonutils.dumps(self.body)
+        self.req.set_legacy_v2()
+        with mock.patch.object(availability_zones, 'get_availability_zones',
+                               return_value=['  zone1  ']):
+            self.controller.create(self.req, body=self.body)
 
     def test_create_instance(self):
         # proper local hrefs must start with 'http://localhost/v2/'
@@ -2662,8 +2806,10 @@ class ServersControllerCreateTest(test.TestCase):
         self._do_test_create_instance_above_quota('cores', 1, 10, msg)
 
     def test_create_instance_above_quota_server_group_members(self):
-        ctxt = context.get_admin_context()
+        ctxt = self.req.environ['nova.context']
         fake_group = objects.InstanceGroup(ctxt)
+        fake_group.project_id = ctxt.project_id
+        fake_group.user_id = ctxt.user_id
         fake_group.create()
 
         def fake_count(context, name, group, user_id):
@@ -2694,8 +2840,10 @@ class ServersControllerCreateTest(test.TestCase):
             self.assertEqual(e.explanation, expected_msg)
 
     def test_create_instance_with_group_hint(self):
-        ctxt = context.get_admin_context()
+        ctxt = self.req.environ['nova.context']
         test_group = objects.InstanceGroup(ctxt)
+        test_group.project_id = ctxt.project_id
+        test_group.user_id = ctxt.user_id
         test_group.create()
 
         def fake_instance_destroy(context, uuid, constraint):
@@ -2954,7 +3102,7 @@ class ServersViewBuilderTest(test.TestCase):
         fakes.stub_out_nw_api_get_instance_nw_info(self.stubs, nw_info)
 
         self.uuid = db_inst['uuid']
-        self.view_builder = views.servers.ViewBuilderV3()
+        self.view_builder = views.servers.ViewBuilderV21()
         self.request = fakes.HTTPRequestV21.blank("/fake")
         self.request.context = context.RequestContext('fake', 'fake')
         self.instance = fake_instance.fake_instance_obj(
@@ -3439,7 +3587,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
 
     def setUp(self):
         super(ServersAllExtensionsTestCase, self).setUp()
-        self.app = compute.APIRouterV3()
+        self.app = compute.APIRouterV21()
 
     def test_create_missing_server(self):
         # Test create with malformed body.
@@ -3449,7 +3597,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
 
         self.stubs.Set(compute_api.API, 'create', fake_create)
 
-        req = fakes.HTTPRequestV21.blank('/servers')
+        req = fakes.HTTPRequestV21.blank('/fake/servers')
         req.method = 'POST'
         req.content_type = 'application/json'
         body = {'foo': {'a': 'b'}}
@@ -3461,7 +3609,7 @@ class ServersAllExtensionsTestCase(test.TestCase):
     def test_update_missing_server(self):
         # Test update with malformed body.
 
-        req = fakes.HTTPRequestV21.blank('/servers/1')
+        req = fakes.HTTPRequestV21.blank('/fake/servers/1')
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'foo': {'a': 'b'}}
@@ -3521,9 +3669,20 @@ class FakeExt(extensions.V21APIExtensionBase):
     name = "DiskConfig"
     alias = 'os-disk-config'
     version = 1
+    fake_schema = {'fake_ext_attr': {'type': 'string'}}
 
     def fake_extension_point(self, *args, **kwargs):
         pass
+
+    def fake_schema_extension_point(self, version):
+        if version == '2.1':
+            return self.fake_schema
+        elif version == '2.0':
+            return {}
+        # This fake method should reuturn the schema for expected version
+        # Return None will make the tests failed, that means there is something
+        # in the code.
+        return None
 
     def get_controller_extensions(self):
         return []
@@ -3566,11 +3725,13 @@ class TestServersExtensionPoint(test.NoDBTestCase):
 class TestServersExtensionSchema(test.NoDBTestCase):
     def setUp(self):
         super(TestServersExtensionSchema, self).setUp()
-        CONF.set_override('extensions_whitelist', ['disk_config'], 'osapi_v21')
+        CONF.set_override('extensions_whitelist', ['os-disk-config'],
+                          'osapi_v21')
+        self.stubs.Set(disk_config, 'DiskConfig', FakeExt)
 
     def _test_load_extension_schema(self, name):
         setattr(FakeExt, 'get_server_%s_schema' % name,
-                FakeExt.fake_extension_point)
+                FakeExt.fake_schema_extension_point)
         ext_info = extension_info.LoadedExtensionInfo()
         controller = servers.ServersController(extension_info=ext_info)
         self.assertTrue(hasattr(controller, '%s_schema_manager' % name))
@@ -3583,7 +3744,7 @@ class TestServersExtensionSchema(test.NoDBTestCase):
         # because of the above extensions_whitelist.
         expected_schema = copy.deepcopy(servers_schema.base_create)
         expected_schema['properties']['server']['properties'].update(
-            disk_config_schema.server_create)
+            FakeExt.fake_schema)
 
         actual_schema = self._test_load_extension_schema('create')
         self.assertEqual(expected_schema, actual_schema)
@@ -3593,7 +3754,7 @@ class TestServersExtensionSchema(test.NoDBTestCase):
         # here checks that any extension is not added to the schema.
         expected_schema = copy.deepcopy(servers_schema.base_update)
         expected_schema['properties']['server']['properties'].update(
-            disk_config_schema.server_create)
+            FakeExt.fake_schema)
 
         actual_schema = self._test_load_extension_schema('update')
         self.assertEqual(expected_schema, actual_schema)
@@ -3603,7 +3764,7 @@ class TestServersExtensionSchema(test.NoDBTestCase):
         # here checks that any extension is not added to the schema.
         expected_schema = copy.deepcopy(servers_schema.base_rebuild)
         expected_schema['properties']['rebuild']['properties'].update(
-            disk_config_schema.server_create)
+            FakeExt.fake_schema)
 
         actual_schema = self._test_load_extension_schema('rebuild')
         self.assertEqual(expected_schema, actual_schema)
@@ -3613,7 +3774,7 @@ class TestServersExtensionSchema(test.NoDBTestCase):
         # here checks that any extension is not added to the schema.
         expected_schema = copy.deepcopy(servers_schema.base_resize)
         expected_schema['properties']['resize']['properties'].update(
-            disk_config_schema.server_create)
+            FakeExt.fake_schema)
 
         actual_schema = self._test_load_extension_schema('resize')
         self.assertEqual(expected_schema, actual_schema)

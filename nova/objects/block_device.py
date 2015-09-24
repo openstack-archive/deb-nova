@@ -57,7 +57,8 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
     # Version 1.12: Changed device_type field to BlockDeviceTypeField.
     # Version 1.13: Instance version 1.21
     # Version 1.14: Instance version 1.22
-    VERSION = '1.14'
+    # Version 1.15: Instance version 1.23
+    VERSION = '1.15'
 
     fields = {
         'id': fields.IntegerField(),
@@ -84,7 +85,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         'instance': [('1.0', '1.13'), ('1.2', '1.14'), ('1.3', '1.15'),
                      ('1.4', '1.16'), ('1.5', '1.17'), ('1.6', '1.18'),
                      ('1.8', '1.19'), ('1.9', '1.20'), ('1.13', '1.21'),
-                     ('1.14', '1.22')],
+                     ('1.14', '1.22'), ('1.15', '1.23')],
     }
 
     @staticmethod
@@ -272,7 +273,8 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.13: BlockDeviceMapping <= version 1.12
     # Version 1.14: BlockDeviceMapping <= version 1.13
     # Version 1.15: BlockDeviceMapping <= version 1.14
-    VERSION = '1.15'
+    # Version 1.16: BlockDeviceMapping <= version 1.15
+    VERSION = '1.16'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
@@ -283,7 +285,7 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
                     ('1.6', '1.5'), ('1.7', '1.6'), ('1.8', '1.7'),
                     ('1.9', '1.8'), ('1.10', '1.9'), ('1.11', '1.10'),
                     ('1.12', '1.11'), ('1.13', '1.12'), ('1.14', '1.13'),
-                    ('1.15', '1.14')],
+                    ('1.15', '1.14'), ('1.16', '1.15')],
     }
 
     @base.remotable_classmethod
@@ -298,26 +300,6 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
             return next(bdm_obj for bdm_obj in self if bdm_obj.is_root)
         except StopIteration:
             return
-
-    def root_metadata(self, context, image_api, volume_api):
-        root_bdm = self.root_bdm()
-        if not root_bdm:
-            return {}
-
-        if root_bdm.is_volume:
-            try:
-                volume = volume_api.get(context, root_bdm.volume_id)
-                return volume.get('volume_image_metadata', {})
-            except Exception:
-                raise exception.InvalidBDMVolume(id=root_bdm.id)
-        elif root_bdm.is_image:
-            try:
-                image_meta = image_api.show(context, root_bdm.image_id)
-                return image_meta.get('properties', {})
-            except Exception:
-                raise exception.InvalidBDMImage(id=root_bdm.id)
-        else:
-            return {}
 
 
 def block_device_make_list(context, db_list, **extra_args):

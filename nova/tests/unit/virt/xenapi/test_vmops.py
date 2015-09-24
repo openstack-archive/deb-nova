@@ -349,7 +349,7 @@ class SpawnTestCase(VMOpsTestBase):
         if include_root_vdi:
             vdis["root"] = {"ref": "fake_ref"}
         self.vmops._get_vdis_for_instance(context, instance,
-                name_label, "image_id", di_type,
+                name_label, image_meta, di_type,
                 block_device_info).AndReturn(vdis)
         self.vmops._resize_up_vdis(instance, vdis)
         step += 1
@@ -1284,6 +1284,31 @@ class LiveMigrateHelperTestCase(VMOpsTestBase):
             mock_connect.assert_called_once_with("c_info")
             mock_session.assert_called_once_with("SR.get_by_uuid",
                                                  "sr_uuid")
+
+
+class RollbackLiveMigrateDestinationTestCase(VMOpsTestBase):
+    @mock.patch.object(volume_utils, 'find_sr_by_uuid', return_value='sr_ref')
+    @mock.patch.object(volume_utils, 'forget_sr')
+    def test_rollback_dest_calls_sr_forget(self, forget_sr, sr_ref):
+        block_device_info = {'block_device_mapping': [{'connection_info':
+                                {'data': {'volume_id': 'fake-uuid',
+                                          'target_iqn': 'fake-iqn',
+                                          'target_portal': 'fake-portal'}}}]}
+        self.vmops.rollback_live_migration_at_destination('instance',
+                                                          block_device_info)
+        forget_sr.assert_called_once_with(self.vmops._session, 'sr_ref')
+
+    @mock.patch.object(volume_utils, 'forget_sr')
+    @mock.patch.object(volume_utils, 'find_sr_by_uuid',
+                       side_effect=test.TestingException)
+    def test_rollback_dest_handles_exception(self, find_sr_ref, forget_sr):
+        block_device_info = {'block_device_mapping': [{'connection_info':
+                                {'data': {'volume_id': 'fake-uuid',
+                                          'target_iqn': 'fake-iqn',
+                                          'target_portal': 'fake-portal'}}}]}
+        self.vmops.rollback_live_migration_at_destination('instance',
+                                                          block_device_info)
+        self.assertFalse(forget_sr.called)
 
 
 @mock.patch.object(vmops.VMOps, '_resize_ensure_vm_is_shutdown')

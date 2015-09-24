@@ -1246,12 +1246,12 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
         obj.model = "virtio"
         obj.target_dev = "vnet0"
         obj.driver_name = "vhost"
-        obj.vif_inbound_average = 1024000
-        obj.vif_inbound_peak = 10240000
-        obj.vif_inbound_burst = 1024000
-        obj.vif_outbound_average = 1024000
-        obj.vif_outbound_peak = 10240000
-        obj.vif_outbound_burst = 1024000
+        obj.vif_inbound_average = 16384
+        obj.vif_inbound_peak = 32768
+        obj.vif_inbound_burst = 3276
+        obj.vif_outbound_average = 32768
+        obj.vif_outbound_peak = 65536
+        obj.vif_outbound_burst = 6553
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
@@ -1261,8 +1261,8 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
               <driver name="vhost"/>
               <target dev="vnet0"/>
               <bandwidth>
-                <inbound average="1024000" peak="10240000" burst="1024000"/>
-                <outbound average="1024000" peak="10240000" burst="1024000"/>
+                <inbound average="16384" peak="32768" burst="3276"/>
+                <outbound average="32768" peak="65536" burst="6553"/>
               </bandwidth>
             </interface>""")
 
@@ -1293,12 +1293,12 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
         obj.target_dev = "tap12345678"
         obj.filtername = "clean-traffic"
         obj.filterparams.append({"key": "IP", "value": "192.168.122.1"})
-        obj.vif_inbound_average = 1024000
-        obj.vif_inbound_peak = 10240000
-        obj.vif_inbound_burst = 1024000
-        obj.vif_outbound_average = 1024000
-        obj.vif_outbound_peak = 10240000
-        obj.vif_outbound_burst = 1024000
+        obj.vif_inbound_average = 16384
+        obj.vif_inbound_peak = 32768
+        obj.vif_inbound_burst = 3276
+        obj.vif_outbound_average = 32768
+        obj.vif_outbound_peak = 65536
+        obj.vif_outbound_burst = 6553
 
         xml = obj.to_xml()
         self.assertXmlEqual(xml, """
@@ -1311,8 +1311,8 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
                 <parameter name="IP" value="192.168.122.1"/>
               </filterref>
               <bandwidth>
-                <inbound average="1024000" peak="10240000" burst="1024000"/>
-                <outbound average="1024000" peak="10240000" burst="1024000"/>
+                <inbound average="16384" peak="32768" burst="3276"/>
+                <outbound average="32768" peak="65536" burst="6553"/>
               </bandwidth>
             </interface>""")
 
@@ -1336,6 +1336,21 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
               <virtualport type="openvswitch">
                 <parameters instanceid="foobar"/>
               </virtualport>
+            </interface>""")
+
+    def test_config_bridge_xen(self):
+        obj = config.LibvirtConfigGuestInterface()
+        obj.net_type = "bridge"
+        obj.source_dev = "br0"
+        obj.mac_addr = "CA:FE:BE:EF:CA:FE"
+        obj.script = "/path/to/test-vif-openstack"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <interface type="bridge">
+              <mac address="CA:FE:BE:EF:CA:FE"/>
+              <source bridge="br0"/>
+              <script path="/path/to/test-vif-openstack"/>
             </interface>""")
 
     def test_config_8021Qbh(self):

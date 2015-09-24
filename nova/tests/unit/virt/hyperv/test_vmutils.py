@@ -121,7 +121,7 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
     def test_lookup_vm_none(self):
         self._vmutils._conn.Msvm_ComputerSystem.return_value = []
-        self.assertRaises(exception.NotFound,
+        self.assertRaises(exception.InstanceNotFound,
                           self._vmutils._lookup_vm_check,
                           self._FAKE_VM_NAME)
 
@@ -396,6 +396,17 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
             mock_add_virt_res.assert_called_with(mock_nic, self._FAKE_VM_PATH)
 
+    @mock.patch.object(vmutils.VMUtils, '_get_nic_data_by_name')
+    def test_destroy_nic(self, mock_get_nic_data_by_name):
+        self._lookup_vm()
+        fake_nic_data = mock_get_nic_data_by_name.return_value
+        with mock.patch.object(self._vmutils,
+                '_remove_virt_resource') as mock_rem_virt_res:
+            self._vmutils.destroy_nic(self._FAKE_VM_NAME,
+                                      mock.sentinel.FAKE_NIC_NAME)
+            mock_rem_virt_res.assert_called_once_with(fake_nic_data,
+                                                      self._FAKE_VM_PATH)
+
     def test_set_vm_state(self):
         mock_vm = self._lookup_vm()
         mock_vm.RequestStateChange.return_value = (
@@ -432,6 +443,11 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
     def test_wait_for_job_done(self):
         mockjob = self._prepare_wait_for_job(constants.WMI_JOB_STATE_COMPLETED)
+        job = self._vmutils._wait_for_job(self._FAKE_JOB_PATH)
+        self.assertEqual(mockjob, job)
+
+    def test_wait_for_job_killed(self):
+        mockjob = self._prepare_wait_for_job(constants.JOB_STATE_KILLED)
         job = self._vmutils._wait_for_job(self._FAKE_JOB_PATH)
         self.assertEqual(mockjob, job)
 
@@ -863,3 +879,40 @@ class VMUtilsTestCase(test.NoDBTestCase):
                 fields=[self._vmutils._VM_ENABLED_STATE_PROP])
 
             self.assertEqual(watcher.return_value, listener)
+
+    def test_get_vm_generation_gen1(self):
+        ret = self._vmutils.get_vm_generation(mock.sentinel.FAKE_VM_NAME)
+        self.assertEqual(constants.VM_GEN_1, ret)
+
+    def test_stop_vm_jobs(self):
+        mock_vm = self._lookup_vm()
+
+        mock_job1 = mock.MagicMock(Cancellable=True)
+        mock_job2 = mock.MagicMock(Cancellable=True)
+        mock_job3 = mock.MagicMock(Cancellable=True)
+
+        mock_job1.JobState = 2
+        mock_job2.JobState = 3
+        mock_job3.JobState = constants.JOB_STATE_KILLED
+
+        mock_vm_jobs = [mock_job1, mock_job2, mock_job3]
+
+        mock_vm.associators.return_value = mock_vm_jobs
+
+        self._vmutils.stop_vm_jobs(mock.sentinel.FAKE_VM_NAME)
+
+        mock_job1.RequestStateChange.assert_called_once_with(
+            self._vmutils._KILL_JOB_STATE_CHANGE_REQUEST)
+        mock_job2.RequestStateChange.assert_called_once_with(
+            self._vmutils._KILL_JOB_STATE_CHANGE_REQUEST)
+        self.assertFalse(mock_job3.RequestStateChange.called)
+
+    def test_is_job_completed_true(self):
+        job = mock.MagicMock(JobState=constants.JOB_STATE_COMPLETED)
+
+        self.assertTrue(self._vmutils._is_job_completed(job))
+
+    def test_is_job_completed_false(self):
+        job = mock.MagicMock(JobState=constants.WMI_JOB_STATE_RUNNING)
+
+        self.assertFalse(self._vmutils._is_job_completed(job))

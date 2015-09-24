@@ -12,6 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import copy
+
 from nova.api.validation import parameter_types
 
 
@@ -21,7 +23,7 @@ create = {
         'cell': {
             'type': 'object',
             'properties': {
-                'name': parameter_types.name,
+                'name': parameter_types.cell_name,
                 'type': {
                     'type': 'string',
                     'enum': ['parent', 'child'],
@@ -55,13 +57,18 @@ create = {
 }
 
 
+create_v20 = copy.deepcopy(create)
+create_v20['properties']['cell']['properties']['name'] = (parameter_types.
+    cell_name_leading_trailing_spaces)
+
+
 update = {
     'type': 'object',
     'properties': {
         'cell': {
             'type': 'object',
             'properties': {
-                'name': parameter_types.name,
+                'name': parameter_types.cell_name,
                 'type': {
                     'type': 'string',
                     'enum': ['parent', 'child'],
@@ -83,6 +90,11 @@ update = {
     'required': ['cell'],
     'additionalProperties': False,
 }
+
+
+update_v20 = copy.deepcopy(create)
+update_v20['properties']['cell']['properties']['name'] = (parameter_types.
+    cell_name_leading_trailing_spaces)
 
 
 sync_instances = {

@@ -46,13 +46,23 @@ _hints = {
         # NOTE: The value of 'target_cell' is the cell name what cell
         # a new server is scheduled on.
         'target_cell': parameter_types.name,
+        'different_cell': {
+            'type': ['string', 'array'],
+            'items': {
+                'type': 'string'
+            }
+        },
         'build_near_host_ip': parameter_types.ip_address,
         'cidr': {
             'type': 'string',
             'pattern': '^\/[0-9a-f.:]+$'
         },
     },
-    'additionalProperties': False
+    # NOTE: As this Mail:
+    # http://lists.openstack.org/pipermail/openstack-dev/2015-June/067996.html
+    # pointed out the limit the scheduler-hints in the API is problematic. So
+    # relax it.
+    'additionalProperties': True
 }
 
 

@@ -423,6 +423,9 @@ MIN_LIBVIRT_SET_ADMIN_PASSWD = (1, 2, 16)
 MIN_LIBVIRT_KVM_S390_VERSION = (1, 2, 13)
 MIN_QEMU_S390_VERSION = (2, 3, 0)
 
+# Names of the types that do not get compressed during migration
+NO_COMPRESSION_TYPES = ('qcow2',)
+
 
 class LibvirtDriver(driver.ComputeDriver):
     capabilities = {
@@ -492,13 +495,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         self._sysinfo_serial_func = sysinfo_serial_funcs.get(
             CONF.libvirt.sysinfo_serial)
-        if not self._sysinfo_serial_func:
-            raise exception.NovaException(
-                _("Unexpected sysinfo_serial setting '%(actual)s'. "
-                  "Permitted values are %(expect)s'") %
-                  {'actual': CONF.libvirt.sysinfo_serial,
-                   'expect': ', '.join("'%s'" % k for k in
-                                       sysinfo_serial_funcs.keys())})
 
         self.job_tracker = instancejobtracker.InstanceJobTracker()
         self._remotefs = remotefs.RemoteFilesystem()
@@ -911,7 +907,7 @@ class LibvirtDriver(driver.ComputeDriver):
         if destroy_disks:
             # NOTE(haomai): destroy volumes if needed
             if CONF.libvirt.images_type == 'lvm':
-                self._cleanup_lvm(instance)
+                self._cleanup_lvm(instance, block_device_info)
             if CONF.libvirt.images_type == 'rbd':
                 self._cleanup_rbd(instance)
 
@@ -930,30 +926,29 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if CONF.serial_console.enabled:
             try:
-                serials = self._get_serial_ports_from_instance(instance)
+                guest = self._host.get_guest(instance)
+                serials = self._get_serial_ports_from_guest(guest)
+                for hostname, port in serials:
+                    serial_console.release_port(host=hostname, port=port)
             except exception.InstanceNotFound:
-                # Serial ports already gone. Nothing to release.
-                serials = ()
-            for hostname, port in serials:
-                serial_console.release_port(host=hostname, port=port)
+                pass
 
         self._undefine_domain(instance)
 
-    def _detach_encrypted_volumes(self, instance):
+    def _detach_encrypted_volumes(self, instance, block_device_info):
         """Detaches encrypted volumes attached to instance."""
-        disks = jsonutils.loads(self.get_instance_disk_info(instance))
+        disks = jsonutils.loads(self.get_instance_disk_info(instance,
+                                                            block_device_info))
         encrypted_volumes = filter(dmcrypt.is_encrypted,
                                    [disk['path'] for disk in disks])
         for path in encrypted_volumes:
             dmcrypt.delete_volume(path)
 
-    def _get_serial_ports_from_instance(self, instance, mode=None):
-        """Returns an iterator over serial port(s) configured on instance.
+    def _get_serial_ports_from_guest(self, guest, mode=None):
+        """Returns an iterator over serial port(s) configured on guest.
 
         :param mode: Should be a value in (None, bind, connect)
         """
-        guest = self._host.get_guest(instance)
-
         xml = guest.get_xml_desc()
         tree = etree.fromstring(xml)
 
@@ -979,10 +974,10 @@ class LibvirtDriver(driver.ComputeDriver):
     def _cleanup_rbd(self, instance):
         LibvirtDriver._get_rbd_driver().cleanup_volumes(instance)
 
-    def _cleanup_lvm(self, instance):
+    def _cleanup_lvm(self, instance, block_device_info):
         """Delete all LVM disks for given instance object."""
         if instance.get('ephemeral_key_uuid') is not None:
-            self._detach_encrypted_volumes(instance)
+            self._detach_encrypted_volumes(instance, block_device_info)
 
         disks = self._lvm_disks(instance)
         if disks:
@@ -1929,8 +1924,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
             rebase_disk = my_dev
             rebase_base = delete_info['file_to_merge']  # often None
-            if active_protocol is not None:
-                rebase_base = _get_snap_dev(delete_info['file_to_merge'],
+            if (active_protocol is not None) and (rebase_base is not None):
+                rebase_base = _get_snap_dev(rebase_base,
                                             active_disk_object.backing_store)
 
             # NOTE(deepakcs): libvirt added support for _RELATIVE in v1.2.7,
@@ -2596,8 +2591,9 @@ class LibvirtDriver(driver.ComputeDriver):
         return ctype.ConsoleSpice(host=host, port=ports[0], tlsPort=ports[1])
 
     def get_serial_console(self, context, instance):
-        for hostname, port in self._get_serial_ports_from_instance(
-                instance, mode='bind'):
+        guest = self._host.get_guest(instance)
+        for hostname, port in self._get_serial_ports_from_guest(
+                guest, mode='bind'):
             return ctype.ConsoleSerial(host=hostname, port=port)
         raise exception.ConsoleTypeUnavailable(console_type='serial')
 
@@ -2959,10 +2955,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 config_drive_image.import_file(
                     instance, configdrive_path, 'disk.config' + suffix)
             finally:
-                # NOTE(mikal): if the config drive was imported into RBD, then
-                # we no longer need the local copy
-                if CONF.libvirt.images_type == 'rbd':
-                    os.unlink(configdrive_path)
+                config_drive_image.import_file_cleanup(configdrive_path)
 
         # File injection only if needed
         elif inject_files and CONF.libvirt.inject_partition != -2:
@@ -4718,6 +4711,7 @@ class LibvirtDriver(driver.ComputeDriver):
         cpu_info['vendor'] = caps.host.cpu.vendor
 
         topology = dict()
+        topology['cells'] = len(getattr(caps.host.topology, 'cells', [1]))
         topology['sockets'] = caps.host.cpu.sockets
         topology['cores'] = caps.host.cpu.cores
         topology['threads'] = caps.host.cpu.threads
@@ -5174,6 +5168,19 @@ class LibvirtDriver(driver.ComputeDriver):
                                     dest_check_data['disk_available_mb'],
                                     dest_check_data['disk_over_commit'],
                                     block_device_info)
+            if block_device_info:
+                bdm = block_device_info.get('block_device_mapping')
+                # NOTE(stpierre): if this instance has mapped volumes,
+                # we can't do a block migration, since that will
+                # result in volumes being copied from themselves to
+                # themselves, which is a recipe for disaster.
+                if bdm and len(bdm):
+                    LOG.error(_LE('Cannot block migrate instance %s with '
+                                  'mapped volumes'),
+                              instance.uuid, instance=instance)
+                    msg = (_('Cannot block migrate instance %s with mapped '
+                             'volumes') % instance.uuid)
+                    raise exception.MigrationPreCheckError(reason=msg)
 
         elif not (dest_check_data['is_shared_block_storage'] or
                   dest_check_data['is_shared_instance_path'] or
@@ -5420,7 +5427,7 @@ class LibvirtDriver(driver.ComputeDriver):
                              post_method, recover_method, block_migration,
                              migrate_data)
 
-    def _update_xml(self, xml_str, volume, listen_addrs):
+    def _update_xml(self, xml_str, volume, listen_addrs, serial_listen_addr):
         xml_doc = etree.fromstring(xml_str)
 
         if volume:
@@ -5429,6 +5436,10 @@ class LibvirtDriver(driver.ComputeDriver):
             xml_doc = self._update_graphics_xml(xml_doc, listen_addrs)
         else:
             self._check_graphics_addresses_can_live_migrate(listen_addrs)
+        if serial_listen_addr:
+            xml_doc = self._update_serial_xml(xml_doc, serial_listen_addr)
+        else:
+            self._verify_serial_console_is_disabled()
 
         return etree.tostring(xml_doc)
 
@@ -5489,6 +5500,17 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return xml_doc
 
+    def _update_serial_xml(self, xml_doc, listen_addr):
+        for dev in xml_doc.findall("./devices/serial[@type='tcp']/source"):
+            if dev.get('host') is not None:
+                dev.set('host', listen_addr)
+
+        for dev in xml_doc.findall("./devices/console[@type='tcp']/source"):
+            if dev.get('host') is not None:
+                dev.set('host', listen_addr)
+
+        return xml_doc
+
     def _check_graphics_addresses_can_live_migrate(self, listen_addrs):
         LOCAL_ADDRS = ('0.0.0.0', '127.0.0.1', '::', '::1')
 
@@ -5529,6 +5551,18 @@ class LibvirtDriver(driver.ComputeDriver):
                              ' continue to listen on the current'
                              ' addresses.'))
 
+    def _verify_serial_console_is_disabled(self):
+        if CONF.serial_console.enabled:
+
+            msg = _('Your libvirt version does not support the'
+                    ' VIR_DOMAIN_XML_MIGRATABLE flag or your'
+                    ' destination node does not support'
+                    ' retrieving listen addresses.  In order'
+                    ' for live migration to work properly you'
+                    ' must either disable serial console or'
+                    ' upgrade your libvirt version.')
+            raise exception.MigrationError(reason=msg)
+
     def _live_migration_operation(self, context, instance, dest,
                                   block_migration, migrate_data, dom):
         """Invoke the live migration operation
@@ -5560,13 +5594,18 @@ class LibvirtDriver(driver.ComputeDriver):
                                         'pre_live_migration_result', {})
             listen_addrs = pre_live_migrate_data.get('graphics_listen_addrs')
             volume = pre_live_migrate_data.get('volume')
+            serial_listen_addr = pre_live_migrate_data.get(
+                                     'serial_listen_addr')
 
             migratable_flag = getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
                                       None)
 
             if (migratable_flag is None or
                     (listen_addrs is None and not volume)):
+                # TODO(alexs-h): These checks could be moved to the
+                # check_can_live_migrate_destination/source phase
                 self._check_graphics_addresses_can_live_migrate(listen_addrs)
+                self._verify_serial_console_is_disabled()
                 dom.migrateToURI(CONF.libvirt.live_migration_uri % dest,
                                  logical_sum,
                                  None,
@@ -5575,7 +5614,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 old_xml_str = guest.get_xml_desc(dump_migratable=True)
                 new_xml_str = self._update_xml(old_xml_str,
                                                volume,
-                                               listen_addrs)
+                                               listen_addrs,
+                                               serial_listen_addr)
                 try:
                     dom.migrateToURI2(CONF.libvirt.live_migration_uri % dest,
                                       None,
@@ -5603,6 +5643,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                  instance=instance)
                         self._check_graphics_addresses_can_live_migrate(
                             listen_addrs)
+                        self._verify_serial_console_is_disabled()
                         dom.migrateToURI(
                             CONF.libvirt.live_migration_uri % dest,
                             logical_sum,
@@ -5815,7 +5856,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     # Leave type untouched
                 else:
                     try:
-                        if dom.isActive():
+                        if guest.is_active():
                             LOG.debug("VM running on src, migration failed",
                                       instance=instance)
                             info.type = libvirt.VIR_DOMAIN_JOB_FAILED
@@ -6183,18 +6224,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 instance, CONF.libvirt.virt_type, image_meta, vol)
             self._connect_volume(connection_info, disk_info)
 
-        if is_block_migration and len(block_device_mapping):
-            # NOTE(stpierre): if this instance has mapped volumes,
-            # we can't do a block migration, since that will
-            # result in volumes being copied from themselves to
-            # themselves, which is a recipe for disaster.
-            LOG.error(
-                _LE('Cannot block migrate instance %s with mapped volumes'),
-                instance.uuid, instance=instance)
-            msg = (_('Cannot block migrate instance %s with mapped volumes') %
-                   instance.uuid)
-            raise exception.MigrationError(reason=msg)
-
         # We call plug_vifs before the compute manager calls
         # ensure_filtering_rules_for_instance, to ensure bridge is set up
         # Retry operation is necessary because continuously request comes,
@@ -6217,9 +6246,12 @@ class LibvirtDriver(driver.ComputeDriver):
                     greenthread.sleep(1)
 
         # Store vncserver_listen and latest disk device info
-        res_data = {'graphics_listen_addrs': {}, 'volume': {}}
+        res_data = {'graphics_listen_addrs': {}, 'volume': {},
+                    'serial_listen_addr': {}}
         res_data['graphics_listen_addrs']['vnc'] = CONF.vnc.vncserver_listen
         res_data['graphics_listen_addrs']['spice'] = CONF.spice.server_listen
+        res_data['serial_listen_addr'] = \
+                CONF.serial_console.proxyclient_address
         for vol in block_device_mapping:
             connection_info = vol['connection_info']
             if connection_info.get('serial'):
@@ -6694,9 +6726,11 @@ class LibvirtDriver(driver.ComputeDriver):
                         instance, process.pid)
                     on_completion = lambda process: self.job_tracker.\
                         remove_job(instance, process.pid)
+                    compression = info['type'] not in NO_COMPRESSION_TYPES
                     libvirt_utils.copy_image(from_path, img_path, host=dest,
                                              on_execute=on_execute,
-                                             on_completion=on_completion)
+                                             on_completion=on_completion,
+                                             compression=compression)
         except Exception:
             with excutils.save_and_reraise_exception():
                 self._cleanup_remote_migration(dest, inst_base,
@@ -6828,6 +6862,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                     self._wait_for_running,
                                                     instance)
             timer.start(interval=0.5).wait()
+
+        LOG.debug("finish_migration finished successfully.", instance=instance)
 
     def _cleanup_failed_migration(self, inst_base):
         """Make sure that a failed migrate doesn't prevent us from rolling

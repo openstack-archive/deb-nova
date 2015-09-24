@@ -83,7 +83,7 @@ class ConductorManager(manager.Manager):
     namespace.  See the ComputeTaskManager class for details.
     """
 
-    target = messaging.Target(version='2.2')
+    target = messaging.Target(version='2.3')
 
     def __init__(self, *args, **kwargs):
         super(ConductorManager, self).__init__(service_name='conductor',
@@ -95,6 +95,7 @@ class ConductorManager(manager.Manager):
         self.compute_task_mgr = ComputeTaskManager()
         self.cells_rpcapi = cells_rpcapi.CellsAPI()
         self.additional_endpoints.append(self.compute_task_mgr)
+        self.additional_endpoints.append(_ConductorManagerV3Proxy(self))
 
     @property
     def network_api(self):
@@ -327,6 +328,7 @@ class ConductorManager(manager.Manager):
     def service_destroy(self, context, service_id):
         self.db.service_destroy(context, service_id)
 
+    # NOTE(hanlind): This method can be removed in version 3.0 of the RPC API
     def compute_node_create(self, context, values):
         result = self.db.compute_node_create(context, values)
         return jsonutils.to_primitive(result)
@@ -446,6 +448,7 @@ class ConductorManager(manager.Manager):
         except Exception:
             raise messaging.ExpectedException()
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def object_class_action(self, context, objname, objmethod,
                             objver, args, kwargs):
         """Perform a classmethod action on an object."""
@@ -457,6 +460,20 @@ class ConductorManager(manager.Manager):
         # but in this case, we need to honor the version the client is
         # asking for, so we do it before returning here.
         return (result.obj_to_primitive(target_version=objver)
+                if isinstance(result, nova_object.NovaObject) else result)
+
+    def object_class_action_versions(self, context, objname, objmethod,
+                                     object_versions, args, kwargs):
+        objclass = nova_object.NovaObject.obj_class_from_name(
+            objname, object_versions[objname])
+        args = tuple([context] + list(args))
+        result = self._object_dispatch(objclass, objmethod, args, kwargs)
+        # NOTE(danms): The RPC layer will convert to primitives for us,
+        # but in this case, we need to honor the version the client is
+        # asking for, so we do it before returning here.
+        return (result.obj_to_primitive(
+            target_version=object_versions[objname],
+            version_manifest=object_versions)
                 if isinstance(result, nova_object.NovaObject) else result)
 
     def object_action(self, context, objinst, objmethod, args, kwargs):
@@ -479,16 +496,18 @@ class ConductorManager(manager.Manager):
         updates['obj_what_changed'] = objinst.obj_what_changed()
         return updates, result
 
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def object_backport(self, context, objinst, target_version):
         return objinst.obj_to_primitive(target_version=target_version)
 
     def object_backport_versions(self, context, objinst, object_versions):
         target = object_versions[objinst.obj_name()]
         LOG.debug('Backporting %(obj)s to %(ver)s with versions %(manifest)s',
-                  obj=objinst.obj_name(), ver=target,
-                  manifest=','.join(
-                      ['%s=%s' % (name, ver)
-                       for name, ver in object_versions.items()]))
+                  {'obj': objinst.obj_name(),
+                   'ver': target,
+                   'manifest': ','.join(
+                       ['%s=%s' % (name, ver)
+                       for name, ver in object_versions.items()])})
         return objinst.obj_to_primitive(target_version=target,
                                         version_manifest=object_versions)
 
@@ -840,6 +859,7 @@ class ComputeTaskManager(base.Base):
 
         with compute_utils.EventReporter(context, 'rebuild_server',
                                           instance.uuid):
+            node = limits = None
             if not host:
                 # NOTE(lcostantino): Retrieve scheduler filters for the
                 # instance when the feature is available
@@ -853,7 +873,10 @@ class ComputeTaskManager(base.Base):
                     hosts = self.scheduler_client.select_destinations(context,
                                                             request_spec,
                                                             filter_properties)
-                    host = hosts.pop(0)['host']
+                    host_dict = hosts.pop(0)
+                    host, node, limits = (host_dict['host'],
+                                          host_dict['nodename'],
+                                          host_dict['limits'])
                 except exception.NoValidHost as ex:
                     with excutils.save_and_reraise_exception():
                         self._set_vm_state_and_notify(context, instance.uuid,
@@ -872,6 +895,14 @@ class ComputeTaskManager(base.Base):
                                         "cannot be rebuilt"),
                                     instance=instance)
 
+            try:
+                migration = objects.Migration.get_by_instance_and_status(
+                    context, instance.uuid, 'accepted')
+            except exception.MigrationNotFoundByStatus:
+                LOG.debug("No migration record for the rebuild/evacuate "
+                          "request.", instance=instance)
+                migration = None
+
             compute_utils.notify_about_instance_usage(
                 self.notifier, context, instance, "rebuild.scheduled")
 
@@ -886,4 +917,29 @@ class ComputeTaskManager(base.Base):
                     recreate=recreate,
                     on_shared_storage=on_shared_storage,
                     preserve_ephemeral=preserve_ephemeral,
-                    host=host)
+                    migration=migration,
+                    host=host, node=node, limits=limits)
+
+
+class _ConductorManagerV3Proxy(object):
+
+    target = messaging.Target(version='3.0')
+
+    def __init__(self, manager):
+        self.manager = manager
+
+    def provider_fw_rule_get_all(self, context):
+        return self.manager.provider_fw_rule_get_all(context)
+
+    def object_class_action_versions(self, context, objname, objmethod,
+                                     object_versions, args, kwargs):
+        return self.manager.object_class_action_versions(
+                context, objname, objmethod, object_versions, args, kwargs)
+
+    def object_action(self, context, objinst, objmethod, args, kwargs):
+        return self.manager.object_action(context, objinst, objmethod, args,
+                                          kwargs)
+
+    def object_backport_versions(self, context, objinst, object_versions):
+        return self.manager.object_backport_versions(context, objinst,
+                                                     object_versions)

@@ -88,9 +88,6 @@ VMWARE_POWER_STATES = {
 
 RESIZE_TOTAL_STEPS = 6
 
-DcInfo = collections.namedtuple('DcInfo',
-                                ['ref', 'name', 'vmFolder'])
-
 
 class VirtualMachineInstanceConfigInfo(object):
     """Parameters needed to create and configure a new instance."""
@@ -165,7 +162,6 @@ class VMwareVMOps(object):
         self._datastore_regex = datastore_regex
         self._base_folder = self._get_base_folder()
         self._tmp_folder = 'vmware_temp'
-        self._datastore_dc_mapping = {}
         self._datastore_browser_mapping = {}
         self._imagecache = imagecache.ImageCacheManager(self._session,
                                                         self._base_folder)
@@ -820,9 +816,10 @@ class VMwareVMOps(object):
                             datastore, file_path):
         """Attach cdrom to VM by reconfiguration."""
         client_factory = self._session.vim.client.factory
-        devices = self._session._call_method(vim_util,
-                                    "get_dynamic_property", vm_ref,
-                                    "VirtualMachine", "config.hardware.device")
+        devices = self._session._call_method(vutil,
+                                             "get_object_property",
+                                             vm_ref,
+                                             "config.hardware.device")
         (controller_key, unit_number,
          controller_spec) = vm_util.allocate_controller_key_and_unit_number(
                                                     client_factory,
@@ -851,9 +848,10 @@ class VMwareVMOps(object):
                     quiesce=True)
         self._session._wait_for_task(snapshot_task)
         LOG.debug("Created Snapshot of the VM instance", instance=instance)
-        task_info = self._session._call_method(vim_util,
-                                               "get_dynamic_property",
-                                               snapshot_task, "Task", "info")
+        task_info = self._session._call_method(vutil,
+                                               "get_object_property",
+                                               snapshot_task,
+                                               "info")
         snapshot = task_info.result
         return snapshot
 
@@ -893,9 +891,10 @@ class VMwareVMOps(object):
         self._session._wait_for_task(vm_clone_task)
         LOG.info(_LI("Created linked-clone VM from snapshot"),
                  instance=instance)
-        task_info = self._session._call_method(vim_util,
-                                               "get_dynamic_property",
-                                               vm_clone_task, "Task", "info")
+        task_info = self._session._call_method(vutil,
+                                               "get_object_property",
+                                               vm_clone_task,
+                                               "info")
         return task_info.result
 
     def snapshot(self, context, instance, image_id, update_task_state):
@@ -1084,9 +1083,10 @@ class VMwareVMOps(object):
     def suspend(self, instance):
         """Suspend the specified instance."""
         vm_ref = vm_util.get_vm_ref(self._session, instance)
-        pwr_state = self._session._call_method(vim_util,
-                    "get_dynamic_property", vm_ref,
-                    "VirtualMachine", "runtime.powerState")
+        pwr_state = self._session._call_method(vutil,
+                                               "get_object_property",
+                                               vm_ref,
+                                               "runtime.powerState")
         # Only PoweredOn VMs can be suspended.
         if pwr_state == "poweredOn":
             LOG.debug("Suspending the VM", instance=instance)
@@ -1105,9 +1105,10 @@ class VMwareVMOps(object):
     def resume(self, instance):
         """Resume the specified instance."""
         vm_ref = vm_util.get_vm_ref(self._session, instance)
-        pwr_state = self._session._call_method(vim_util,
-                                     "get_dynamic_property", vm_ref,
-                                     "VirtualMachine", "runtime.powerState")
+        pwr_state = self._session._call_method(vutil,
+                                               "get_object_property",
+                                               vm_ref,
+                                               "runtime.powerState")
         if pwr_state.lower() == "suspended":
             LOG.debug("Resuming the VM", instance=instance)
             suspend_task = self._session._call_method(
@@ -1120,9 +1121,10 @@ class VMwareVMOps(object):
             raise exception.InstanceResumeFailure(reason=reason)
 
     def _get_rescue_device(self, instance, vm_ref):
-        hardware_devices = self._session._call_method(vim_util,
-                        "get_dynamic_property", vm_ref,
-                        "VirtualMachine", "config.hardware.device")
+        hardware_devices = self._session._call_method(vutil,
+                                                      "get_object_property",
+                                                      vm_ref,
+                                                      "config.hardware.device")
         return vm_util.find_rescue_device(hardware_devices,
                                           instance)
 
@@ -1513,10 +1515,10 @@ class VMwareVMOps(object):
     def _get_vnc_console_connection(self, instance):
         """Return connection info for a vnc console."""
         vm_ref = vm_util.get_vm_ref(self._session, instance)
-        opt_value = self._session._call_method(vim_util,
-                               'get_dynamic_property',
-                               vm_ref, 'VirtualMachine',
-                               vm_util.VNC_CONFIG_KEY)
+        opt_value = self._session._call_method(vutil,
+                                               'get_object_property',
+                                               vm_ref,
+                                               vm_util.VNC_CONFIG_KEY)
         if opt_value:
             port = int(opt_value.value)
         else:
@@ -1589,9 +1591,10 @@ class VMwareVMOps(object):
     def _get_ds_browser(self, ds_ref):
         ds_browser = self._datastore_browser_mapping.get(ds_ref.value)
         if not ds_browser:
-            ds_browser = self._session._call_method(
-                vim_util, "get_dynamic_property", ds_ref, "Datastore",
-                "browser")
+            ds_browser = self._session._call_method(vutil,
+                                                    "get_object_property",
+                                                    ds_ref,
+                                                    "browser")
             self._datastore_browser_mapping[ds_ref.value] = ds_browser
         return ds_browser
 
@@ -1734,9 +1737,11 @@ class VMwareVMOps(object):
                         "VM") % vif['id']
                 raise exception.NotFound(msg)
 
-            hardware_devices = self._session._call_method(vim_util,
-                            "get_dynamic_property", vm_ref,
-                            "VirtualMachine", "config.hardware.device")
+            hardware_devices = self._session._call_method(
+                                                    vutil,
+                                                    "get_object_property",
+                                                    vm_ref,
+                                                    "config.hardware.device")
             device = vmwarevif.get_network_device(hardware_devices,
                                                   vif['address'])
             if device is None:
@@ -1893,39 +1898,9 @@ class VMwareVMOps(object):
                     vi.root_gb * units.Mi, linked_clone,
                     disk_io_limits=vi._extra_specs.disk_io_limits)
 
-    def _update_datacenter_cache_from_objects(self, dcs):
-        """Updates the datastore/datacenter cache."""
-
-        while dcs:
-            for dco in dcs.objects:
-                dc_ref = dco.obj
-                ds_refs = []
-                prop_dict = vm_util.propset_dict(dco.propSet)
-                name = prop_dict.get('name')
-                vmFolder = prop_dict.get('vmFolder')
-                datastore_refs = prop_dict.get('datastore')
-                if datastore_refs:
-                    datastore_refs = datastore_refs.ManagedObjectReference
-                    for ds in datastore_refs:
-                        ds_refs.append(ds.value)
-                else:
-                    LOG.debug("Datacenter %s doesn't have any datastore "
-                              "associated with it, ignoring it", name)
-                for ds_ref in ds_refs:
-                    self._datastore_dc_mapping[ds_ref] = DcInfo(ref=dc_ref,
-                            name=name, vmFolder=vmFolder)
-            dcs = self._session._call_method(vutil, 'continue_retrieval',
-                                             dcs)
-
     def get_datacenter_ref_and_name(self, ds_ref):
         """Get the datacenter name and the reference."""
-        dc_info = self._datastore_dc_mapping.get(ds_ref.value)
-        if not dc_info:
-            dcs = self._session._call_method(vim_util, "get_objects",
-                    "Datacenter", ["name", "datastore", "vmFolder"])
-            self._update_datacenter_cache_from_objects(dcs)
-            dc_info = self._datastore_dc_mapping.get(ds_ref.value)
-        return dc_info
+        return ds_util.get_dc_info(self._session, ds_ref)
 
     def list_instances(self):
         """Lists the VM instances that are registered with vCenter cluster."""

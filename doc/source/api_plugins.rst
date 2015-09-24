@@ -26,8 +26,8 @@ out being called v3 rather than v2.1. Where you see references to v3
 you can treat it as a reference to v2.1 with or without microversions
 support.
 
-The original V2 API plugins live in ``nova/api/openstack/compute/contrib``
-and the V2.1 plugins live in ``nova/api/openstack/compute/plugins/v3``.
+The original V2 API plugins live in ``nova/api/openstack/compute/legacy_v2``
+and the V2.1 plugins live in ``nova/api/openstack/compute``.
 
 Note that any change to the Nova API to be merged will first require a
 spec be approved first. See `here <https://github.com/openstack/nova-specs>`_
@@ -66,7 +66,7 @@ A very basic skeleton of a v2.1 plugin can be seen `here in the unittests <http:
         # If a method is not definied a request to it will be a 404 response
 
         # It is also possible to define support for further responses
-        # See `servers.py <http://git.openstack.org/cgit/openstack/nova/tree/nova/nova/api/openstack/compute/plugins/v3/servers.py>`_.
+        # See `servers.py <http://git.openstack.org/cgit/openstack/nova/tree/nova/nova/api/openstack/compute/servers.py>`_.
 
 
     class Basic(extensions.V3APIExtensionBase):
@@ -85,7 +85,7 @@ A very basic skeleton of a v2.1 plugin can be seen `here in the unittests <http:
         def get_controller_extensions(self):
             return []
 
-All of these plugin files should live in the ``nova/api/openstack/compute/plugins/v3`` directory.
+All of these plugin files should live in the ``nova/api/openstack/compute`` directory.
 
 
 Policy
@@ -101,7 +101,7 @@ Modularity
 ~~~~~~~~~~
 
 The Nova REST API is separated into different plugins in the directory
-'nova/api/openstack/compute/plugins/v3/'
+'nova/api/openstack/compute/'
 
 Because microversions are supported in the Nova REST API, the API can be
 extended without any new plugin. But for code readability, the Nova REST API
@@ -123,18 +123,51 @@ code still needs modularity. Here are rules for how to separate modules:
   in existing extended models. New extended attributes needn't any namespace
   prefix anymore.
 
+JSON-Schema
+~~~~~~~~~~~
+
+The v2.1 API validates a REST request body with JSON-Schema library.
+Valid body formats are defined with JSON-Schema in the directory
+'nova/api/openstack/compute/schemas'. Each definition is used at the
+corresponding method with the ``validation.schema`` decorator like::
+
+    @validation.schema(schema.update_something)
+    def update(self, req, id, body):
+        ....
+
+Nova supports the extension of JSON-Schema definitions based on the
+loaded API extensions for some APIs. Stevedore library tries to find
+specific name methods which return additional parameters and extends
+them to the original JSON-Schema definitions.
+The following are the combinations of extensible API and method name
+which returns additional parameters:
+
+* Create a server API  - get_server_create_schema()
+* Update a server API  - get_server_update_schema()
+* Rebuild a server API - get_server_rebuild_schema()
+* Resize a server API  - get_server_resize_schema()
+
+For example, keypairs extension(Keypairs class) contains the method
+get_server_create_schema() which returns::
+
+    {
+        'key_name': parameter_types.name,
+    }
+
+then the parameter key_name is allowed on Create a server API.
+
 Support files
 -------------
 
 At least one entry needs to made in ``setup.cfg`` for each plugin.
-An entry point for the plugin must be added to nova.api.v3.extensions
+An entry point for the plugin must be added to nova.api.v21.extensions
 even if no resource or controller is added. Other entry points available
 are
 
-* Modify create behaviour (nova.api.v3.extensions.server.create)
-* Modify rebuild behaviour (nova.api.v3.extensions.server.rebuild)
-* Modify update behaviour (nova.api.v3.extensions.server.update)
-* Modify resize behaviour (nova.api.v3.extensions.server.resize)
+* Modify create behaviour (nova.api.v21.extensions.server.create)
+* Modify rebuild behaviour (nova.api.v21.extensions.server.rebuild)
+* Modify update behaviour (nova.api.v21.extensions.server.update)
+* Modify resize behaviour (nova.api.v21.extensions.server.resize)
 
 These are essentially hooks into the servers plugin which allow other
 plugins to modify behaviour without having to modify servers.py. In

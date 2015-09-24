@@ -112,8 +112,8 @@ class QuobyteTestCase(test.NoDBTestCase):
                                        utils.get_hash_str(quobyte_volume))
 
         def exec_side_effect(*cmd, **kwargs):
-            exerror = processutils.ProcessExecutionError()
-            exerror.message = "Device or resource busy"
+            exerror = processutils.ProcessExecutionError(
+                                       "Device or resource busy")
             raise exerror
         mock_execute.side_effect = exec_side_effect
 
@@ -313,8 +313,8 @@ class LibvirtQuobyteVolumeDriverTestCase(
         libvirt_driver.connect_volume(connection_info, self.disk_info)
         conf = libvirt_driver.get_config(connection_info, self.disk_info)
         tree = conf.format_dom()
-        self.assertEqual(tree.get('type'), 'file')
-        self.assertEqual(tree.find('./driver').get('type'), 'qcow2')
+        self.assertEqual('file', tree.get('type'))
+        self.assertEqual('qcow2', tree.find('./driver').get('type'))
 
         (mock_mount_volume.
          assert_called_once_with('192.168.1.1/volume-00001',
@@ -352,8 +352,8 @@ class LibvirtQuobyteVolumeDriverTestCase(
 
         libvirt_driver = quobyte.LibvirtQuobyteVolumeDriver(self.fake_conn)
         export_string = 'quobyte://192.168.1.1/volume-00001'
-        self.assertEqual(libvirt_driver._normalize_export(export_string),
-                         "192.168.1.1/volume-00001")
+        self.assertEqual("192.168.1.1/volume-00001",
+                         libvirt_driver._normalize_export(export_string))
 
     def test_libvirt_quobyte_driver_normalize_export_without_protocol(self):
         mnt_base = '/mnt'
@@ -361,5 +361,5 @@ class LibvirtQuobyteVolumeDriverTestCase(
 
         libvirt_driver = quobyte.LibvirtQuobyteVolumeDriver(self.fake_conn)
         export_string = '192.168.1.1/volume-00001'
-        self.assertEqual(libvirt_driver._normalize_export(export_string),
-                         "192.168.1.1/volume-00001")
+        self.assertEqual("192.168.1.1/volume-00001",
+                         libvirt_driver._normalize_export(export_string))

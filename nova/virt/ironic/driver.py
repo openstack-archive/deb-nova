@@ -112,6 +112,10 @@ _POWER_STATE_MAP = {
     ironic_states.POWER_OFF: power_state.SHUTDOWN,
 }
 
+_UNPROVISION_STATES = (ironic_states.ACTIVE, ironic_states.DEPLOYFAIL,
+                       ironic_states.ERROR, ironic_states.DEPLOYWAIT,
+                       ironic_states.DEPLOYING)
+
 
 def map_power_state(state):
     try:
@@ -727,6 +731,9 @@ class IronicDriver(virt_driver.ComputeDriver):
             information. Ignored by this driver.
         """
         LOG.debug('Spawn called for instance', instance=instance)
+
+        image_meta = objects.ImageMeta.from_dict(image_meta)
+
         # The compute manager is meant to know the node uuid, so missing uuid
         # is a significant issue. It may mean we've been passed the wrong data.
         node_uuid = instance.get('node')
@@ -899,10 +906,7 @@ class IronicDriver(virt_driver.ComputeDriver):
             #             without raising any exceptions.
             return
 
-        if node.provision_state in (ironic_states.ACTIVE,
-                                    ironic_states.DEPLOYFAIL,
-                                    ironic_states.ERROR,
-                                    ironic_states.DEPLOYWAIT):
+        if node.provision_state in _UNPROVISION_STATES:
             self._unprovision(self.ironicclient, instance, node)
 
         self._cleanup_deploy(context, node, instance, network_info)
@@ -1165,6 +1169,9 @@ class IronicDriver(virt_driver.ComputeDriver):
 
         """
         LOG.debug('Rebuild called for instance', instance=instance)
+
+        image_meta = objects.ImageMeta.from_dict(image_meta)
+
         instance.task_state = task_states.REBUILD_SPAWNING
         instance.save(expected_task_state=[task_states.REBUILDING])
 

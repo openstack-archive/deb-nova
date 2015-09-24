@@ -22,6 +22,7 @@ import platform
 from oslo_log import log as logging
 
 from nova.i18n import _, _LW
+from nova import objects
 from nova.virt import driver
 from nova.virt.hyperv import eventhandler
 from nova.virt.hyperv import hostops
@@ -80,6 +81,7 @@ class HyperVDriver(driver.ComputeDriver):
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
+        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._vmops.spawn(context, instance, image_meta, injected_files,
                           admin_password, network_info, block_device_info)
 
@@ -248,6 +250,7 @@ class HyperVDriver(driver.ComputeDriver):
     def finish_migration(self, context, migration, instance, disk_info,
                          network_info, image_meta, resize_instance,
                          block_device_info=None, power_on=True):
+        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._migrationops.finish_migration(context, migration, instance,
                                             disk_info, network_info,
                                             image_meta, resize_instance,
@@ -264,3 +267,9 @@ class HyperVDriver(driver.ComputeDriver):
 
     def get_console_output(self, context, instance):
         return self._vmops.get_console_output(instance)
+
+    def attach_interface(self, instance, image_meta, vif):
+        return self._vmops.attach_interface(instance, vif)
+
+    def detach_interface(self, instance, vif):
+        return self._vmops.detach_interface(instance, vif)

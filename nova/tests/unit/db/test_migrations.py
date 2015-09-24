@@ -800,6 +800,10 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertColumnExists(engine, 'compute_nodes',
                                 'ram_allocation_ratio')
 
+    def _check_302(self, engine, data):
+        self.assertIndexMembers(engine, 'instance_system_metadata',
+                                'instance_uuid', ['instance_uuid'])
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
                                test_base.DbTestCase,
@@ -865,6 +869,17 @@ class ProjectTestCase(test.NoDBTestCase):
                        "which is not supported:"
                        "\n\t%s" % '\n\t'.join(sorted(includes_downgrade)))
         self.assertFalse(includes_downgrade, helpful_msg)
+
+
+class ExpandTest(test.NoDBTestCase):
+
+    @mock.patch('nova.db.sqlalchemy.migration._schedule_schema_changes')
+    @mock.patch('nova.db.sqlalchemy.migration._find_migrate_repo')
+    def test_dryrun(self, find_repo, schedule):
+        # we shouldn't lock the sqlalchemy migrate table on a dry run
+        schedule.return_value = [], [], []
+        sa_migration.db_expand(dryrun=True)
+        self.assertEqual([], find_repo.mock_calls)
 
 
 class SchemaChangeSchedulerTest(test.NoDBTestCase):

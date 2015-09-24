@@ -2176,10 +2176,17 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self._assertEqualListsOfInstances([instance], result)
 
     def test_instance_get_all_by_filters_unicode_value(self):
-        instance = self.create_instance_with_args(display_name=u'test♥')
+        i1 = self.create_instance_with_args(display_name=u'test♥')
+        i2 = self.create_instance_with_args(display_name=u'test')
+        i3 = self.create_instance_with_args(display_name=u'test♥test')
+        self.create_instance_with_args(display_name='diff')
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'display_name': u'test'})
-        self._assertEqualListsOfInstances([instance], result)
+        self._assertEqualListsOfInstances([i1, i2, i3], result)
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'display_name': u'test♥'})
+        self._assertEqualListsOfInstances(result, [i1, i3])
 
     def test_instance_get_all_by_filters_tags(self):
         instance = self.create_instance_with_args(
@@ -4532,6 +4539,28 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
                               self.ctxt, address, instance_uuid)
             self.assertEqual(1, mock_first.call_count)
 
+    def test_fixed_ip_associate_with_vif(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+        vif = db.virtual_interface_create(self.ctxt, {})
+        address = self.create_fixed_ip()
+
+        fixed_ip = db.fixed_ip_associate(self.ctxt, address, instance_uuid,
+                                         network_id=network['id'],
+                                         virtual_interface_id=vif['id'])
+
+        self.assertTrue(fixed_ip['allocated'])
+        self.assertEqual(vif['id'], fixed_ip['virtual_interface_id'])
+
+    def test_fixed_ip_associate_not_allocated_without_vif(self):
+        instance_uuid = self._create_instance()
+        address = self.create_fixed_ip()
+
+        fixed_ip = db.fixed_ip_associate(self.ctxt, address, instance_uuid)
+
+        self.assertFalse(fixed_ip['allocated'])
+        self.assertIsNone(fixed_ip['virtual_interface_id'])
+
     def test_fixed_ip_associate_pool_invalid_uuid(self):
         instance_uuid = '123'
         self.assertRaises(exception.InvalidUUID, db.fixed_ip_associate_pool,
@@ -5597,7 +5626,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
 
     def test_vol_usage_update_totals_update_when_blockdevicestats_reset(self):
         # This is unlikely to happen, but could when a volume is detached
-        # right after a instance has rebooted / recovered and before
+        # right after an instance has rebooted / recovered and before
         # the system polled and updated the volume usage cache table.
         ctxt = context.get_admin_context()
         now = timeutils.utcnow()
@@ -6143,7 +6172,7 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'network_id': network.id, 'allocated': True,
             'virtual_interface_id': virtual_interface.id})
         db.fixed_ip_associate(self.ctxt, ip, instance.uuid,
-            network.id)
+            network.id, virtual_interface_id=virtual_interface['id'])
         return network, instance
 
     def test_network_get_associated_default_route(self):
@@ -6717,6 +6746,13 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
                     'fixed_ips': {'in_use': 2, 'reserved': 2}}
         self.assertEqual(expected, db.quota_usage_get_all_by_project_and_user(
                          self.ctxt, 'p1', 'u1'))
+
+    def test_get_project_user_quota_usages_in_order(self):
+        _quota_reserve(self.ctxt, 'p1', 'u1')
+        with mock.patch.object(query.Query, 'order_by') as order_mock:
+            sqlalchemy_api._get_project_user_quota_usages(
+                self.ctxt, None, 'p1', 'u1')
+        self.assertTrue(order_mock.called)
 
     def test_quota_usage_update_nonexistent(self):
         self.assertRaises(exception.QuotaUsageNotFound, db.quota_usage_update,
@@ -8279,12 +8315,21 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         super(InstanceGroupDBApiTestCase, self).setUp()
         self.user_id = 'fake_user'
         self.project_id = 'fake_project'
+        self.new_user_id = 'new_user_id'
+        self.new_project_id = 'new_project_id'
         self.context = context.RequestContext(self.user_id, self.project_id)
+        self.new_context = context.RequestContext(self.new_user_id,
+                                                  self.new_project_id)
 
     def _get_default_values(self):
         return {'name': 'fake_name',
                 'user_id': self.user_id,
                 'project_id': self.project_id}
+
+    def _get_new_default_values(self):
+        return {'name': 'fake_new_name',
+                'user_id': self.new_user_id,
+                'project_id': self.new_project_id}
 
     def _create_instance_group(self, context, values, policies=None,
                                members=None):
@@ -8323,14 +8368,13 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_instance_group_update_simple(self):
         values = self._get_default_values()
         result1 = self._create_instance_group(self.context, values)
-        values = {'name': 'new_name', 'user_id': 'new_user',
-                  'project_id': 'new_project'}
+        values = {'name': 'new_name'}
         db.instance_group_update(self.context, result1['uuid'],
                                  values)
         result2 = db.instance_group_get(self.context, result1['uuid'])
         self.assertEqual(result1['uuid'], result2['uuid'])
         ignored_keys = ['id', 'uuid', 'deleted', 'deleted_at', 'updated_at',
-                        'created_at']
+                        'created_at', 'project_id', 'user_id']
         self._assertEqualObjects(result2, values, ignored_keys)
 
     def test_instance_group_delete(self):
@@ -8373,19 +8417,21 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         values = self._get_default_values()
         result1 = self._create_instance_group(self.context, values)
         groups = db.instance_group_get_all_by_project_id(self.context,
-                                                         'fake_project')
+                                                         self.project_id)
         self.assertEqual(1, len(groups))
-        values = self._get_default_values()
-        values['project_id'] = 'new_project_id'
-        result2 = self._create_instance_group(self.context, values)
+        values = self._get_new_default_values()
+        result2 = self._create_instance_group(self.new_context, values)
         groups = db.instance_group_get_all(self.context)
+        groups.extend(db.instance_group_get_all(self.new_context))
         results = [result1, result2]
         self._assertEqualListsOfObjects(results, groups)
-        projects = [{'name': 'fake_project', 'value': [result1]},
-                    {'name': 'new_project_id', 'value': [result2]}]
+        projects = [{'context': self.context, 'name': self.project_id,
+                     'value': [result1]},
+                    {'context': self.new_context, 'name': self.new_project_id,
+                     'value': [result2]}]
         for project in projects:
-            groups = db.instance_group_get_all_by_project_id(self.context,
-                                                             project['name'])
+            groups = db.instance_group_get_all_by_project_id(
+                project['context'], project['name'])
             self._assertEqualListsOfObjects(project['value'], groups)
 
     def test_instance_group_update(self):
@@ -8431,6 +8477,35 @@ class InstanceGroupDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                                    'instance_id1')
 
         self.assertEqual(group2.uuid, group1.uuid)
+
+    def test_instance_group_get_by_other_project_user(self):
+        values = self._get_default_values()
+        result = self._create_instance_group(self.context, values)
+        self.assertRaises(exception.InstanceGroupNotFound,
+                          db.instance_group_get,
+                          self.new_context, result['uuid'])
+
+    def test_instance_group_delete_by_other_project_user(self):
+        values = self._get_default_values()
+        result = self._create_instance_group(self.context, values)
+        self.assertRaises(exception.InstanceGroupNotFound,
+                          db.instance_group_delete,
+                          self.new_context, result['uuid'])
+
+    def test_instance_group_get_by_admin(self):
+        values = self._get_default_values()
+        result = self._create_instance_group(self.context, values)
+        group = db.instance_group_get(context.get_admin_context(),
+                                      result['uuid'])
+        self.assertEqual(result['uuid'], group.uuid)
+        self.assertEqual(values['user_id'], group.user_id)
+        self.assertEqual(values['project_id'], group.project_id)
+
+    def test_instance_group_delete_by_admin(self):
+        values = self._get_default_values()
+        result = self._create_instance_group(self.context, values)
+        db.instance_group_delete(context.get_admin_context(),
+                                 result['uuid'])
 
 
 class InstanceGroupMembersDBApiTestCase(InstanceGroupDBApiTestCase):

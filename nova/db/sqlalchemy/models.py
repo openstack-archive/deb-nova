@@ -284,6 +284,9 @@ class Instance(BASE, NovaBase):
     launched_at = Column(DateTime)
     terminated_at = Column(DateTime)
 
+    # This always refers to the availability_zone kwarg passed in /servers and
+    # provided as an API option, not at all related to the host AZ the instance
+    # belongs to.
     availability_zone = Column(String(255))
 
     # User editable field for display in user-facing UIs
@@ -987,7 +990,9 @@ class InstanceMetadata(BASE, NovaBase):
 class InstanceSystemMetadata(BASE, NovaBase):
     """Represents a system-owned metadata key/value pair for an instance."""
     __tablename__ = 'instance_system_metadata'
-    __table_args__ = ()
+    __table_args__ = (
+        Index('instance_uuid', 'instance_uuid'),
+    )
     id = Column(Integer, primary_key=True)
     key = Column(String(255), nullable=False)
     value = Column(String(255))

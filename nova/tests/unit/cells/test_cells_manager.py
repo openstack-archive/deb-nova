@@ -223,7 +223,7 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         instances = ['instance1', 'instance2', 'instance3']
 
         def get_instances_to_sync(context, **kwargs):
-            self.assertEqual(context, fake_context)
+            self.assertEqual(fake_context, context)
             call_info['shuffle'] = kwargs.get('shuffle')
             call_info['project_id'] = kwargs.get('project_id')
             call_info['updated_since'] = kwargs.get('updated_since')
@@ -235,7 +235,7 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
             return instances[int(uuid[-1]) - 1]
 
         def sync_instance(context, instance):
-            self.assertEqual(context, fake_context)
+            self.assertEqual(fake_context, context)
             call_info['sync_instances'].append(instance)
 
         self.stubs.Set(cells_utils, 'get_instances_to_sync',
@@ -247,23 +247,22 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
         self.stubs.Set(timeutils, 'utcnow', utcnow)
 
         self.cells_manager._heal_instances(fake_context)
-        self.assertEqual(call_info['shuffle'], True)
+        self.assertEqual(True, call_info['shuffle'])
         self.assertIsNone(call_info['project_id'])
-        self.assertEqual(call_info['updated_since'], updated_since)
-        self.assertEqual(call_info['get_instances'], 1)
+        self.assertEqual(updated_since, call_info['updated_since'])
+        self.assertEqual(1, call_info['get_instances'])
         # Only first 2
-        self.assertEqual(call_info['sync_instances'],
-                instances[:2])
+        self.assertEqual(instances[:2], call_info['sync_instances'])
 
         call_info['sync_instances'] = []
         self.cells_manager._heal_instances(fake_context)
-        self.assertEqual(call_info['shuffle'], True)
+        self.assertEqual(True, call_info['shuffle'])
         self.assertIsNone(call_info['project_id'])
-        self.assertEqual(call_info['updated_since'], updated_since)
-        self.assertEqual(call_info['get_instances'], 2)
+        self.assertEqual(updated_since, call_info['updated_since'])
+        self.assertEqual(2, call_info['get_instances'])
         # Now the last 1 and the first 1
-        self.assertEqual(call_info['sync_instances'],
-                [instances[-1], instances[0]])
+        self.assertEqual([instances[-1], instances[0]],
+                         call_info['sync_instances'])
 
     def test_sync_instances(self):
         self.mox.StubOutWithMock(self.msg_runner,
@@ -880,3 +879,27 @@ class CellsManagerClassTestCase(test.NoDBTestCase):
                     instance='fake-instance', new_pass='fake-password')
             set_admin_password.assert_called_once_with(self.ctxt,
                     'fake-instance', 'fake-password')
+
+    def test_get_keypair_at_top(self):
+        keypairs = [self._get_fake_response('fake_keypair'),
+                    self._get_fake_response('fake_keypair2')]
+        with mock.patch.object(self.msg_runner,
+                               'get_keypair_at_top',
+                               return_value=keypairs) as fake_get_keypair:
+            response = self.cells_manager.get_keypair_at_top(self.ctxt,
+                                                             'fake_user_id',
+                                                             'fake_name')
+            fake_get_keypair.assert_called_once_with(self.ctxt, 'fake_user_id',
+                                                     'fake_name')
+            self.assertEqual('fake_keypair', response)
+
+    def test_get_keypair_at_top_with_empty_responses(self):
+        with mock.patch.object(self.msg_runner,
+                               'get_keypair_at_top',
+                               return_value=[]) as fake_get_keypair:
+            self.assertIsNone(
+                self.cells_manager.get_keypair_at_top(self.ctxt,
+                                                      'fake_user_id',
+                                                      'fake_name'))
+            fake_get_keypair.assert_called_once_with(self.ctxt, 'fake_user_id',
+                                                     'fake_name')

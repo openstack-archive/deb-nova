@@ -16,6 +16,7 @@
 """Tests for the conductor service."""
 
 import contextlib
+import copy
 import uuid
 
 import mock
@@ -101,15 +102,6 @@ class _BaseTestCase(object):
         self.mox.ReplayAll()
         result = self.conductor.provider_fw_rule_get_all(self.context)
         self.assertEqual(result, fake_rules)
-
-    def test_compute_node_create(self):
-        self.mox.StubOutWithMock(db, 'compute_node_create')
-        db.compute_node_create(self.context, 'fake-values').AndReturn(
-            'fake-result')
-        self.mox.ReplayAll()
-        result = self.conductor.compute_node_create(self.context,
-                                                    'fake-values')
-        self.assertEqual(result, 'fake-result')
 
 
 class ConductorTestCase(_BaseTestCase, test.TestCase):
@@ -394,6 +386,29 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         # the same, and thus 'dict' will not be reported as changed
         self.assertIn('dict', updates)
         self.assertEqual({'foo': 'bar'}, updates['dict'])
+
+    def test_object_class_action_versions(self):
+        @obj_base.NovaObjectRegistry.register
+        class TestObject(obj_base.NovaObject):
+            VERSION = '1.10'
+
+            @classmethod
+            def foo(cls, context):
+                return cls()
+
+        versions = {
+            'TestObject': '1.2',
+            'OtherObj': '1.0',
+        }
+        with mock.patch.object(self.conductor_manager,
+                               '_object_dispatch') as m:
+            m.return_value = TestObject()
+            m.return_value.obj_to_primitive = mock.MagicMock()
+            self.conductor.object_class_action_versions(
+                self.context, TestObject.obj_name(), 'foo', versions,
+                tuple(), {})
+            m.return_value.obj_to_primitive.assert_called_once_with(
+                target_version='1.2', version_manifest=versions)
 
     def _test_expected_exceptions(self, db_method, conductor_method, errors,
                                   *args, **kwargs):
@@ -779,6 +794,15 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
         self.assertEqual('INFO', msg.priority)
         self.assertEqual('fake-info', msg.payload)
 
+    def test_compute_node_create(self):
+        self.mox.StubOutWithMock(db, 'compute_node_create')
+        db.compute_node_create(self.context, 'fake-values').AndReturn(
+            'fake-result')
+        self.mox.ReplayAll()
+        result = self.conductor.compute_node_create(self.context,
+                                                    'fake-values')
+        self.assertEqual(result, 'fake-result')
+
 
 class ConductorRPCAPITestCase(_BaseTestCase, test.TestCase):
     """Conductor RPC API Tests."""
@@ -816,6 +840,20 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
 
         self.assertEqual(timeouts.count(10), 10)
         self.assertIn(None, timeouts)
+
+    @mock.patch('oslo_versionedobjects.base.obj_tree_get_versions')
+    def test_object_backport_redirect(self, mock_ovo):
+        mock_ovo.return_value = mock.sentinel.obj_versions
+        mock_objinst = mock.Mock()
+
+        with mock.patch.object(self.conductor,
+                               'object_backport_versions') as mock_call:
+            self.conductor.object_backport(mock.sentinel.ctxt,
+                                           mock_objinst,
+                                           mock.sentinel.target_version)
+            mock_call.assert_called_once_with(mock.sentinel.ctxt,
+                                              mock_objinst,
+                                              mock.sentinel.obj_versions)
 
 
 class ConductorLocalAPITestCase(ConductorAPITestCase):
@@ -912,6 +950,11 @@ class _BaseTaskTestCase(object):
                        fake_deserialize_context)
 
     def _prepare_rebuild_args(self, update_args=None):
+        # Args that don't get passed in to the method but do get passed to RPC
+        migration = update_args and update_args.pop('migration', None)
+        node = update_args and update_args.pop('node', None)
+        limits = update_args and update_args.pop('limits', None)
+
         rebuild_args = {'new_pass': 'admin_password',
                         'injected_files': 'files_to_inject',
                         'image_ref': 'image_ref',
@@ -924,7 +967,11 @@ class _BaseTaskTestCase(object):
                         'host': 'compute-host'}
         if update_args:
             rebuild_args.update(update_args)
-        return rebuild_args
+        compute_rebuild_args = copy.deepcopy(rebuild_args)
+        compute_rebuild_args['migration'] = migration
+        compute_rebuild_args['node'] = node
+        compute_rebuild_args['limits'] = limits
+        return rebuild_args, compute_rebuild_args
 
     @mock.patch('nova.objects.Migration')
     def test_live_migrate(self, migobj):
@@ -1336,13 +1383,10 @@ class _BaseTaskTestCase(object):
                                        'hosts': []}}
         system_metadata = instance.system_metadata
 
-        self.mox.StubOutWithMock(self.conductor_manager.image_api, 'get')
         self.mox.StubOutWithMock(self.conductor_manager, '_schedule_instances')
         self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
                 'unshelve_instance')
 
-        self.conductor_manager.image_api.get(self.context,
-                'fake_image_id', show_deleted=False).AndReturn(None)
         self.conductor_manager._schedule_instances(self.context,
                 None, filter_properties, instance).AndReturn(
                         [{'host': 'fake_host',
@@ -1358,13 +1402,13 @@ class _BaseTaskTestCase(object):
         self.mox.ReplayAll()
 
         system_metadata['shelved_at'] = timeutils.utcnow()
-        system_metadata['shelved_image_id'] = 'fake_image_id'
         system_metadata['shelved_host'] = 'fake-mini'
         self.conductor_manager.unshelve_instance(self.context, instance)
 
     def test_rebuild_instance(self):
         inst_obj = self._create_fake_instance_obj()
-        rebuild_args = self._prepare_rebuild_args({'host': inst_obj.host})
+        rebuild_args, compute_args = self._prepare_rebuild_args(
+            {'host': inst_obj.host})
 
         with contextlib.nested(
             mock.patch.object(self.conductor_manager.compute_rpcapi,
@@ -1378,13 +1422,16 @@ class _BaseTaskTestCase(object):
             self.assertFalse(select_dest_mock.called)
             rebuild_mock.assert_called_once_with(self.context,
                                instance=inst_obj,
-                               **rebuild_args)
+                               **compute_args)
 
     def test_rebuild_instance_with_scheduler(self):
         inst_obj = self._create_fake_instance_obj()
         inst_obj.host = 'noselect'
-        rebuild_args = self._prepare_rebuild_args({'host': None})
         expected_host = 'thebesthost'
+        expected_node = 'thebestnode'
+        expected_limits = 'fake-limits'
+        rebuild_args, compute_args = self._prepare_rebuild_args(
+            {'host': None, 'node': expected_node, 'limits': expected_limits})
         request_spec = {}
         filter_properties = {'ignore_hosts': [(inst_obj.host)]}
 
@@ -1395,7 +1442,9 @@ class _BaseTaskTestCase(object):
                               return_value=False),
             mock.patch.object(self.conductor_manager.scheduler_client,
                               'select_destinations',
-                              return_value=[{'host': expected_host}]),
+                              return_value=[{'host': expected_host,
+                                             'nodename': expected_node,
+                                             'limits': expected_limits}]),
             mock.patch('nova.scheduler.utils.build_request_spec',
                        return_value=request_spec)
         ) as (rebuild_mock, sig_mock, select_dest_mock, bs_mock):
@@ -1405,17 +1454,17 @@ class _BaseTaskTestCase(object):
             select_dest_mock.assert_called_once_with(self.context,
                                                      request_spec,
                                                      filter_properties)
-            rebuild_args['host'] = expected_host
+            compute_args['host'] = expected_host
             rebuild_mock.assert_called_once_with(self.context,
                                             instance=inst_obj,
-                                            **rebuild_args)
+                                            **compute_args)
         self.assertEqual('compute.instance.rebuild.scheduled',
                          fake_notifier.NOTIFICATIONS[0].event_type)
 
     def test_rebuild_instance_with_scheduler_no_host(self):
         inst_obj = self._create_fake_instance_obj()
         inst_obj.host = 'noselect'
-        rebuild_args = self._prepare_rebuild_args({'host': None})
+        rebuild_args, _ = self._prepare_rebuild_args({'host': None})
         request_spec = {}
         filter_properties = {'ignore_hosts': [(inst_obj.host)]}
 
@@ -1456,7 +1505,7 @@ class _BaseTaskTestCase(object):
                                                            rebuild_mock,
                                                            spawn_mock):
         inst_obj = self._create_fake_instance_obj()
-        rebuild_args = self._prepare_rebuild_args({'host': None})
+        rebuild_args, _ = self._prepare_rebuild_args({'host': None})
         request_spec = {}
         bs_mock.return_value = request_spec
 
@@ -1481,6 +1530,33 @@ class _BaseTaskTestCase(object):
                                            exception, request_spec)
         self.assertFalse(select_dest_mock.called)
         self.assertFalse(rebuild_mock.called)
+
+    def test_rebuild_instance_evacuate_migration_record(self):
+        inst_obj = self._create_fake_instance_obj()
+        migration = objects.Migration(context=self.context,
+                                      source_compute=inst_obj.host,
+                                      source_node=inst_obj.node,
+                                      instance_uuid=inst_obj.uuid,
+                                      status='accepted',
+                                      migration_type='evacuation')
+        rebuild_args, compute_args = self._prepare_rebuild_args(
+            {'host': inst_obj.host, 'migration': migration})
+
+        with contextlib.nested(
+            mock.patch.object(self.conductor_manager.compute_rpcapi,
+                              'rebuild_instance'),
+            mock.patch.object(self.conductor_manager.scheduler_client,
+                              'select_destinations'),
+            mock.patch.object(objects.Migration, 'get_by_instance_and_status',
+                              return_value=migration)
+        ) as (rebuild_mock, select_dest_mock, get_migration_mock):
+            self.conductor_manager.rebuild_instance(context=self.context,
+                                            instance=inst_obj,
+                                            **rebuild_args)
+            self.assertFalse(select_dest_mock.called)
+            rebuild_mock.assert_called_once_with(self.context,
+                               instance=inst_obj,
+                               **compute_args)
 
 
 class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
@@ -2029,3 +2105,24 @@ class ConductorLocalComputeTaskAPITestCase(ConductorTaskAPITestCase):
         super(ConductorLocalComputeTaskAPITestCase, self).setUp()
         self.conductor = conductor_api.LocalComputeTaskAPI()
         self.conductor_manager = self.conductor._manager._target
+
+
+class ConductorV3ManagerProxyTestCase(test.NoDBTestCase):
+    def test_v3_manager_proxy(self):
+        manager = conductor_manager.ConductorManager()
+        proxy = conductor_manager._ConductorManagerV3Proxy(manager)
+        ctxt = context.get_admin_context()
+
+        methods = [
+            # (method, number_of_args)
+            ('provider_fw_rule_get_all', 0),
+            ('object_class_action_versions', 5),
+            ('object_action', 4),
+            ('object_backport_versions', 2),
+        ]
+
+        for method, num_args in methods:
+            args = range(num_args)
+            with mock.patch.object(manager, method) as mock_method:
+                getattr(proxy, method)(ctxt, *args)
+                mock_method.assert_called_once_with(ctxt, *args)

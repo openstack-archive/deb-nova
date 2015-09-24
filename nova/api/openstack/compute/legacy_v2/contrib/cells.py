@@ -141,7 +141,7 @@ class Controller(object):
     def capacities(self, req, id=None):
         """Return capacities for a given cell or all cells."""
         # TODO(kaushikc): return capacities as a part of cell info and
-        # cells detail calls in v3, along with capabilities
+        # cells detail calls in v2.1, along with capabilities
         if not self.ext_mgr.is_loaded('os-cell-capacities'):
             raise exc.HTTPNotFound()
 
@@ -187,12 +187,14 @@ class Controller(object):
         return {}
 
     def _validate_cell_name(self, cell_name):
-        """Validate cell name is not empty and doesn't contain '!' or '.'."""
+        """Validate cell name is not empty and doesn't contain '!',
+         '.' or '@'.
+        """
         if not cell_name:
             msg = _("Cell name cannot be empty")
             raise exc.HTTPBadRequest(explanation=msg)
-        if '!' in cell_name or '.' in cell_name:
-            msg = _("Cell name cannot contain '!' or '.'")
+        if '!' in cell_name or '.' in cell_name or '@' in cell_name:
+            msg = _("Cell name cannot contain '!', '.' or '@'")
             raise exc.HTTPBadRequest(explanation=msg)
 
     def _validate_cell_type(self, cell_type):

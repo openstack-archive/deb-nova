@@ -57,6 +57,7 @@ from nova.cells import rpcapi as cells_rpcapi
 from nova.cloudpipe import pipelib
 from nova import compute
 from nova.compute import build_results
+from nova.compute import claims
 from nova.compute import power_state
 from nova.compute import resource_tracker
 from nova.compute import rpcapi as compute_rpcapi
@@ -253,7 +254,6 @@ CONF.register_opts(interval_opts)
 CONF.register_opts(timeout_opts)
 CONF.register_opts(running_deleted_opts)
 CONF.register_opts(instance_cleaning_opts)
-CONF.import_opt('allow_resize_to_same_host', 'nova.compute.api')
 CONF.import_opt('console_topic', 'nova.console.rpcapi')
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('enabled', 'nova.vnc', group='vnc')
@@ -442,6 +442,11 @@ def object_compat(function):
     def decorated_function(self, context, *args, **kwargs):
         def _load_instance(instance_or_dict):
             if isinstance(instance_or_dict, dict):
+                # try to get metadata and system_metadata for most cases but
+                # only attempt to load those if the db instance already has
+                # those fields joined
+                metas = [meta for meta in ('metadata', 'system_metadata')
+                         if meta in instance_or_dict]
                 instance = objects.Instance._from_db_object(
                     context, objects.Instance(), instance_or_dict,
                     expected_attrs=metas)
@@ -449,7 +454,6 @@ def object_compat(function):
                 return instance
             return instance_or_dict
 
-        metas = ['metadata', 'system_metadata']
         try:
             kwargs['instance'] = _load_instance(kwargs['instance'])
         except KeyError:
@@ -662,10 +666,10 @@ class ComputeVirtAPI(virtapi.VirtAPI):
 class ComputeManager(manager.Manager):
     """Manages the running instances from creation to destruction."""
 
-    target = messaging.Target(version='4.4')
+    target = messaging.Target(version='4.5')
 
     # How long to wait in seconds before re-issuing a shutdown
-    # signal to a instance during power off.  The overall
+    # signal to an instance during power off.  The overall
     # time to wait is set by CONF.shutdown_timeout.
     SHUTDOWN_RETRY_INTERVAL = 10
 
@@ -875,20 +879,20 @@ class ComputeManager(manager.Manager):
         """Complete deletion for instances in DELETED status but not marked as
         deleted in the DB
         """
+        system_meta = instance.system_metadata
         instance.destroy()
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
-        quotas = objects.Quotas(context)
+        quotas = objects.Quotas(context=context)
         project_id, user_id = objects.quotas.ids_from_instance(context,
                                                                instance)
-        quotas.reserve(context, project_id=project_id, user_id=user_id,
-                       instances=-1, cores=-instance.vcpus,
-                       ram=-instance.memory_mb)
+        quotas.reserve(project_id=project_id, user_id=user_id, instances=-1,
+                       cores=-instance.vcpus, ram=-instance.memory_mb)
         self._complete_deletion(context,
                                 instance,
                                 bdms,
                                 quotas,
-                                instance.system_metadata)
+                                system_meta)
 
     def _complete_deletion(self, context, instance, bdms,
                            quotas, system_meta):
@@ -1041,6 +1045,18 @@ class ComputeManager(manager.Manager):
                       {'task_state': instance.task_state,
                        'power_state': current_power_state},
                       instance=instance)
+
+            # NOTE(mikal): if the instance was doing a soft reboot that got as
+            # far as shutting down the instance but not as far as starting it
+            # again, then we've just become a hard reboot. That means the
+            # task state for the instance needs to change so that we're in one
+            # of the expected task states for a hard reboot.
+            soft_types = [task_states.REBOOT_STARTED,
+                          task_states.REBOOT_PENDING,
+                          task_states.REBOOTING]
+            if instance.task_state in soft_types and reboot_type == 'HARD':
+                instance.task_state = task_states.REBOOT_PENDING_HARD
+
             self.reboot_instance(context, instance, block_device_info=None,
                                  reboot_type=reboot_type)
             return
@@ -1280,7 +1296,7 @@ class ComputeManager(manager.Manager):
         self.driver.init_host(host=self.host)
         context = nova.context.get_admin_context()
         instances = objects.InstanceList.get_by_host(
-            context, self.host, expected_attrs=['info_cache'])
+            context, self.host, expected_attrs=['info_cache', 'metadata'])
 
         if CONF.defer_iptables_apply:
             self.driver.filter_defer_apply_on()
@@ -1592,25 +1608,6 @@ class ComputeManager(manager.Manager):
         dhcp_options = self.driver.dhcp_options_for_instance(instance)
         network_info = self._allocate_network(context, instance,
                 requested_networks, macs, security_groups, dhcp_options)
-
-        if not instance.access_ip_v4 and not instance.access_ip_v6:
-            # If CONF.default_access_ip_network_name is set, grab the
-            # corresponding network and set the access ip values accordingly.
-            # Note that when there are multiple ips to choose from, an
-            # arbitrary one will be chosen.
-            network_name = CONF.default_access_ip_network_name
-            if not network_name:
-                return network_info
-
-            for vif in network_info:
-                if vif['network']['label'] == network_name:
-                    for ip in vif.fixed_ips():
-                        if ip['version'] == 4:
-                            instance.access_ip_v4 = ip['address']
-                        if ip['version'] == 6:
-                            instance.access_ip_v6 = ip['address']
-                    instance.save()
-                    break
 
         return network_info
 
@@ -2060,6 +2057,22 @@ class ComputeManager(manager.Manager):
 
         # NOTE(alaski): This is only useful during reschedules, remove it now.
         instance.system_metadata.pop('network_allocated', None)
+
+        # If CONF.default_access_ip_network_name is set, grab the
+        # corresponding network and set the access ip values accordingly.
+        network_name = CONF.default_access_ip_network_name
+        if (network_name and not instance.access_ip_v4 and
+                not instance.access_ip_v6):
+            # Note that when there are multiple ips to choose from, an
+            # arbitrary one will be chosen.
+            for vif in network_info:
+                if vif['network']['label'] == network_name:
+                    for ip in vif.fixed_ips():
+                        if not instance.access_ip_v4 and ip['version'] == 4:
+                            instance.access_ip_v4 = ip['address']
+                        if not instance.access_ip_v6 and ip['version'] == 6:
+                            instance.access_ip_v6 = ip['address']
+                    break
 
         self._update_instance_after_spawn(context, instance)
 
@@ -2595,7 +2608,8 @@ class ComputeManager(manager.Manager):
     def rebuild_instance(self, context, instance, orig_image_ref, image_ref,
                          injected_files, new_pass, orig_sys_metadata,
                          bdms, recreate, on_shared_storage=None,
-                         preserve_ephemeral=False):
+                         preserve_ephemeral=False, migration=None,
+                         scheduled_node=None, limits=None):
         """Destroy and re-make this instance.
 
         A 'rebuild' effectively purges all existing data from the system and
@@ -2618,18 +2632,92 @@ class ComputeManager(manager.Manager):
                                   files are available or not on the target host
         :param preserve_ephemeral: True if the default ephemeral storage
                                    partition must be preserved on rebuild
+        :param migration: a Migration object if one was created for this
+                          rebuild operation (if it's a part of evacaute)
+        :param scheduled_node: A node of the host chosen by the scheduler. If a
+                               host was specified by the user, this will be
+                               None
+        :param limits: Overcommit limits set by the scheduler. If a host was
+                       specified by the user, this will be None
         """
         context = context.elevated()
 
         LOG.info(_LI("Rebuilding instance"), context=context,
                     instance=instance)
+        if scheduled_node is not None:
+            rt = self._get_resource_tracker(scheduled_node)
+            rebuild_claim = rt.rebuild_claim
+        else:
+            rebuild_claim = claims.NopClaim
+
+        image_meta = {}
+        if image_ref:
+            image_meta = self.image_api.get(context, image_ref)
+
+        # NOTE(mriedem): On a recreate (evacuate), we need to update
+        # the instance's host and node properties to reflect it's
+        # destination node for the recreate.
+        if not scheduled_node:
+            try:
+                compute_node = self._get_compute_info(context, self.host)
+                scheduled_node = compute_node.hypervisor_hostname
+            except exception.ComputeHostNotFound:
+                LOG.exception(_LE('Failed to get compute_info for %s'),
+                                self.host)
+
+        def _fail_migration(migration):
+            if migration:
+                migration.status = 'failed'
+                migration.save()
 
         with self._error_out_instance_on_exception(context, instance):
-            self._do_rebuild_instance(context, instance, orig_image_ref,
-                                      image_ref, injected_files, new_pass,
-                                      orig_sys_metadata, bdms, recreate,
-                                      on_shared_storage,
-                                      preserve_ephemeral)
+            try:
+                claim_ctxt = rebuild_claim(
+                    context, instance, limits=limits, image_meta=image_meta,
+                    migration=migration)
+                self._do_rebuild_instance_with_claim(
+                    claim_ctxt, context, instance, orig_image_ref,
+                    image_ref, injected_files, new_pass, orig_sys_metadata,
+                    bdms, recreate, on_shared_storage, preserve_ephemeral)
+            except exception.ComputeResourcesUnavailable as e:
+                LOG.debug("Could not rebuild instance on this host, not "
+                          "enough resources available.", instance=instance)
+
+                # NOTE(ndipanov): We just abort the build for now and leave a
+                # migration record for potential cleanup later
+                _fail_migration(migration)
+
+                self._notify_about_instance_usage(context, instance,
+                        'rebuild.error', fault=e)
+                raise exception.BuildAbortException(
+                    instance_uuid=instance.uuid, reason=e.format_message())
+            except Exception as e:
+                _fail_migration(migration)
+                self._notify_about_instance_usage(context, instance,
+                        'rebuild.error', fault=e)
+                raise
+            else:
+                instance.apply_migration_context()
+                # NOTE (ndipanov): This save will now update the host and node
+                # attributes making sure that next RT pass is consistent since
+                # it will be based on the instance and not the migration DB
+                # entry.
+                instance.host = self.host
+                instance.node = scheduled_node
+                instance.save()
+                instance.drop_migration_context()
+
+                # NOTE (ndipanov): Mark the migration as done only after we
+                # mark the instance as belonging to this host.
+                if migration:
+                    migration.status = 'done'
+                    migration.save()
+
+    def _do_rebuild_instance_with_claim(self, claim_context, *args, **kwargs):
+        """Helper to avoid deep nesting in the top-level method."""
+
+        with claim_context:
+            self._do_rebuild_instance(*args, **kwargs)
 
     def _do_rebuild_instance(self, context, instance, orig_image_ref,
                              image_ref, injected_files, new_pass,
@@ -2664,21 +2752,6 @@ class ComputeManager(manager.Manager):
                 image_ref = orig_image_ref = instance.image_ref
                 LOG.info(_LI("disk not on shared storage, rebuilding from:"
                                 " '%s'"), str(image_ref))
-
-            # NOTE(mriedem): On a recreate (evacuate), we need to update
-            # the instance's host and node properties to reflect it's
-            # destination node for the recreate.
-            node_name = None
-            try:
-                compute_node = self._get_compute_info(context, self.host)
-                node_name = compute_node.hypervisor_hostname
-            except exception.ComputeHostNotFound:
-                LOG.exception(_LE('Failed to get compute_info for %s'),
-                                self.host)
-            finally:
-                instance.host = self.host
-                instance.node = node_name
-                instance.save()
 
         if image_ref:
             image_meta = self.image_api.get(context, image_ref)
@@ -3434,6 +3507,16 @@ class ComputeManager(manager.Manager):
             with migration.obj_as_admin():
                 migration.save()
 
+            # NOTE(ndipanov): We need to do this here because dropping the
+            # claim means we lose the migration_context data. We really should
+            # fix this by moving the drop_move_claim call to the
+            # finish_revert_resize method as this is racy (revert is dropped,
+            # but instance resources will be tracked with the new flavor until
+            # it gets rolled back in finish_revert_resize, which is
+            # potentially wrong for a period of time).
+            instance.revert_migration_context()
+            instance.save()
+
             rt = self._get_resource_tracker(instance.node)
             rt.drop_move_claim(context, instance)
 
@@ -3543,10 +3626,6 @@ class ComputeManager(manager.Manager):
             if not self.driver.capabilities['supports_migrate_to_same_host']:
                 raise exception.UnableToMigrateToSelf(
                     instance_id=instance.uuid, host=self.host)
-        elif same_host and not CONF.allow_resize_to_same_host:
-            self._set_instance_obj_error_state(context, instance)
-            msg = _('destination same as source!')
-            raise exception.MigrationError(reason=msg)
 
         # NOTE(danms): Stash the new instance_type to avoid having to
         # look it up in the database later
@@ -3778,6 +3857,7 @@ class ComputeManager(manager.Manager):
                 if old_instance_type[key] != instance_type[key]:
                     resize_instance = True
                     break
+        instance.apply_migration_context()
 
         # NOTE(tr3buchet): setup networks on destination host
         self.network_api.setup_networks_on_host(context, instance,
@@ -5027,6 +5107,7 @@ class ComputeManager(manager.Manager):
             # Executing live migration
             # live_migration might raises exceptions, but
             # nothing must be recovered in this version.
+            LOG.exception(_LE('Live migration failed.'), instance=instance)
             with excutils.save_and_reraise_exception():
                 if migration:
                     migration.status = 'failed'
@@ -6104,7 +6185,6 @@ class ComputeManager(manager.Manager):
         """
         new_resource_tracker_dict = {}
 
-        # Delete orphan compute node not reported by driver but still in db
         compute_nodes_in_db = self._get_compute_nodes_in_db(context,
                                                             use_slave=True)
         nodenames = set(self.driver.get_available_nodes())

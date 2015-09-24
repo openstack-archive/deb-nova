@@ -20,6 +20,7 @@ from cinderclient import exceptions as cinder_exception
 from eventlet import event as eventlet_event
 import mock
 from mox3 import mox
+import netaddr
 from oslo_config import cfg
 import oslo_messaging as messaging
 from oslo_utils import importutils
@@ -46,6 +47,7 @@ from nova import test
 from nova.tests.unit.compute import fake_resource_tracker
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_instance
+from nova.tests.unit import fake_network
 from nova.tests.unit import fake_network_cache_model
 from nova.tests.unit import fake_server_actions
 from nova.tests.unit.objects import test_instance_fault
@@ -407,7 +409,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.compute.driver.init_host(host=our_host)
             context.get_admin_context().AndReturn(self.context)
             db.instance_get_all_by_host(
-                    self.context, our_host, columns_to_join=['info_cache'],
+                    self.context, our_host,
+                    columns_to_join=['info_cache', 'metadata'],
                     use_slave=False
                     ).AndReturn(startup_instances)
             if defer_iptables_apply:
@@ -506,7 +509,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.compute.driver.init_host(host=our_host)
         context.get_admin_context().AndReturn(self.context)
         db.instance_get_all_by_host(self.context, our_host,
-                                    columns_to_join=['info_cache'],
+                                    columns_to_join=['info_cache', 'metadata'],
                                     use_slave=False
                                     ).AndReturn([])
         self.compute.init_virt_events()
@@ -611,6 +614,90 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.compute._set_instance_obj_error_state(mox.IgnoreArg(), instance)
         self.mox.ReplayAll()
         self.compute._init_instance('fake-context', instance)
+
+    @mock.patch.object(objects.BlockDeviceMapping, 'destroy')
+    @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
+    @mock.patch.object(objects.Instance, 'destroy')
+    @mock.patch.object(objects.Instance, 'obj_load_attr')
+    @mock.patch.object(objects.quotas.Quotas, 'commit')
+    @mock.patch.object(objects.quotas.Quotas, 'reserve')
+    @mock.patch.object(objects.quotas, 'ids_from_instance')
+    def test_init_instance_complete_partial_deletion(
+            self, mock_ids_from_instance, mock_reserve, mock_commit,
+            mock_inst_destroy, mock_obj_load_attr, mock_get_by_instance_uuid,
+            mock_bdm_destroy):
+        """Test to complete deletion for instances in DELETED status but not
+        marked as deleted in the DB
+        """
+        instance = fake_instance.fake_instance_obj(
+                self.context,
+                project_id='fake',
+                uuid='fake-uuid',
+                vcpus=1,
+                memory_mb=64,
+                power_state=power_state.SHUTDOWN,
+                vm_state=vm_states.DELETED,
+                host=self.compute.host,
+                task_state=None,
+                deleted=False,
+                deleted_at=None,
+                metadata={},
+                system_metadata={},
+                expected_attrs=['metadata', 'system_metadata'])
+
+        # Make sure instance vm_state is marked as 'DELETED' but instance is
+        # not destroyed from db.
+        self.assertEqual(vm_states.DELETED, instance.vm_state)
+        self.assertFalse(instance.deleted)
+
+        deltas = {'instances': -1,
+                  'cores': -instance.vcpus,
+                  'ram': -instance.memory_mb}
+
+        def fake_inst_destroy():
+            instance.deleted = True
+            instance.deleted_at = timeutils.utcnow()
+
+        mock_ids_from_instance.return_value = (instance.project_id,
+                                               instance.user_id)
+        mock_inst_destroy.side_effect = fake_inst_destroy()
+
+        self.compute._init_instance(self.context, instance)
+
+        # Make sure that instance.destroy method was called and
+        # instance was deleted from db.
+        self.assertTrue(mock_reserve.called)
+        self.assertTrue(mock_commit.called)
+        self.assertNotEqual(0, instance.deleted)
+        mock_reserve.assert_called_once_with(project_id=instance.project_id,
+                                             user_id=instance.user_id,
+                                             **deltas)
+
+    @mock.patch('nova.compute.manager.LOG')
+    def test_init_instance_complete_partial_deletion_raises_exception(
+            self, mock_log):
+        instance = fake_instance.fake_instance_obj(
+                self.context,
+                project_id='fake',
+                uuid='fake-uuid',
+                vcpus=1,
+                memory_mb=64,
+                power_state=power_state.SHUTDOWN,
+                vm_state=vm_states.DELETED,
+                host=self.compute.host,
+                task_state=None,
+                deleted=False,
+                deleted_at=None,
+                metadata={},
+                system_metadata={},
+                expected_attrs=['metadata', 'system_metadata'])
+
+        with mock.patch.object(self.compute,
+                               '_complete_partial_deletion') as mock_deletion:
+            mock_deletion.side_effect = test.TestingException()
+            self.compute._init_instance(self, instance)
+            msg = u'Failed to complete a deletion'
+            mock_log.exception.assert_called_once_with(msg, instance=instance)
 
     def test_init_instance_stuck_in_deleting(self):
         instance = fake_instance.fake_instance_obj(
@@ -1056,6 +1143,21 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             instance.vm_state = state
             self._test_init_instance_retries_reboot(instance, 'HARD',
                                                     power_state.RUNNING)
+
+    def test_init_instance_retries_reboot_pending_soft_became_hard(self):
+        instance = objects.Instance(self.context)
+        instance.uuid = 'foo'
+        instance.task_state = task_states.REBOOT_PENDING
+        for state in vm_states.ALLOW_HARD_REBOOT:
+            # NOTE(dave-mcnally) while a reboot of a vm in error state is
+            # possible we don't attempt to recover an error during init
+            if state == vm_states.ERROR:
+                continue
+            instance.vm_state = state
+            self._test_init_instance_retries_reboot(instance, 'HARD',
+                                                    power_state.SHUTDOWN)
+            self.assertEqual(task_states.REBOOT_PENDING_HARD,
+                             instance.task_state)
 
     def test_init_instance_retries_reboot_started(self):
         instance = objects.Instance(self.context)
@@ -2077,8 +2179,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
     @mock.patch('nova.compute.manager.ComputeManager._driver_detach_volume')
     @mock.patch('nova.compute.manager.ComputeManager.'
                 '_notify_about_instance_usage')
-    @mock.patch('nova.conductor.manager.ConductorManager.vol_usage_update')
-    def _test_detach_volume(self, vol_usage_update, notify_inst_usage, detach,
+    def _test_detach_volume(self, notify_inst_usage, detach,
                             bdm_get, destroy_bdm=True):
         volume_id = '123'
         inst_obj = mock.sentinel.inst_obj
@@ -3816,6 +3917,41 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     mock_notify.call_count - 1]
             self.assertEqual(expected_call, create_end_call)
 
+    def test_access_ip_set_when_instance_set_to_active(self):
+
+        self.flags(default_access_ip_network_name='test1')
+        instance = fake_instance.fake_db_instance()
+
+        @mock.patch.object(db, 'instance_update_and_get_original',
+                return_value=({}, instance))
+        @mock.patch.object(self.compute.driver, 'spawn')
+        @mock.patch.object(self.compute, '_build_networks_for_instance',
+                return_value=fake_network.fake_get_instance_nw_info(
+                    self.stubs))
+        @mock.patch.object(db, 'instance_extra_update_by_uuid')
+        @mock.patch.object(self.compute, '_notify_about_instance_usage')
+        def _check_access_ip(mock_notify, mock_extra, mock_networks,
+                mock_spawn, mock_db_update):
+            self.compute._build_and_run_instance(self.context, self.instance,
+                    self.image, self.injected_files, self.admin_pass,
+                    self.requested_networks, self.security_groups,
+                    self.block_device_mapping, self.node, self.limits,
+                    self.filter_properties)
+
+            updates = {'vm_state': u'active', 'access_ip_v6':
+                    netaddr.IPAddress('2001:db8:0:1:dcad:beff:feef:1'),
+                    'access_ip_v4': netaddr.IPAddress('192.168.1.100'),
+                    'power_state': 0, 'task_state': None, 'launched_at':
+                    mock.ANY, 'expected_task_state': 'spawning'}
+            expected_call = mock.call(self.context, self.instance.uuid,
+                    updates, columns_to_join=['metadata', 'system_metadata',
+                        'info_cache'])
+            last_update_call = mock_db_update.call_args_list[
+                mock_db_update.call_count - 1]
+            self.assertEqual(expected_call, last_update_call)
+
+        _check_access_ip()
+
     @mock.patch.object(manager.ComputeManager, '_instance_update')
     def test_create_end_on_instance_delete(self, mock_instance_update):
 
@@ -3958,6 +4094,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
         # revert_resize() and the return value is passed to driver.destroy().
         # Otherwise we could regress this.
 
+        @mock.patch.object(self.instance, 'revert_migration_context')
         @mock.patch.object(self.compute.network_api, 'get_instance_nw_info')
         @mock.patch.object(self.compute, '_is_instance_storage_shared')
         @mock.patch.object(self.compute, 'finish_revert_resize')
@@ -3980,7 +4117,8 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
                     _instance_update,
                     finish_revert_resize,
                     _is_instance_storage_shared,
-                    get_instance_nw_info):
+                    get_instance_nw_info,
+                    revert_migration_context):
 
             self.migration.source_compute = self.instance['host']
 

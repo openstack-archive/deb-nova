@@ -19,8 +19,6 @@ from oslo_serialization import jsonutils
 import requests
 import six
 
-from nova.tests.unit.image import fake
-
 
 LOG = logging.getLogger(__name__)
 
@@ -337,33 +335,16 @@ class TestOpenStackClient(object):
         return self.api_post('/servers/%s/metadata' % server_id,
                              post_body).body['metadata']
 
+    def get_server_groups(self):
+        return self.api_get('/os-server-groups').body['server_groups']
 
-class TestOpenStackClientV3(TestOpenStackClient):
-    """Simple OpenStack v3 API Client.
+    def get_server_group(self, group_id):
+        return self.api_get('/os-server-groups/%s' %
+                            group_id).body['server_group']
 
-    This is a really basic OpenStack API client that is under our control,
-    so we can make changes / insert hooks for testing.
+    def post_server_groups(self, group):
+        response = self.api_post('/os-server-groups', {"server_group": group})
+        return response.body['server_group']
 
-    Note that the V3 API does not have an image API and so it is
-    not possible to query the api for the image information.
-    So instead we just access the fake image service used by the unittests
-    directly.
-
-    """
-
-    def get_image(self, image_id):
-        return fake._fakeImageService.show(None, image_id)
-
-    def get_images(self, detail=True):
-        return fake._fakeImageService.detail(None)
-
-    def post_image(self, image):
-        raise NotImplementedError
-
-    def delete_image(self, image_id):
-        return fake._fakeImageService.delete(None, image_id)
-
-
-class TestOpenStackClientV3Mixin(object):
-    def _get_test_client(self):
-        return TestOpenStackClientV3('fake', 'fake', self.auth_url)
+    def delete_server_group(self, group_id):
+        self.api_delete('/os-server-groups/%s' % group_id)

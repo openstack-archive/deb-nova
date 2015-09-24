@@ -12,6 +12,9 @@
 
 import os
 
+import mock
+from oslo_concurrency import processutils
+
 from nova.tests.unit.virt.libvirt.volume import test_volume
 from nova import utils
 from nova.virt.libvirt import utils as libvirt_utils
@@ -38,7 +41,7 @@ class LibvirtGlusterfsVolumeDriverTestCase(
 
         device_path = os.path.join(export_mnt_base,
                                    connection_info['data']['name'])
-        self.assertEqual(device_path, connection_info['data']['device_path'])
+        self.assertEqual(connection_info['data']['device_path'], device_path)
         expected_commands = [
             ('mkdir', '-p', export_mnt_base),
             ('mount', '-t', 'glusterfs', export_string, export_mnt_base),
@@ -92,7 +95,21 @@ class LibvirtGlusterfsVolumeDriverTestCase(
             ('findmnt', '--target', export_mnt_base,
              '--source', export_string),
             ('umount', export_mnt_base)]
-        self.assertEqual(self.executes, expected_commands)
+        self.assertEqual(expected_commands, self.executes)
+
+    @mock.patch.object(glusterfs.utils, 'execute')
+    @mock.patch.object(glusterfs.LOG, 'debug')
+    @mock.patch.object(glusterfs.LOG, 'exception')
+    def test_libvirt_glusterfs_driver_umount_error(self, mock_LOG_exception,
+                                        mock_LOG_debug, mock_utils_exe):
+        export_string = '192.168.1.1:/volume-00001'
+        connection_info = {'data': {'export': export_string,
+                                    'name': self.name}}
+        libvirt_driver = glusterfs.LibvirtGlusterfsVolumeDriver(self.fake_conn)
+        mock_utils_exe.side_effect = processutils.ProcessExecutionError(
+            None, None, None, 'umount', 'umount: target is busy.')
+        libvirt_driver.disconnect_volume(connection_info, "vde")
+        self.assertTrue(mock_LOG_debug.called)
 
     def test_libvirt_glusterfs_driver_with_opts(self):
         mnt_base = '/mnt'
@@ -118,7 +135,7 @@ class LibvirtGlusterfsVolumeDriverTestCase(
              export_string, export_mnt_base),
             ('umount', export_mnt_base),
         ]
-        self.assertEqual(self.executes, expected_commands)
+        self.assertEqual(expected_commands, self.executes)
 
     def test_libvirt_glusterfs_libgfapi(self):
         self.flags(qemu_allowed_storage_drivers=['gluster'], group='libvirt')
@@ -138,13 +155,13 @@ class LibvirtGlusterfsVolumeDriverTestCase(
         libvirt_driver.connect_volume(connection_info, disk_info)
         conf = libvirt_driver.get_config(connection_info, disk_info)
         tree = conf.format_dom()
-        self.assertEqual(tree.get('type'), 'network')
-        self.assertEqual(tree.find('./driver').get('type'), 'raw')
+        self.assertEqual('network', tree.get('type'))
+        self.assertEqual('raw', tree.find('./driver').get('type'))
 
         source = tree.find('./source')
-        self.assertEqual(source.get('protocol'), 'gluster')
-        self.assertEqual(source.get('name'), 'volume-00001/volume-00001')
-        self.assertEqual(source.find('./host').get('name'), '192.168.1.1')
-        self.assertEqual(source.find('./host').get('port'), '24007')
+        self.assertEqual('gluster', source.get('protocol'))
+        self.assertEqual('volume-00001/volume-00001', source.get('name'))
+        self.assertEqual('192.168.1.1', source.find('./host').get('name'))
+        self.assertEqual('24007', source.find('./host').get('port'))
 
         libvirt_driver.disconnect_volume(connection_info, "vde")

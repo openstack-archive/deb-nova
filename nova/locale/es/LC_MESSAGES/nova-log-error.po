@@ -5,6 +5,7 @@
 # Translators:
 # Adriana Chisco Landazábal <achisco94@gmail.com>, 2015
 # David Martinez Morata, 2014
+# Ed Gonzalez <proplw@gmail.com>, 2015
 # Pablo Sanchez <furybeat@gmail.com>, 2015
 # Rafael Rivero <rafael@cloudscaling.com>, 2014
 # Sergio Cuellar Valdes <scuellarv@kionetworks.com>, 2015
@@ -12,8 +13,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-05 06:21+0000\n"
-"PO-Revision-Date: 2015-08-05 00:46+0000\n"
+"POT-Creation-Date: 2015-09-08 06:24+0000\n"
+"PO-Revision-Date: 2015-08-30 00:41+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
 "es/)\n"
@@ -127,14 +128,14 @@ msgstr "Ha fallado la conexión a libvirt: %s"
 
 #, python-format
 msgid "Could not bind to %(host)s:%(port)s"
-msgstr "No se puede asociar a %(host)s:%(port)s"
+msgstr "No se puede asociar al %(host)s:%(port)s"
 
 msgid "Could not decode scheduler options"
 msgstr "No se ha podido decodificar las opciones del programador"
 
 #, python-format
 msgid "Could not remove tmpdir: %s"
-msgstr "No se ha podido eliminar directorio temporal: %s"
+msgstr "No se ha podido remover directorio temporal: %s"
 
 #, python-format
 msgid "Could not stat scheduler options file %(filename)s"
@@ -151,7 +152,7 @@ msgstr "No se puede comunicar con la celda '%s'"
 
 #, python-format
 msgid "Couldn't lookup app: %s"
-msgstr "No se pudo buscar aplicación: %s"
+msgstr "No se pudo hayar aplicación: %s"
 
 #, python-format
 msgid "Couldn't unmount the GlusterFS share %s"
@@ -395,17 +396,17 @@ msgstr "Excepción al asignar el suceso %(event)s: %(ex)s"
 
 #, python-format
 msgid "Exception handling resource: %s"
-msgstr "Excepción al manejar recurso: %s"
+msgstr "Excepción manejando recurso: %s"
 
 msgid "Exception in string format operation"
-msgstr "Excepción en la operación de formato de cadena"
+msgstr "Excepción en operacion de formateo de cadena"
 
 msgid "Exception loading extension"
-msgstr "Excepción al cargar extensión"
+msgstr "Excepción cargando extensión"
 
 #, python-format
 msgid "Exception running %(name)s %(type)s-hook: %(obj)s"
-msgstr "Excepción ejecutándose %(name)s %(type)s-enlace: %(obj)s"
+msgstr "Excepción ejecutándo %(name)s %(type)s-enlace: %(obj)s"
 
 msgid "Exception while creating table."
 msgstr "Excepción al crear la tabla."
@@ -478,7 +479,7 @@ msgstr "Fallo al limpiar instantánea."
 
 #, python-format
 msgid "Failed to commit reservations %s"
-msgstr "Ha fallado la entrega de reservas %s|"
+msgstr "Falla al asegurar grabado de reservaciones %s"
 
 msgid "Failed to complete a deletion"
 msgstr "Fallo durante la compleción una remoción"
@@ -547,14 +548,14 @@ msgstr "Fallo al obtener las redes predeterminadas"
 
 #, python-format
 msgid "Failed to get metadata for instance id: %s"
-msgstr "No se han podido obtener metadatos para el id de instancia: %s"
+msgstr "Falla al obtener metadatos para la instancia id: %s"
 
 #, python-format
 msgid "Failed to get metadata for ip: %s"
-msgstr "Fallo al generar metadatos para la ip %s"
+msgstr "Falla al obtener metadatos para ip: %s"
 
 msgid "Failed to get nw_info"
-msgstr "No se ha podido obtener nw_info"
+msgstr "Falla al obtener nw_info"
 
 #, python-format
 msgid "Failed to instantiate the download handler for %(scheme)s"
@@ -562,7 +563,7 @@ msgstr "Fallo al instanciar el manejador de descargas para %(scheme)s"
 
 #, python-format
 msgid "Failed to load %(cfgfile)s: %(ex)s"
-msgstr "Fallo al cargar %(cfgfile)s: %(ex)s"
+msgstr "Falla cargando %(cfgfile)s: %(ex)s"
 
 #, python-format
 msgid "Failed to load %s"
@@ -621,7 +622,7 @@ msgstr "Se ha encontrado un error en al revertir la migración colgada"
 
 #, python-format
 msgid "Failed to roll back reservations %s"
-msgstr "Fallo al revertir las reservas %s"
+msgstr "Falla al revertir las reservaciones %s"
 
 msgid "Failed to rollback quota for failed finish_resize"
 msgstr "Error al restaurar capacidad para finish_resize fallido"
@@ -631,7 +632,7 @@ msgid "Failed to send message to cell: %(next_hop)s"
 msgstr "Error al enviar mensaje a celda: %(next_hop)s"
 
 msgid "Failed to send state update notification"
-msgstr "No se ha podido enviar notificación de actualización de estado"
+msgstr "Falla enviando notificación de actualización de estado"
 
 msgid "Failed to send updated snapshot status to volume service."
 msgstr ""
@@ -644,7 +645,7 @@ msgstr ""
 
 #, python-format
 msgid "Failed to start %(name)s on %(host)s:%(port)s with SSL support"
-msgstr "No se ha podido iniciar %(name)s en %(host)s:%(port)s con soporte SSL"
+msgstr "Falla al iniciar %(name)s en %(host)s:%(port)s con soporte SSL"
 
 msgid "Failed to start instance"
 msgstr "Fallo al iniciar instancia"
@@ -703,7 +704,7 @@ msgid "Failed to write configuration file"
 msgstr "No se ha podido grabar archivo de configuración"
 
 msgid "Failed to write inbound.csr"
-msgstr "No se ha podido grabar inbound.csr"
+msgstr "Falla al grabar inbound.csr"
 
 msgid "Failed while plugging vif"
 msgstr "Fallo al conectar vif"
@@ -719,7 +720,7 @@ msgstr "Error al limpiar VDI conectados "
 
 #, python-format
 msgid "Fatal Exception running %(name)s %(type)s-hook: %(obj)s"
-msgstr "Excepción fatal ejecutándose %(name)s %(type)s-enlace: %(obj)s"
+msgstr "Excepción fatal ejecutándo %(name)s %(type)s-enlace: %(obj)s"
 
 msgid "FaultWrapper error"
 msgstr "Error de FaultWrapper"
@@ -782,11 +783,11 @@ msgstr "Interfaz %s no encontrada"
 
 #, python-format
 msgid "Invalid server_string: %s"
-msgstr "Serie de servidor no válida: %s"
+msgstr "Serie del servidor no válido: %s"
 
 #, python-format
 msgid "Keystone failure: %s"
-msgstr "Anomalía de keystone: %s"
+msgstr "Falla de keystone: %s"
 
 #, python-format
 msgid "Live Migration failure: %s"
@@ -931,9 +932,6 @@ msgstr "Previo a migración en vivo falló en %s"
 msgid "Read/Write data failed"
 msgstr "Fallo en la Lectura/Escritura de datos"
 
-msgid "Recovered model server connection!"
-msgstr "Recuperada la conexión al servidor de modelos."
-
 #, python-format
 msgid "Requested VM Generation %s is not supported on  this OS."
 msgstr "Este Sistema Operativo no soporta la generación de VM %s solicitada."
@@ -949,7 +947,7 @@ msgid "Returning exception %s to caller"
 msgstr "Devolviendo excepción %s al interlocutor"
 
 msgid "Service error occurred during cleanup_host"
-msgstr "Ha ocurrido un error de servicio durante cleanup_host"
+msgstr "Error del servicio durante cleanup_host"
 
 msgid "Setting instance vm_state to ERROR"
 msgstr "Estableciendo el vm_state de la instancia a ERROR"
@@ -1116,7 +1114,7 @@ msgstr "Incapaz de actualizar el anfitrión del puerto %s"
 
 #, python-format
 msgid "Unexpected %(ex_name)s raised: %(ex_str)s"
-msgstr "Encontrado %(ex_name)s inesperado : %(ex_str)s"
+msgstr "Inesperado %(ex_name)s: %(ex_str)s"
 
 msgid "Unexpected build failure, not rescheduling build."
 msgstr "Fallo de compilación inesperado, no se reprogramará la compilación."
@@ -1220,9 +1218,6 @@ msgstr "kill -HUP dnsmasq lanzó %s"
 msgid "killing radvd threw %s"
 msgstr "Matando radvd lanzado %s"
 
-msgid "model server went away"
-msgstr "el servidor de modelos se ha ido"
-
 msgid "nbd module not loaded"
 msgstr "El módulo nbd no se ha cargado"
 
@@ -1234,5 +1229,5 @@ msgid ""
 "status is UNKNOWN from vm_state=%(vm_state)s task_state=%(task_state)s. Bad "
 "upgrade or db corrupted?"
 msgstr ""
-"el estado es UNKNOWN de vm_state=%(vm_state)s task_state=%(task_state)s. "
+"Estado  DESCONOCIDO de vm_state=%(vm_state)s task_state=%(task_state)s. "
 "¿Actualización errónea o base de datos dañada?"
