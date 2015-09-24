@@ -69,6 +69,7 @@ override_dh_install:
 	done
 	install -D -m 0600 $(CURDIR)/debian/nova-compute-xen.conf.dist $(CURDIR)/debian/nova-compute-xen/usr/share/nova-compute-xen/nova-compute.conf
 	find $(CURDIR)/debian -name .gitignore -delete
+	cp $(CURDIR)/nova/db/sqlalchemy/migrate_repo/migrate.cfg $(CURDIR)/debian/python-nova/usr/lib/python2.7/dist-packages/nova/db/sqlalchemy/migrate_repo
 
 override_dh_fixperms:
 	dh_fixperms -Xnova_sudoers
