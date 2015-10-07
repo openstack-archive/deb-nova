@@ -2,20 +2,22 @@
 # Copyright (C) 2012 THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the nova package.
 # Jeroen Schot <schot@a-eskwadraat.nl>, 2012.
-# Frans Spiesschaert <Frans.Spiesschaert@yucom.be>, 2014.
+# Frans Spiesschaert <Frans.Spiesschaert@yucom.be>, 2014, 2015.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 2012.1-6\n"
+"Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2015-02-02 01:36+0100\n"
-"PO-Revision-Date: 2014-09-25 23:34+0200\n"
+"PO-Revision-Date: 2015-08-29 21:36+0200\n"
 "Last-Translator: Frans Spiesschaert <Frans.Spiesschaert@yucom.be>\n"
 "Language-Team: Debian Dutch l10n Team <debian-l10n-dutch@lists.debian.org>\n"
 "Language: nl\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: Gtranslator 2.91.6\n"
 
 #. Type: string
 #. Description
@@ -144,7 +146,7 @@ msgstr "Waarde voor my_ip:"
 #. Description
 #: ../nova-common.templates:8001
 msgid "This value will be stored in the my_ip directive of nova.conf."
-msgstr "Seze waarde wordt opgeslagen in het stuurcommando my_ip van nova.conf."
+msgstr "Deze waarde wordt opgeslagen in het stuurcommando my_ip van nova.conf."
 
 #. Type: string
 #. Description
@@ -265,7 +267,7 @@ msgstr ""
 #. Description
 #: ../nova-common.templates:16001
 msgid "Metadata proxy shared secret:"
-msgstr ""
+msgstr "Met de proxy voor metagegevens gedeeld geheim:"
 
 #. Type: password
 #. Description
@@ -275,6 +277,9 @@ msgid ""
 "through the Neutron metadata agent, which serves as a proxy to the Nova "
 "metadata REST API server."
 msgstr ""
+"VM-realisaties die Neutron gebruiken om hun netwerkomgeving te beheren, "
+"halen hun metagegevens op via de agent voor metagegevens van Neutron die "
+"dienst doet als een proxy voor de REST API server voor metagegevens van Nova."
 
 #. Type: password
 #. Description
@@ -285,6 +290,11 @@ msgid ""
 "same shared password should be used when setting up the neutron-metadata-"
 "agent package."
 msgstr ""
+"Gelieve het wachtwoord in te voeren dat gebruikt moet worden om de "
+"communicatie te beveiligen tussen de proxy-agent voor metagegevens van "
+"Neutron en de server voor metagegevens van Nova. Hetzelfde gedeelde "
+"wachtwoord moet gebruikt worden bij het instellen van het pakket dat de "
+"agent voor metagegevens van Neutron bevat."
 
 #. Type: string
 #. Description
@@ -449,7 +459,7 @@ msgstr ""
 #. Description
 #: ../nova-api.templates:5001
 msgid "Name of the region to register:"
-msgstr "Naam van de te registreren regio:"
+msgstr "Naam van de regio voor registratie:"
 
 #. Type: string
 #. Description

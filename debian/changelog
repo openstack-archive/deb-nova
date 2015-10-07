@@ -2,6 +2,8 @@ nova (1:12.0.0~rc1-2) UNRELEASED; urgency=medium
 
   * Updated the Danish translation of the debconf templates thanks to Joe
     Dalton <joedalton2@yahoo.dk> (Closes: #800397).
+  * Updated Dutch translation of debconf messages thanks to Frans
+    Spiesschaert <Frans.Spiesschaert@yucom.be> (Closes: #797349).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 07 Oct 2015 16:02:07 +0200
 
