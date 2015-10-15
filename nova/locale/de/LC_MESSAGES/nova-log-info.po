@@ -3,334 +3,345 @@
 # This file is distributed under the same license as the nova project.
 #
 # Translators:
-# ChangBo Guo(gcb) <glongwave@gmail.com>, 2014
-# Chen Peng <goldenarmour@sina.com>, 2015
-# 汪军 <wwyyzz08@sina.com>, 2015
-# 颜海峰 <yanheven@gmail.com>, 2014
+# Ettore Atalan <atalanttore@googlemail.com>, 2014
+# Andreas Jaeger <jaegerandi@gmail.com>, 2015. #zanata
+# Frank Kloeker <eumel@arcor.de>, 2015. #zanata
 # OpenStack Infra <zanata@openstack.org>, 2015. #zanata
-# liujunpeng <liujunpeng@inspur.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 12.0.0.0rc2.dev8\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
-"PO-Revision-Date: 2015-09-27 06:28+0000\n"
-"Last-Translator: liujunpeng <liujunpeng@inspur.com>\n"
-"Language-Team: Chinese (China) (http://www.transifex.com/openstack/nova/"
-"language/zh_CN/)\n"
-"Language: zh-CN\n"
+"POT-Creation-Date: 2015-10-05 06:32+0000\n"
+"PO-Revision-Date: 2015-10-03 03:02+0000\n"
+"Last-Translator: Frank Kloeker <eumel@arcor.de>\n"
+"Language-Team: German (http://www.transifex.com/openstack/nova/language/"
+"de/)\n"
+"Language: de\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Generated-By: Babel 2.0\n"
-"Plural-Forms: nplurals=1; plural=0;\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "X-Generator: Zanata 3.7.1\n"
 
 #, python-format
 msgid "%(action_str)s instance"
-msgstr "%(action_str)s 实例"
+msgstr "%(action_str)s Instanz"
 
 #, python-format
 msgid "%(id)s (%(base_file)s): generating checksum"
-msgstr "%(id)s (%(base_file)s)：正在生成校验和"
+msgstr "%(id)s (%(base_file)s): Prüfsumme wird erzeugt"
 
 #, python-format
 msgid "%(name)s listening on %(host)s:%(port)s"
-msgstr "%(name)s 正在侦听 %(host)s:%(port)s"
+msgstr "%(name)s lauscht auf %(host)s:%(port)s"
 
 #, python-format
 msgid "%(num_values)d values found, of which the minimum value will be used."
-msgstr "发现值%(num_values)d ，最小值数目值将使用它。"
+msgstr ""
+"%(num_values)d Einträge gefunden,  von denen der Minimalwert verwendet wird."
 
 #, python-format
 msgid "%(type)s limit not specified, defaulting to unlimited"
-msgstr "%(type)s限制未指定，默认设为无限制"
+msgstr "%(type)s Limit nicht spezifiziert, voreingestellt ist unlimitiert"
 
 #, python-format
 msgid "%(type)s limit: %(limit).02f %(unit)s, free: %(free).02f %(unit)s"
-msgstr "%(type)s 限制: %(limit).02f %(unit)s, 剩余: %(free).02f %(unit)s"
+msgstr "%(type)s Limit: %(limit).02f %(unit)s, frei: %(free).02f %(unit)s"
 
 #, python-format
 msgid "%(url)s returned with HTTP %(status)d"
-msgstr "%(url)s 随HTTP %(status)d返回"
+msgstr "%(url)s mit HTTP %(status)d zurückgegeben"
 
 #, python-format
 msgid "%s is not a valid LUKS device; formatting device for first use"
-msgstr "%s 不是一个可用LUKS设备; 第一次用，先进行格式化"
+msgstr "%s ist kein gültiges LUKS Gerät; formatiere Gerät zur ersten Benutzung"
 
 #, python-format
 msgid "Active base files: %s"
-msgstr "活跃的基文件：%s"
+msgstr "Aktive Basisdateien: %s"
 
 #, python-format
 msgid "Adding security group %(security_group_id)s to port %(port_id)s"
-msgstr "正在将安全组 %(security_group_id)s 添加至端口 %(port_id)s"
+msgstr "Füge Sicherheitsgruppe %(security_group_id)s zu Port %(port_id)s"
 
 msgid "Allocate address"
-msgstr "分配地址"
+msgstr "Weise Adresse zu"
 
 #, python-format
 msgid "Allocated network: '%s' for instance"
-msgstr "为实例分配网络： '%s' "
+msgstr "Netwerkzuweisung: '%s' für Instanz"
 
 #, python-format
 msgid "Associate address %(public_ip)s to instance %(instance_id)s"
-msgstr "把地址 %(public_ip)s 关联到实例 %(instance_id)s"
+msgstr "Verbinde Adresse %(public_ip)s mit Instanz %(instance_id)s"
 
 msgid "Attach interface"
-msgstr "请连接接口"
+msgstr "Schnittstelle hinzufügen"
 
 #, python-format
 msgid "Attach volume %(volume_id)s to instance %(instance_id)s at %(device)s"
-msgstr "把卷 %(volume_id)s 附加到实例 %(instance_id)s 上位置在 %(device)s"
+msgstr "Hänge Volume %(volume_id)s an Instanz %(instance_id)s via %(device)s"
 
 #, python-format
 msgid "Attach volume %(volume_id)s to instance %(server_id)s at %(device)s"
-msgstr "把卷 %(volume_id)s 附加到实例 %(server_id)s 的 %(device)s 设备上"
+msgstr "Hänge Volume %(volume_id)s an Instanz %(server_id)s via %(device)s"
 
 #, python-format
 msgid "Attaching volume %(volume_id)s to %(mountpoint)s"
-msgstr "正在把卷 %(volume_id)s 附加到 %(mountpoint)s"
+msgstr "Anhängen Datenträger %(volume_id)s an %(mountpoint)s"
 
 msgid "Attempted to unfilter instance which is not filtered"
-msgstr "试图不过滤没有过滤的实例"
+msgstr ""
+"Versuch den Filter von einer Instanz zu nehmen, die nicht gefiltert ist"
 
 #, python-format
 msgid "Auditing locally available compute resources for node %(node)s"
-msgstr "正审计节点%(node)s本地可用的计算资源"
+msgstr ""
+"Überprüfung der örtlich verfügbaren Compute-Resourcen für Knoten %(node)s"
 
 #, python-format
 msgid ""
 "Automatically confirming migration %(migration_id)s for instance "
 "%(instance_uuid)s"
-msgstr "正在自动为实例 %(instance_uuid)s 确认迁移 %(migration_id)s"
+msgstr ""
+"Automatische Migrationsbestätigung %(migration_id)s für Instanz "
+"%(instance_uuid)s"
 
 msgid "Automatically hard rebooting"
-msgstr "正在自动执行硬重新引导"
+msgstr "Automatischer harter Neustart"
 
 #, python-format
 msgid "Base or swap file too young to remove: %s"
-msgstr "Base 或 Swap 文件太新不能移除：%s"
+msgstr "Basis- oder Swap-Datei zu neu zum Löschen: %s"
 
 msgid "Beginning cold snapshot process"
-msgstr "正在结束冷快照流程"
+msgstr "Beginne kalte Schattenkopie zu erstellen"
 
 msgid "Beginning live snapshot process"
-msgstr "正在开始实时快照流程"
+msgstr "Beginne Live-Schattenkopie zu erstellen"
 
 #, python-format
 msgid "Booting with volume %(volume_id)s at %(mountpoint)s"
-msgstr "卷 %(volume_id)s 正在 %(mountpoint)s 上启动"
+msgstr "Starte mit Datenträger %(volume_id)s an EInhängepunkt %(mountpoint)s"
 
 msgid "Called setup_basic_filtering in nwfilter"
-msgstr "在 nwfilter 里调用 setup_basic_filtering"
+msgstr "Rufe setup_basic_filtering in Nwfilter"
 
 #, python-format
 msgid "Checking Token: %(token)s, %(token_valid)s"
-msgstr "检查令牌：%(token)s, %(token_valid)s"
+msgstr "Überprüfe Token: %(token)s, %(token_valid)s"
 
 msgid "Claim successful"
-msgstr "请求成功"
+msgstr "Reklamation erfolgreich"
 
 #, python-format
 msgid "Compute node '%s' not found in update_available_resource."
-msgstr "在update_available_resource中没有发现计算节点 '%s' 。"
+msgstr "Compute Knoten '%s' nicht gefunden in update_available_resource."
 
 #, python-format
 msgid "Compute_service record created for %(host)s:%(node)s"
-msgstr "已为 %(host)s:%(node)s 创建 Compute_service 记录"
+msgstr "Compute_service Datensatz erstellt für %(host)s:%(node)s"
 
 #, python-format
 msgid "Compute_service record updated for %(host)s:%(node)s"
-msgstr "已为 %(host)s:%(node)s 更新 Compute_service 记录"
+msgstr "Compute_service Eintrag aktualisiert für %(host)s:%(node)s"
 
 #, python-format
 msgid ""
 "Config drive for instance %(instance)s on baremetal node %(node)s created."
-msgstr "在裸节点%(node)s，创建实例%(instance)s的配置驱动。"
+msgstr ""
+"Konfigurationsfestplatte für Instanz %(instance)s an BareMetal-Knoten "
+"%(node)s erstellt."
 
 #, python-format
 msgid "Configured network %(network)s on host %(host)s"
-msgstr "在主机%(host)s上配置了网络 %(network)s "
+msgstr "Konfiguriere Netzwerk %(network)s auf Host %(host)s"
 
 msgid "Configuring timezone for windows instance to localtime"
-msgstr "为windowss实例配置本地时区"
+msgstr "Konfiguriere Zeitzone für Windowsinstanz auf lokale Zeit"
 
 #, python-format
 msgid "Connected volume (vdi_uuid): %s"
-msgstr "连接卷 (vdi_uuid): %s"
+msgstr "Verbundenes Volumen (vdi_uuid): %s"
 
 #, python-format
 msgid "Connection event '%(enabled)d' reason '%(reason)s'"
-msgstr "连接事件 '%(enabled)d' ，原因：'%(reason)s'"
+msgstr "Verbindungsereignis '%(enabled)d' Grund: '%(reason)s'"
 
 #, python-format
 msgid "Copied %(source_file)s using %(module_str)s"
-msgstr "使用%(module_str)s 复制%(source_file)s"
+msgstr "Kopierte %(source_file)s unter Benutzung von  %(module_str)s"
 
 #, python-format
 msgid "Copied virtual disk from %(src)s to %(dst)s."
-msgstr "从 %(src)s 到 %(dst)s 复制虚拟磁盘。"
+msgstr "Virtuelle Festplatte kopiert von %(src)s nach %(dst)s."
 
 #, python-format
 msgid "Corrupt base files: %s"
-msgstr "损坏的基文件：%s"
+msgstr "Fehlerhafte Basisdateien: %s"
 
 #, python-format
 msgid ""
 "Could not find domain in libvirt for instance %s. Cannot get block stats for "
 "device"
-msgstr "对于实例 %s，在 libvirt 中找不到域。无法获取设备的块统计信息"
+msgstr ""
+"Konnte Domain nicht finden in Libvirt für Instanz %s. Bekomme keinen "
+"Blockstatus für Gerät"
 
 #, python-format
 msgid "Create Security Group %s"
-msgstr "创建安全组 %s"
+msgstr "Sicherheitsgruppe %s erstellen"
 
 #, python-format
 msgid "Create assisted snapshot from volume %s"
-msgstr "从卷%s 创建辅助的快照"
+msgstr "Erstelle Schattenkopievorlage vom Datenträger %s"
 
 #, python-format
 msgid "Create key pair %s"
-msgstr "创建密钥对 %s"
+msgstr "Schlüsselpaar %s erstellen"
 
 #, python-format
 msgid "Create snapshot from volume %s"
-msgstr "为卷 %s 创建快照"
+msgstr "Momentaufnahme aus Datenträger %s erstellen"
 
 #, python-format
 msgid "Create snapshot of volume %s"
-msgstr "创建卷 %s 的快照"
+msgstr "Erstelle Momentaufnahme aus Datenträger %s"
 
 #, python-format
 msgid "Create volume from snapshot %s"
-msgstr "从快照 %s 创建卷"
+msgstr "Erzeuge Volume von der Schattenkopie %s"
 
 #, python-format
 msgid "Create volume of %s GB"
-msgstr "创建 %s GB的卷"
+msgstr "Datenträger mit %s GB erstellen"
 
 msgid "Created linked-clone VM from snapshot"
-msgstr "从镜像创建链接-克隆的虚拟机VM"
+msgstr "Link-Clone VM von Schattenkopie erstellt"
 
 #, python-format
 msgid "Creating config drive at %(path)s"
-msgstr "正在 %(path)s 处创建配置驱动器"
+msgstr "Konfigurationslaufwerk wird erstellt bei %(path)s"
 
 #, python-format
 msgid "Creating event %(name)s:%(tag)s for instance %(instance_uuid)s"
-msgstr "为实例 %(instance_uuid)s 创建事件 %(name)s:%(tag)s"
+msgstr "Erstelle Ereignis %(name)s:%(tag)s für Instanz %(instance_uuid)s"
 
 msgid "Creating image"
-msgstr "正在创建镜像"
+msgstr "Abbild wird erstellt"
 
 #, python-format
 msgid ""
 "Data remaining %(remaining)d bytes, low watermark %(watermark)d bytes "
 "%(last)d seconds ago"
-msgstr "在%(last)d秒以前，数据剩余%(remaining)d 字节，低值%(watermark)d 字节。"
+msgstr ""
+"Verbleibende Daten %(remaining)d Bytes, niedrige Wassermarke %(watermark)d "
+"Bytes  seit %(last)d Sekunden"
 
 #, python-format
 msgid "De-registering image %s"
-msgstr "解除镜像 %s 的注册"
+msgstr "Melde Abbild  %s ab"
 
 #, python-format
 msgid "Delete key pair %s"
-msgstr "删除密钥对 %s"
+msgstr "Schlüsselpaar %s löschen"
 
 #, python-format
 msgid "Delete security group %s"
-msgstr "删除安全组 %s"
+msgstr "Sicherheitsgruppe %s löschen"
 
 #, python-format
 msgid "Delete snapshot with id: %s"
-msgstr "删除id为 %s 的快照"
+msgstr "Momentaufnahme mit folgender ID löschen: %s"
 
 #, python-format
 msgid "Delete volume with id: %s"
-msgstr "删除id为 %s 的卷"
+msgstr "Datenträger mit folgender ID löschen: %s"
 
 #, python-format
 msgid "Deleted %s snapshots."
-msgstr "删除 %s 快照。"
+msgstr "%s Schattenkopien gelöscht."
 
 #, python-format
 msgid "Deleted virtual disk %s."
-msgstr "删除虚拟磁盘 %s。"
+msgstr "Virtuelle Festplatte gelöscht %s."
 
 msgid "Deleting instance as it has been evacuated from this host"
-msgstr "当它从这台主机取消时，删除实例"
+msgstr "Gelöschte Instanz wurde von diesem Host geräumt"
 
 #, python-format
 msgid "Deleting instance files %s"
-msgstr "删除实例文件 %s"
+msgstr "Instanzdateien werden gelöscht %s"
 
 #, python-format
 msgid "Deleting orphan compute node %s"
-msgstr "正在删除孤立计算节点%s"
+msgstr "Lösche verwaisten Compute Knoten %s"
 
 #, python-format
 msgid "Deletion of %s complete"
-msgstr "%s 的删除完成"
+msgstr "Löschung von %s abgeschlossen"
 
 #, python-format
 msgid "Deletion of %s failed"
-msgstr "%s 的删除失败"
+msgstr "Löschung von %s fehlgeschlagen"
 
 msgid "Destroyed the VM"
-msgstr "已销毁 VM"
+msgstr "VM wurde zerstört"
 
 msgid "Destroying VM"
-msgstr "正在销毁 VM"
+msgstr "VM wird zerstört"
 
 #, python-format
 msgid ""
 "Destroying instance with name label '%s' which is marked as DELETED but "
 "still present on host."
-msgstr "正在销毁名为’%s'的实例，其已被标记为‘已删除’状态，但仍然存在于主机上。"
+msgstr ""
+"Zerstören der Instanz mit Namensschild '%s' welche markiert ist als GELÖSCHT "
+"aber weiter auf dem Host existiert."
 
 #, python-format
 msgid "Detach interface %s"
-msgstr "请与接口 %s 断开连接"
+msgstr "Schnittstelle %s abtrennen"
 
 #, python-format
 msgid "Detach volume %(volume_id)s from mountpoint %(mp)s"
-msgstr "卷 %(volume_id)s 从挂载点 %(mp)s 分离"
+msgstr "Abhängen des Datenträgers %(volume_id)s vom Einhängepunkt %(mp)s"
 
 #, python-format
 msgid "Detach volume %s"
-msgstr "分离卷 %s"
+msgstr "Datenträger %s abtrennen"
 
 #, python-format
 msgid "Detaching from volume api: %s"
-msgstr "正在从卷 API 断开连接：%s"
+msgstr "Abhängen von Datenträger-API: %s"
 
 #, python-format
 msgid "Dev %(dev_number)s attached to instance %(instance_name)s"
-msgstr "设备 %(dev_number)s 绑定到实例 %(instance_name)s"
+msgstr "Gerät %(dev_number)s angehangen an Instanz %(instance_name)s"
 
 msgid "Device allocation failed. Will retry in 2 seconds."
-msgstr "设备分配失败。将在两秒后重试。"
+msgstr "Gerätezuordnung fehlgeschlagen. Versuche es erneut in 2 Sekunden."
 
 #, python-format
 msgid "Disabling host %s."
-msgstr "正在禁用主机 %s。"
+msgstr "Host %s wird deaktiviert."
 
 #, python-format
 msgid "Disassociate address %s"
-msgstr "取消地址 %s 的关联"
+msgstr "Trenne Adresse %s"
 
 #, python-format
 msgid "Disconnecting stale VDI %s from compute domU"
-msgstr "正在将过时 VDI %s 从计算 domU 断开连接"
+msgstr "Trenne schlechte VDI %s von Compute domU"
 
 #, python-format
 msgid "Downloaded OVA image file %(image_ref)s"
-msgstr "下载OVA镜像文件%(image_ref)s"
+msgstr "Heruntergeladene OVA -Abbilddatei %(image_ref)s"
 
 #, python-format
 msgid "Downloaded image file data %(image_ref)s"
-msgstr "下载镜像文件数据  %(image_ref)s"
+msgstr "Heruntergeladene Abbilddatei %(image_ref)s"
 
 #, python-format
 msgid ""
@@ -338,83 +349,100 @@ msgid ""
 "does not match the vm_power_state from the hypervisor (%(vm_power_state)s). "
 "Updating power_state in the DB to match the hypervisor."
 msgstr ""
-"在同步实例电源状态期间，DB电源状态 (%(db_power_state)s) 与监测器上虚拟机电源"
-"状态 (%(vm_power_state)s)不一致。更新DB中的电源状态与监测器匹配"
+"During _sync_instance_power_state der Datenbank power_state "
+"(%(db_power_state)s) stimmt nicht mit  vm_power_state vom Hypervisor "
+"(%(vm_power_state)s) überein. Aktualisieren SIe power_state in der "
+"Datenbank, damit er mit dem Hypervisor übereinstimmt."
 
 #, python-format
 msgid ""
 "During sync_power_state the instance has a pending task (%(task)s). Skip."
-msgstr "在同步电源状态期间，实例有一个待办任务 (%(task)s) 。跳过。"
+msgstr ""
+"Bei sync_power_state hat die Instanz noch anstehende Aufgaben (%(task)s). "
+"Überspringe."
 
 #, python-format
 msgid ""
 "During the sync_power process the instance has moved from host %(src)s to "
 "host %(dst)s"
-msgstr "在 sync_power 过程中，实例已从主机 %(src)s 移到主机 %(dst)s"
+msgstr ""
+"Beim the sync_power Prozess wurde die Instanz verschoben von Host %(src)s zu "
+"Host %(dst)s"
 
 msgid "During wait destroy, instance disappeared."
-msgstr "在 wait destroy 期间，实例消失。"
+msgstr "Beim Warten zerstört, Instanz verschwunden."
 
 #, python-format
 msgid "Enabling host %s."
-msgstr "正在启用主机 %s。"
+msgstr "Host %s wird aktiviert."
 
 msgid "Ensuring static filters"
-msgstr "正在确保静态过滤器"
+msgstr "Sorge für statische Filter"
 
 #, python-format
 msgid "Error %(ex)s, migration failed"
-msgstr "错误 %(ex)s，迁移失败"
+msgstr "Fehler %(ex)s, Migration fehlgeschlagen"
 
 #, python-format
 msgid "Error auto-confirming resize: %s. Will retry later."
-msgstr "自动确认调整错误：%s。稍后重试。"
+msgstr ""
+"Fehler bei Auto-Bestätigung zur Größenänderung: %s. Werde es später nochmal "
+"probieren."
 
 #, python-format
 msgid "Error in handshake format: %s"
-msgstr "握手格式错误：%s"
+msgstr "Fehler im Handshake-Format: %s"
 
 #, python-format
 msgid "Error in handshake: %s"
-msgstr "握手出错：%s"
+msgstr "Fehler im Handshake: %s"
 
 #, python-format
 msgid ""
 "Executing RootwrapDaemonHelper.execute cmd=[%(cmd)r] kwargs=[%(kwargs)r]"
-msgstr "执行RootwrapDaemonHelper.execute cmd=[%(cmd)r] kwargs=[%(kwargs)r]"
+msgstr ""
+"Ausführen RootwrapDaemonHelper.execute cmd=[%(cmd)r] kwargs=[%(kwargs)r]"
 
 #, python-format
 msgid "Failed to get image info from path %(path)s; error: %(error)s"
-msgstr "从路径%(path)s 获取镜像信息失败；错误 ：%(error)s"
+msgstr ""
+"Abruf Abbild-Information fehlgeschlagen vom Pfad %(path)s; Fehler: %(error)s"
 
 #, python-format
 msgid "Failed to mount filesystem (expected for non-linux instances): %s"
-msgstr "挂载文件系统失败(期望的是非Linux实例)：%s"
+msgstr ""
+"Einhängen Dateisystem fehlgeschlagen (es wurde eine Nicht-Linux-Instanz "
+"erwartet): %s"
 
 #, python-format
 msgid "Failed to process external instance event %(event)s due to: %(error)s"
-msgstr "处理外部实例事件%(event)s失败，原因是：%(error)s"
+msgstr ""
+"Verarbeitung des externen Instanz-Ereignis  %(event)s fehlgeschlagen wegen: "
+"%(error)s"
 
 #, python-format
 msgid ""
 "Failed to undefine network filter %(name)s. Try %(cnt)d of %(max_retry)d."
-msgstr "取消网络过滤器 %(name)s 失败。尝试了%(max_retry)d的%(cnt)d次"
+msgstr ""
+"Zurücksetzen des Netzwerkfilters %(name)s fehlgeschlagen. Versuch %(cnt)d "
+"von %(max_retry)d."
 
 #, python-format
 msgid "Fault thrown: %s"
-msgstr "错误抛出: %s"
+msgstr "Ausgelöster Fehler: %s"
 
 #, python-format
 msgid "Filter %s returned 0 hosts"
-msgstr "筛选器%s返回0个主机"
+msgstr "Filter %s hat 0 Hosts gefunden"
 
 #, python-format
 msgid ""
 "Filtering removed all hosts for the request with reservation ID '%(res_id)s' "
 "and instance ID '%(inst_uuid)s'. Filter results: %(str_results)s"
 msgstr ""
-"过滤器移除保留ID '%(res_id)s' 和实例 ID '%(inst_uuid)s' 的所有主机。过滤结"
-"果：%(str_results)s"
+"Filtern gelöscht an allen Hosts für die Anfrage mit Reservierungs-ID "
+"'%(res_id)s' und Instance-ID '%(inst_uuid)s'. Filterergebnisse: "
+"%(str_results)s"
 
 #, python-format
 msgid ""
@@ -422,86 +450,94 @@ msgid ""
 "%(used_ram)sMB phys_disk=%(phys_disk)sGB used_disk=%(used_disk)sGB "
 "total_vcpus=%(total_vcpus)s used_vcpus=%(used_vcpus)s pci_stats=%(pci_stats)s"
 msgstr ""
-"最终资源视图：name=%(node)s phys_ram=%(phys_ram)sMB used_ram=%(used_ram)sMB "
-"phys_disk=%(phys_disk)sGB used_disk=%(used_disk)sGB total_vcpus="
-"%(total_vcpus)s used_vcpus=%(used_vcpus)s pci_stats=%(pci_stats)s"
+"Finale Verbrauchsansicht: name=%(node)s phys_ram=%(phys_ram)sMB used_ram="
+"%(used_ram)sMB phys_disk=%(phys_disk)sGB used_disk=%(used_disk)sGB "
+"total_vcpus=%(total_vcpus)s used_vcpus=%(used_vcpus)s pci_stats=%(pci_stats)s"
 
 #, python-format
 msgid "Finishing migration network for instance %s"
-msgstr "开始完成为实例%s迁移网络"
+msgstr "Beende Netzwerkmigration für Instanz %s"
 
 #, python-format
 msgid "Fixing previous mount %s which was not unmounted correctly."
-msgstr "修复前一个挂载 %s ，它没有被正确卸载。"
+msgstr ""
+"Repariere vorherigen Einhängepunkt %s, welcher nicht korrekt eingehangen war."
 
 #, python-format
 msgid "Floating IP %s is not associated. Ignore."
-msgstr "浮动IP %s 没有关联。忽略。"
+msgstr "Floating IP %s ist nicht verbunden. Wird ignoriert."
 
 #, python-format
 msgid ""
 "Forcing a sync of instances, project_id=%(projid_str)s, updated_since="
 "%(since_str)s"
 msgstr ""
-"正在强制执行实例的同步，project_id=%(projid_str)s，updated_since="
-"%(since_str)s"
+"Erzwinge Synchronisierung der Instanzen, project_id=%(projid_str)s, "
+"updated_since=%(since_str)s"
 
 #, python-format
 msgid ""
 "Forcing direct route to %(cell_name)s because of 'target_cell' scheduler hint"
-msgstr "由于'target_cell'调度器，强制直接路由到%(cell_name)s"
+msgstr ""
+"Erzwinge direkte Route zu %(cell_name)s wegen einem Scheduler-Hinweis zu "
+"'target_cell'"
 
 #, python-format
 msgid "Found %(instance_count)d hung reboots older than %(timeout)d seconds"
-msgstr "找到%(instance_count)d个超过%(timeout)d秒悬挂的重启"
+msgstr ""
+"%(instance_count)d hängende Neustarts gefunden älter als %(timeout)d Sekunden"
 
 #, python-format
 msgid ""
 "Found %(migration_count)d unconfirmed migrations older than "
 "%(confirm_window)d seconds"
-msgstr "发现 %(migration_count)d 个超过 %(confirm_window)d 秒未经确认的迁移"
+msgstr ""
+"Fand %(migration_count)d unbestätigte Migrationen älter als "
+"%(confirm_window)d Sekunden"
 
 #, python-format
 msgid ""
 "Found an unconfirmed migration during delete, id: %(id)s, status: %(status)s"
-msgstr "删除过程中发现了未确认的迁移,id:%(id)s,status:%(status)s"
+msgstr ""
+"Beim Löschen eine unbestätigte Migration gefunden, ID: %(id)s, Status: "
+"%(status)s"
 
 msgid "Get console output"
-msgstr "请获取控制台输出"
+msgstr "Konsolenausgabe holen"
 
 #, python-format
 msgid "Get console output for instance %s"
-msgstr "获取实例 %s 控制台输出"
+msgstr "Konsolenausgabe holen für Instanz %s"
 
 #, python-format
 msgid ""
 "Getting block stats failed, device might have been detached. Instance="
 "%(instance_name)s Disk=%(disk)s Code=%(errcode)s Error=%(e)s"
 msgstr ""
-"获取块统计失败，设备可能已经解绑绑定。实例=%(instance_name)s 磁盘=%(disk)s 代"
-"码=%(errcode)s 错误=%(e)s"
+"Erhalte Blockstatus-Fehler, Gerät ist möglicherweise abgetrennt. Instanz="
+"%(instance_name)s Festplatte=%(disk)s Code=%(errcode)s Fehler=%(e)s"
 
 msgid "Going to destroy instance again."
-msgstr "将再次销毁实例。"
+msgstr "Beginne erneut Instanz zu zerstören."
 
 msgid "Got request to destroy instance"
-msgstr "收到销毁实例的请求"
+msgstr "Erhielt Anfrage zum Zerstören der Instanz"
 
 #, python-format
 msgid "HTTP exception thrown: %s"
-msgstr "HTTP 异常抛出：%s"
+msgstr "Ausgelöste HTTP-Ausnahme: %s"
 
 #, python-format
 msgid "Host filter forcing available hosts to %s"
-msgstr "主机过滤强制可用主机到 %s"
+msgstr "Host-Filter erzwingt verfügbare Hosts zu %s"
 
 #, python-format
 msgid "Host filter forcing available nodes to %s"
-msgstr "主机过滤强制可以节点到 %s"
+msgstr "Host-Filter erzwingt verfügbare Hosts zu %s"
 
 #, python-format
 msgid "Host filter ignoring hosts: %s"
-msgstr "主机过滤忽略主机：%s"
+msgstr "Host-Filter ignoriert Hosts: %s"
 
 #, python-format
 msgid ""
@@ -509,170 +545,180 @@ msgid ""
 "is now associated with a new instance that is in the process of allocating "
 "it's network."
 msgstr ""
-"忽略释放 MAC %(mac)s 的固定IP  %(address)s ，原因是它现在与一个新的实例绑定，"
-"该实例正在进行网络分配。"
+"Ignoriere Anfrage zur Freigabe der festen  IP-Adresse %(address)s mit MAC "
+"%(mac)s seit sie an eine neue Instanz gebunden ist während der Erstellung "
+"eines Netzwerkes-"
 
 #, python-format
 msgid "Image %s is no longer used by this node. Pending deletion!"
-msgstr "这台节点不再使用镜像  %s 。等待删除！"
+msgstr ""
+"Abbild %s wird nicht länger in diesem Knoten verwendet. Löschung ausstehend!"
 
 #, python-format
 msgid "Image %s is no longer used. Deleting!"
-msgstr "镜像%s 不再使用。删除！"
+msgstr "Abbild %s ist nicht länger in Benutzung. Wird gelöscht!"
 
 #, python-format
 msgid "Image %s was deleted underneath us"
-msgstr "在我们的控制之下，镜像%s被删除"
+msgstr "Abbild %s wurde unter uns gelöscht"
 
 #, python-format
 msgid ""
 "Image creation data, cacheable: %(cache)s, downloaded: %(downloaded)s "
 "duration: %(duration).2f secs for image %(image_id)s"
 msgstr ""
-"镜像创建数据，缓存：%(cache)s，下载：持续 %(downloaded)s ：镜像 %(image_id)s "
-"%(duration).2f 秒"
+"Abbild erstellt Daten, zum Zwischenspeicher: %(cache)s, zum Download: "
+"%(downloaded)s Dauer: %(duration).2f Sekunden für Abbild %(image_id)s"
 
 #, python-format
 msgid "Import key %s"
-msgstr "导入密钥 %s"
+msgstr "Schlüssel %s importieren"
 
 #, python-format
 msgid ""
 "Increasing downtime to %(downtime)dms after %(waittime)d sec elapsed time"
-msgstr "在过去的%(waittime)d 秒时间里， 减少宕机时间到%(downtime)dms"
+msgstr "Erweitere Standzeit zu %(downtime)dms nach %(waittime)d Sekunden"
 
 #, python-format
 msgid ""
 "Instance %(name)s running on %(host)s could not be found in the database: "
 "assuming it is a worker VM and skip ping migration to a new host"
 msgstr ""
-"在数据库中，找不到 %(host)s 上正在运行的实例 %(name)s：假定它是工作程序 VM 并"
-"且跳过至新主机的 ping 迁移"
+"Instanz %(name)s die auf Host %(host)s läuft, konnte in der Datenbank nicht "
+"gefunden werden: vermutlich ist es eine Arbeits-VM und überspringe Ping-"
+"Migration zu einem neuen Host"
 
 msgid "Instance already shutdown."
-msgstr "实例已经关闭。"
+msgstr "Instanz bereits heruntergefahren."
 
 msgid "Instance destroyed successfully."
-msgstr "实例销毁成功。"
+msgstr "Instanz erfolgreich zerstört."
 
 msgid "Instance disappeared during terminate"
-msgstr "实例在结束(terminate)过程中消失。"
+msgstr "Instanz beim Beenden verschwunden"
 
 #, python-format
 msgid "Instance failed to shutdown in %d seconds."
-msgstr "在%d 秒以内，实例关闭失败。"
+msgstr "Fehlerhaftes Herunterfahren der Instanz nach %d Sekunden."
 
 msgid "Instance found in migrating state during startup. Resetting task_state"
-msgstr "在启动期间，找到处于正在迁移状态的实例。正在重置 task_state"
+msgstr ""
+"Instanz gefunden im Migrations-Status während der Startphase. Setze den "
+"Status task_state zurück"
 
 msgid ""
 "Instance has been marked deleted already, removing it from the hypervisor."
-msgstr "实例已被标记为已删除,将其由虚拟机管理程序中删除"
+msgstr "Instanz ist schon zum Löschen markiert, entferne sie vom Hypervisor."
 
 msgid "Instance is already in deleting state, ignoring this request"
-msgstr "实例处在正被删除状态，忽略此请求"
+msgstr "Instanz ist schon im Löschstatus, Anfrage ignoriert"
 
 msgid "Instance is already powered off in the hypervisor when stop is called."
-msgstr "对实例发出停止指令时，该实例在虚拟机管理程序中已被关闭电源。"
+msgstr ""
+"Instance ist schon ausgeschaltet im Hypervisor wenn Stopp aufgerufen ist."
 
 msgid ""
 "Instance is configured with a file console, but the backing file is not "
 "(yet?) present"
-msgstr "实例通过文件控制台配置，但是备份文件还没有存在"
+msgstr ""
+"Instanz ist konfiguriert mit einer Dateikonsole, aber die Datei ist bis "
+"jetzt nicht vorhanden"
 
 msgid "Instance is not found during confirmation"
-msgstr "确认过程中未找到实例"
+msgstr "Instanz beim Bestätigen nicht gefunden"
 
 #, python-format
 msgid "Instance launched has CPU info: %s"
-msgstr "启动实例的CPU信息： %s"
+msgstr "Gestartete Instanz hat CPU Info: %s"
 
 msgid ""
 "Instance lifecycle events from the compute driver have been disabled. Note "
 "that lifecycle changes to an instance outside of the compute service will "
 "only be synchronized by the _sync_power_states periodic task."
 msgstr ""
-"从计算驱动的实例 生命周期事件已经被禁用。注意计算服务以外的实例生命周期的变动"
-"只用被_sync_power_states周情性任务同步。"
+"Ereignis im Lebenszyklus der Instanz vom Compute-Treiber wurde deaktiviert. "
+"Beachten Sie, dass Änderungen im Lebenszyklus zu einer Instanz ausserhalb "
+"des Compute-Dienstes nur synchronisiert wird von _sync_power_states periodic "
+"task"
 
 msgid "Instance may be started again."
-msgstr "可再次启动实例。"
+msgstr "Instanz startet möglicherweise neu."
 
 msgid "Instance may have been confirmed during delete"
-msgstr "实例可能在删除过程中已经被确认"
+msgstr "Instanz könnte beim Löschen bestätigt sein"
 
 msgid "Instance may have been rebooted during soft reboot, so return now."
-msgstr "在软重新引导期间，可能已重新引导实例，因此会立即返回。"
+msgstr "Instanz wurde beim sanften Neustart neu gestartet, beginne von vorn."
 
 msgid "Instance rebooted successfully."
-msgstr "实例成功重启。"
+msgstr "Instanz erfolgreich neu gestartet."
 
 msgid "Instance running successfully."
-msgstr "实例正在成功运行。"
+msgstr "Instanz läuft erfolgreich."
 
 #, python-format
 msgid "Instance shutdown successfully after %d seconds."
-msgstr "在%d秒以后，实例成功关闭。"
+msgstr "Herunterfahren der Instanz erfolgreich nach %d Sekunden."
 
 msgid "Instance shutdown successfully."
-msgstr "已成功关闭实例。"
+msgstr "Instanz erfolgreich heruntergefahren."
 
 msgid "Instance soft rebooted successfully."
-msgstr "已成功执行实例软重新引导。"
+msgstr "Sanfter Neustart der Instanz erfolgreich."
 
 msgid "Instance spawned successfully."
-msgstr "实例成功生产。"
+msgstr "Starten der Instanz erfolgreich."
 
 msgid "Instance was successfully rebuilt"
-msgstr "实例成功重建"
+msgstr "Instanz erfolgreich neu gebaut"
 
 #, python-format
 msgid "Invalid request: %s"
-msgstr "无效的请求：%s"
+msgstr "Ungültige Anfrage: %s"
 
 msgid "It's not supported to backup volume backed instance."
-msgstr "不支持备份卷后台的实例"
+msgstr "Backup Datenträger zurück zur Instance wird nicht unterstützt."
 
 #, python-format
 msgid "Libvirt host capabilities %s"
-msgstr "Libvirt主机能力 %s"
+msgstr "Libvirt Host-Resourcen %s"
 
 #, python-format
 msgid "Loaded extensions: %s"
-msgstr "已加载的扩展:%s"
+msgstr "Geladene Erweiterungen: %s"
 
 #, python-format
 msgid "Loading compute driver '%s'"
-msgstr "正在装入计算驱动程序“%s”"
+msgstr "Lade Computer-Treiber '%s'"
 
 #, python-format
 msgid "Loading network driver '%s'"
-msgstr "正在装入网络驱动程序“%s”"
+msgstr "Netzwerktreiber \"%s\" wird geladen"
 
 #, python-format
 msgid "Loop mount error: %s"
-msgstr "发生回路安装错误：%s"
+msgstr "Fehlerschleife beim EInhängen: %s"
 
 msgid "Manipulating interface files directly"
-msgstr "直接操作接口文件"
+msgstr "Bearbeite Schnittstellendatei direkt"
 
 msgid "Migrating"
-msgstr "正在迁移"
+msgstr "Migrieren"
 
 #, python-format
 msgid "Migrating instance to %s finished successfully."
-msgstr "成功完成迁移实例到 %s。"
+msgstr "Migrieren Instanz zu %s erfolgreich abgeschlossen."
 
 #, python-format
 msgid "Migration %s is already confirmed"
-msgstr "迁移%s已被确认"
+msgstr "Migration %s ist schon bestätigt"
 
 #, python-format
 msgid "Migration %s may have been confirmed during delete"
-msgstr "迁移%s可能已经在删除过程中被确认"
+msgstr "Migration %s könnte beim Löschen bestätigt sein"
 
 msgid "Migration operation has completed"
-msgstr "迁移操作完成"
+msgstr "Migration volständig"
 
 #, python-format
 msgid ""
@@ -680,489 +726,534 @@ msgid ""
 "(bytes processed=%(processed_memory)d, remaining=%(remaining_memory)d, total="
 "%(total_memory)d)"
 msgstr ""
-"迁移运行%(secs)d 秒，内存%(remaining)d%% remaining; (处理的字节="
-"%(processed_memory)d, 剩余=%(remaining_memory)d, 总计=%(total_memory)d)"
+"Migration läuft für %(secs)d Sekunden, Speicher %(remaining)d%% verbleiben; "
+"(Bytes verarbeitet=%(processed_memory)d, verbleibt=%(remaining_memory)d, "
+"Summe=%(total_memory)d)"
 
 #, python-format
 msgid "Mounted volume: %s"
-msgstr "挂载的卷：%s"
+msgstr "Eingehangener Datenträger: %s"
 
 #, python-format
 msgid "Mountpoint %(mountpoint)s detached from instance %(instance_name)s"
-msgstr "挂载点 %(mountpoint)s 从实例 %(instance_name)s 分离"
+msgstr "Einhängepunkt %(mountpoint)s abgehangen von Instanz %(instance_name)s"
 
 #, python-format
 msgid "Moved virtual disk from %(src)s to %(dst)s."
-msgstr "从 %(src)s 到 %(dst)s 移动虚拟磁盘。"
+msgstr "Virtuelle Festplatte verschoben von %(src)s nach %(dst)s."
 
 #, python-format
 msgid "NBD mount error: %s"
-msgstr "发生 NBD 安装错误：%s"
+msgstr "NBD-Einhängefehler: %s"
 
 #, python-format
 msgid "Network deallocated for instance (fixed ips: '%s')"
-msgstr "为实例(固定 ips: '%s') 释放网络"
+msgstr "Netwerk freigegeben für Instanz (feste IPs: '%s')"
 
 #, python-format
 msgid ""
 "Neutron deleted interface %(intf)s; detaching it from the instance and "
 "deleting it from the info cache"
-msgstr "Neutron 删除接口%(intf)s；从实例解绑，并且从信息info缓存中删除"
+msgstr ""
+"Neutron löschte die Schnittstelle %(intf)s; hänge sie von der Instanz ab und "
+"lösche sie vom Info-Zwischenspeicher"
 
 #, python-format
 msgid ""
 "No cells available when scheduling.  Will retry in %(sleep_time)s second(s)"
-msgstr "进行调度时，没有任何单元可用。将在 %(sleep_time)s 秒后重试"
+msgstr ""
+"Keine Zellen zur Verfügung bei der Planung.  Neuer Versuch in  "
+"%(sleep_time)s second(s)"
 
 #, python-format
 msgid "No hosts matched due to not matching 'force_hosts' value of '%s'"
-msgstr "没有匹配主机，原因是没有'%s'匹配的 'force_hosts'  'force_hosts' 值"
+msgstr "Kein Host stimmt mit  'force_hosts' und einem Wert von  '%s' überein"
 
 #, python-format
 msgid "No nodes matched due to not matching 'force_nodes' value of '%s'"
-msgstr "没有匹配节点，原因是没有 '%s' 匹配的'force_nodes' 值"
+msgstr "Kein Host stimmt mit  'force_hosts' und einem Wert von  '%s' überein"
 
 msgid "Pausing"
-msgstr "正在暂停"
+msgstr "Pausieren"
 
 #, python-format
 msgid ""
 "Port %s from network info_cache is no longer associated with instance in "
 "Neutron. Removing from network info_cache."
 msgstr ""
-"在Neutron中，网络 info_cache中的端口%s 不再与实例绑定。从网络info_cache中移"
-"除。"
+"Port %s von Netzwerk info_cache ist nicht länger mit einer Instanz verbunden "
+"in Neutron. Lösche Netzwerk von info_cache."
 
 msgid "Post operation of migration started"
-msgstr "已启动迁移的后操作"
+msgstr "Post Operation der Migration gestartet"
 
 #, python-format
 msgid ""
 "Powering off instance with name label '%s' which is marked as DELETED but "
 "still present on host."
 msgstr ""
-"正在对名为’%s'的实例执行关电操作，其已被标记为‘已删除’状态，但仍然存在于主机"
-"上。"
+"Ausschalten der Instanz mit Namensschild '%s' welche markiert ist als "
+"GELÖSCHT aber weiter auf dem Host existiert."
 
 #, python-format
 msgid "Putting host %(host_name)s in maintenance mode %(mode)s."
-msgstr "正在将主机 %(host_name)s 置于维护方式 %(mode)s 下。"
+msgstr "Setze Host %(host_name)s in Wartungsmodus %(mode)s."
 
 #, python-format
 msgid "Reboot instance %r"
-msgstr "重启实例 %r"
+msgstr "Instanz %r neu starten"
 
 msgid "Rebooting instance"
-msgstr "正在重新引导实例"
+msgstr "Instanz wird neu gestartet"
 
 msgid "Rebooting instance after nova-compute restart."
-msgstr "nova-compute重启后，实例正在重启。"
+msgstr "Neustart der Instanz nach dem Nova-Compute Neustart."
 
 msgid "Rebuilding instance"
-msgstr "正在重建实例"
+msgstr "Neubau der Instanz"
 
 #, python-format
 msgid "Received Token: %(token)s, %(token_dict)s"
-msgstr "接受到的令牌：%(token)s, %(token_dict)s"
+msgstr "Erhaltenes Token: %(token)s, %(token_dict)s"
 
 #, python-format
 msgid ""
 "Received a delete update from an unknown host '%s'. Re-created its "
 "InstanceList."
-msgstr "接收到一个未知主机  '%s' 的删除更新。重新创建InstanceList。"
+msgstr ""
+"Erhalte eine Lösch-Aktualisierung von einem unbekannten Host '%s'. Erstelle "
+"neue InstanceList."
 
 #, python-format
 msgid ""
 "Received a sync request from an unknown host '%s'. Re-created its "
 "InstanceList."
-msgstr "接收到一个未知主机 '%s' 的同步请求。重新创建InstanceList。"
+msgstr ""
+"Erhalte eine Synchronisierungsanfrage von einem unbekannten Host '%s'. "
+"Erstelle neue InstanceList."
 
 #, python-format
 msgid ""
 "Received an update from an unknown host '%s'. Re-created its InstanceList."
-msgstr "接收到一个未知主机  '%s' 的更新。重新创建InstanceList。"
+msgstr ""
+"Erhalte eine Aktualisierung von einem unbekannten Host '%s'. Erstelle neue "
+"InstanceList."
 
 msgid "Reclaiming deleted instance"
-msgstr "回收删除的实例"
+msgstr "Zurücknahme der gelöschten Instanz"
 
 msgid "Recovered connection to memcache server for reporting service status."
-msgstr "与memcache服务器的连接恢复，报告服务状态。"
+msgstr ""
+"Wiederhergestellte Verbindung zu Memcache-Server für Bericht zum "
+"Dienstestatus."
 
 msgid "Recovered connection to nova-conductor for reporting service status."
-msgstr "与nova-conductor的连接恢复，报告服务状态。"
+msgstr ""
+"Wiederhergestellte Verbindung zu Nova-Conductor für Bericht zum "
+"Dienstestatus."
 
 #, python-format
 msgid "Registered image %(image_location)s with id %(image_id)s"
-msgstr "用id %(image_id)s 注册镜像 %(image_location)s"
+msgstr "Angemeldetes Abbild %(image_location)s mit ID %(image_id)s"
 
 #, python-format
 msgid "Release address %s"
-msgstr "释放地址 %s"
+msgstr "Adresse %s freigeben"
 
 #, python-format
 msgid "Removable base files: %s"
-msgstr "可删除的基文件：%s"
+msgstr "Entfernbare Basisdateien: %s"
 
 #, python-format
 msgid "Removing base or swap file: %s"
-msgstr "移除Base 或 Swap 文件：%s"
+msgstr "Lösche Basis- oder Swap-Datei: %s"
 
 #, python-format
 msgid "Removing dead compute node %(host)s:%(node)s from scheduler"
-msgstr "正在从调度程序除去已终止的计算节点 %(host)s:%(node)s"
+msgstr "Lösche leere Compute-Knoten %(host)s:%(node)s vom Scheduler"
 
 #, python-format
 msgid "Request made with invalid token: %s"
-msgstr "请求中有无效令牌：%s"
+msgstr "Anfrage gestellt mit ungültigem Token: %s"
 
 #, python-format
 msgid "Request made with missing token: %s"
-msgstr "请求缺少令牌：%s"
+msgstr "Anfrage gestellt ohne Token: %s"
 
 #, python-format
 msgid "Request: %s"
-msgstr "请求：%s"
+msgstr "Anforderung: %s"
 
 msgid "Rescuing"
-msgstr "正在进行拯救"
+msgstr "Rettungsmodus"
 
 msgid "Resuming"
-msgstr "正在进行恢复"
+msgstr "Wird fortgesetzt"
 
 msgid "Retrieving diagnostics"
-msgstr "正在检索诊断"
+msgstr "Empfange Diagnose"
 
 msgid "Root password set"
-msgstr "已设置 root 用户密码"
+msgstr "Root-Passwort festgelegt"
 
 #, python-format
 msgid ""
 "Running instance usage audit for host %(host)s from %(begin_time)s to "
 "%(end_time)s. %(number_instances)s instances."
 msgstr ""
-"正在为主机 %(host)s 运行实例使用量审计（从 %(begin_time)s 至 %(end_time)s）。"
-"存在 %(number_instances)s 个实例。"
+"Führe Instanz-Verwendungsstatistik aus für Host %(host)s von %(begin_time)s "
+"bis %(end_time)s. %(number_instances)s Instanzen."
 
 msgid ""
 "Service started deleting the instance during the previous run, but did not "
 "finish. Restarting the deletion now."
-msgstr "相关服务曾在之前开始删除此实例，但未完成。现在重新开始删除。"
+msgstr ""
+"Dienst startete Löschen der Instanz während des letzten Laufs, aber dieser "
+"wurde nicht abgeschlossen. Starte das Löschen neu."
 
 #, python-format
 msgid "Setting instance back to %(state)s after: %(error)s"
-msgstr "在%(error)s之后，将实例恢复成 %(state)s状态"
+msgstr "Setze Instanz zurück auf %(state)s nach: %(error)s"
 
 #, python-format
 msgid "Setting instance back to ACTIVE after: %s"
-msgstr "在%s之后，将实例恢复成‘运行中’状态"
+msgstr "Setze Instanz zurück auf AKTIV nach: %s"
 
 #, python-format
 msgid "Skipped adding %s because an equivalent index already exists."
-msgstr "跳过添加%s操作，因为已存在等效索引。"
+msgstr ""
+"Überspringe hinzufügen von  %s weil ein gleichnamiger Index bereits "
+"existiert."
 
 msgid ""
 "Skipped adding instances_project_id_deleted_idx because an equivalent index "
 "already exists."
-msgstr "跳过添加instances_project_id_deleted_idx，因为相同的索引已经存在。"
+msgstr ""
+"Überspringe hinzufügen von  instances_project_id_deleted_idx weil ein "
+"gleichnamiger Index bereits existiert."
 
 msgid ""
 "Skipped adding reservations_deleted_expire_idx because an equivalent index "
 "already exists."
-msgstr "跳过增加reservations_deleted_expire_idx,因为一个同等的索引已经存在"
+msgstr ""
+"Überspringe hinzufügen von reservations_deleted_expire_idx weil ein "
+"gleichnamiger Index bereits existiert."
 
 #, python-format
 msgid "Skipping quiescing instance: %(reason)s."
-msgstr "正在跳过静默实例:%(reason)s."
+msgstr "Überspringe stillegen der Instanz: %(reason)s."
 
 msgid "Snapshot extracted, beginning image upload"
-msgstr "已抽取快照，正在开始映像上载"
+msgstr "Schattenkopie extrahiert, beginne Abbild hochzuladen"
 
 msgid "Snapshot image upload complete"
-msgstr "快照映像上载完成"
+msgstr "Hochladen Schattenkopie-Abbild fertig"
 
 msgid "Soft shutdown succeeded."
-msgstr "软关机已成功。"
+msgstr "Sanftes Herunterfahren war erfolgreich."
 
 msgid "Spawning new instance"
-msgstr "正在衍生新实例"
+msgstr "Starte neue Instanz"
 
 #, python-format
 msgid "Starting %(topic)s node (version %(version)s)"
-msgstr "正在启动 %(topic)s 节点 (V%(version)s)"
+msgstr "%(topic)s-Knoten wird gestartet  (Version %(version)s)"
 
 msgid "Starting halted instance found during reboot"
-msgstr "正在启动在重新引导期间找到的已停止实例"
+msgstr "Starte Instanz, die während des Neustarts angehalten wurde"
 
 msgid "Starting instance..."
-msgstr "正在启动虚拟机"
+msgstr "Instanz wird gestartet..."
 
 #, python-format
 msgid "Starting migration network for instance %s"
-msgstr "开始为实例%s迁移网络"
+msgstr "Starte Netzwerkmigration für Instanz %s"
 
 #, python-format
 msgid "Starting nova-xvpvncproxy node (version %s)"
-msgstr "启动nova-xvpvncproxy节点(版本 %s)"
+msgstr "Starte Nova-xvpvncproxy Knoten (Version %s)"
 
 msgid "Stopping WSGI server."
-msgstr "关闭WSGI服务器"
+msgstr "WSGI-Server wird gestoppt."
 
 #, python-format
 msgid "Successfully powered off Ironic node %s"
-msgstr "成功关闭Ironic节点%s"
+msgstr "Ironic Knoten %s erfolgreich ausgeschaltet"
 
 #, python-format
 msgid "Successfully powered on Ironic node %s"
-msgstr "成功开启Ironic节点%s"
+msgstr "Ironic Knoten %s erfolgreich eingeschaltet"
 
 #, python-format
 msgid "Successfully provisioned Ironic node %s"
-msgstr "成功提供Ironic节点 %s"
+msgstr "Ironic Knoten %s erfolgreich provisioniert"
 
 #, python-format
 msgid "Successfully rebooted Ironic node %s"
-msgstr "成功重启Ironic节点%s"
+msgstr "Ironic Knoten %s erfolgreich neu gestartet"
 
 #, python-format
 msgid "Successfully synced instances from host '%s'."
-msgstr "成功从主机 '%s' 同步实例。"
+msgstr "Erfolreich Instanzen synchronisiert von Host '%s'."
 
 #, python-format
 msgid "Successfully transferred using %s"
-msgstr "使用字符串%s成功传输"
+msgstr "Erfolgreiche Übertragung von %s"
 
 #, python-format
 msgid "Successfully unprovisioned Ironic node %s"
-msgstr "成功撤回Ironic节点%s"
+msgstr "Ironic Knoten %s erfolgreich deinstalliert"
 
 #, python-format
 msgid "Swapping volume %(old_volume)s for %(new_volume)s"
-msgstr "为%(new_volume)s 交换卷%(old_volume)s"
+msgstr "Tausche Datenträger %(old_volume)s für %(new_volume)s"
 
 #, python-format
 msgid "Task possibly preempted: %s"
-msgstr "任务可能被打断：%s"
+msgstr "Aufgabe möglicherweise beendet: %s"
 
 msgid "The ISCSI initiator name can't be found. Choosing the default one"
-msgstr "找不到 ISCSI 发起方名称。正在选择缺省的名称"
+msgstr ""
+"Der ISCSI Initiatorname kann nicht gefunden werden. Benutze den Standardnamen"
 
 msgid "The imported VM was unregistered"
-msgstr "导入的虚拟机VM没有注册"
+msgstr "Die importierte VM war nicht registriert"
 
 #, python-format
 msgid ""
 "The instance sync for host '%s' did not match. Re-created its InstanceList."
-msgstr "主机 '%s' 的实例同步不匹配。重新创建 InstanceList。"
+msgstr ""
+"Die Instanz-Synchronisierung für Host '%s' stimmt nicht überein. Erstelle "
+"neue InstanceList."
 
 #, python-format
 msgid ""
 "The volume's backing has been relocated to %s. Need to consolidate backing "
 "disk file."
-msgstr "卷的备份重新定位到 %s。需要联合备份磁盘文件。"
+msgstr ""
+"Das Datenträger-Backup wurde verlegt nach %s. Wird benötigt zur "
+"Konsilidierung der Backupdatei."
 
 msgid "Timestamp is invalid."
-msgstr "时间戳记无效。"
+msgstr "Zeitstempel ist ungültig."
 
 #, python-format
 msgid "Total %(type)s: %(total)d %(unit)s, used: %(used).02f %(unit)s"
-msgstr "总共 %(type)s: %(total)d %(unit)s, 已使用: %(used).02f %(unit)s"
+msgstr "Gesamt %(type)s: %(total)d %(unit)s, Belegt: %(used).02f %(unit)s"
 
 #, python-format
 msgid "Total usable vcpus: %(tcpu)s, total allocated vcpus: %(ucpu)s"
-msgstr "总共可用vcpus：%(tcpu)s，总计分配的vcpus：%(ucpu)s"
+msgstr "Gesamter Verbrauch vcpus: %(tcpu)s, gesamt benutzte vcpus: %(ucpu)s"
 
 #, python-format
 msgid "Truncated console log returned, %d bytes ignored"
-msgstr "已返回截断的控制台日志，忽略了 %d 个字节"
+msgstr "Kürzen des Konsole-Log abgeschlossen, %d Bytes ignoriert"
 
 #, python-format
 msgid "Trying to disconnected unmounted volume at %s"
-msgstr "在 %s 尝试断开已卸载的卷"
+msgstr "Versuche den ausgehängten Datenträger zu trennen auf  %s"
 
 msgid "Unable to import guestfs, falling back to VFSLocalFS"
-msgstr "不能导入guestfs，回归到VFSLocalFS"
+msgstr "Konnte guestfs nicht importieren, falle zurück auf VFSLocalFS"
 
 #, python-format
 msgid "Unable to release %s because vif doesn't exist"
-msgstr "因为vif不存在，无法释放 %s"
+msgstr "Konnte %s nicht freigeben, weil VIF nicht existiert"
 
 #, python-format
 msgid "Unable to release %s because vif object doesn't exist"
-msgstr "由于vif对象不存在，不能释放%s"
+msgstr "Konnte %s nicht freigeben, weil VIF-Objekt nicht existiert"
 
 #, python-format
 msgid ""
 "Unable to use bulk domain list APIs, falling back to slow code path: %(ex)s"
-msgstr "不能使用扩大的域获取APIs，回归到慢代码路径：%(ex)s"
+msgstr ""
+"Konnte die Massen-Domain-List-API nicht verwenden, falle zurück auf "
+"langsamen Code-Pfad: %(ex)s"
 
 #, python-format
 msgid ""
 "Unauthorized request for controller=%(controller)s and action=%(action)s"
-msgstr "为controller=%(controller)s 以及 action=%(action)s未验证的请求"
+msgstr ""
+"Unberechtigte Anfrage für Controller=%(controller)s und Aktion=%(action)s"
 
 #, python-format
 msgid "Unexpected error: %s"
-msgstr "意外错误：%s"
+msgstr "Unerwarteter Fehler: %s"
 
 msgid "Unpausing"
-msgstr "正在取消暂停"
+msgstr "Pausieren beenden"
 
 msgid "Unrescuing"
-msgstr "正在取消拯救"
+msgstr "Rettungsmodus beenden"
 
 msgid "Updating bandwidth usage cache"
-msgstr "更新带宽使用缓存"
+msgstr "Aktualisiere Zwischenspeicher für Bandbreitennutzung"
 
 #, python-format
 msgid "Updating from migration %s"
-msgstr "正在从迁移 %s 进行更新"
+msgstr "Aktualisiere von Migration %s"
 
 #, python-format
 msgid "Updating image %s publicity"
-msgstr "正在更新镜像 %s 的 publicity 属性"
+msgstr "Aktualisiere Abbild %s öffentlich"
 
 #, python-format
 msgid "Updating instance to original state: '%s'"
-msgstr "正在将实例更新为原始状态：‘%s’"
+msgstr "Aktualisiere Instanz in den Original-Status '%s'"
 
 msgid "Using config drive"
-msgstr "正在使用配置驱动器"
+msgstr "Konfigurationslaufwerk wird verwendet"
 
 msgid "Using config drive for instance"
-msgstr "使用实例的配置驱动"
+msgstr "Konfigurationslaufwerk wird für Instanz verwendet"
 
 msgid "V2.1 API has been disabled by configuration"
-msgstr "V2.1 API 已通过配置被禁用了"
+msgstr "V2.1 API wurde deaktiviert bei der Konfiguration"
 
 #, python-format
 msgid ""
 "VBD %(vbd_ref)s uplug failed with \"%(err)s\", attempt %(num_attempt)d/"
 "%(max_attempts)d"
 msgstr ""
-"VBD %(vbd_ref)s 拔除失败，错误是\"%(err)s\"，尝试 %(num_attempt)d/"
-"%(max_attempts)d"
+"VBD %(vbd_ref)s entfernen fehlgeschlagen mit \"%(err)s\", versuche "
+"%(num_attempt)d/%(max_attempts)d"
 
 #, python-format
 msgid "VBD %s already detached"
-msgstr "已断开与 VBD %s 的连接"
+msgstr "VBD %s bereits getrennt"
 
 #, python-format
 msgid "VM %(state)s (Lifecycle Event)"
-msgstr "VM %(state)s (生命周期事件)"
+msgstr "VM %(state)s (Ereignis im Lebenszyklus)"
 
 #, python-format
 msgid "VMware vCenter version: %s"
-msgstr "VMware vCenter版本：%s"
+msgstr "VMware vCenter Version: %s"
 
 msgid ""
 "Virt driver does not support 'get_available_resource'. Compute tracking is "
 "disabled."
-msgstr "虚拟驱动不支持 'get_available_resource'。禁用计算追踪。"
+msgstr ""
+"Virt Treiber unterstützt kein 'get_available_resource'. Compute Tracking ist "
+"deaktiviert"
 
 #, python-format
 msgid ""
 "Volume(%s) has lower stats then what is in the database. Instance must have "
 "been rebooted or crashed. Updating totals."
-msgstr "卷(%s) 比数据库中的统计低。实例一定被重启过或崩溃。更新总数。"
+msgstr ""
+"Volume(%s) hat einen niedrigeren Status als in der Datenbank. Instanz ist "
+"neu gestartet oder abgestürzt. Aktualisiere alles."
 
 msgid "WSGI server has stopped."
-msgstr "WSGI服务器已经停止。"
+msgstr "WSGI-Server wurde gestoppt."
 
 #, python-format
 msgid "Working on deleting snapshot %s from shelved instance..."
-msgstr "正在从废弃的实例删除快照%s"
+msgstr "Arbeite am Löschen der Schattenkopie %s der eingestellten Instanz...."
 
 #, python-format
 msgid "Writing stored info to %s"
-msgstr "正在将已存储的信息写入 %s"
+msgstr "Schreibe Speicherinformationen zu %s"
 
 msgid "XenServer tools are not installed in this image"
-msgstr "没有在该镜像上安装XenServer工具"
+msgstr "XenServer-Werkzeuge sind in diesem Abbild nicht installiert"
 
 msgid ""
 "XenServer tools are present in this image but are not capable of network "
 "injection"
-msgstr "该镜像有XenServer工具，但是不能进行网络注入"
+msgstr ""
+"XenServer Tools sind in diesem Abbild installiert, befähigen aber nicht zur "
+"Netzwerkeinfügung."
 
 msgid ""
 "XenServer tools installed in this image are capable of network injection.  "
 "Networking files will not bemanipulated"
-msgstr "安装在该镜像的XenServer工具可以进行网络注入。网络文件不会被操作。"
+msgstr ""
+"XenServer Tools, die in diesem Abbild installiert sind, befähigen zur "
+"Netzwerkeinfügung. Netzwerkdatein werden nicht  manipuliert"
 
 msgid ""
 "You may see the error \"libvirt: QEMU error: Domain not found: no domain "
 "with matching name.\" This error can be safely ignored."
 msgstr ""
-"你会看到错误“libvirt: QEMU error: Domain not found: no domain with matching "
-"name。”这个错误可以放心的忽略。"
+"Möglicherweise sehen Sie den Fehler \"libvirt: QEMU error: Domain not found: "
+"no domain with matching name.\" Dieser Fehler kann ignoriert werden."
 
 msgid "_post_live_migration() is started.."
-msgstr "已启动 _post_live_migration()。"
+msgstr "_post_live_migration() ist gestartet.."
 
 #, python-format
 msgid "bringing vm to original state: '%s'"
-msgstr "正在将 vm 置于原始状态：“%s”"
+msgstr "Bringe VM in den Original-Status: '%s'"
 
 #, python-format
 msgid "data: %(data)r, fpath: %(fpath)r"
-msgstr "data：%(data)r, fpath: %(fpath)r"
+msgstr "Daten: %(data)r, fpath: %(fpath)r"
 
 #, python-format
 msgid "deleted %s"
-msgstr "删除%s"
+msgstr "%s gelöscht"
 
 #, python-format
 msgid "disk not on shared storage, rebuilding from: '%s'"
-msgstr "磁盘不在共享存储上，正由:'%s‘重建"
+msgstr "Festplatte nicht am verteilten Speicher, baue neu von: '%s'"
 
 msgid "disk on shared storage, recreating using existing disk"
-msgstr "磁盘在共享存储器上，正在使用现有磁盘来重新创建"
+msgstr ""
+"Festplatte am verteilten Speicher, baue neu unter Benutzung der "
+"existierenden Platte"
 
 msgid "findmnt tool is not installed"
-msgstr "findmnt 工具没有安装"
+msgstr "findmnt-Werkzeug ist nicht installiert"
 
 #, python-format
 msgid "image %(id)s at (%(base_file)s): checking"
-msgstr "(%(base_file)s) 处的映像 %(id)s：正在检查"
+msgstr "Abbild %(id)s auf (%(base_file)s): wird überprüft"
 
 #, python-format
 msgid ""
 "image %(id)s at (%(base_file)s): image verification skipped, no hash stored"
-msgstr "(%(base_file)s) 处的映像 %(id)s：已跳过映像验证，未存储任何散列"
+msgstr ""
+"Abbild %(id)s at (%(base_file)s): Abbildverifizierung übersprungen, kein "
+"Hash gespeichert"
 
 #, python-format
 msgid ""
 "image %(id)s at (%(base_file)s): in use: on this node %(local)d local, "
 "%(remote)d on other nodes sharing this instance storage"
 msgstr ""
-"(%(base_file)s) 处的映像 %(id)s：在使用中：在此节点上，%(local)d 本地；在共享"
-"此实例存储器的其他节点上，%(remote)d"
+"Abbild %(id)s auf (%(base_file)s): in Benutzung: auf diesem Knoten %(local)d "
+"lokal, %(remote)d auf anderem Knoten geteilt in diesem Instanzspeicher"
 
 #, python-format
 msgid "injecting file to %s"
-msgstr "正对%s注入文件"
+msgstr "Datei einfügen von %s"
 
 #, python-format
 msgid "instance chain %s disappeared during refresh, skipping"
-msgstr "在刷新期间，实例链%s消失，跳过"
+msgstr "Instanzreihe %s bei der Aktualisierung verschwunden, wird übersprungen"
 
 msgid ""
 "instance is in SHELVED_OFFLOADED state, cleanup the instance's info from "
 "database."
-msgstr "实例处在SHELVED_OFFLOADED状态，在数据库中清除该实例的信息"
+msgstr ""
+"Iinstanz ist in SHELVED_OFFLOADED Status, aufräumen der Instanz-Infos in der "
+"Datenbank."
 
 msgid "instance snapshotting"
-msgstr "正在对实例生成快照"
+msgstr "Schattenkopie von Instanz wird erstellt"
 
 msgid "instance termination disabled"
-msgstr "已禁用实例终止"
+msgstr "Beendigung der Instanz deaktiviert"
 
 msgid "nova-conductor connection established successfully"
-msgstr "nova-conductor 连接成功建立"
+msgstr "nova-conductor erfolgreich verbunden"
 
 #, python-format
 msgid "preserve multipath_id %s"
-msgstr "保留的multipath_id %s"
+msgstr "Erhalte multipath_id %s"
 
 #, python-format
 msgid ""
@@ -1170,17 +1261,17 @@ msgid ""
 "%(user_id)s, resource: %(res)s, tracked usage: %(tracked_use)s, actual "
 "usage: %(in_use)s"
 msgstr ""
-"quota_usages 超出同步，更新。project_id: %(project_id)s, user_id: "
-"%(user_id)s, 资源: %(res)s, 跟踪的使用率: %(tracked_use)s, 实际使用率: "
-"%(in_use)s"
+"quota_usages ist nicht sychron, wird aktualisiert. project_id: "
+"%(project_id)s, user_id: %(user_id)s, resource: %(res)s, tracked usage: "
+"%(tracked_use)s, actual usage: %(in_use)s"
 
 #, python-format
 msgid "re-assign floating IP %(address)s from instance %(instance_id)s"
-msgstr "请从实例 %(instance_id)s 重新分配浮动 IP %(address)s"
+msgstr "Weise Floating IP %(address)s der Instanz %(instance_id)s wieder zu"
 
 #, python-format
 msgid "tap-ctl check: %s"
-msgstr "tap-ctl 检查：%s"
+msgstr "tap-ctl überprüft %s"
 
 #, python-format
 msgid "vol=%s"

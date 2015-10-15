@@ -82,6 +82,7 @@ from nova.network import model as network_model
 from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import base as obj_base
+from nova.objects import instance as obj_instance
 from nova import paths
 from nova import rpc
 from nova import safe_utils
@@ -1768,7 +1769,7 @@ class ComputeManager(manager.Manager):
         """
         if not self.send_instance_updates:
             return
-        if isinstance(instance, objects.Instance):
+        if isinstance(instance, obj_instance._BaseInstance):
             instance = objects.InstanceList(objects=[instance])
         context = context.elevated()
         self.scheduler_client.update_instance_info(context, self.host,
@@ -2596,9 +2597,10 @@ class ComputeManager(manager.Manager):
         instance.save(
             expected_task_state=[task_states.REBUILD_BLOCK_DEVICE_MAPPING])
 
-        self.driver.spawn(context, instance, image_meta, injected_files,
-                          admin_password, network_info=network_info,
-                          block_device_info=new_block_device_info)
+        with instance.mutated_migration_context():
+            self.driver.spawn(context, instance, image_meta, injected_files,
+                              admin_password, network_info=network_info,
+                              block_device_info=new_block_device_info)
 
     @messaging.expected_exceptions(exception.PreserveEphemeralNotSupported)
     @wrap_exception()
@@ -2820,7 +2822,8 @@ class ComputeManager(manager.Manager):
             preserve_ephemeral=preserve_ephemeral,
             recreate=recreate)
         try:
-            self.driver.rebuild(**kwargs)
+            with instance.mutated_migration_context():
+                self.driver.rebuild(**kwargs)
         except NotImplementedError:
             # NOTE(rpodolyaka): driver doesn't provide specialized version
             # of rebuild, fall back to the default implementation

@@ -823,6 +823,21 @@ class _BaseInstance(base.NovaPersistentObject, base.NovaObject,
                          "seem to be set for this instance"),
                          instance=self)
 
+    @contextlib.contextmanager
+    def mutated_migration_context(self):
+        """Context manager to temporarily apply the migration context.
+
+        Calling .save() from within the context manager means that the mutated
+        context will be saved which can cause incorrect resource tracking, and
+        should be avoided.
+        """
+        current_numa_topo = self.numa_topology
+        self.apply_migration_context()
+        try:
+            yield
+        finally:
+            self.numa_topology = current_numa_topo
+
     @base.remotable
     def drop_migration_context(self):
         if self.migration_context:
@@ -1059,7 +1074,8 @@ class InstanceV2(_BaseInstance):
             # FIXME(danms): Remove this when we drop v1.x compatibility
             my_prim = self.obj_to_primitive()
             my_prim['nova_object.version'] = InstanceV1.VERSION
-            instv1 = InstanceV1.obj_from_primitive(my_prim)
+            instv1 = InstanceV1.obj_from_primitive(my_prim,
+                                                   context=self._context)
             return instv1.obj_make_compatible(primitive, target_version)
         super(InstanceV2, self).obj_make_compatible(primitive, target_version)
 
@@ -1302,7 +1318,8 @@ class InstanceListV2(_BaseInstanceList):
         if target_version.startswith('1.'):
             my_prim = self.obj_to_primitive()
             my_prim['nova_object.version'] = InstanceListV1.VERSION
-            instv1 = InstanceListV1.obj_from_primitive(my_prim)
+            instv1 = InstanceListV1.obj_from_primitive(my_prim,
+                                                       context=self._context)
             return instv1.obj_make_compatible(primitive, target_version)
         super(InstanceListV2, self).obj_make_compatible(primitive,
                                                         target_version)
