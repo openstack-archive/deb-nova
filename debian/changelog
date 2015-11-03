@@ -1,3 +1,9 @@
+nova (1:12.0.0-3) unstable; urgency=medium
+
+  * Rebuilt with openstack-pkg-tools 37 to use Keystone API v3.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 03 Nov 2015 09:08:37 +0000
+
 nova (1:12.0.0-2) unstable; urgency=medium
 
   * Uploading to unstable.
