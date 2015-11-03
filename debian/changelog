@@ -1,3 +1,9 @@
+nova (1:12.0.0-4) unstable; urgency=medium
+
+  * Added q-text-as-data as depends of nova-api.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 03 Nov 2015 11:52:41 +0000
+
 nova (1:12.0.0-3) unstable; urgency=medium
 
   * Rebuilt with openstack-pkg-tools 37 to use Keystone API v3.
