@@ -96,8 +96,9 @@ api_version_re = re.compile(r"@.*api_version")
 dict_constructor_with_list_copy_re = re.compile(r".*\bdict\((\[)?(\(|\[)")
 decorator_re = re.compile(r"@.*")
 http_not_implemented_re = re.compile(r"raise .*HTTPNotImplemented\(")
-greenthread_spawn_re = re.compile(r".*greenthread.spawn\(.*\)")
-greenthread_spawn_n_re = re.compile(r".*greenthread.spawn_n\(.*\)")
+spawn_re = re.compile(
+    r".*(eventlet|greenthread)\.(?P<spawn_part>spawn(_n)?)\(.*\)")
+contextlib_nested = re.compile(r"^with (contextlib\.)?nested\(")
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -523,16 +524,30 @@ def check_http_not_implemented(logical_line, physical_line, filename):
 
 
 def check_greenthread_spawns(logical_line, physical_line, filename):
-    """Check for use of greenthread.spawn() and greenthread.spawn_n()
+    """Check for use of greenthread.spawn(), greenthread.spawn_n(),
+    eventlet.spawn(), and eventlet.spawn_n()
 
     N340
     """
     msg = ("N340: Use nova.utils.%(spawn)s() rather than "
-           "greenthread.%(spawn)s()")
-    if re.match(greenthread_spawn_re, logical_line):
-        yield (0, msg % {'spawn': 'spawn'})
-    if re.match(greenthread_spawn_n_re, logical_line):
-        yield (0, msg % {'spawn': 'spawn_n'})
+           "greenthread.%(spawn)s() and eventlet.%(spawn)s()")
+    if "nova/utils.py" in filename or "nova/tests/" in filename:
+        return
+
+    match = re.match(spawn_re, logical_line)
+
+    if match:
+        yield (0, msg % {'spawn': match.group('spawn_part')})
+
+
+def check_no_contextlib_nested(logical_line, filename):
+    msg = ("N341: contextlib.nested is deprecated. With Python 2.7 and later "
+           "the with-statement supports multiple nested objects. See https://"
+           "docs.python.org/2/library/contextlib.html#contextlib.nested for "
+           "more information. nova.test.nested() is an alternative as well.")
+
+    if contextlib_nested.match(logical_line):
+        yield(0, msg)
 
 
 def factory(register):
@@ -561,4 +576,5 @@ def factory(register):
     register(dict_constructor_with_list_copy)
     register(assert_equal_in)
     register(check_http_not_implemented)
+    register(check_no_contextlib_nested)
     register(check_greenthread_spawns)

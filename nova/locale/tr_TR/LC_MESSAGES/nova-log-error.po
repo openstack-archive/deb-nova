@@ -6,20 +6,19 @@
 # OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0b4.dev203\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-09-16 19:02+0000\n"
+"POT-Creation-Date: 2015-12-01 06:32+0000\n"
 "PO-Revision-Date: 2015-08-30 12:41+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
-"Language-Team: Turkish (Turkey) (http://www.transifex.com/openstack/nova/"
-"language/tr_TR/)\n"
+"Language-Team: Turkish (Turkey)\n"
 "Language: tr-TR\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
-"X-Generator: Zanata 3.7.1\n"
+"Generated-By: Babel 2.0\n"
+"X-Generator: Zanata 3.7.3\n"
 
 msgid "\"Look for the VDIs failed"
 msgstr "\"VDI arama başarısız"
@@ -65,10 +64,6 @@ msgstr "Mantıksal sürücü ekleme başarısız: %s"
 #, python-format
 msgid "Attaching PCI devices %(dev)s to %(dom)s failed."
 msgstr "%(dev)s PCI aygıtlarının %(dom)s e eklenmesi başarısız."
-
-#, python-format
-msgid "Attaching network adapter failed. Exception:  %s"
-msgstr "Ağ bağdaştırıcısı ekleme başarısız. İstisna:  %s"
 
 #, python-format
 msgid "Cannot block migrate instance %s with mapped volumes"
@@ -735,10 +730,6 @@ msgid "Instance type %s not found for deletion"
 msgstr "Silme işlemi için %s örnek türü bulunamadı"
 
 #, python-format
-msgid "Instance update attempted for '%(key)s' on %(instance_uuid)s"
-msgstr "%(instance_uuid)s üzerinde '%(key)s' için sunucu güncellemesi denendi"
-
-#, python-format
 msgid "Interface %s not found"
 msgstr "Arayüz %s bulunamadı"
 
@@ -889,10 +880,6 @@ msgid "Read/Write data failed"
 msgstr "Veri okuma/yazma başarısız"
 
 #, python-format
-msgid "Requested VM Generation %s is not supported on  this OS."
-msgstr "İstenen VM Üretimi %s bu  işletim sisteminde desteklenmiyor."
-
-#, python-format
 msgid "Requested VM Generation %s, but provided VHD instead of VHDX."
 msgstr "VM Oluşturma %s istendi, ama VHDX yerine VHD sağlandı."
 
@@ -953,11 +940,6 @@ msgstr "%(method)s çağrısı bir hata döndürdü: %(e)s. args=%(args)r"
 
 msgid "Transfer data failed"
 msgstr "Veri aktarımı başarısız"
-
-#, python-format
-msgid "Unable to access floating IP %(fixed_ip)s for port %(port_id)s"
-msgstr ""
-"%(port_id)s bağlantı noktası için değişken IP %(fixed_ip)s ye erişilemiyor"
 
 #, python-format
 msgid "Unable to access floating IP %s"

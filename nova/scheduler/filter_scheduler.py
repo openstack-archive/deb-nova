@@ -61,12 +61,18 @@ class FilterScheduler(driver.Scheduler):
 
     def select_destinations(self, context, request_spec, filter_properties):
         """Selects a filtered set of hosts and nodes."""
-        self.notifier.info(context, 'scheduler.select_destinations.start',
-                           dict(request_spec=request_spec))
+        # TODO(sbauza): Change the select_destinations method to accept a
+        # RequestSpec object directly (and add a new RPC API method for passing
+        # a RequestSpec object over the wire)
+        spec_obj = objects.RequestSpec.from_primitives(context,
+                                                       request_spec,
+                                                       filter_properties)
+        self.notifier.info(
+            context, 'scheduler.select_destinations.start',
+            dict(request_spec=spec_obj.to_legacy_request_spec_dict()))
 
-        num_instances = request_spec['num_instances']
-        selected_hosts = self._schedule(context, request_spec,
-                                        filter_properties)
+        num_instances = spec_obj.num_instances
+        selected_hosts = self._schedule(context, spec_obj)
 
         # Couldn't fulfill the request_spec
         if len(selected_hosts) < num_instances:
@@ -92,42 +98,22 @@ class FilterScheduler(driver.Scheduler):
         dests = [dict(host=host.obj.host, nodename=host.obj.nodename,
                       limits=host.obj.limits) for host in selected_hosts]
 
-        self.notifier.info(context, 'scheduler.select_destinations.end',
-                           dict(request_spec=request_spec))
+        self.notifier.info(
+            context, 'scheduler.select_destinations.end',
+            dict(request_spec=spec_obj.to_legacy_request_spec_dict()))
         return dests
 
     def _get_configuration_options(self):
         """Fetch options dictionary. Broken out for testing."""
         return self.options.get_configuration()
 
-    def _schedule(self, context, request_spec, filter_properties):
+    def _schedule(self, context, spec_obj):
         """Returns a list of hosts that meet the required specs,
         ordered by their fitness.
         """
         elevated = context.elevated()
-        instance_properties = request_spec['instance_properties']
-
-        # NOTE(danms): Instance here is still a dict, which is converted from
-        # an object. The pci_requests are a dict as well. Convert this when
-        # we get an object all the way to this path.
-        # TODO(sbauza): Will be fixed later by the RequestSpec object
-        pci_requests = instance_properties.get('pci_requests')
-        if pci_requests:
-            pci_requests = (
-                objects.InstancePCIRequests.from_request_spec_instance_props(
-                    pci_requests))
-            instance_properties['pci_requests'] = pci_requests
-
-        instance_type = request_spec.get("instance_type", None)
-
-        update_group_hosts = filter_properties.get('group_updated', False)
 
         config_options = self._get_configuration_options()
-
-        filter_properties.update({'context': context,
-                                  'request_spec': request_spec,
-                                  'config_options': config_options,
-                                  'instance_type': instance_type})
 
         # Find our local list of acceptable hosts by repeatedly
         # filtering and weighing our options. Each time we choose a
@@ -140,11 +126,13 @@ class FilterScheduler(driver.Scheduler):
         hosts = self._get_all_host_states(elevated)
 
         selected_hosts = []
-        num_instances = request_spec.get('num_instances', 1)
+        num_instances = spec_obj.num_instances
+        # NOTE(sbauza): Adding one field for any out-of-tree need
+        spec_obj.config_options = config_options
         for num in range(num_instances):
             # Filter local hosts based on requirements ...
             hosts = self.host_manager.get_filtered_hosts(hosts,
-                    filter_properties, index=num)
+                    spec_obj, index=num)
             if not hosts:
                 # Can't get any more locally.
                 break
@@ -152,7 +140,7 @@ class FilterScheduler(driver.Scheduler):
             LOG.debug("Filtered %(hosts)s", {'hosts': hosts})
 
             weighed_hosts = self.host_manager.get_weighed_hosts(hosts,
-                    filter_properties)
+                    spec_obj)
 
             LOG.debug("Weighed %(hosts)s", {'hosts': weighed_hosts})
 
@@ -169,15 +157,11 @@ class FilterScheduler(driver.Scheduler):
 
             # Now consume the resources so the filter/weights
             # will change for the next instance.
-            chosen_host.obj.consume_from_instance(instance_properties)
-            if update_group_hosts is True:
-                # NOTE(sbauza): Group details are serialized into a list now
-                # that they are populated by the conductor, we need to
-                # deserialize them
-                if isinstance(filter_properties['group_hosts'], list):
-                    filter_properties['group_hosts'] = set(
-                        filter_properties['group_hosts'])
-                filter_properties['group_hosts'].add(chosen_host.obj.host)
+            chosen_host.obj.consume_from_request(spec_obj)
+            if spec_obj.instance_group is not None:
+                spec_obj.instance_group.hosts.append(chosen_host.obj.host)
+                # hosts has to be not part of the updates when saving
+                spec_obj.instance_group.obj_reset_changes(['hosts'])
         return selected_hosts
 
     def _get_all_host_states(self, context):

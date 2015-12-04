@@ -14,7 +14,6 @@
 #    under the License.
 
 import base64
-import contextlib
 import inspect
 import os
 import shutil
@@ -107,6 +106,7 @@ class _ImageTestCase(object):
         def fake_fetch(target, *args, **kwargs):
             return
 
+        self.stubs.Set(image, 'get_disk_size', lambda _: self.SIZE)
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(os, 'access', lambda p, w: True)
 
@@ -131,6 +131,7 @@ class _ImageTestCase(object):
 
         self.stubs.Set(image, 'check_image_exists', lambda: True)
         self.stubs.Set(image, '_can_fallocate', lambda: True)
+        self.stubs.Set(image, 'get_disk_size', lambda _: self.SIZE)
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(os, 'access', lambda p, w: False)
 
@@ -766,6 +767,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(image, 'check_image_exists', lambda: True)
+        self.stubs.Set(image, 'get_disk_size', lambda _: self.SIZE)
 
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 
@@ -806,7 +808,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.dmcrypt = imagebackend.dmcrypt
 
     def _create_image(self, sparse):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -848,7 +850,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
             self.utils.execute.assert_called_with(*cmd, run_as_root=True)
 
     def _create_image_generated(self, sparse):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -885,7 +887,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
                 ephemeral_size=None, context=self.CONTEXT)
 
     def _create_image_resize(self, sparse):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -950,7 +952,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self._create_image_resize(True)
 
     def test_create_image_negative(self):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -992,7 +994,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
             self.lvm.remove_volumes.assert_called_with([self.LV_PATH])
 
     def test_create_image_encrypt_negative(self):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -1039,7 +1041,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
             self.lvm.remove_volumes.assert_called_with([self.LV_PATH])
 
     def test_create_image_generated_negative(self):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -1085,7 +1087,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
             self.lvm.remove_volumes.assert_called_with([self.LV_PATH])
 
     def test_create_image_generated_encrypt_negative(self):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(self.lvm, 'create_volume', mock.Mock()),
                 mock.patch.object(self.lvm, 'remove_volumes', mock.Mock()),
                 mock.patch.object(self.disk, 'resize2fs', mock.Mock()),
@@ -1138,6 +1140,7 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(image, 'check_image_exists', lambda: True)
+        self.stubs.Set(image, 'get_disk_size', lambda _: self.SIZE)
 
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 
@@ -1324,6 +1327,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(image, 'check_image_exists', lambda: True)
+        self.stubs.Set(image, 'get_disk_size', lambda _: self.SIZE)
 
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 
@@ -1502,6 +1506,7 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.stubs.Set(os.path, 'exists', lambda _: True)
         self.stubs.Set(image, 'check_image_exists', lambda: True)
+        self.stubs.Set(image, 'get_disk_size', lambda _: self.SIZE)
 
         image.cache(fake_fetch, self.TEMPLATE_PATH, self.SIZE)
 

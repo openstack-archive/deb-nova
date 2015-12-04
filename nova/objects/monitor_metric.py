@@ -11,7 +11,7 @@
 #    under the License.
 
 from oslo_serialization import jsonutils
-from oslo_utils import timeutils
+from oslo_utils import versionutils
 
 from nova.objects import base
 from nova.objects import fields
@@ -48,7 +48,7 @@ class MonitorMetric(base.NovaObject):
     def obj_make_compatible(self, primitive, target_version):
         super(MonitorMetric, self).obj_make_compatible(primitive,
                                                        target_version)
-        target_version = utils.convert_version_to_tuple(target_version)
+        target_version = versionutils.convert_version_to_tuple(target_version)
         if target_version < (1, 1) and 'numa_nodes_values' in primitive:
             del primitive['numa_membw_values']
 
@@ -60,7 +60,7 @@ class MonitorMetric(base.NovaObject):
             # NOTE(jaypipes): This is what jsonutils.dumps() does to
             # datetime.datetime objects, which is what timestamp is in
             # this object as well as the original simple dict metrics
-            'timestamp': timeutils.strtime(self.timestamp),
+            'timestamp': utils.strtime(self.timestamp),
             'source': self.source,
         }
 
@@ -83,9 +83,6 @@ class MonitorMetricList(base.ObjectListBase, base.NovaObject):
 
     fields = {
         'objects': fields.ListOfObjectsField('MonitorMetric'),
-    }
-    obj_relationships = {
-        'objects': [('1.0', '1.0'), ('1.1', '1.1')],
     }
 
     @classmethod

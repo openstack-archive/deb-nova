@@ -11,16 +11,17 @@
 # Akihiro Motoki <amotoki@gmail.com>, 2015. #zanata
 # KATO Tomoyuki <kato.tomoyuki@jp.fujitsu.com>, 2015. #zanata
 # Mie Yamamoto <myamamot@redhat.com>, 2015. #zanata
+# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
+# Yuko Katabami <yukokatabami@gmail.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev13\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-06 06:38+0000\n"
-"PO-Revision-Date: 2015-10-06 04:52+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
+"PO-Revision-Date: 2015-10-08 04:20+0000\n"
 "Last-Translator: Akihiro Motoki <amotoki@gmail.com>\n"
 "Language: ja\n"
-"Language-Team: Japanese (http://www.transifex.com/openstack/nova/language/"
-"ja/)\n"
+"Language-Team: Japanese\n"
 "Plural-Forms: nplurals=1; plural=0\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -339,10 +340,6 @@ msgstr ""
 
 msgid "Attempted overwrite of an existing value."
 msgstr "既存の値を上書きしようとしました。"
-
-#, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr "割り当て要求中: メモリー %(memory_mb)d MB、ディスク %(disk_gb)d GB"
 
 #, python-format
 msgid "Attribute not supported: %(attr)s"
@@ -847,11 +844,6 @@ msgstr "コア API 拡張がありません: %(missing_apis)s"
 msgid "Could not attach image to loopback: %s"
 msgstr "イメージをループバック %s にアタッチできません。"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr ""
-"失敗したビルドをクリーンアップできませんでした。再スケジューリングは行われま"
-"せん"
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "イメージ %(image_id)s を取り出すことができませんでした"
@@ -1053,9 +1045,6 @@ msgstr "ID が %s のインスタンスに接続されたディスクが見つ�
 msgid "Driver Error: %s"
 msgstr "ドライバーエラー: %s"
 
-msgid "Driver must implement select_destinations"
-msgstr "ドライバーは select_destinations を実装する必要があります"
-
 #, python-format
 msgid "Duplicate VM name found: %s"
 msgstr "重複する VM 名が検出されました: %s"
@@ -1167,14 +1156,6 @@ msgstr ""
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "イベントは nova.virt.event.Event のインスタンスでなければなりません"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"インスタンス %(instance_uuid)s のスケジュールの最大試行回数 %(max_attempts)d "
-"を超過しました。最後の例外: %(exc)s"
 
 #, python-format
 msgid ""
@@ -1692,10 +1673,6 @@ msgstr ""
 "していません"
 
 #, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "ハイパーバイザーバージョン %s は無効です。"
-
-#, python-format
 msgid "Hypervisor virtualization type '%(hv_type)s' is not recognised"
 msgstr "ハイパーバイザー仮想化タイプ '%(hv_type)s' は認識されていません"
 
@@ -1785,7 +1762,7 @@ msgid ""
 "Image property 'hw_cpu_policy' is not permitted to override CPU pinning "
 "policy set against the flavor"
 msgstr ""
-"このフレーバーでは、イメージプロパティー \"hw_cpu_policy\" による CPU ピンポ"
+"イメージプロパティー「hw_cpu_policy」はフレーバーに対して設定されたCPU ピンポ"
 "リシーのオーバーライドを許可されていません"
 
 msgid "Image that the instance was started with could not be found."
@@ -1993,15 +1970,6 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "現在、インスタンスのスナップショット作成は許可されていません。"
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"ボリュームグループ %(vg)s の容量が不足しています。使用可能な容量は "
-"%(free_space)d バイトしかありませんが、ボリューム %(lv)s には %(size)d バイト"
-"必要です。"
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "コンピュートリソースが不十分です: %(reason)s。"
 
@@ -2010,10 +1978,6 @@ msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr ""
 "コンピュートノードには %(uuid)s を開始するための十分な空きメモリーがありませ"
 "ん。"
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "テーブル %s をアーカイブするときに IntegrityError が検出されました"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -3055,7 +3019,7 @@ msgid ""
 "%(unit_string)s."
 msgstr ""
 "%(uri)s に対して実行できる要求は、%(unit_string)s につき %(value)s %(verb)s "
-"リクエストに限られます。"
+"要求に限られます。"
 
 msgid "Only 'updated_since', 'project_id' and 'deleted' are understood."
 msgstr "'updated_since'、'project_id'、および 'deleted' のみが認識できます。"
@@ -3716,6 +3680,16 @@ msgstr "ストレージエラー: %(reason)s"
 msgid "Storage policy %s did not match any datastores"
 msgstr "ストレージポリシー %s がどのデータストアにも一致しませんでした"
 
+#, python-format
+msgid "Subject for certificate for projects, %s for project, timestamp"
+msgstr ""
+"プロジェクトの証明書のサブジェクト、%s はプロジェクト、およびタイムスタンプ"
+
+#, python-format
+msgid "Subject for certificate for users, %s for project, user, timestamp"
+msgstr ""
+"ユーザーの証明書のサブジェクト、%s はプロジェクト、ユーザー、タイムスタンプ"
+
 msgid "Success"
 msgstr "成功"
 
@@ -3745,15 +3719,6 @@ msgstr "タスク %(task_name)s はホスト %(host)s 上で実行されてい�
 
 msgid "Template for cloudpipe instance boot script"
 msgstr "cloudpipe インスタンスのブートスクリプト用テンプレート"
-
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"Windows Server/Hyper-V Server 2012 R2 以降で は \"force_hyperv_utils_v1\" オ"
-"プションを \"True\" に設定できません。WMI \"root/virtualization\" 名前空間は"
-"もはやサポートされていません。"
 
 #, python-format
 msgid "The CA file for %(project)s could not be found"
@@ -5098,10 +5063,6 @@ msgstr "本文にキーが多すぎます"
 
 msgid "type"
 msgstr "タイプ"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "不明な ServiceGroup ドライバー名: %s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "vmwareapi では一時停止解除はサポートされていません"

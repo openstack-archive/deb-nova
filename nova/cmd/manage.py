@@ -107,6 +107,17 @@ def args(*args, **kwargs):
     return _decorator
 
 
+def deprecate(msg):
+    """Decorator which print the deprecation message before the decorated
+    function is called
+    """
+    @decorator.decorator
+    def _deprecate(f, *args, **kwargs):
+        print(msg, file=sys.stderr)
+        return f(*args, **kwargs)
+    return _deprecate
+
+
 def param2id(object_id):
     """Helper function to convert various volume id types to internal id.
     args: [object_id], e.g. 'vol-0000000a' or 'volume-0000000a' or '10'
@@ -701,6 +712,12 @@ class VmCommands(object):
 class ServiceCommands(object):
     """Enable and disable running services."""
 
+    description = ('DEPRECATED: Use the nova service-* commands from '
+                   'python-novaclient instead or the os-services REST '
+                   'resource. The service subcommand will be '
+                   'removed in the 14.0 release.')
+
+    @deprecate(description)
     @args('--host', metavar='<host>', help='Host')
     @args('--service', metavar='<service>', help='Nova service')
     def list(self, host=None, service=None):
@@ -733,6 +750,7 @@ class ServiceCommands(object):
                                   svc['availability_zone'], active, art,
                                   svc['updated_at']))
 
+    @deprecate(description)
     @args('--host', metavar='<host>', help='Host')
     @args('--service', metavar='<service>', help='Nova service')
     def enable(self, host, service):
@@ -747,6 +765,7 @@ class ServiceCommands(object):
         print((_("Service %(service)s on host %(host)s enabled.") %
                {'service': service, 'host': host}))
 
+    @deprecate(description)
     @args('--host', metavar='<host>', help='Host')
     @args('--service', metavar='<service>', help='Nova service')
     def disable(self, host, service):
@@ -815,6 +834,7 @@ class ServiceCommands(object):
 
         return {'resource': resource, 'usage': usage}
 
+    @deprecate(description)
     @args('--host', metavar='<host>', help='Host')
     def describe_resource(self, host):
         """Describes cpu/memory/hdd info for host.
@@ -909,38 +929,15 @@ class DbCommands(object):
         """Sync the database up to the most recent version."""
         return migration.db_sync(version)
 
-    @args('--dry-run', action='store_true', dest='dry_run',
-          default=False, help='Print SQL statements instead of executing')
-    def expand(self, dry_run):
-        """Expand database schema."""
-        return migration.db_expand(dry_run)
-
-    @args('--dry-run', action='store_true', dest='dry_run',
-          default=False, help='Print SQL statements instead of executing')
-    def migrate(self, dry_run):
-        """Migrate database schema."""
-        return migration.db_migrate(dry_run)
-
-    @args('--dry-run', action='store_true', dest='dry_run',
-          default=False, help='Print SQL statements instead of executing')
-    @args('--force-experimental-contract', action='store_true',
-          dest='force_experimental_contract',
-          help="Force experimental contract operation to run *VOLATILE*")
-    def contract(self, dry_run, force_experimental_contract=False):
-        """Contract database schema."""
-        if force_experimental_contract:
-            return migration.db_contract(dry_run)
-        print('The "contract" command is experimental and potentially '
-              'dangerous. As such, it is disabled by default. Enable using '
-              '"--force-experimental".')
-
     def version(self):
         """Print the current database version."""
         print(migration.db_version())
 
     @args('--max_rows', metavar='<number>',
             help='Maximum number of deleted rows to archive')
-    def archive_deleted_rows(self, max_rows):
+    @args('--verbose', action='store_true', dest='verbose', default=False,
+          help='Print how many rows were archived per table.')
+    def archive_deleted_rows(self, max_rows, verbose=False):
         """Move up to max_rows deleted rows from production tables to shadow
         tables.
         """
@@ -949,8 +946,13 @@ class DbCommands(object):
             if max_rows < 0:
                 print(_("Must supply a positive value for max_rows"))
                 return(1)
-        admin_context = context.get_admin_context()
-        db.archive_deleted_rows(admin_context, max_rows)
+        table_to_rows_archived = db.archive_deleted_rows(max_rows)
+        if verbose:
+            if table_to_rows_archived:
+                cliutils.print_dict(table_to_rows_archived, _('Table'),
+                                    dict_value=_('Number of Rows Archived'))
+            else:
+                print(_('Nothing was archived.'))
 
     @args('--delete', action='store_true', dest='delete',
           help='If specified, automatically delete any records found where '

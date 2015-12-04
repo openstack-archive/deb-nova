@@ -81,13 +81,6 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         'connection_info': fields.StringField(nullable=True),
     }
 
-    obj_relationships = {
-        'instance': [('1.0', '1.13'), ('1.2', '1.14'), ('1.3', '1.15'),
-                     ('1.4', '1.16'), ('1.5', '1.17'), ('1.6', '1.18'),
-                     ('1.8', '1.19'), ('1.9', '1.20'), ('1.13', '1.21'),
-                     ('1.14', '1.22'), ('1.15', '1.23')],
-    }
-
     @staticmethod
     def _from_db_object(context, block_device_obj,
                         db_block_device, expected_attrs=None):
@@ -274,19 +267,32 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.14: BlockDeviceMapping <= version 1.13
     # Version 1.15: BlockDeviceMapping <= version 1.14
     # Version 1.16: BlockDeviceMapping <= version 1.15
-    VERSION = '1.16'
+    # Version 1.17: Add get_by_instance_uuids()
+    VERSION = '1.17'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
     }
-    obj_relationships = {
-        'objects': [('1.0', '1.0'), ('1.1', '1.1'), ('1.2', '1.1'),
-                    ('1.3', '1.2'), ('1.4', '1.3'), ('1.5', '1.4'),
-                    ('1.6', '1.5'), ('1.7', '1.6'), ('1.8', '1.7'),
-                    ('1.9', '1.8'), ('1.10', '1.9'), ('1.11', '1.10'),
-                    ('1.12', '1.11'), ('1.13', '1.12'), ('1.14', '1.13'),
-                    ('1.15', '1.14'), ('1.16', '1.15')],
-    }
+
+    @property
+    def instance_uuids(self):
+        return set(
+            bdm.instance_uuid for bdm in self
+            if bdm.obj_attr_is_set('instance_uuid')
+        )
+
+    @classmethod
+    def bdms_by_instance_uuid(cls, context, instance_uuids):
+        bdms = cls.get_by_instance_uuids(context, instance_uuids)
+        return base.obj_make_dict_of_lists(
+                context, cls, bdms, 'instance_uuid')
+
+    @base.remotable_classmethod
+    def get_by_instance_uuids(cls, context, instance_uuids, use_slave=False):
+        db_bdms = db.block_device_mapping_get_all_by_instance_uuids(
+                context, instance_uuids, use_slave=use_slave)
+        return base.obj_make_list(
+                context, cls(), objects.BlockDeviceMapping, db_bdms or [])
 
     @base.remotable_classmethod
     def get_by_instance_uuid(cls, context, instance_uuid, use_slave=False):
@@ -296,6 +302,19 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
                 context, cls(), objects.BlockDeviceMapping, db_bdms or [])
 
     def root_bdm(self):
+        """It only makes sense to call this method when the
+        BlockDeviceMappingList contains BlockDeviceMappings from
+        exactly one instance rather than BlockDeviceMappings from
+        multiple instances.
+
+        For example, you should not call this method from a
+        BlockDeviceMappingList created by get_by_instance_uuids(),
+        but you may call this method from a BlockDeviceMappingList
+        created by get_by_instance_uuid().
+        """
+
+        if len(self.instance_uuids) > 1:
+            raise exception.UndefinedRootBDM()
         try:
             return next(bdm_obj for bdm_obj in self if bdm_obj.is_root)
         except StopIteration:

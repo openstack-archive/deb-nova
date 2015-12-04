@@ -7,14 +7,13 @@
 # OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
 "PO-Revision-Date: 2015-09-06 10:17+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language: tr_TR\n"
-"Language-Team: Turkish (Turkey) (http://www.transifex.com/openstack/nova/"
-"language/tr_TR/)\n"
+"Language-Team: Turkish (Turkey)\n"
 "Plural-Forms: nplurals=1; plural=0\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -345,10 +344,6 @@ msgid "Attempted overwrite of an existing value."
 msgstr "Mevcut değerin üzerine yazılması girişimi."
 
 #, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr "Talep ediliyor: hafıza %(memory_mb)d MB, disk %(disk_gb)d GB"
-
-#, python-format
 msgid "Attribute not supported: %(attr)s"
 msgstr "Öznitelik desteklenmiyor: %(attr)s"
 
@@ -656,9 +651,6 @@ msgstr ""
 "Kök disk daha küçük bir boyuta boyutlandırılamıyor. Mevcut boyut: "
 "%(curr_root_gb)s GB. İstenen boyut: %(new_root_gb)s GB"
 
-msgid "Cannot run 'db sync' until 'db contract' is run"
-msgstr "'db contract' çalışmadan 'db sync' çalıştırılamaz"
-
 msgid "Cannot run any more instances of this type."
 msgstr "Bu türde daha fazla sunucu çalıştırılamıyor."
 
@@ -843,9 +835,6 @@ msgstr "Çekirdek API eklentileri eksik: %(missing_apis)s"
 msgid "Could not attach image to loopback: %s"
 msgstr "İmaj geri dönüşe eklenemiyor: %s"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr "Başarısız inşa temizlenemedi, yeniden zamanlanmıyor"
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "%(image_id)s imajı getirilemedi"
@@ -934,10 +923,6 @@ msgid "DNS2"
 msgstr "DNS2"
 
 #, python-format
-msgid "Database migration failed: %(reason)s"
-msgstr "Veritabanı göçü başarısız: %(reason)s"
-
-#, python-format
 msgid "Datastore regex %s did not match any datastores"
 msgstr "Veridepolama düzenli ifadesi %s herhangi bir verideposuyla eşleşmedi"
 
@@ -956,9 +941,6 @@ msgstr "'%(table_name)s' tablosundan %(records)d kayıt silindi."
 
 msgid "Deleting by fixed_range is not supported with the NeutronManager"
 msgstr "fixed_range ile silme NeutronManager ile desteklenmiyor"
-
-msgid "Dependency loop exists in database migrations"
-msgstr "Veri tabanı göçlerinde bağımlılık döngüsü var"
 
 #, python-format
 msgid "Desired state must be specified.  Valid states are: %s"
@@ -1044,9 +1026,6 @@ msgstr "id:%s diski sunucuya ekli şekilde bulunmadı."
 #, python-format
 msgid "Driver Error: %s"
 msgstr "Sürücü Hatası: %s"
-
-msgid "Driver must implement select_destinations"
-msgstr "Sürücü select_destinations uygulamalı"
 
 #, python-format
 msgid "Duplicate VM name found: %s"
@@ -1165,14 +1144,6 @@ msgstr "Olay %(event)s eylem kimliği %(action_id)s için bulunamadı"
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "Olay bir nova.virt.event.Event örneği olmalı"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"%(instance_uuid)s sunucusu için %(max_attempts)d azami zamanlama girişimi "
-"aşıldı. Son istisna: %(exc)s"
 
 #, python-format
 msgid ""
@@ -1690,10 +1661,6 @@ msgstr ""
 "Hipervizör sürücüsü post_live_migration_at_source yöntemini desteklemiyor"
 
 #, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "Hipervizör sürümü %s geçersiz."
-
-#, python-format
 msgid "Hypervisor virt type '%s' is not valid"
 msgstr "Hipervizör sanallaştırma türü '%s' geçerli değil"
 
@@ -1994,24 +1961,12 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "Örnek sistem görüntüleri şu an onaylanmadı."
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"Mantıksal Sürücü Grubu %(vg)s de Yetersiz Alan. Yalnızca %(free_space)db "
-"kullanılabilir, ama %(lv)s mantıksal sürücüsü tarafından %(size)db istendi."
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "Yetersiz hesaplama kaynağı: %(reason)s."
 
 #, python-format
 msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr "%(uuid)s hesaplama düğümü başlatmada yetersiz boş hafıza."
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "Tablo %s arşivlenirken TutarlılıkHatası algılandı"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -3758,15 +3713,6 @@ msgstr "Görev %(task_name)s %(host)s istemcisi üzerinde çalışmıyor"
 msgid "Template for cloudpipe instance boot script"
 msgstr "Cloudpipe sunucusu ön yükleme betiği için şablon"
 
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"WMI \"kök/sanallaştırma\" isim uzayı artık desteklenmediğinden "
-"\"force_hyperv_utils_v1\" seçeneği Windows Sunucu / Hyper-V Sunucu 2012 R2 "
-"veya üstünde artık \"Doğru\" olarak ayarlanamaz."
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr "%(project)s için CA dosyası bulunamadı"
@@ -4372,10 +4318,6 @@ msgstr "Bilinmeyen eylem"
 msgid "Unknown action %s"
 msgstr "Bilinmeyen eylem %s"
 
-#, python-format
-msgid "Unknown alembic cmd %s"
-msgstr "Bilinmeyen alembic komutu %s"
-
 msgid "Unknown argument : port"
 msgstr "Bilinmeyen bağımsız değişken : port"
 
@@ -4835,9 +4777,6 @@ msgstr "olay girdisi desteklenmeyen öğeler içeriyor: %s"
 msgid "event entity requires key %(key)s"
 msgstr "olay birimi %(key)s anahtarına ihtiyaç duyar"
 
-msgid "expand phase still has operations that need to be executed"
-msgstr "genişletme sürecinde hala çalıştırılması gereken işlemler var"
-
 #, python-format
 msgid "failed to generate X509 fingerprint. Error message: %s"
 msgstr "X509 parmak izi oluşturulamadı. Hata iletisi: %s"
@@ -4978,9 +4917,6 @@ msgstr "memcached_servers tanımlanmamış"
 msgid "memory"
 msgstr "hafıza"
 
-msgid "migrate phase still has operations that need to be executed"
-msgstr "göç sürecinde hala çalıştırılması gereken işlemler var"
-
 msgid "min_count must be <= max_count"
 msgstr "min_count max_count'dan küçük olmalı"
 
@@ -5119,10 +5055,6 @@ msgstr "Çok sayıda gövde anahtarları"
 
 msgid "type"
 msgstr "tür"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "bilinmeyen Servis Grubu sürücü ismi: %s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "vmwareapi için sürdürme desteklenmiyor"

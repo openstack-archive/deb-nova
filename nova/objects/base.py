@@ -22,7 +22,7 @@ import traceback
 import netaddr
 from oslo_log import log as logging
 import oslo_messaging as messaging
-from oslo_utils import timeutils
+from oslo_utils import versionutils
 from oslo_versionedobjects import base as ovoo_base
 from oslo_versionedobjects import exception as ovoo_exc
 import six
@@ -48,11 +48,11 @@ class NovaObjectRegistry(ovoo_base.VersionedObjectRegistry):
         # NOTE(danms): This is called when an object is registered,
         # and is responsible for maintaining nova.objects.$OBJECT
         # as the highest-versioned implementation of a given object.
-        version = utils.convert_version_to_tuple(cls.VERSION)
+        version = versionutils.convert_version_to_tuple(cls.VERSION)
         if not hasattr(objects, cls.obj_name()):
             setattr(objects, cls.obj_name(), cls)
         else:
-            cur_version = utils.convert_version_to_tuple(
+            cur_version = versionutils.convert_version_to_tuple(
                 getattr(objects, cls.obj_name()).VERSION)
             if version >= cur_version:
                 setattr(objects, cls.obj_name(), cls)
@@ -74,46 +74,6 @@ class NovaObject(ovoo_base.VersionedObject):
 
     OBJ_SERIAL_NAMESPACE = 'nova_object'
     OBJ_PROJECT_NAMESPACE = 'nova'
-
-    # NOTE(danms): Keep the compatibility bits in nova separate from o.vo
-    # for the time being so that we can keep changes required to use
-    # the base version of those risky methods separate from the rest of the
-    # simple inherited methods.
-    def obj_calculate_child_version(self, target_version, child):
-        """Calculate the appropriate version for a child object.
-
-        This is to be used when backporting an object for an older client.
-        A sub-object will need to be backported to a suitable version for
-        the client as well, and this method will calculate what that
-        version should be, based on obj_relationships.
-
-        :param target_version: Version this object is being backported to
-        :param child: The child field for which the appropriate version
-                      is to be calculated
-        :returns: None if the child should be omitted from the backport,
-                  otherwise, the version to which the child should be
-                  backported
-        """
-        target_version = utils.convert_version_to_tuple(target_version)
-        for index, versions in enumerate(self.obj_relationships[child]):
-            my_version, child_version = versions
-            my_version = utils.convert_version_to_tuple(my_version)
-            if target_version < my_version:
-                if index == 0:
-                    # We're backporting to a version from before this
-                    # subobject was added: delete it from the primitive.
-                    return None
-                else:
-                    # We're in the gap between index-1 and index, so
-                    # backport to the older version
-                    return self.obj_relationships[child][index - 1][1]
-            elif target_version == my_version:
-                # This is the first mapping that satisfies the
-                # target_version request: backport the object.
-                return child_version
-        # No need to backport, as far as we know, so return the latest
-        # version of the sub-object we know about
-        return self.obj_relationships[child][-1][1]
 
     # NOTE(danms): This has some minor change between the nova and o.vo
     # version, so avoid inheriting it for the moment so we can make that
@@ -348,6 +308,28 @@ def obj_to_primitive(obj):
         return obj
 
 
+def obj_make_dict_of_lists(context, list_cls, obj_list, item_key):
+    """Construct a dictionary of object lists, keyed by item_key.
+
+    :param:context: Request context
+    :param:list_cls: The ObjectListBase class
+    :param:obj_list: The list of objects to place in the dictionary
+    :param:item_key: The object attribute name to use as a dictionary key
+    """
+
+    obj_lists = {}
+    for obj in obj_list:
+        key = getattr(obj, item_key)
+        if key not in obj_lists:
+            obj_lists[key] = list_cls()
+            obj_lists[key].objects = []
+        obj_lists[key].objects.append(obj)
+    for key in obj_lists:
+        obj_lists[key]._context = context
+        obj_lists[key].obj_reset_changes()
+    return obj_lists
+
+
 def obj_make_list(context, list_obj, item_cls, db_list, **extra_args):
     """Construct an object list from a list of primitives.
 
@@ -374,7 +356,7 @@ def obj_make_list(context, list_obj, item_cls, db_list, **extra_args):
 def serialize_args(fn):
     """Decorator that will do the arguments serialization before remoting."""
     def wrapper(obj, *args, **kwargs):
-        args = [timeutils.strtime(at=arg) if isinstance(arg, datetime.datetime)
+        args = [utils.strtime(arg) if isinstance(arg, datetime.datetime)
                 else arg for arg in args]
         for k, v in six.iteritems(kwargs):
             if k == 'exc_val' and v:
@@ -382,7 +364,7 @@ def serialize_args(fn):
             elif k == 'exc_tb' and v and not isinstance(v, six.string_types):
                 kwargs[k] = ''.join(traceback.format_tb(v))
             elif isinstance(v, datetime.datetime):
-                kwargs[k] = timeutils.strtime(at=v)
+                kwargs[k] = utils.strtime(v)
         if hasattr(fn, '__call__'):
             return fn(obj, *args, **kwargs)
         # NOTE(danms): We wrap a descriptor, so use that protocol

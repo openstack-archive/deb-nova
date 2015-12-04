@@ -63,7 +63,7 @@ notify_decorator = 'nova.notifications.notify_decorator'
 monkey_patch_opts = [
     cfg.BoolOpt('monkey_patch',
                 default=False,
-                help='Whether to log monkey patching'),
+                help='Whether to apply monkey patching'),
     cfg.ListOpt('monkey_patch_modules',
                 default=[
                   'nova.api.ec2.cloud:%s' % (notify_decorator),
@@ -1008,10 +1008,10 @@ def last_bytes(file_like_object, num):
     return (file_like_object.read(), remaining)
 
 
-def metadata_to_dict(metadata, filter_deleted=False):
+def metadata_to_dict(metadata, include_deleted=False):
     result = {}
     for item in metadata:
-        if not filter_deleted and item.get('deleted'):
+        if not include_deleted and item.get('deleted'):
             continue
         result[item['key']] = item['value']
     return result
@@ -1038,7 +1038,7 @@ def instance_sys_meta(instance):
         return instance['system_metadata']
     else:
         return metadata_to_dict(instance['system_metadata'],
-                                filter_deleted=True)
+                                include_deleted=True)
 
 
 def get_wrapped_function(function):
@@ -1099,7 +1099,7 @@ class ExceptionHelper(object):
             try:
                 return func(*args, **kwargs)
             except messaging.ExpectedException as e:
-                raise (e.exc_info[1], None, e.exc_info[2])
+                six.reraise(*e.exc_info)
         return wrapper
 
 
@@ -1212,32 +1212,6 @@ def is_none_string(val):
     return val.lower() == 'none'
 
 
-def convert_version_to_int(version):
-    try:
-        if isinstance(version, six.string_types):
-            version = convert_version_to_tuple(version)
-        if isinstance(version, tuple):
-            return six.moves.reduce(lambda x, y: (x * 1000) + y, version)
-    except Exception:
-        msg = _("Hypervisor version %s is invalid.") % version
-        raise exception.NovaException(msg)
-
-
-def convert_version_to_str(version_int):
-    version_numbers = []
-    factor = 1000
-    while version_int != 0:
-        version_number = version_int - (version_int // factor * factor)
-        version_numbers.insert(0, str(version_number))
-        version_int = version_int // factor
-
-    return six.moves.reduce(lambda x, y: "%s.%s" % (x, y), version_numbers)
-
-
-def convert_version_to_tuple(version_str):
-    return tuple(int(part) for part in version_str.split('.'))
-
-
 def is_neutron():
     global _IS_NEUTRON
 
@@ -1296,7 +1270,7 @@ def get_system_metadata_from_image(image_meta, flavor=None):
             if image_meta.get('disk_format') == 'vhd':
                 value = flavor['root_gb']
             else:
-                value = max(value, flavor['root_gb'])
+                value = max(value or 0, flavor['root_gb'])
 
         if value is None:
             continue
@@ -1311,7 +1285,7 @@ def get_image_from_system_metadata(system_meta):
     properties = {}
 
     if not isinstance(system_meta, dict):
-        system_meta = metadata_to_dict(system_meta, filter_deleted=True)
+        system_meta = metadata_to_dict(system_meta, include_deleted=True)
 
     for key, value in six.iteritems(system_meta):
         if value is None:
@@ -1539,3 +1513,21 @@ def delete_cached_file(filename):
 
     if filename in _FILE_CACHE:
         del _FILE_CACHE[filename]
+
+
+def isotime(at=None):
+    """Current time as ISO string,
+    as timeutils.isotime() is deprecated
+
+    :returns: Current time in ISO format
+    """
+    if not at:
+        at = timeutils.utcnow()
+    date_string = at.strftime("%Y-%m-%dT%H:%M:%S")
+    tz = at.tzinfo.tzname(None) if at.tzinfo else 'UTC'
+    date_string += ('Z' if tz == 'UTC' else tz)
+    return date_string
+
+
+def strtime(at):
+    return at.strftime("%Y-%m-%dT%H:%M:%S.%f")

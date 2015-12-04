@@ -28,12 +28,14 @@ from keystoneclient import exceptions as keystone_exception
 from keystoneclient import session
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import excutils
 from oslo_utils import strutils
 import six
 
 from nova import availability_zones as az
 from nova import exception
 from nova.i18n import _
+from nova.i18n import _LE
 from nova.i18n import _LW
 
 cinder_opts = [
@@ -53,7 +55,17 @@ cinder_opts = [
     cfg.BoolOpt('cross_az_attach',
                 default=True,
                 help='Allow attach between instance and volume in different '
-                     'availability zones.'),
+                     'availability zones. If False, volumes attached to an '
+                     'instance must be in the same availability zone in '
+                     'Cinder as the instance availability zone in Nova. '
+                     'This also means care should be taken when booting an '
+                     'instance from a volume where source is not "volume" '
+                     'because Nova will attempt to create a volume using '
+                     'the same availability zone as what is assigned to the '
+                     'instance. If that AZ is not in Cinder (or '
+                     'allow_availability_zone_fallback=False in cinder.conf), '
+                     'the volume create request will fail and the instance '
+                     'will fail the build request.'),
 ]
 
 CONF = cfg.CONF
@@ -337,8 +349,32 @@ class API(object):
 
     @translate_volume_exception
     def initialize_connection(self, context, volume_id, connector):
-        return cinderclient(context).volumes.initialize_connection(volume_id,
-                                                                   connector)
+        try:
+            return cinderclient(context).volumes.initialize_connection(
+                volume_id, connector)
+        except cinder_exception.ClientException as ex:
+            with excutils.save_and_reraise_exception():
+                LOG.error(_LE('Initialize connection failed for volume '
+                              '%(vol)s on host %(host)s. Error: %(msg)s '
+                              'Code: %(code)s. Attempting to terminate '
+                              'connection.'),
+                          {'vol': volume_id,
+                           'host': connector.get('host'),
+                           'msg': six.text_type(ex),
+                           'code': ex.code})
+                try:
+                    self.terminate_connection(context, volume_id, connector)
+                except Exception as exc:
+                    LOG.error(_LE('Connection between volume %(vol)s and host '
+                                  '%(host)s might have succeeded, but attempt '
+                                  'to terminate connection has failed. '
+                                  'Validate the connection and determine if '
+                                  'manual cleanup is needed. Error: %(msg)s '
+                                  'Code: %(code)s.'),
+                              {'vol': volume_id,
+                               'host': connector.get('host'),
+                               'msg': six.text_type(exc),
+                               'code': exc.code})
 
     @translate_volume_exception
     def terminate_connection(self, context, volume_id, connector):

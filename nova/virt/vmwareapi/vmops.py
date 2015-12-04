@@ -231,13 +231,13 @@ class VMwareVMOps(object):
                                 injected_files, admin_password, network_info):
         session_vim = self._session.vim
         cookies = session_vim.client.options.transport.cookiejar
-
+        dc_path = vutil.get_inventory_path(session_vim, dc_info.ref)
         uploaded_iso_path = self._create_config_drive(instance,
                                                       injected_files,
                                                       admin_password,
                                                       network_info,
                                                       datastore.name,
-                                                      dc_info.name,
+                                                      dc_path,
                                                       instance.uuid,
                                                       cookies)
         uploaded_iso_path = datastore.build_path(uploaded_iso_path)
@@ -1143,7 +1143,7 @@ class VMwareVMOps(object):
         dc_info = self.get_datacenter_ref_and_name(datastore.ref)
 
         # Get the image details of the instance
-        image_info = images.VMwareImage.from_image(instance.image_ref,
+        image_info = images.VMwareImage.from_image(image_meta.id,
                                                    image_meta)
         vi = VirtualMachineInstanceConfigInfo(instance,
                                               image_info,
@@ -1151,6 +1151,9 @@ class VMwareVMOps(object):
                                               dc_info,
                                               self._imagecache)
         vm_util.power_off_instance(self._session, instance, vm_ref)
+
+        # Fetch the image if it does not exist in the cache
+        self._fetch_image_if_missing(context, vi)
 
         # Get the rescue disk path
         rescue_disk_path = datastore.build_path(instance.uuid,
@@ -1410,29 +1413,6 @@ class VMwareVMOps(object):
         self._update_instance_progress(context, instance,
                                        step=6,
                                        total_steps=RESIZE_TOTAL_STEPS)
-
-    def live_migration(self, context, instance_ref, dest,
-                       post_method, recover_method, block_migration=False):
-        """Spawning live_migration operation for distributing high-load."""
-        vm_ref = vm_util.get_vm_ref(self._session, instance_ref)
-
-        host_ref = self._get_host_ref_from_name(dest)
-        if host_ref is None:
-            raise exception.HostNotFound(host=dest)
-
-        LOG.debug("Migrating VM to host %s", dest, instance=instance_ref)
-        try:
-            vm_migrate_task = self._session._call_method(
-                                    self._session.vim,
-                                    "MigrateVM_Task", vm_ref,
-                                    host=host_ref,
-                                    priority="defaultPriority")
-            self._session._wait_for_task(vm_migrate_task)
-        except Exception:
-            with excutils.save_and_reraise_exception():
-                recover_method(context, instance_ref, dest, block_migration)
-        post_method(context, instance_ref, dest, block_migration)
-        LOG.debug("Migrated VM to host %s", dest, instance=instance_ref)
 
     def poll_rebooting_instances(self, timeout, instances):
         """Poll for rebooting instances."""
@@ -1712,7 +1692,7 @@ class VMwareVMOps(object):
                                        attach_config_spec)
             except Exception as e:
                 LOG.error(_LE('Attaching network adapter failed. Exception: '
-                              ' %s'),
+                              '%s'),
                           e, instance=instance)
                 raise exception.InterfaceAttachFailed(
                         instance_uuid=instance.uuid)

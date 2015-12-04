@@ -165,14 +165,26 @@ class ParseVolumeInfoTestCase(stubs.XenAPITestBaseNoDB):
                          'target_lun': None,
                          'auth_method': 'CHAP',
                          'auth_username': 'username',
-                         'auth_password': 'password'}}
+                         'auth_password': 'verybadpass'}}
 
     def test_parse_volume_info_parsing_auth_details(self):
         conn_info = self._make_connection_info()
         result = volume_utils._parse_volume_info(conn_info['data'])
 
         self.assertEqual('username', result['chapuser'])
-        self.assertEqual('password', result['chappassword'])
+        self.assertEqual('verybadpass', result['chappassword'])
+
+    def test_parse_volume_info_missing_details(self):
+        # Tests that a StorageError is raised if volume_id, target_host, or
+        # target_ign is missing from connection_data. Also ensures that the
+        # auth_password value is not present in the StorageError message.
+        for data_key_to_null in ('volume_id', 'target_portal', 'target_iqn'):
+            conn_info = self._make_connection_info()
+            conn_info['data'][data_key_to_null] = None
+            ex = self.assertRaises(exception.StorageError,
+                                   volume_utils._parse_volume_info,
+                                   conn_info['data'])
+            self.assertNotIn('verybadpass', six.text_type(ex))
 
     def test_get_device_number_raise_exception_on_wrong_mountpoint(self):
         self.assertRaises(
@@ -227,6 +239,38 @@ class FindVBDTestCase(stubs.XenAPITestBaseNoDB):
         self.assertIsNone(result)
         session.VM.get_VBDs.assert_called_once_with("vm_ref")
         session.VBD.get_userdevice.assert_called_once_with("a")
+
+
+class IntroduceSRTestCase(stubs.XenAPITestBaseNoDB):
+    @mock.patch.object(volume_utils, '_create_pbd')
+    def test_backend_kind(self, create_pbd):
+        session = mock.Mock()
+        session.product_version = (6, 5, 0)
+        session.call_xenapi.return_value = 'sr_ref'
+        params = {'sr_type': 'iscsi'}
+        sr_uuid = 'sr_uuid'
+        label = 'label'
+        expected_params = {'backend-kind': 'vbd'}
+
+        volume_utils.introduce_sr(session, sr_uuid, label, params)
+        session.call_xenapi.assert_any_call('SR.introduce', sr_uuid,
+                                            label, '', 'iscsi',
+                                            '', False, expected_params)
+
+    @mock.patch.object(volume_utils, '_create_pbd')
+    def test_backend_kind_upstream_fix(self, create_pbd):
+        session = mock.Mock()
+        session.product_version = (7, 0, 0)
+        session.call_xenapi.return_value = 'sr_ref'
+        params = {'sr_type': 'iscsi'}
+        sr_uuid = 'sr_uuid'
+        label = 'label'
+        expected_params = {}
+
+        volume_utils.introduce_sr(session, sr_uuid, label, params)
+        session.call_xenapi.assert_any_call('SR.introduce', sr_uuid,
+                                            label, '', 'iscsi',
+                                            '', False, expected_params)
 
 
 class BootedFromVolumeTestCase(stubs.XenAPITestBaseNoDB):

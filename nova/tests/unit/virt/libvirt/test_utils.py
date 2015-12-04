@@ -24,6 +24,7 @@ from oslo_utils import fileutils
 import six
 
 from nova.compute import arch
+from nova import context
 from nova import exception
 from nova import objects
 from nova import test
@@ -108,6 +109,15 @@ disk size: 96K
                     'env', 'LC_ALL=C', 'LANG=C',
                     'qemu-img', 'info', path)
                 self.assertEqual(f, d_type)
+
+    @mock.patch('os.path.exists', return_value=True)
+    @mock.patch('os.path.isdir', return_value=True)
+    def test_disk_type_ploop(self, mock_isdir, mock_exists):
+        path = '/some/path'
+        d_type = libvirt_utils.get_disk_type(path)
+        mock_isdir.assert_called_once_with(path)
+        mock_exists.assert_called_once_with("%s/DiskDescriptor.xml" % path)
+        self.assertEqual('ploop', d_type)
 
     @mock.patch('os.path.exists', return_value=True)
     @mock.patch('nova.utils.execute')
@@ -478,12 +488,12 @@ disk size: 4.4M
                         '/some/path')
         mock_execute.assert_called_once_with(*execute_args, run_as_root=True)
 
-    def _do_test_extract_snapshot(self, mock_execute,
+    def _do_test_extract_snapshot(self, mock_execute, src_format='qcow2',
                                   dest_format='raw', out_format='raw'):
-        libvirt_utils.extract_snapshot('/path/to/disk/image', 'qcow2',
+        libvirt_utils.extract_snapshot('/path/to/disk/image', src_format,
                                        '/extracted/snap', dest_format)
         mock_execute.assert_called_once_with(
-            'qemu-img', 'convert', '-f', 'qcow2', '-O', out_format,
+            'qemu-img', 'convert', '-f', src_format, '-O', out_format,
             '/path/to/disk/image', '/extracted/snap')
 
     @mock.patch.object(utils, 'execute')
@@ -498,6 +508,13 @@ disk size: 4.4M
     def test_extract_snapshot_qcow2(self, mock_execute):
         self._do_test_extract_snapshot(mock_execute,
                                        dest_format='qcow2', out_format='qcow2')
+
+    @mock.patch.object(utils, 'execute')
+    def test_extract_snapshot_parallels(self, mock_execute):
+        self._do_test_extract_snapshot(mock_execute,
+                                       src_format='raw',
+                                       dest_format='ploop',
+                                       out_format='parallels')
 
     def test_load_file(self):
         dst_fd, dst_path = tempfile.mkstemp()
@@ -563,6 +580,22 @@ disk size: 4.4M
                                   user_id, project_id)
         mock_images.assert_called_once_with(
             context, image_id, target, user_id, project_id,
+            max_size=0)
+
+    @mock.patch('nova.virt.images.fetch')
+    def test_fetch_initrd_image(self, mock_images):
+        _context = context.RequestContext(project_id=123,
+                                          project_name="aubergine",
+                                          user_id=456,
+                                          user_name="pie")
+        target = '/tmp/targetfile'
+        image_id = '4'
+        user_id = 'fake'
+        project_id = 'fake'
+        libvirt_utils.fetch_raw_image(_context, target, image_id,
+                                      user_id, project_id)
+        mock_images.assert_called_once_with(
+            _context, image_id, target, user_id, project_id,
             max_size=0)
 
     def test_fetch_raw_image(self):

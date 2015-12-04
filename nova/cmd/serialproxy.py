@@ -19,25 +19,14 @@ Based on nova-novncproxy.
 """
 import sys
 
-from oslo_config import cfg
-
 from nova.cmd import baseproxy
+import nova.conf
+from nova.conf import serial_console as serial
 from nova import config
 
 
-opts = [
-    cfg.StrOpt('serialproxy_host',
-               default='0.0.0.0',
-               help='Host on which to listen for incoming requests'),
-    cfg.IntOpt('serialproxy_port',
-               default=6083,
-               min=1,
-               max=65535,
-               help='Port on which to listen for incoming requests'),
-    ]
-
-CONF = cfg.CONF
-CONF.register_cli_opts(opts, group="serial_console")
+CONF = nova.conf.CONF
+serial.register_cli_opts(CONF)
 
 
 def main():

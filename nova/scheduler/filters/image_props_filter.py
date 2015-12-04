@@ -17,12 +17,12 @@
 from distutils import versionpredicate
 
 from oslo_log import log as logging
+from oslo_utils import versionutils
 
 from nova.compute import arch
 from nova.compute import hv_type
 from nova.compute import vm_mode
 from nova.scheduler import filters
-from nova import utils
 
 
 LOG = logging.getLogger(__name__)
@@ -78,7 +78,7 @@ class ImagePropertiesFilter(filters.BaseHostFilter):
                 return True
             img_prop_predicate = versionpredicate.VersionPredicate(
                 'image_prop (%s)' % version_required)
-            hyper_ver_str = utils.convert_version_to_str(hyper_version)
+            hyper_ver_str = versionutils.convert_version_to_str(hyper_version)
             return img_prop_predicate.satisfied_by(hyper_ver_str)
 
         for supp_inst in supp_instances:
@@ -95,6 +95,7 @@ class ImagePropertiesFilter(filters.BaseHostFilter):
                    'hypervisor_version': hypervisor_version})
         return False
 
+    @filters.compat_legacy_props
     def host_passes(self, host_state, filter_properties):
         """Check if host passes specified image properties.
 

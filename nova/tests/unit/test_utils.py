@@ -297,7 +297,7 @@ class TestCachedFile(test.NoDBTestCase):
         self.assertNotIn(filename, utils._FILE_CACHE)
 
 
-class RootwrapDaemonTesetCase(test.TestCase):
+class RootwrapDaemonTesetCase(test.NoDBTestCase):
     @mock.patch('oslo_rootwrap.client.Client')
     def test_get_client(self, mock_client):
         mock_conf = mock.MagicMock()
@@ -812,8 +812,26 @@ class MetadataToDictTestCase(test.NoDBTestCase):
                  {'key': 'foo2', 'value': 'baz'}]),
                          {'foo1': 'bar', 'foo2': 'baz'})
 
+    def test_metadata_to_dict_with_include_deleted(self):
+        metadata = [{'key': 'foo1', 'value': 'bar', 'deleted': 1442875429,
+                     'other': 'stuff'},
+                    {'key': 'foo2', 'value': 'baz', 'deleted': 0,
+                     'other': 'stuff2'}]
+        self.assertEqual({'foo1': 'bar', 'foo2': 'baz'},
+                         utils.metadata_to_dict(metadata,
+                                                include_deleted=True))
+        self.assertEqual({'foo2': 'baz'},
+                         utils.metadata_to_dict(metadata,
+                                                include_deleted=False))
+        # verify correct default behavior
+        self.assertEqual(utils.metadata_to_dict(metadata),
+                         utils.metadata_to_dict(metadata,
+                                                include_deleted=False))
+
     def test_metadata_to_dict_empty(self):
-        self.assertEqual(utils.metadata_to_dict([]), {})
+        self.assertEqual({}, utils.metadata_to_dict([]))
+        self.assertEqual({}, utils.metadata_to_dict([], include_deleted=True))
+        self.assertEqual({}, utils.metadata_to_dict([], include_deleted=False))
 
     def test_dict_to_metadata(self):
         def sort_key(adict):
@@ -1191,22 +1209,6 @@ class GetImageMetadataFromVolumeTestCase(test.NoDBTestCase):
         self.assertEqual(0, image_meta["size"])
         # volume's properties should not be touched
         self.assertNotEqual({}, properties)
-
-
-class VersionTestCase(test.NoDBTestCase):
-    def test_convert_version_to_int(self):
-        self.assertEqual(utils.convert_version_to_int('6.2.0'), 6002000)
-        self.assertEqual(utils.convert_version_to_int((6, 4, 3)), 6004003)
-        self.assertEqual(utils.convert_version_to_int((5, )), 5)
-        self.assertRaises(exception.NovaException,
-                          utils.convert_version_to_int, '5a.6b')
-
-    def test_convert_version_to_string(self):
-        self.assertEqual(utils.convert_version_to_str(6007000), '6.7.0')
-        self.assertEqual(utils.convert_version_to_str(4), '4')
-
-    def test_convert_version_to_tuple(self):
-        self.assertEqual(utils.convert_version_to_tuple('6.7.0'), (6, 7, 0))
 
 
 class ConstantTimeCompareTestCase(test.NoDBTestCase):

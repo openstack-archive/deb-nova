@@ -20,7 +20,6 @@ Test suite for VMwareAPI.
 """
 
 import collections
-import contextlib
 import datetime
 
 from eventlet import greenthread
@@ -70,18 +69,6 @@ CONF = cfg.CONF
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('remove_unused_original_minimum_age_seconds',
                 'nova.virt.imagecache')
-
-
-class fake_vm_ref(object):
-    def __init__(self):
-        self.value = 4
-        self._type = 'VirtualMachine'
-
-
-class fake_service_content(object):
-    def __init__(self):
-        self.ServiceContent = vmwareapi_fake.DataObject()
-        self.ServiceContent.fake = 'fake'
 
 
 def _fake_create_session(inst):
@@ -135,7 +122,7 @@ class VMwareSessionTestCase(test.NoDBTestCase):
     @mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
                        return_value=False)
     def test_call_method(self, mock_is_vim):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(driver.VMwareAPISession, '_create_session',
                                   _fake_create_session),
                 mock.patch.object(driver.VMwareAPISession, 'invoke_api'),
@@ -149,7 +136,7 @@ class VMwareSessionTestCase(test.NoDBTestCase):
     @mock.patch.object(driver.VMwareAPISession, '_is_vim_object',
                        return_value=True)
     def test_call_method_vim(self, mock_is_vim):
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(driver.VMwareAPISession, '_create_session',
                                   _fake_create_session),
                 mock.patch.object(driver.VMwareAPISession, 'invoke_api'),
@@ -716,9 +703,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertFalse(mock_destroy.called)
 
     @mock.patch.object(driver.VMwareVCDriver, 'detach_volume',
-                       side_effect=exception.StorageError(reason='oh man'))
+                       side_effect=exception.DiskNotFound(message='oh man'))
     @mock.patch.object(vmops.VMwareVMOps, 'destroy')
-    def test_destroy_with_attached_volumes_with_storage_error(
+    def test_destroy_with_attached_volumes_with_disk_not_found(
         self, mock_destroy, mock_detach_volume):
         self._create_vm()
         connection_info = {'data': 'fake-data', 'serial': 'volume-fake-id'}
@@ -836,7 +823,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         mock_from_image.return_value = img_props
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._vmops, '_extend_virtual_disk'),
             mock.patch.object(self.conn._vmops, 'get_datacenter_ref_and_name'),
         ) as (mock_extend, mock_get_dc):
@@ -872,7 +859,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
             return self.call_method(module, method, *args, **kwargs)
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_call_method',
                               new=fake_call_method),
             mock.patch.object(self.conn._session, '_wait_for_task',
@@ -908,7 +895,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 self.task_ref = task_ref
             return task_ref
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_call_method',
                               new=fake_call_method),
             mock.patch.object(self.conn._session, '_wait_for_task',
@@ -952,7 +939,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 self.task_ref = task_ref
             return task_ref
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_wait_for_task',
                               new=fake_wait_for_task),
             mock.patch.object(self.conn._session, '_call_method',
@@ -1008,7 +995,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 self.task_ref = task_ref
             return task_ref
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_wait_for_task',
                               fake_wait_for_task),
             mock.patch.object(self.conn._session, '_call_method',
@@ -1038,7 +1025,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 self.task_ref = task_ref
             return task_ref
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_wait_for_task',
                               fake_wait_for_task),
             mock.patch.object(self.conn._session, '_call_method',
@@ -1069,7 +1056,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 self.task_ref = task_ref
             return task_ref
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_wait_for_task',
                               fake_wait_for_task),
             mock.patch.object(self.conn._session, '_call_method',
@@ -1285,7 +1272,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                value="Snapshot-123",
                                name="VirtualMachineSnapshot")
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self.conn._session, '_wait_for_task',
                               side_effect=exception),
             mock.patch.object(vmops, '_time_sleep_wrapper')
@@ -1447,7 +1434,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
     def test_resume_state_on_host_boot_no_reboot(self):
         self._create_instance()
         for state in ['poweredOn', 'suspended']:
-            with contextlib.nested(
+            with test.nested(
                 mock.patch.object(driver.VMwareVCDriver, 'reboot'),
                 mock.patch.object(vm_util, 'get_vm_state',
                                   return_value=state)
@@ -1458,6 +1445,37 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 mock_get_vm_state.assert_called_once_with(self.conn._session,
                                                           self.instance)
                 self.assertFalse(mock_reboot.called)
+
+    @mock.patch('nova.virt.driver.block_device_info_get_mapping')
+    @mock.patch('nova.virt.vmwareapi.driver.VMwareVCDriver.detach_volume')
+    def test_detach_instance_volumes(
+            self, detach_volume, block_device_info_get_mapping):
+        self._create_vm()
+
+        def _mock_bdm(connection_info, device_name):
+            return {'connection_info': connection_info,
+                    'device_name': device_name}
+
+        disk_1 = _mock_bdm(mock.sentinel.connection_info_1, 'dev1')
+        disk_2 = _mock_bdm(mock.sentinel.connection_info_2, 'dev2')
+        block_device_info_get_mapping.return_value = [disk_1, disk_2]
+
+        detach_volume.side_effect = [None, exception.DiskNotFound("Error")]
+
+        with mock.patch.object(self.conn, '_vmops') as vmops:
+            block_device_info = mock.sentinel.block_device_info
+            self.conn._detach_instance_volumes(self.instance,
+                                               block_device_info)
+
+            block_device_info_get_mapping.assert_called_once_with(
+                block_device_info)
+            vmops.power_off.assert_called_once_with(self.instance)
+            self.assertEqual(vm_states.STOPPED, self.instance.vm_state)
+            exp_detach_calls = [mock.call(mock.sentinel.connection_info_1,
+                                          self.instance, 'dev1'),
+                                mock.call(mock.sentinel.connection_info_2,
+                                          self.instance, 'dev2')]
+            self.assertEqual(exp_detach_calls, detach_volume.call_args_list)
 
     def test_destroy(self):
         self._create_vm()
@@ -1510,7 +1528,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             return 'fake-ref'
 
         self._create_instance()
-        with contextlib.nested(
+        with test.nested(
              mock.patch.object(vm_util, 'get_vm_ref_from_name',
                                fake_vm_ref_from_name),
              mock.patch.object(self.conn._session,
@@ -1709,7 +1727,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         device = mock.Mock(backing=backing)
         vmdk_info = vm_util.VmdkInfo('fake-path', adapter_type, disk_type, 64,
                                      device)
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(vm_util, 'get_vm_ref',
                               return_value=mock.sentinel.vm_ref),
             mock.patch.object(volumeops.VMwareVolumeOps, '_get_volume_ref'),
@@ -1883,8 +1901,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
     def _get_timestamp_filename(self):
         return '%s%s' % (imagecache.TIMESTAMP_PREFIX,
-                         timeutils.strtime(at=self.old_time,
-                                           fmt=imagecache.TIMESTAMP_FORMAT))
+                         self.old_time.strftime(imagecache.TIMESTAMP_FORMAT))
 
     def _override_time(self):
         self.old_time = datetime.datetime(2012, 11, 22, 12, 00, 00)
@@ -2229,12 +2246,27 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         # currently there are 2 data stores
         self.assertEqual(2, len(ds_util._DS_DC_MAPPING))
 
+    def test_pre_live_migration(self):
+        self.assertRaises(NotImplementedError,
+                          self.conn.pre_live_migration, self.context,
+                          'fake_instance', 'fake_block_device_info',
+                          'fake_network_info', 'fake_disk_info')
+
+    def test_live_migration(self):
+        self.assertRaises(NotImplementedError,
+                          self.conn.live_migration, self.context,
+                          'fake_instance', 'fake_dest', 'fake_post_method',
+                          'fake_recover_method')
+
     def test_rollback_live_migration_at_destination(self):
-        with mock.patch.object(self.conn, "destroy") as mock_destroy:
-            self.conn.rollback_live_migration_at_destination(self.context,
-                    "instance", [], None)
-            mock_destroy.assert_called_once_with(self.context,
-                    "instance", [], None)
+        self.assertRaises(NotImplementedError,
+                          self.conn.rollback_live_migration_at_destination,
+                          self.context, 'fake_instance', 'fake_network_info',
+                          'fake_block_device_info')
+
+    def test_post_live_migration(self):
+        self.assertIsNone(self.conn.post_live_migration(self.context,
+            'fake_instance', 'fake_block_device_info'))
 
     def test_get_instance_disk_info_is_implemented(self):
         # Ensure that the method has been implemented in the driver

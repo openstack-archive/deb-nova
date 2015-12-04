@@ -8,19 +8,19 @@
 # Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
-"PO-Revision-Date: 2015-09-24 08:43+0000\n"
+"POT-Creation-Date: 2015-12-01 06:32+0000\n"
+"PO-Revision-Date: 2015-11-24 04:00+0000\n"
 "Last-Translator: Zbyněk Schwarz <zbynek.schwarz@gmail.com>\n"
-"Language-Team: Czech (http://www.transifex.com/openstack/nova/language/cs/)\n"
+"Language-Team: Czech\n"
 "Language: cs\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
-"X-Generator: Zanata 3.7.1\n"
+"Generated-By: Babel 2.0\n"
+"X-Generator: Zanata 3.7.3\n"
 
 #, python-format
 msgid ""
@@ -113,9 +113,6 @@ msgstr "Pokus o automatické nastavení disku selhalo z důvodu: %s"
 msgid "Attempted to remove chain %s which does not exist"
 msgstr "Pokus o odstranění řetězu %s, který neexistuje"
 
-msgid "Bandwidth usage not supported by hypervisor."
-msgstr "Využití šířky pásma není podporováno hypervizorem."
-
 msgid ""
 "Can't create a migration_context record without a migration object specified."
 msgstr "Nelze vytvořit kontext přesunu bez zadání přesunovaného objektu."
@@ -184,6 +181,15 @@ msgstr ""
 #, python-format
 msgid "Compute resource plugin %s was not loaded"
 msgstr "Zásuvný modul zdroje výpočtu %s nebyl načten"
+
+msgid ""
+"Conductor local mode is deprecated and will be removed in a subsequent "
+"release"
+msgstr "Místní režim Conductor je zastaralý a v následné verzi bude odstraněn."
+
+#, python-format
+msgid "Could not clean up failed build, not rescheduling. Error: %s"
+msgstr "Nelze vyčistit sestavení co selhalo, není znovu naplánováno. Chyba: %s"
 
 #, python-format
 msgid "Could not decode cpu_allocation_ratio: '%s'"
@@ -525,11 +531,11 @@ msgstr "Získání souborů cookies esx selhalo: %s"
 
 #, python-format
 msgid ""
-"Host %(hostname)s has more disk space than database expected (%(physical)sgb "
-"> %(database)sgb)"
+"Host %(hostname)s has more disk space than database expected (%(physical)s "
+"GB > %(database)s GB)"
 msgstr ""
 "Hostitel %(hostname)s má větší kapacitu disku, než databáze očekávala "
-"(%(physical)sgb > %(database)sgb)"
+"(%(physical)s GB > %(database)s GB)"
 
 msgid ""
 "Host field should not be set on the instance until resources have been "
@@ -545,14 +551,8 @@ msgstr ""
 "Název hostitele %(hostname)s je delší než 63 znaků, zkrácen na "
 "%(truncated_name)s"
 
-msgid "Hypervisor driver does not support firewall rules"
-msgstr "Ovladač hypervizoru nepodporuje pravidla brány firewall"
-
 msgid "Hypervisor driver does not support resume guests"
 msgstr "Ovladač hypervizoru nepodporuje obnovení hostů"
-
-msgid "Hypervisor driver does not support security groups."
-msgstr "Ovladač hypervizoru nepodporuje bezpečnostní skupiny."
 
 #, python-format
 msgid "IP %s leased that is not associated"
@@ -797,6 +797,11 @@ msgstr ""
 msgid "Instance: %(instance_uuid)s failed to save into memcached"
 msgstr "Instance: %(instance_uuid)s nemohla být uložena do memcached."
 
+#, python-format
+msgid "IntegrityError detected when archiving table %(tablename)s: %(error)s"
+msgstr ""
+"Při archivaci tabulky %(tablename)s došlo k chybě celistvosti: %(error)s"
+
 msgid "Invalid 'agent_present' value. Falling back to the default."
 msgstr "Neplatná hodnota 'agent_present'. Vrací se zpět na výchozí."
 
@@ -954,14 +959,6 @@ msgstr "Nenalezen žádný platný hostitel pro vyskladnění instance"
 
 #, python-format
 msgid ""
-"No valid network found in %(opaque)s, from %(bridge)s or "
-"%(integration_bridge)s"
-msgstr ""
-"V %(opaque)s nebyla nalezena žádná platná síť, z %(bridge)s či "
-"%(integration_bridge)s"
-
-#, python-format
-msgid ""
 "Node %(uuid)s has a malformed \"%(prop)s\". It should be an integer but its "
 "value is \"%(value)s\"."
 msgstr ""
@@ -1058,10 +1055,10 @@ msgstr "Stav napájení %s nebyl nalezen."
 #, python-format
 msgid ""
 "Problem with acquiring the list of children of %(path)r within a given "
-"timeout=%(timeout)rs"
+"timeout=%(timeout)d seconds"
 msgstr ""
 "Problém při získávání seznamu potomků %(path)r v rámci daného časového "
-"limitu=%(timeout)rs"
+"limitu=%(timeout)d vteřin"
 
 #, python-format
 msgid "Quota exceeded for %s, tried to allocate floating IP"
@@ -1142,6 +1139,16 @@ msgstr ""
 
 #, python-format
 msgid ""
+"Running Nova with a block_migration_flag config option which does not "
+"contain %(flag)s will cause all block-migrations to be live-migrations "
+"instead. This setting should be on the block_migration_flag."
+msgstr ""
+"Spuštění Nova s volbou nastavení block_migration_flag neobsahující %(flag)s "
+"způsobí, že všechny přenosy bloku budou přenosy za provozu. Toto nastavení "
+"by se mělo používat pouze u block_migration_flag."
+
+#, python-format
+msgid ""
 "Running Nova with a libvirt version less than %(version)s is deprecated. The "
 "required minimum version of libvirt will be raised to %(version)s in the "
 "13.0.0 release."
@@ -1149,6 +1156,16 @@ msgstr ""
 "Spouštět Nova pomocí libvirt s verzí starší než %(version)s je zastaralé. "
 "Požadovaná minimální verze libvirt bude ve verzi 13.0.0 zvýšena na "
 "%(version)s."
+
+#, python-format
+msgid ""
+"Running Nova with a live_migration_flag config option which contains "
+"%(flag)s will cause all live-migrations to be block-migrations instead. This "
+"setting should only be on the block_migration_flag instead."
+msgstr ""
+"Spuštění Nova s volbou nastavení live_migration_flag obsahující %(flag)s "
+"způsobí, že všechny přenosy za provozu budou přenosy bloku. Toto nastavení "
+"by se mělo používat u block_migration_flag."
 
 msgid ""
 "Running libvirt-lxc without user namespaces is dangerous. Containers spawned "
@@ -1200,6 +1217,31 @@ msgstr ""
 "%(instance_id)s."
 
 msgid ""
+"The Extensible Resource Tracker is deprecated and will be removed in the "
+"14.0.0 release. If you use this functionality and have custom resources that "
+"are managed by the Extensible Resource Tracker, please contact the Nova "
+"development team by posting to the openstack-dev mailing list. There is no "
+"future planned support for the tracking of custom resources."
+msgstr ""
+"Sledovač rozšířitelných zdrojů je zastaralý a bude odstraněn ve verzi "
+"14.0.0. Pokud tuto funkci využíváte a máte vlastní zdroje které jsou tímto "
+"systémem spravované, prosím kontaktujte tým vývojářů Nova zasláním příspěvku "
+"na poštovní konferenci openstack-dev. Podpora sledování vlastních zdrojů "
+"není do budoucna plánována."
+
+msgid ""
+"The TrustedFilter is considered experimental by the OpenStack project "
+"because it receives much less testing than the rest of Nova. This may change "
+"in the future, but current deployers should be aware that the use of it in "
+"production right now may be risky."
+msgstr ""
+"Funkce důvěryhodného filtru v Nova je v projektu OpenStack považována za "
+"experimentální, protože prošla menším počtem zkoušek v porovnání s ostatní "
+"mi části Nova. Toto se v budoucnu může změnit, ale v současnosti by si "
+"správci měli být vědomi, že použití této funkce v ostrých provozech může být "
+"riskantní."
+
+msgid ""
 "The ZooKeeper service group driver in Nova is not tested by the OpenStack "
 "project and thus its quality can not be ensured. This may change in the "
 "future, but current deployers should be aware that the use of it in "
@@ -1235,13 +1277,12 @@ msgstr ""
 
 msgid ""
 "The in tree EC2 API is deprecated as of Kilo release and may be removed in a "
-"future release. The stackforge ec2-api project http://git.openstack.org/cgit/"
-"stackforge/ec2-api/ is the target replacement for this functionality."
+"future release. The openstack ec2-api project http://git.openstack.org/cgit/"
+"openstack/ec2-api/ is the target replacement for this functionality."
 msgstr ""
 "EC2 API ve stromě je od verze Kilo označeno jako zastaralé a v budoucích "
-"verzích mlže být odstraněno. Projekt ec2-api ve stackforge na adrese http://"
-"git.openstack.org/cgit/stackforge/ec2-api/ má za cíl nahradit tuto "
-"funkcionalitu."
+"verzích mlže být odstraněno. Projekt openstack ec2-api na adrese http://git."
+"openstack.org/cgit/openstack/ec2-api/ má za cíl nahradit tuto funkcionalitu."
 
 #, python-format
 msgid ""
@@ -1269,12 +1310,9 @@ msgstr ""
 "Stejný název páru klíčů '%(name)s' existuje v následujících buňkách: "
 "%(cell_names)s. Je vrácena hodnota páru z první buňky."
 
-msgid ""
-"The setting \"always\" will be deprecated in the Liberty version. Please use "
-"\"True\" instead"
-msgstr ""
-"Nastavení \"always\" bude od verze Liberty zastaralé. Místo toho prosím "
-"použijte \"True\"."
+#, python-format
+msgid "The volume %s does not exist!"
+msgstr "Svazek %s neexistuje!"
 
 msgid ""
 "This key manager is insecure and is not recommended for production "
@@ -1343,13 +1381,6 @@ msgstr ""
 "Pokus o odstranění neexistujícího pravidla: %(chain)r %(rule)r %(wrap)r "
 "%(top)r"
 
-msgid ""
-"Trying to apply a migration context that does not seem to be set for this "
-"instance"
-msgstr ""
-"Pokus o použití kontextu přesunu, který nevypadá, že je nastaven na tuto "
-"instanci."
-
 #, python-format
 msgid ""
 "Trying to remove device with %(status)s ownership %(instance_uuid)s because "
@@ -1357,13 +1388,6 @@ msgid ""
 msgstr ""
 "Pokus o odstranění zařízení se stavem %(status)s ve vlastnictví "
 "%(instance_uuid)s z důvodu %(pci_exception)s"
-
-msgid ""
-"Trying to revert a migration context that does not seem to be set for this "
-"instance"
-msgstr ""
-"Pokus o vrácení kontextu přesunu zpět, který nevypadá, že je nastaven na "
-"tuto instanci."
 
 #, python-format
 msgid "URI %(uri)s does not support connection events: %(error)s"
@@ -1468,6 +1492,13 @@ msgstr "VM není přítomno, přeskakování ničení..."
 msgid "VM is not present, skipping soft delete..."
 msgstr "VM není přítomno, přeskakování měkkého smazání..."
 
+#, python-format
+msgid ""
+"VMware vCenter version less than %(version)s does not support the 'ovs' port "
+"type."
+msgstr ""
+" VMware vCenter s verzí starší než %(version)s nepodporuje typ portu 'ovs'."
+
 msgid ""
 "Value specified in conf file for xenserver.torrent_base_url does not contain "
 "a slash character, therefore it will not be used as part of the torrent URL. "
@@ -1489,12 +1520,12 @@ msgstr ""
 #, python-format
 msgid ""
 "Volume group %(vg)s will not be able to hold sparse volume %(lv)s. Virtual "
-"volume size is %(size)db, but free space on volume group is only "
+"volume size is %(size)d bytes, but free space on volume group is only "
 "%(free_space)db."
 msgstr ""
 "Skupina svazku %(vg)s nebude moci pojmout řídký svazek %(lv)s. Velikost "
-"virtuálního svazku je %(size)db, ale volná kapacita ve skupině svazku je "
-"pouze %(free_space)db."
+"virtuálního svazku je %(size)d bajtů, ale volná kapacita ve skupině svazku "
+"je pouze %(free_space)d bajtů."
 
 #, python-format
 msgid ""
@@ -1553,15 +1584,6 @@ msgstr ""
 "%(expected_signature)s pro id: %(requestor_id)s. Formulář žádosti: "
 "%(requestor_address)s"
 
-msgid ""
-"You are running nova-compute on Windows / Hyper-V Server 2008 R2. This "
-"version of Windows is deprecated in the current version of OpenStack and the "
-"support for it will be removed in the next cycle."
-msgstr ""
-"nova-compute spouštíte na Windows / Hyper-V Server 2008 R2. Tato verze "
-"Windows je v současné verzi OpenStack považována za zastaralou a její "
-"podpora bude ukončena v další verzi."
-
 #, python-format
 msgid ""
 "You are running with libvirt version %s which is known to have broken NUMA "
@@ -1574,11 +1596,11 @@ msgstr ""
 
 msgid ""
 "Your libvirt version does not support the VIR_DOMAIN_XML_MIGRATABLE flag, "
-"and the  graphics (VNC and/or SPICE) listen addresses on the destination "
-"node do not match the addresses on the source node. Since the source node "
-"has listen addresses set to either the catch-all address (0.0.0.0 or ::) or "
-"the local address (127.0.0.1 or ::1), the live migration will succeed, but "
-"the VM will continue to listen on the current addresses."
+"and the graphics (VNC and/or SPICE) listen addresses on the destination node "
+"do not match the addresses on the source node. Since the source node has "
+"listen addresses set to either the catch-all address (0.0.0.0 or ::) or the "
+"local address (127.0.0.1 or ::1), the live migration will succeed, but the "
+"VM will continue to listen on the current addresses."
 msgstr ""
 "Vaše verze libvirt nepodporuje příznak VIR_DOMAIN_XML_MIGRATABLE a adresy "
 "pro odposlech grafiky (VNC a(nebo SPICE) na cílovém uzlu neodpovídají "
@@ -1608,7 +1630,7 @@ msgstr "nelze získat paměť z domény: %(uuid)s, výjimka: %(ex)s"
 
 #, python-format
 msgid ""
-"couldn't obtain the vpu count from domain id: %(uuid)s, exception: %(ex)s"
+"couldn't obtain the vcpu count from domain id: %(uuid)s, exception: %(ex)s"
 msgstr "nelze získat počet vcpu z domény s id: %(uuid)s, výjimka: %(ex)s"
 
 #, python-format
@@ -1621,6 +1643,12 @@ msgstr "regulární výraz datového úložiště je ignorován když je PBM zap
 #, python-format
 msgid "deallocate port %(port_id)s failed"
 msgstr "zrušení přidělení portu %(port_id)s selhalo"
+
+#, python-format
+msgid "get_minimum_version called with likely-incorrect binary `%s'"
+msgstr ""
+"Získání minimální verze zavoláno pomocí pravděpodobně nesprávného binárního "
+"souboru: `%s'"
 
 #, python-format
 msgid "hostname %s too long, truncating."
@@ -1707,9 +1735,6 @@ msgstr ""
 
 msgid "set_admin_password is not implemented by this driver or guest instance."
 msgstr "set_admin_password není tímto ovladačem nebo hostem instance zavedeno."
-
-msgid "set_bootable is not implemented for the current driver"
-msgstr "get_diagnostics není zavedeno pro současný ovladač"
 
 #, python-format
 msgid ""

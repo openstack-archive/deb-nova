@@ -259,13 +259,29 @@ class ServiceTestCase(test.NoDBTestCase):
         serv.rpcserver.wait.assert_called_once_with()
 
 
-class TestWSGIService(test.TestCase):
+class TestWSGIService(test.NoDBTestCase):
 
     def setUp(self):
         super(TestWSGIService, self).setUp()
         self.stubs.Set(wsgi.Loader, "load_app", mox.MockAnything())
 
-    def test_service_random_port(self):
+    @mock.patch('nova.objects.Service.get_by_host_and_binary')
+    @mock.patch('nova.objects.Service.create')
+    def test_service_start_creates_record(self, mock_create, mock_get):
+        mock_get.return_value = None
+        test_service = service.WSGIService("test_service")
+        test_service.start()
+        self.assertTrue(mock_create.called)
+
+    @mock.patch('nova.objects.Service.get_by_host_and_binary')
+    @mock.patch('nova.objects.Service.create')
+    def test_service_start_does_not_create_record(self, mock_create, mock_get):
+        test_service = service.WSGIService("test_service")
+        test_service.start()
+        self.assertFalse(mock_create.called)
+
+    @mock.patch('nova.objects.Service.get_by_host_and_binary')
+    def test_service_random_port(self, mock_get):
         test_service = service.WSGIService("test_service")
         test_service.start()
         self.assertNotEqual(0, test_service.port)
@@ -312,7 +328,8 @@ class TestWSGIService(test.TestCase):
                           service.WSGIService, "openstack_compute_api_v2")
 
     @testtools.skipIf(not utils.is_ipv6_supported(), "no ipv6 support")
-    def test_service_random_port_with_ipv6(self):
+    @mock.patch('nova.objects.Service.get_by_host_and_binary')
+    def test_service_random_port_with_ipv6(self, mock_get):
         CONF.set_default("test_service_listen", "::1")
         test_service = service.WSGIService("test_service")
         test_service.start()
@@ -320,7 +337,8 @@ class TestWSGIService(test.TestCase):
         self.assertNotEqual(0, test_service.port)
         test_service.stop()
 
-    def test_reset_pool_size_to_default(self):
+    @mock.patch('nova.objects.Service.get_by_host_and_binary')
+    def test_reset_pool_size_to_default(self, mock_get):
         test_service = service.WSGIService("test_service")
         test_service.start()
 

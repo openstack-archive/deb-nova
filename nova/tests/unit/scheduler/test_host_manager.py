@@ -22,6 +22,7 @@ import datetime
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
+from oslo_utils import versionutils
 import six
 
 import nova
@@ -33,12 +34,10 @@ from nova.objects import base as obj_base
 from nova.pci import stats as pci_stats
 from nova.scheduler import filters
 from nova.scheduler import host_manager
-from nova.scheduler import utils as sched_utils
 from nova import test
 from nova.tests.unit import fake_instance
 from nova.tests.unit import matchers
 from nova.tests.unit.scheduler import fakes
-from nova import utils
 
 CONF = cfg.CONF
 CONF.import_opt('scheduler_tracks_instance_changes',
@@ -208,7 +207,10 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.assertEqual(set(info['expected_objs']), set(result))
 
     def test_get_filtered_hosts(self):
-        fake_properties = {'moo': 1, 'cow': 2}
+        fake_properties = objects.RequestSpec(ignore_hosts=[],
+                                              instance_uuid='fake-uuid1',
+                                              force_hosts=[],
+                                              force_nodes=[])
 
         info = {'expected_objs': self.fake_hosts,
                 'expected_fprops': fake_properties}
@@ -221,7 +223,10 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     @mock.patch.object(FakeFilterClass2, '_filter_one', return_value=True)
     def test_get_filtered_hosts_with_specified_filters(self, mock_filter_one):
-        fake_properties = {'moo': 1, 'cow': 2}
+        fake_properties = objects.RequestSpec(ignore_hosts=[],
+                                              instance_uuid='fake-uuid1',
+                                              force_hosts=[],
+                                              force_nodes=[])
 
         specified_filters = ['FakeFilterClass1', 'FakeFilterClass2']
         info = {'expected_objs': self.fake_hosts,
@@ -233,8 +238,12 @@ class HostManagerTestCase(test.NoDBTestCase):
         self._verify_result(info, result)
 
     def test_get_filtered_hosts_with_ignore(self):
-        fake_properties = {'ignore_hosts': ['fake_host1', 'fake_host3',
-            'fake_host5', 'fake_multihost']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=['fake_host1', 'fake_host3',
+                          'fake_host5', 'fake_multihost'],
+            force_hosts=[],
+            force_nodes=[])
 
         # [1] and [3] are host2 and host4
         info = {'expected_objs': [self.fake_hosts[1], self.fake_hosts[3]],
@@ -246,8 +255,11 @@ class HostManagerTestCase(test.NoDBTestCase):
         self._verify_result(info, result)
 
     def test_get_filtered_hosts_with_force_hosts(self):
-        fake_properties = {'force_hosts': ['fake_host1', 'fake_host3',
-            'fake_host5']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=[],
+            force_hosts=['fake_host1', 'fake_host3', 'fake_host5'],
+            force_nodes=[])
 
         # [0] and [2] are host1 and host3
         info = {'expected_objs': [self.fake_hosts[0], self.fake_hosts[2]],
@@ -259,7 +271,11 @@ class HostManagerTestCase(test.NoDBTestCase):
         self._verify_result(info, result, False)
 
     def test_get_filtered_hosts_with_no_matching_force_hosts(self):
-        fake_properties = {'force_hosts': ['fake_host5', 'fake_host6']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=[],
+            force_hosts=['fake_host5', 'fake_host6'],
+            force_nodes=[])
 
         info = {'expected_objs': [],
                 'expected_fprops': fake_properties}
@@ -271,8 +287,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_ignore_and_force_hosts(self):
         # Ensure ignore_hosts processed before force_hosts in host filters.
-        fake_properties = {'force_hosts': ['fake_host3', 'fake_host1'],
-                           'ignore_hosts': ['fake_host1']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=['fake_host1'],
+            force_hosts=['fake_host3', 'fake_host1'],
+            force_nodes=[])
 
         # only fake_host3 should be left.
         info = {'expected_objs': [self.fake_hosts[2]],
@@ -285,7 +304,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_force_host_and_many_nodes(self):
         # Ensure all nodes returned for a host with many nodes
-        fake_properties = {'force_hosts': ['fake_multihost']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=[],
+            force_hosts=['fake_multihost'],
+            force_nodes=[])
 
         info = {'expected_objs': [self.fake_hosts[4], self.fake_hosts[5],
                                   self.fake_hosts[6], self.fake_hosts[7]],
@@ -297,8 +320,11 @@ class HostManagerTestCase(test.NoDBTestCase):
         self._verify_result(info, result, False)
 
     def test_get_filtered_hosts_with_force_nodes(self):
-        fake_properties = {'force_nodes': ['fake-node2', 'fake-node4',
-                                           'fake-node9']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=[],
+            force_hosts=[],
+            force_nodes=['fake-node2', 'fake-node4', 'fake-node9'])
 
         # [5] is fake-node2, [7] is fake-node4
         info = {'expected_objs': [self.fake_hosts[5], self.fake_hosts[7]],
@@ -311,8 +337,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_force_hosts_and_nodes(self):
         # Ensure only overlapping results if both force host and node
-        fake_properties = {'force_hosts': ['fake_host1', 'fake_multihost'],
-                           'force_nodes': ['fake-node2', 'fake-node9']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=[],
+            force_hosts=['fake-host1', 'fake_multihost'],
+            force_nodes=['fake-node2', 'fake-node9'])
 
         # [5] is fake-node2
         info = {'expected_objs': [self.fake_hosts[5]],
@@ -325,8 +354,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_force_hosts_and_wrong_nodes(self):
         # Ensure non-overlapping force_node and force_host yield no result
-        fake_properties = {'force_hosts': ['fake_multihost'],
-                           'force_nodes': ['fake-node']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=[],
+            force_hosts=['fake_multihost'],
+            force_nodes=['fake-node'])
 
         info = {'expected_objs': [],
                 'expected_fprops': fake_properties}
@@ -338,8 +370,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_ignore_hosts_and_force_nodes(self):
         # Ensure ignore_hosts can coexist with force_nodes
-        fake_properties = {'force_nodes': ['fake-node4', 'fake-node2'],
-                           'ignore_hosts': ['fake_host1', 'fake_host2']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=['fake_host1', 'fake_host2'],
+            force_hosts=[],
+            force_nodes=['fake-node4', 'fake-node2'])
 
         info = {'expected_objs': [self.fake_hosts[5], self.fake_hosts[7]],
                 'expected_fprops': fake_properties}
@@ -351,8 +386,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_ignore_hosts_and_force_same_nodes(self):
         # Ensure ignore_hosts is processed before force_nodes
-        fake_properties = {'force_nodes': ['fake_node4', 'fake_node2'],
-                           'ignore_hosts': ['fake_multihost']}
+        fake_properties = objects.RequestSpec(
+            instance_uuid='fake-uuid1',
+            ignore_hosts=['fake_multihost'],
+            force_hosts=[],
+            force_nodes=['fake_node4', 'fake_node2'])
 
         info = {'expected_objs': [],
                 'expected_fprops': fake_properties}
@@ -375,8 +413,8 @@ class HostManagerTestCase(test.NoDBTestCase):
         objects.ComputeNodeList.get_all(context).AndReturn(fakes.COMPUTE_NODES)
         # node 3 host physical disk space is greater than database
         host_manager.LOG.warning("Host %(hostname)s has more disk space "
-                                 "than database expected (%(physical)sgb >"
-                                 " %(database)sgb)",
+                                 "than database expected (%(physical)s GB >"
+                                 " %(database)s GB)",
                                  {'physical': 3333, 'database': 3072,
                                   'hostname': 'node3'})
         # Invalid service
@@ -756,7 +794,7 @@ class HostManagerChangedNodesTestCase(test.NoDBTestCase):
 class HostStateTestCase(test.NoDBTestCase):
     """Test case for HostState class."""
 
-    # update_from_compute_node() and consume_from_instance() are tested
+    # update_from_compute_node() and consume_from_request() are tested
     # in HostManagerTestCase.test_get_all_host_states()
 
     def test_stat_consumption_from_compute_node(self):
@@ -773,7 +811,7 @@ class HostStateTestCase(test.NoDBTestCase):
             'io_workload': '42',
         }
 
-        hyper_ver_int = utils.convert_version_to_int('6.0.0')
+        hyper_ver_int = versionutils.convert_version_to_int('6.0.0')
         compute = objects.ComputeNode(
             stats=stats, memory_mb=1, free_disk_gb=0, local_gb=0,
             local_gb_used=0, free_ram_mb=0, vcpus=0, vcpus_used=0,
@@ -814,7 +852,7 @@ class HostStateTestCase(test.NoDBTestCase):
             'io_workload': '42',
         }
 
-        hyper_ver_int = utils.convert_version_to_int('6.0.0')
+        hyper_ver_int = versionutils.convert_version_to_int('6.0.0')
         compute = objects.ComputeNode(
             stats=stats, memory_mb=0, free_disk_gb=0, local_gb=0,
             local_gb_used=0, free_ram_mb=0, vcpus=0, vcpus_used=0,
@@ -846,7 +884,7 @@ class HostStateTestCase(test.NoDBTestCase):
             'io_workload': '42',
         }
 
-        hyper_ver_int = utils.convert_version_to_int('6.0.0')
+        hyper_ver_int = versionutils.convert_version_to_int('6.0.0')
         compute = objects.ComputeNode(
             stats=stats, memory_mb=0, free_disk_gb=0, local_gb=0,
             local_gb_used=0, free_ram_mb=0, vcpus=0, vcpus_used=0,
@@ -870,52 +908,57 @@ class HostStateTestCase(test.NoDBTestCase):
         self.assertEqual(hyper_ver_int, host.hypervisor_version)
 
     @mock.patch('nova.virt.hardware.get_host_numa_usage_from_instance')
+    @mock.patch('nova.objects.Instance')
     @mock.patch('nova.virt.hardware.numa_fit_instance_to_host')
-    @mock.patch('nova.virt.hardware.instance_topology_from_instance')
     @mock.patch('nova.virt.hardware.host_topology_and_format_from_host')
     def test_stat_consumption_from_instance(self, host_topo_mock,
-                                            instance_topo_mock,
                                             numa_fit_mock,
+                                            instance_init_mock,
                                             numa_usage_mock):
-        fake_numa_topology = mock.Mock()
-        host_topo_mock.return_value = ('fake-host-topology', None)
-        numa_usage_mock.return_value = 'fake-consumed-once'
-        numa_fit_mock.return_value = 'fake-fitted-once'
-        instance_topo_mock.return_value = fake_numa_topology
-        instance = dict(root_gb=0, ephemeral_gb=0, memory_mb=0, vcpus=0,
-                        project_id='12345', vm_state=vm_states.BUILDING,
-                        task_state=task_states.SCHEDULING, os_type='Linux',
-                        uuid='fake-uuid',
-                        numa_topology=fake_numa_topology,
-                        pci_requests={'requests': []})
+        fake_numa_topology = objects.InstanceNUMATopology(
+            cells=[objects.InstanceNUMACell()])
+        fake_host_numa_topology = mock.Mock()
+        fake_instance = objects.Instance(numa_topology=fake_numa_topology)
+        host_topo_mock.return_value = (fake_host_numa_topology, True)
+        numa_usage_mock.return_value = fake_host_numa_topology
+        numa_fit_mock.return_value = fake_numa_topology
+        instance_init_mock.return_value = fake_instance
+        spec_obj = objects.RequestSpec(
+            instance_uuid='fake-uuid',
+            flavor=objects.Flavor(root_gb=0, ephemeral_gb=0, memory_mb=0,
+                                  vcpus=0),
+            numa_topology=fake_numa_topology,
+            pci_requests=objects.InstancePCIRequests(requests=[]))
         host = host_manager.HostState("fakehost", "fakenode")
 
         self.assertIsNone(host.updated)
-        host.consume_from_instance(instance)
-        numa_fit_mock.assert_called_once_with('fake-host-topology',
+        host.consume_from_request(spec_obj)
+        numa_fit_mock.assert_called_once_with(fake_host_numa_topology,
                                               fake_numa_topology,
                                               limits=None, pci_requests=None,
                                               pci_stats=None)
-        numa_usage_mock.assert_called_once_with(host, instance)
-        self.assertEqual('fake-consumed-once', host.numa_topology)
-        self.assertEqual('fake-fitted-once', instance['numa_topology'])
+        numa_usage_mock.assert_called_once_with(host, fake_instance)
+        self.assertEqual(fake_host_numa_topology, host.numa_topology)
         self.assertIsNotNone(host.updated)
 
-        instance = dict(root_gb=0, ephemeral_gb=0, memory_mb=0, vcpus=0,
-                        project_id='12345', vm_state=vm_states.ACTIVE,
-                        task_state=task_states.RESIZE_PREP, os_type='Linux',
-                        uuid='fake-uuid',
-                        numa_topology=fake_numa_topology)
-        numa_usage_mock.return_value = 'fake-consumed-twice'
-        numa_fit_mock.return_value = 'fake-fitted-twice'
-        host.consume_from_instance(instance)
-        self.assertEqual('fake-fitted-twice', instance['numa_topology'])
+        second_numa_topology = objects.InstanceNUMATopology(
+            cells=[objects.InstanceNUMACell()])
+        spec_obj = objects.RequestSpec(
+            instance_uuid='fake-uuid',
+            flavor=objects.Flavor(root_gb=0, ephemeral_gb=0, memory_mb=0,
+                                  vcpus=0),
+            numa_topology=second_numa_topology,
+            pci_requests=objects.InstancePCIRequests(requests=[]))
+        second_host_numa_topology = mock.Mock()
+        numa_usage_mock.return_value = second_host_numa_topology
+        numa_fit_mock.return_value = second_numa_topology
 
+        host.consume_from_request(spec_obj)
         self.assertEqual(2, host.num_instances)
         self.assertEqual(2, host.num_io_ops)
         self.assertEqual(2, numa_usage_mock.call_count)
-        self.assertEqual(((host, instance),), numa_usage_mock.call_args)
-        self.assertEqual('fake-consumed-twice', host.numa_topology)
+        self.assertEqual(((host, fake_instance),), numa_usage_mock.call_args)
+        self.assertEqual(second_host_numa_topology, host.numa_topology)
         self.assertIsNotNone(host.updated)
 
     def test_stat_consumption_from_instance_pci(self):
@@ -931,24 +974,15 @@ class HostStateTestCase(test.NoDBTestCase):
                                 requests=[objects.InstancePCIRequest(**r)
                                           for r in fake_requests],
                                 instance_uuid='fake-uuid')
-        instance = objects.Instance(root_gb=0, ephemeral_gb=0, memory_mb=512,
-                        vcpus=1,
-                        project_id='12345', vm_state=vm_states.BUILDING,
-                        task_state=task_states.SCHEDULING, os_type='Linux',
-                        uuid='fake-uuid',
-                        numa_topology=inst_topology,
-                        pci_requests=fake_requests_obj,
-                        id = 1243)
-        req_spec = sched_utils.build_request_spec(None,
-                                                  None,
-                                                  [instance],
-                                                  objects.Flavor(
-                                                             root_gb=0,
-                                                             ephemeral_gb=0,
-                                                             memory_mb=1024,
-                                                             vcpus=1))
-        # NOTE(sbauza): FilterSchedule._schedule() rehydrates pci_requests
-        req_spec['instance_properties']['pci_requests'] = fake_requests_obj
+        req_spec = objects.RequestSpec(
+            instance_uuid='fake-uuid',
+            project_id='12345',
+            numa_topology=inst_topology,
+            pci_requests=fake_requests_obj,
+            flavor=objects.Flavor(root_gb=0,
+                                  ephemeral_gb=0,
+                                  memory_mb=512,
+                                  vcpus=1))
         host = host_manager.HostState("fakehost", "fakenode")
         self.assertIsNone(host.updated)
         host.pci_stats = pci_stats.PciDeviceStats(
@@ -957,8 +991,8 @@ class HostStateTestCase(test.NoDBTestCase):
                                                              numa_node=1,
                                                              count=1)])
         host.numa_topology = fakes.NUMA_TOPOLOGY
-        host.consume_from_instance(req_spec['instance_properties'])
-        self.assertIsInstance(req_spec['instance_properties']['numa_topology'],
+        host.consume_from_request(req_spec)
+        self.assertIsInstance(req_spec.numa_topology,
                               objects.InstanceNUMATopology)
 
         self.assertEqual(512, host.numa_topology.cells[1].memory_usage)
@@ -973,21 +1007,15 @@ class HostStateTestCase(test.NoDBTestCase):
                                 requests=[objects.InstancePCIRequest(**r)
                                           for r in fake_requests],
                                 instance_uuid='fake-uuid')
-        instance = objects.Instance(root_gb=0, ephemeral_gb=0, memory_mb=512,
-                        vcpus=1,
-                        project_id='12345', vm_state=vm_states.BUILDING,
-                        task_state=task_states.SCHEDULING, os_type='Linux',
-                        uuid='fake-uuid',
-                        pci_requests=fake_requests_obj,
-                        id=1243)
-        req_spec = sched_utils.build_request_spec(None,
-                                                  None,
-                                                  [instance],
-                                                  objects.Flavor(
-                                                             root_gb=0,
-                                                             ephemeral_gb=0,
-                                                             memory_mb=1024,
-                                                             vcpus=1))
+        req_spec = objects.RequestSpec(
+            instance_uuid='fake-uuid',
+            project_id='12345',
+            numa_topology=None,
+            pci_requests=fake_requests_obj,
+            flavor=objects.Flavor(root_gb=0,
+                                  ephemeral_gb=0,
+                                  memory_mb=1024,
+                                  vcpus=1))
         host = host_manager.HostState("fakehost", "fakenode")
         self.assertIsNone(host.updated)
         fake_updated = mock.sentinel.fake_updated
@@ -995,7 +1023,7 @@ class HostStateTestCase(test.NoDBTestCase):
         host.pci_stats = pci_stats.PciDeviceStats()
         with mock.patch.object(host.pci_stats, 'apply_requests',
                                side_effect=exception.PciDeviceRequestFailed):
-            host.consume_from_instance(req_spec['instance_properties'])
+            host.consume_from_request(req_spec)
         self.assertEqual(fake_updated, host.updated)
 
     def test_resources_consumption_from_compute_node(self):
@@ -1010,7 +1038,7 @@ class HostStateTestCase(test.NoDBTestCase):
                  source='source2',
                  timestamp=_ts_now),
         ]
-        hyper_ver_int = utils.convert_version_to_int('6.0.0')
+        hyper_ver_int = versionutils.convert_version_to_int('6.0.0')
         compute = objects.ComputeNode(
             metrics=jsonutils.dumps(metrics),
             memory_mb=0, free_disk_gb=0, local_gb=0,

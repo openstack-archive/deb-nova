@@ -895,7 +895,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertRaises(
             exception.InstanceDeployFailure,
             self.driver.spawn, self.ctx, instance, None, [], None)
-        mock_destroy.assert_called_once_with(self.ctx, instance, None)
+        self.assertEqual(0, mock_destroy.call_count)
 
     @mock.patch.object(FAKE_CLIENT.node, 'update')
     def test__add_driver_fields_good(self, mock_update):
@@ -1128,8 +1128,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertRaises(ironic_exception.BadRequest,
                           self.driver.spawn, self.ctx, instance,
                           image_meta, [], None, fake_net_info)
-        mock_destroy.assert_called_once_with(self.ctx, instance,
-                                             fake_net_info)
+        self.assertEqual(0, mock_destroy.call_count)
 
     @mock.patch.object(configdrive, 'required_by')
     @mock.patch.object(loopingcall, 'FixedIntervalLoopingCall')
@@ -1485,13 +1484,6 @@ class IronicDriverTestCase(test.NoDBTestCase):
         fake_instance.fake_instance_obj(self.ctx)
         self.driver.refresh_provider_fw_rules()
         mock_rpfr.assert_called_once_with()
-
-    @mock.patch.object(firewall.NoopFirewallDriver,
-                       'refresh_security_group_members', create=True)
-    def test_refresh_security_group_members(self, mock_rsgm):
-        fake_group = 'fake-security-group-members'
-        self.driver.refresh_security_group_members(fake_group)
-        mock_rsgm.assert_called_once_with(fake_group)
 
     @mock.patch.object(firewall.NoopFirewallDriver,
                       'refresh_instance_security_rules', create=True)

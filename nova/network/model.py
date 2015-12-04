@@ -15,13 +15,13 @@
 
 import functools
 
-import eventlet
 import netaddr
 from oslo_serialization import jsonutils
 import six
 
 from nova import exception
 from nova.i18n import _
+from nova import utils
 
 
 def ensure_string_keys(d):
@@ -37,7 +37,6 @@ VIF_TYPE_BRIDGE = 'bridge'
 VIF_TYPE_802_QBG = '802.1qbg'
 VIF_TYPE_802_QBH = '802.1qbh'
 VIF_TYPE_HW_VEB = 'hw_veb'
-VIF_TYPE_MLNX_DIRECT = 'mlnx_direct'
 VIF_TYPE_IB_HOSTDEV = 'ib_hostdev'
 VIF_TYPE_MIDONET = 'midonet'
 VIF_TYPE_VHOSTUSER = 'vhostuser'
@@ -87,6 +86,8 @@ VIF_DETAILS_TAP_MAC_ADDRESS = 'mac_address'
 VNIC_TYPE_NORMAL = 'normal'
 VNIC_TYPE_DIRECT = 'direct'
 VNIC_TYPE_MACVTAP = 'macvtap'
+
+VNIC_TYPES_SRIOV = (VNIC_TYPE_DIRECT, VNIC_TYPE_MACVTAP)
 
 # Constants for the 'vif_model' values
 VIF_MODEL_VIRTIO = 'virtio'
@@ -485,7 +486,7 @@ class NetworkInfoAsyncWrapper(NetworkInfo):
     """
 
     def __init__(self, async_method, *args, **kwargs):
-        self._gt = eventlet.spawn(async_method, *args, **kwargs)
+        self._gt = utils.spawn(async_method, *args, **kwargs)
         methods = ['json', 'fixed_ips', 'floating_ips']
         for method in methods:
             fn = getattr(self, method)

@@ -12,7 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
 import datetime
 
 import mock
@@ -55,11 +54,10 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             if not self.exists:
                 return
             ts = '%s%s' % (imagecache.TIMESTAMP_PREFIX,
-                    timeutils.strtime(at=self._time,
-                                      fmt=imagecache.TIMESTAMP_FORMAT))
+                           self._time.strftime(imagecache.TIMESTAMP_FORMAT))
             return ts
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self._imagecache, '_get_timestamp',
                               fake_get_timestamp),
             mock.patch.object(ds_util, 'file_delete')
@@ -87,10 +85,8 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                 files.add(self._file_name)
                 return files
 
-        with contextlib.nested(
-            mock.patch.object(ds_util, 'get_sub_folders',
-                              fake_get_sub_folders)
-        ):
+        with mock.patch.object(ds_util, 'get_sub_folders',
+                               fake_get_sub_folders):
             self.exists = True
             ts = self._imagecache._get_timestamp(
                     'fake-ds-browser',
@@ -132,7 +128,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             files.add('image-ref-uuid')
             return files
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(vutil, 'get_object_property',
                               fake_get_object_property),
             mock.patch.object(ds_util, 'get_sub_folders',
@@ -208,7 +204,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         def fake_timestamp_cleanup(dc_ref, ds_browser, ds_path):
             self.assertEqual('[fake-ds] fake-path/fake-image-4', str(ds_path))
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self._imagecache, '_get_ds_browser',
                               fake_get_ds_browser),
             mock.patch.object(self._imagecache, '_get_timestamp',
@@ -249,7 +245,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             self.assertEqual(self.images,
                              self._imagecache.originals)
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(self._imagecache, '_list_datastore_images',
                               fake_list_datastore_images),
             mock.patch.object(self._imagecache,

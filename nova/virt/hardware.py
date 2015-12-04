@@ -82,6 +82,11 @@ def parse_cpu_spec(spec):
         # Note the count limit in the .split() call
         range_parts = rule.split('-', 1)
         if len(range_parts) > 1:
+            reject = False
+            if range_parts[0] and range_parts[0][0] == '^':
+                reject = True
+                range_parts[0] = str(range_parts[0][1:])
+
             # So, this was a range; start by converting the parts to ints
             try:
                 start, end = [int(p.strip()) for p in range_parts]
@@ -93,7 +98,10 @@ def parse_cpu_spec(spec):
                 raise exception.Invalid(_("Invalid range expression %r")
                                         % rule)
             # Add available CPU ids to set
-            cpuset_ids |= set(range(start, end + 1))
+            if not reject:
+                cpuset_ids |= set(range(start, end + 1))
+            else:
+                cpuset_reject_ids |= set(range(start, end + 1))
         elif rule[0] == '^':
             # Not a range, the rule is an exclusion rule; convert to int
             try:
@@ -158,7 +166,7 @@ def get_number_of_serial_ports(flavor, image_meta):
     :param image_meta: nova.objects.ImageMeta object instance
 
     If flavor extra specs is not set, then any image meta value is permitted.
-    If flavour extra specs *is* set, then this provides the default serial
+    If flavor extra specs *is* set, then this provides the default serial
     port count. The image meta is permitted to override the extra specs, but
     *only* with a lower value. ie
 
@@ -700,7 +708,6 @@ def _pack_instance_onto_cores(available_siblings, instance_cell, host_cell_id):
                 pinning = zip(sorted(instance_cell.cpuset),
                               itertools.chain(*sliced_sibs))
 
-            # NOTE(sfinucan) - this may be overriden later on by the drivers
             topology = (instance_cell.cpu_topology or
                         objects.VirtCPUTopology(sockets=1,
                                                 cores=len(sliced_sibs),
@@ -951,6 +958,11 @@ def _numa_get_constraints_manual(nodes, flavor, cpu_list, mem_list):
     return objects.InstanceNUMATopology(cells=cells)
 
 
+def is_realtime_enabled(flavor):
+    flavor_rt = flavor.get('extra_specs', {}).get("hw:cpu_realtime")
+    return strutils.bool_from_string(flavor_rt)
+
+
 def _numa_get_constraints_auto(nodes, flavor):
     if ((flavor.vcpus % nodes) > 0 or
         (flavor.memory_mb % nodes) > 0):
@@ -980,6 +992,11 @@ def _add_cpu_pinning_constraint(flavor, image_meta, numa_topology):
         requested = False
     else:
         requested = image_pinning == "dedicated"
+
+    rt = is_realtime_enabled(flavor)
+    pi = image_pinning or flavor_pinning
+    if rt and pi != "dedicated":
+        raise exception.RealtimeConfigurationInvalid()
 
     if not requested:
         return numa_topology
@@ -1175,7 +1192,7 @@ def instance_topology_from_instance(instance):
     Instance object, this makes sure we get beck either None, or an instance
     of objects.InstanceNUMATopology class.
     """
-    if isinstance(instance, obj_instance._BaseInstance):
+    if isinstance(instance, obj_instance.Instance):
         # NOTE (ndipanov): This may cause a lazy-load of the attribute
         instance_numa_topology = instance.numa_topology
     else:
@@ -1234,7 +1251,7 @@ def host_topology_and_format_from_host(host):
     get beck either None, or an instance of objects.NUMATopology class.
 
     :returns: A two-tuple, first element is the topology itself or None, second
-              is a boolean set to True if topology was in json format.
+              is a boolean set to True if topology was in JSON format.
     """
     was_json = False
     try:

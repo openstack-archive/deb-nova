@@ -14,6 +14,7 @@
 
 import mock
 from oslo_utils import timeutils
+from oslo_versionedobjects import base as ovo_base
 from oslo_versionedobjects import exception as ovo_exc
 
 from nova.compute import manager as compute_manager
@@ -34,7 +35,7 @@ fake_service = {
     'deleted': False,
     'id': 123,
     'host': 'fake-host',
-    'binary': 'fake-service',
+    'binary': 'nova-fake',
     'topic': 'fake-service-topic',
     'report_count': 1,
     'forced_down': False,
@@ -147,7 +148,8 @@ class _TestServiceObject(object):
     @mock.patch.object(db, 'service_create',
                        return_value=fake_service)
     def test_set_id_failure(self, db_mock):
-        service_obj = service.Service(context=self.context)
+        service_obj = service.Service(context=self.context,
+                                      binary='nova-compute')
         service_obj.create()
         self.assertRaises(ovo_exc.ReadOnlyFieldError, setattr,
                           service_obj, 'id', 124)
@@ -253,31 +255,69 @@ class _TestServiceObject(object):
                                                service_id=fake_service['id'])
         get_all_by_host.return_value = [fake_compute_obj]
 
-        service_obj.obj_make_compatible(fake_service_dict, '1.9')
+        versions = ovo_base.obj_tree_get_versions('Service')
+        versions['ComputeNode'] = '1.10'
+        service_obj.obj_make_compatible_from_manifest(fake_service_dict, '1.9',
+                                                      versions)
         self.assertEqual(
-            fake_compute_obj.obj_to_primitive(target_version='1.10'),
+            fake_compute_obj.obj_to_primitive(target_version='1.10',
+                                              version_manifest=versions),
             fake_service_dict['compute_node'])
 
-    @mock.patch.object(objects.ComputeNodeList, 'get_all_by_host')
-    def test_obj_make_compatible_with_juno_computes(self, get_all_by_host):
-        service_attrs = dict(fake_service)
-        del service_attrs['version']
-        service_obj = objects.Service(
-            context=self.context, **service_attrs)
-        service_obj.binary = 'nova-compute'
-        fake_service_dict = fake_service.copy()
-        fake_service_dict['binary'] = 'nova-compute'
-        fake_compute_obj = objects.ComputeNode(host=fake_service['host'],
-                                               service_id=fake_service['id'])
-        get_all_by_host.return_value = [fake_compute_obj]
+    @mock.patch('nova.db.service_get_minimum_version')
+    def test_get_minimum_version_none(self, mock_get):
+        mock_get.return_value = None
+        self.assertEqual(0,
+                         objects.Service.get_minimum_version(self.context,
+                                                             'nova-compute'))
+        mock_get.assert_called_once_with(self.context, 'nova-compute',
+                                         use_slave=False)
 
-        # Juno versions :
-        #   Service : 1.4
-        #   ComputeNode : 1.5
-        service_obj.obj_make_compatible(fake_service_dict, '1.4')
-        self.assertEqual(
-            '1.5',
-            fake_service_dict['compute_node']['nova_object.version'])
+    @mock.patch('nova.db.service_get_minimum_version')
+    def test_get_minimum_version(self, mock_get):
+        mock_get.return_value = 123
+        self.assertEqual(123,
+                         objects.Service.get_minimum_version(self.context,
+                                                             'nova-compute'))
+        mock_get.assert_called_once_with(self.context, 'nova-compute',
+                                         use_slave=False)
+
+    @mock.patch('nova.db.service_get_minimum_version')
+    @mock.patch('nova.objects.service.LOG')
+    def test_get_minimum_version_checks_binary(self, mock_log, mock_get):
+        mock_get.return_value = None
+        self.assertEqual(0,
+                         objects.Service.get_minimum_version(self.context,
+                                                             'nova-compute'))
+        self.assertFalse(mock_log.warning.called)
+        self.assertRaises(exception.ObjectActionError,
+                         objects.Service.get_minimum_version,
+                          self.context,
+                          'compute')
+        self.assertTrue(mock_log.warning.called)
+
+    @mock.patch('nova.db.service_get_minimum_version', return_value=2)
+    def test_create_above_minimum(self, mock_get):
+        with mock.patch('nova.objects.service.SERVICE_VERSION',
+                        new=3):
+            objects.Service(context=self.context,
+                            binary='nova-compute').create()
+
+    @mock.patch('nova.db.service_get_minimum_version', return_value=2)
+    def test_create_equal_to_minimum(self, mock_get):
+        with mock.patch('nova.objects.service.SERVICE_VERSION',
+                        new=2):
+            objects.Service(context=self.context,
+                            binary='nova-compute').create()
+
+    @mock.patch('nova.db.service_get_minimum_version', return_value=2)
+    def test_create_below_minimum(self, mock_get):
+        with mock.patch('nova.objects.service.SERVICE_VERSION',
+                        new=1):
+            self.assertRaises(exception.ServiceTooOld,
+                              objects.Service(context=self.context,
+                                              binary='nova-compute',
+                                              ).create)
 
 
 class TestServiceObject(test_objects._LocalTest,

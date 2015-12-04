@@ -16,12 +16,12 @@
 import copy
 
 from oslo_serialization import jsonutils
+from oslo_utils import versionutils
 import six
 
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova import utils
 
 
 @base.NovaObjectRegistry.register
@@ -39,7 +39,7 @@ class PciDevicePool(base.NovaObject):
         }
 
     def obj_make_compatible(self, primitive, target_version):
-        target_version = utils.convert_version_to_tuple(target_version)
+        target_version = versionutils.convert_version_to_tuple(target_version)
         if target_version < (1, 1) and 'numa_node' in primitive:
             del primitive['numa_node']
 
@@ -77,9 +77,6 @@ class PciDevicePoolList(base.ObjectListBase, base.NovaObject):
     fields = {
              'objects': fields.ListOfObjectsField('PciDevicePool'),
              }
-    obj_relationships = {
-        'objects': [('1.0', '1.0'), ('1.1', '1.1')],
-        }
 
 
 def from_pci_stats(pci_stats):
@@ -87,7 +84,7 @@ def from_pci_stats(pci_stats):
     which can be either the serialized object, or, prior to the creation of the
     device pool objects, a simple dict or a list of such dicts.
     """
-    pools = None
+    pools = []
     if isinstance(pci_stats, six.string_types):
         try:
             pci_stats = jsonutils.loads(pci_stats)
@@ -96,13 +93,12 @@ def from_pci_stats(pci_stats):
     if pci_stats:
         # Check for object-ness, or old-style storage format.
         if 'nova_object.namespace' in pci_stats:
-            pools = objects.PciDevicePoolList.obj_from_primitive(pci_stats)
+            return objects.PciDevicePoolList.obj_from_primitive(pci_stats)
         else:
             # This can be either a dict or a list of dicts
             if isinstance(pci_stats, list):
-                pool_list = [objects.PciDevicePool.from_dict(stat)
-                             for stat in pci_stats]
+                pools = [objects.PciDevicePool.from_dict(stat)
+                         for stat in pci_stats]
             else:
-                pool_list = [objects.PciDevicePool.from_dict(pci_stats)]
-            pools = objects.PciDevicePoolList(objects=pool_list)
-    return pools
+                pools = [objects.PciDevicePool.from_dict(pci_stats)]
+    return objects.PciDevicePoolList(objects=pools)

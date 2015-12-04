@@ -8,19 +8,19 @@
 # Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0b4.dev260\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-09-22 07:45+0000\n"
-"PO-Revision-Date: 2015-09-21 08:44+0000\n"
+"POT-Creation-Date: 2015-12-01 06:32+0000\n"
+"PO-Revision-Date: 2015-11-30 03:50+0000\n"
 "Last-Translator: Zbyněk Schwarz <zbynek.schwarz@gmail.com>\n"
-"Language-Team: Czech (http://www.transifex.com/openstack/nova/language/cs/)\n"
+"Language-Team: Czech\n"
 "Language: cs\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
-"X-Generator: Zanata 3.7.1\n"
+"Generated-By: Babel 2.0\n"
+"X-Generator: Zanata 3.7.3\n"
 
 #, python-format
 msgid "%(action_str)s instance"
@@ -33,6 +33,10 @@ msgstr "%(id)s (%(base_file)s): vytváření kontrolního součtu"
 #, python-format
 msgid "%(name)s listening on %(host)s:%(port)s"
 msgstr "%(name)s poslouchá na %(host)s:%(port)s"
+
+#, python-format
+msgid "%(num_values)d values found, of which the maximum value will be used."
+msgstr "%(num_values)d hodnot nalezeno, z nich bude použita maximální hodnota."
 
 #, python-format
 msgid "%(num_values)d values found, of which the minimum value will be used."
@@ -94,6 +98,14 @@ msgid "Attempted to unfilter instance which is not filtered"
 msgstr "Pokus o odfiltrování instance, která není filtrována"
 
 #, python-format
+msgid ""
+"Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB, vcpus "
+"%(vcpus)d CPU"
+msgstr ""
+"Pokus o získání: paměť  %(memory_mb)d MB, disk %(disk_gb)d GB, virtuální "
+"procesory %(vcpus)d CPU"
+
+#, python-format
 msgid "Auditing locally available compute resources for node %(node)s"
 msgstr "Kontrola místně dostupných výpočetních zdrojů pro uzel %(node)s"
 
@@ -106,6 +118,17 @@ msgstr ""
 
 msgid "Automatically hard rebooting"
 msgstr "Automatický tvrdý restart"
+
+#, python-format
+msgid ""
+"Automatically selected compute RPC version %(rpc)s from minimum service "
+"version %(service)i"
+msgstr ""
+"Automaticky vybraná verze výpočtové RPC %(rpc)s z minimální verze služby "
+"%(service)i"
+
+msgid "Bandwidth usage not supported by hypervisor."
+msgstr "Využití šířky pásma není hypervizorem podporováno."
 
 #, python-format
 msgid "Base or swap file too young to remove: %s"
@@ -429,12 +452,11 @@ msgstr "Filtr %s vrátil 0 hostitelů"
 
 #, python-format
 msgid ""
-"Filtering removed all hosts for the request with reservation ID '%(res_id)s' "
-"and instance ID '%(inst_uuid)s'. Filter results: %(str_results)s"
+"Filtering removed all hosts for the request with instance ID "
+"'%(inst_uuid)s'. Filter results: %(str_results)s"
 msgstr ""
-"Filtrování odstranilo všechny hostitele z žádosti mající ID rezervace "
-"'%(res_id)s' a ID instance '%(inst_uuid)s'. Výsledky filtrování: "
-"%(str_results)s"
+"Filtrování odstranilo všechny hostitele z žádosti ID instance "
+"'%(inst_uuid)s'. Výsledky filtrování: %(str_results)s"
 
 #, python-format
 msgid ""
@@ -567,8 +589,8 @@ msgstr "Importovat klíč %s"
 
 #, python-format
 msgid ""
-"Increasing downtime to %(downtime)dms after %(waittime)d sec elapsed time"
-msgstr "Snižování odstávky na %(downtime)dms po uplynutí %(waittime)d vteřin"
+"Increasing downtime to %(downtime)d ms after %(waittime)d sec elapsed time"
+msgstr "Snižování odstávky na %(downtime)d ms po uplynutí %(waittime)d vteřin"
 
 #, python-format
 msgid ""
@@ -841,10 +863,6 @@ msgstr ""
 "Připojení k serveru memcache obnoveno a stav služby může být znovu "
 "kontrolován."
 
-msgid "Recovered connection to nova-conductor for reporting service status."
-msgstr ""
-"Připojení k nová-conductor obnoveno a stav služby může být znovu kontrolován."
-
 #, python-format
 msgid "Registered image %(image_location)s with id %(image_id)s"
 msgstr "Obraz %(image_location)s registrován s id %(image_id)s"
@@ -953,9 +971,6 @@ msgstr "Spouštění uzlu %(topic)s (verze %(version)s)"
 msgid "Starting halted instance found during reboot"
 msgstr "Spouštění zastavené instance nalezené během restartování"
 
-msgid "Starting instance..."
-msgstr "Spouštění instance..."
-
 #, python-format
 msgid "Starting migration network for instance %s"
 msgstr "Zahajování přesunutí sítě instance %s"
@@ -1028,6 +1043,26 @@ msgid "Timestamp is invalid."
 msgstr "Časové razítko je neplatné."
 
 #, python-format
+msgid "Took %(time).2f seconds to detach %(num)s volumes for instance."
+msgstr "Odpojení %(num)s svazků z instance trvalo %(time).2f vteřin."
+
+#, python-format
+msgid "Took %0.2f seconds to build instance."
+msgstr "Sestavení instance trvalo %0.2f vteřin."
+
+#, python-format
+msgid "Took %0.2f seconds to deallocate network for instance."
+msgstr "Zrušení přidělení síti k instanci trvalo %0.2f vteřin."
+
+#, python-format
+msgid "Took %0.2f seconds to destroy the instance on the hypervisor."
+msgstr "Smazání instance na hypervizoru trvalo %0.2f vteřin."
+
+#, python-format
+msgid "Took %0.2f seconds to spawn the instance on the hypervisor."
+msgstr "Vytvoření instance na hypervizoru trvalo %0.2f vteřin."
+
+#, python-format
 msgid "Total %(type)s: %(total)d %(unit)s, used: %(used).02f %(unit)s"
 msgstr "Celkem %(type)s: %(total)d %(unit)s, využito: %(used).02f %(unit)s"
 
@@ -1090,6 +1125,12 @@ msgstr "Aktualizace zveřejnění obrazu %s"
 #, python-format
 msgid "Updating instance to original state: '%s'"
 msgstr "Aktualizování instance do původního stavu: '%s'"
+
+#, python-format
+msgid ""
+"Updating service version for %(binary)s on %(host)s from %(old)i to %(new)i"
+msgstr ""
+"Aktualizování verze služby pro %(binary)s na %(host)s z %(old)i na %(new)i"
 
 msgid "Using config drive"
 msgstr "Používání konfigurační jednotky"

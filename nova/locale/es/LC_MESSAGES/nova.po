@@ -11,19 +11,18 @@
 # Jose Ramirez Garcia <jose.ramirez.rk@gmail.com>, 2014
 # Edgar Carballo <karvayoEdgar@gmail.com>, 2013
 # Pablo Sanchez <furybeat@gmail.com>, 2015
-# Marian T <marian.tort@gmail.com>, 2015. #zanata
+# Marian Tort <marian.tort@gmail.com>, 2015. #zanata
 # OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 # Travis Nguyen <travisn@us.ibm.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
-"PO-Revision-Date: 2015-09-29 06:56+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
+"PO-Revision-Date: 2015-10-07 05:39+0000\n"
 "Last-Translator: Travis Nguyen <travisn@us.ibm.com>\n"
 "Language: es\n"
-"Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
-"es/)\n"
+"Language-Team: Spanish\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -391,10 +390,6 @@ msgid "Attempted overwrite of an existing value."
 msgstr "Se ha intentado sobreescribir un valor ya existente."
 
 #, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr "Intento de reclamación: memoria %(memory_mb)d MB, disco %(disk_gb)d GB"
-
-#, python-format
 msgid "Attribute not supported: %(attr)s"
 msgstr "Atributo no soportado: %(attr)s"
 
@@ -455,14 +450,6 @@ msgstr ""
 
 msgid "Binary"
 msgstr "Binario"
-
-#, fuzzy, python-format
-msgid ""
-"Binding failed for port %(port_id)s, please check neutron logs for more "
-"information."
-msgstr ""
-"Falló el (binding?) para el puerto %(port_id)s, favor de referirse a los "
-"registros de neutron para más información."
 
 msgid "Blank components"
 msgstr "Componentes en blanco"
@@ -746,9 +733,6 @@ msgstr ""
 "No se puede cambiar el tamaño del disco raíz a un menor tamaño. Tamaño "
 "actual: %(curr_root_gb)s GB. Tamaño solicitado: %(new_root_gb)s GB"
 
-msgid "Cannot run 'db sync' until 'db contract' is run"
-msgstr "No se puede ejecutar 'db sync' hasta que se ejecute 'db contract'"
-
 msgid "Cannot run any more instances of this type."
 msgstr "No se pueden ejecutar más instancias de este tipo. "
 
@@ -960,9 +944,6 @@ msgstr "Faltan las extensiones Core API : %(missing_apis)s"
 msgid "Could not attach image to loopback: %s"
 msgstr "No se puede unir la imagen con el loopback: %s"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr "No se puede limpiar la compilación fallida, no se reprogramará."
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "No se ha podido captar la imagen %(image_id)s"
@@ -1055,10 +1036,6 @@ msgid "DNS2"
 msgstr "DNS2"
 
 #, python-format
-msgid "Database migration failed: %(reason)s"
-msgstr "Ha fallado la migración de base de datos: %(reason)s"
-
-#, python-format
 msgid "Datastore regex %s did not match any datastores"
 msgstr ""
 "El valor regex %s del almacén de datos no concuerda con algún almacén de "
@@ -1080,9 +1057,6 @@ msgstr "Se han eliminado %(records)d registros de la tabla '%(table_name)s'."
 
 msgid "Deleting by fixed_range is not supported with the NeutronManager"
 msgstr "Eliminar por fixed_range no está soportado por el NeutronManager"
-
-msgid "Dependency loop exists in database migrations"
-msgstr "Existe una dependencia de bucle en migraciones de base de datos"
 
 #, python-format
 msgid "Desired state must be specified.  Valid states are: %s"
@@ -1177,9 +1151,6 @@ msgstr "Disco identificado como: %s no se ha encontrado adjunto a la instancia"
 #, python-format
 msgid "Driver Error: %s"
 msgstr "Error de dispositivo: %s"
-
-msgid "Driver must implement select_destinations"
-msgstr "El controlador debe implementar select_destinatios"
 
 #, python-format
 msgid "Duplicate VM name found: %s"
@@ -1314,14 +1285,6 @@ msgstr ""
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "El suceso debe ser una instancia de un nova.virt.event.Event"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"Se ha excedido el máximo de intentos de planificación %(max_attempts)d para "
-"la instancia %(instance_uuid)s. Última excepción: %(exc)s"
 
 #, python-format
 msgid ""
@@ -1876,10 +1839,6 @@ msgstr ""
 "El controlador del hipervisor no soporta método post_live_migration_at_source"
 
 #, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "Versión de hipervisor %s no es válida."
-
-#, python-format
 msgid "Hypervisor virt type '%s' is not valid"
 msgstr "El tipo virtual de hipervisor '%s' no es válido"
 
@@ -2191,14 +2150,6 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "Las instantáneas de instancia no están permitidas en este momento."
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"Espacio insuficiente en grupo de volumen %(vg)s. Sólo %(free_space)db "
-"disponibles, pero se necesitan %(size)db para el volumen %(lv)s."
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "Recursos de cómputo insuficientes: %(reason)s."
 
@@ -2206,10 +2157,6 @@ msgstr "Recursos de cómputo insuficientes: %(reason)s."
 msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr ""
 "No hay suficiente memoria libre en el nodo de cálculo para iniciar %(uuid)s."
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "Se ha detectado un IntegrityError al archivar la tabla %s"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -3501,10 +3448,6 @@ msgstr "La acción watchdog proporcionada (%(action)s) no está soportada."
 msgid "QEMU guest agent is not enabled"
 msgstr "Agente invitado QEMU no está habilitado"
 
-#, fuzzy, python-format
-msgid "Quiescing is not supported in instance %(instance_id)s"
-msgstr "No se soporta el (quiescing?) en la instancia %(instance_id)s"
-
 msgid "Quota"
 msgstr "Cuota"
 
@@ -4034,15 +3977,6 @@ msgstr "La tarea %(task_name)s no se está ejecutando en el host %(host)s"
 
 msgid "Template for cloudpipe instance boot script"
 msgstr "Plantilla para script de arranque de instancia de cloudpipe"
-
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"La opción \"force_hyperv_utils_v1\" no puede configurar para \"True\" en "
-"Servidor Windows/ Servidor Hyper-V 2012 R2 o mayor mientras que ya no se "
-"soporta el  espacio de nombre WMI \"administrador/virtualización\"."
 
 #, python-format
 msgid "The CA file for %(project)s could not be found"
@@ -4688,10 +4622,6 @@ msgstr "Acción desconocida"
 msgid "Unknown action %s"
 msgstr "Acción desconocida %s"
 
-#, python-format
-msgid "Unknown alembic cmd %s"
-msgstr "comando alambico %s desconocido"
-
 msgid "Unknown argument : port"
 msgstr "Argumento desconocido: puerto"
 
@@ -4886,10 +4816,6 @@ msgid ""
 msgstr ""
 "Versión %(req_ver)s no soportada por el API.  Mínimo es %(min_ver)s y máximo "
 "es %(max_ver)s."
-
-#, python-format
-msgid "Version %(val)s is not a valid predicate in field %(attr)s"
-msgstr "La versión %(val)s no es un predicado válido en el campo %(attr)s"
 
 msgid "Virt driver does not implement host disabled status."
 msgstr "El controlador virt no implementa el estado inhabilitado de host."
@@ -5217,9 +5143,6 @@ msgstr "La entidad de evento contiene objetos no soportados: %s"
 msgid "event entity requires key %(key)s"
 msgstr "La entidad de evento requiere clave %(key)s"
 
-msgid "expand phase still has operations that need to be executed"
-msgstr "La fase de expansión aún necesita ejecutar algunas operaciones"
-
 #, python-format
 msgid "failed to generate X509 fingerprint. Error message: %s"
 msgstr "falló al generar huella digital X509. Mensaje de error: %s"
@@ -5359,9 +5282,6 @@ msgstr "memcached_servers sin definir"
 
 msgid "memory"
 msgstr "memoria"
-
-msgid "migrate phase still has operations that need to be executed"
-msgstr "La fase de migración aún necesita ejecutar algunas operaciones"
 
 msgid "min_count must be <= max_count"
 msgstr "min_count debe ser <= max_count "
@@ -5503,10 +5423,6 @@ msgstr "demasiadas claves de cuerpo"
 
 msgid "type"
 msgstr "tipo"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "Nombre de controlador ServiceGroup desconocido: %s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "cancelación de pausa no soportada para vmwareapi"

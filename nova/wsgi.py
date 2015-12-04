@@ -39,6 +39,7 @@ import webob.exc
 
 from nova import exception
 from nova.i18n import _, _LE, _LI
+from nova import utils
 
 wsgi_opts = [
     cfg.StrOpt('api_paste_config',
@@ -236,7 +237,7 @@ class Server(service.ServiceBase):
         if self._max_url_len:
             wsgi_kwargs['url_length_limit'] = self._max_url_len
 
-        self._server = eventlet.spawn(**wsgi_kwargs)
+        self._server = utils.spawn(**wsgi_kwargs)
 
     def reset(self):
         """Reset server greenpool size to default.
@@ -330,7 +331,7 @@ class Application(object):
 
           # Option 3: a webob Response object (in case you need to play with
           # headers, or you want to be treated like an iterable, or or or)
-          res = Response();
+          res = Response()
           res.app_iter = open('somefile')
 
           # Option 4: any wsgi app to be run next

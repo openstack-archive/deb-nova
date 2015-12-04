@@ -21,22 +21,21 @@ import traceback
 
 from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_reports import guru_meditation_report as gmr
 
 from nova.conductor import rpcapi as conductor_rpcapi
 from nova import config
 import nova.db.api
 from nova import exception
-from nova.i18n import _LE
+from nova.i18n import _LE, _LW
 from nova import objects
 from nova.objects import base as objects_base
 from nova import service
 from nova import utils
-from nova import version
 
 CONF = cfg.CONF
 CONF.import_opt('network_topic', 'nova.network.rpcapi')
 CONF.import_opt('use_local', 'nova.conductor.api', group='conductor')
+LOG = logging.getLogger('nova.network')
 
 
 def block_db_access():
@@ -46,7 +45,6 @@ def block_db_access():
 
         def __call__(self, *args, **kwargs):
             stacktrace = "".join(traceback.format_stack())
-            LOG = logging.getLogger('nova.network')
             LOG.error(_LE('No db access allowed in nova-network: %s'),
                       stacktrace)
             raise exception.DBNotAllowed('nova-network')
@@ -60,12 +58,13 @@ def main():
     utils.monkey_patch()
     objects.register_all()
 
-    gmr.TextGuruMeditation.setup_autorun(version)
-
     if not CONF.conductor.use_local:
         block_db_access()
         objects_base.NovaObject.indirection_api = \
             conductor_rpcapi.ConductorAPI()
+    else:
+        LOG.warning(_LW('Conductor local mode is deprecated and will '
+                        'be removed in a subsequent release'))
 
     server = service.Service.create(binary='nova-network',
                                     topic=CONF.network_topic,

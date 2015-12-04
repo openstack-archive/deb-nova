@@ -8,19 +8,19 @@
 # Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:34+0000\n"
-"PO-Revision-Date: 2015-09-23 07:23+0000\n"
+"POT-Creation-Date: 2015-12-01 06:32+0000\n"
+"PO-Revision-Date: 2015-11-19 08:53+0000\n"
 "Last-Translator: Zbyněk Schwarz <zbynek.schwarz@gmail.com>\n"
-"Language-Team: Czech (http://www.transifex.com/openstack/nova/language/cs/)\n"
+"Language-Team: Czech\n"
 "Language: cs\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2;\n"
-"X-Generator: Zanata 3.7.1\n"
+"Generated-By: Babel 2.0\n"
+"X-Generator: Zanata 3.7.3\n"
 
 msgid "\"Look for the VDIs failed"
 msgstr "\"Hledání VBD selhalo"
@@ -56,6 +56,9 @@ msgstr ""
 "Agregát %(aggregate_id)s: neobnovitelný stav během provádění operace na "
 "%(host)s"
 
+msgid "An error occurred while deallocating network."
+msgstr "Při rušení přidělení sítě nastala chyba."
+
 msgid "An error occurred while refreshing the network cache."
 msgstr "Při obnově mezipaměti sítě došlo k chybě."
 
@@ -68,7 +71,7 @@ msgid "Attaching PCI devices %(dev)s to %(dom)s failed."
 msgstr "Připojování zařízení PCI %(dev)s do %(dom)s selhalo."
 
 #, python-format
-msgid "Attaching network adapter failed. Exception:  %s"
+msgid "Attaching network adapter failed. Exception: %s"
 msgstr "Připojování síťového adaptéru selhalo. Výjimka: %s"
 
 #, python-format
@@ -116,6 +119,16 @@ msgstr "Compute.api::odemčení %s"
 #, python-format
 msgid "Compute.api::unpause %s"
 msgstr "Compute.api::zrušení pozastaevní %s"
+
+#, python-format
+msgid ""
+"Connection between volume %(vol)s and host %(host)s might have succeeded, "
+"but attempt to terminate connection has failed. Validate the connection and "
+"determine if manual cleanup is needed. Error: %(msg)s Code: %(code)s."
+msgstr ""
+"Připojení mezi svazkem %(vol)s a hostitelem %(host)s bylo možná navázáno, "
+"ale pokus o jeho ukončení selhalo. Ověřte připojení a zjistěte, zdali je "
+"třeba zakročit ručně. Chyba: %(msg)s, kóde: %(code)s."
 
 #, python-format
 msgid "Connection to libvirt failed: %s"
@@ -519,6 +532,21 @@ msgstr "Nelze odpojit svazek %(volume_id)s z %(mp)s"
 msgid "Failed to download %(image_location)s to %(image_path)s"
 msgstr "Nelze stáhnout %(image_location)s do %(image_path)s"
 
+#, python-format
+msgid ""
+"Failed to extract compute RPC version from service history because I am too "
+"old (minimum version is now %(version)i)"
+msgstr ""
+"Nelze extrahovat verzi výpočetní RPC z historii služeb, protože je příliš "
+"stará. (Minimální verze je nyní %(version)i)"
+
+#, python-format
+msgid ""
+"Failed to extract compute RPC version from service history for version "
+"%(version)i"
+msgstr ""
+"Nelze extrahovat verzi výpočetní RPC z historii služeb, pro verzi %(version)i"
+
 msgid "Failed to fetch glance image"
 msgstr "Nelze získat obraz glance"
 
@@ -755,6 +783,18 @@ msgstr ""
 "konfigurací"
 
 #, python-format
+msgid "Improper or unknown HTTP status code used: %d"
+msgstr "Použit nesprávný nebo špatný kód stavu HTTP: %d"
+
+#, python-format
+msgid ""
+"Initialize connection failed for volume %(vol)s on host %(host)s. Error: "
+"%(msg)s Code: %(code)s. Attempting to terminate connection."
+msgstr ""
+"Zavedení připojení selhalo u svazku %(vol)s na hostiteli %(host)s. Chyba: "
+"%(msg)s, kód: %(code)s. Probíhá pokus o přerušení připojení."
+
+#, python-format
 msgid ""
 "Instance compute service state on %s expected to be down, but it was up."
 msgstr ""
@@ -774,11 +814,6 @@ msgstr "Instance nemohla být spuštěna"
 #, python-format
 msgid "Instance type %s not found for deletion"
 msgstr "Vymazávaná Instance typu %s nebyla nalezena"
-
-#, python-format
-msgid "Instance update attempted for '%(key)s' on %(instance_uuid)s"
-msgstr ""
-"V '%(key)s' na %(instance_uuid)s se uskutečnil pokus o aktualizaci instance"
 
 #, python-format
 msgid "Interface %s not found"
@@ -933,7 +968,7 @@ msgid "Read/Write data failed"
 msgstr "Zápis/Čtení dat selhalo"
 
 #, python-format
-msgid "Requested VM Generation %s is not supported on  this OS."
+msgid "Requested VM Generation %s is not supported on this OS."
 msgstr "Požadované vytvoření VM %s není v tomto OS podporováno."
 
 #, python-format
@@ -998,12 +1033,12 @@ msgid "Transfer data failed"
 msgstr "Přenos dat selhal"
 
 #, python-format
-msgid "Unable to access floating IP %(fixed_ip)s for port %(port_id)s"
-msgstr "Nelze získat přístup k plovoucím IP %(fixed_ip)s na portu %(port_id)s"
-
-#, python-format
 msgid "Unable to access floating IP %s"
 msgstr "Nelze získat přístup k plovoucím IP %s"
+
+#, python-format
+msgid "Unable to access floating IP for %s"
+msgstr "Nelze získat přístup k plovoucím IP pro %s"
 
 msgid "Unable to access the rescue disk"
 msgstr "Nelze získat přístup k záchrannému disku"
@@ -1030,6 +1065,9 @@ msgstr ""
 msgid "Unable to destroy VBD"
 msgstr "Nelze zničit VBD"
 
+msgid "Unable to determine the glance API version"
+msgstr "Nelze zjistit API verzi glance"
+
 #, python-format
 msgid "Unable to execute %(cmd)s. Exception: %(exception)s"
 msgstr "Nelze spustit %(cmd)s. Výjimka: %(exception)s"
@@ -1039,6 +1077,10 @@ msgstr "Nelze najít SR z VBD"
 
 msgid "Unable to find SR from VDI"
 msgstr "Nelze najít SR z VDI"
+
+#, python-format
+msgid "Unable to find a service record to update for %(binary)s on %(host)s"
+msgstr "Nelze najít záznam služby k aktualizaci pro %(binary)s na %(host)s"
 
 #, python-format
 msgid "Unable to find address %r"
@@ -1167,6 +1209,14 @@ msgstr ""
 "XenAPI nemohlo najít repozitář úložišť na které instalovat hosty. Prosím "
 "zkontrolujte své nastavení (např. nastavte výchozí SR pro zásobu) a/nebo "
 "nastavte příznak 'sr_matching_filter'."
+
+msgid ""
+"You are running nova-compute on an unsupported version of Windows (older "
+"than Windows / Hyper-V Server 2012). The support for this version of Windows "
+"has been removed in Mitaka."
+msgstr ""
+"nova-compute spouštíte na nepodporované verzi Windows (starší než Windows / "
+"Hyper-V Server 2012). Podpora pro tuto verzi byla odstraněna v Mitaka."
 
 msgid "_migrate_disk_resizing_down failed. Restoring orig vm"
 msgstr "Přesunutí a zmenšení disku selhalo. Obnovování původní vm"

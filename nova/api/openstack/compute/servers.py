@@ -319,7 +319,7 @@ class ServersController(wsgi.Controller):
         # If an admin hasn't specified a 'deleted' search option, we need
         # to filter out deleted instances by setting the filter ourselves.
         # ... Unless 'changes-since' is specified, because 'changes-since'
-        # should return recently deleted images according to the API spec.
+        # should return recently deleted instances according to the API spec.
 
         if 'deleted' not in search_opts:
             if 'changes-since' not in search_opts:
@@ -427,15 +427,6 @@ class ServersController(wsgi.Controller):
                                        expected_attrs=expected_attrs)
         req.cache_db_instance(instance)
         return instance
-
-    def _check_string_length(self, value, name, max_length=None):
-        try:
-            if isinstance(value, six.string_types):
-                value = value.strip()
-            utils.check_string_length(value, name, min_length=1,
-                                      max_length=max_length)
-        except exception.InvalidInput as e:
-            raise exc.HTTPBadRequest(explanation=e.format_message())
 
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
@@ -612,8 +603,7 @@ class ServersController(wsgi.Controller):
         except (exception.QuotaError,
                 exception.PortLimitExceeded) as error:
             raise exc.HTTPForbidden(
-                explanation=error.format_message(),
-                headers={'Retry-After': 0})
+                explanation=error.format_message())
         except exception.ImageNotFound:
             msg = _("Can not find requested image")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -636,6 +626,7 @@ class ServersController(wsgi.Controller):
             msg = "UnicodeError: %s" % error
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
+                exception.ImageBadRequest,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
@@ -658,6 +649,9 @@ class ServersController(wsgi.Controller):
                 exception.InvalidBDMBootSequence,
                 exception.InvalidBDMLocalsLimit,
                 exception.InvalidBDMVolumeNotBootable,
+                exception.InvalidBDMEphemeralSize,
+                exception.InvalidBDMFormat,
+                exception.InvalidBDMSwapSize,
                 exception.AutoDiskConfigDisabledByImage,
                 exception.ImageNUMATopologyIncomplete,
                 exception.ImageNUMATopologyForbidden,
@@ -873,8 +867,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPNotFound(explanation=e.format_message())
         except exception.QuotaError as error:
             raise exc.HTTPForbidden(
-                explanation=error.format_message(),
-                headers={'Retry-After': 0})
+                explanation=error.format_message())
         except exception.FlavorNotFound:
             msg = _("Unable to locate requested flavor.")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1115,8 +1108,7 @@ class ServersController(wsgi.Controller):
         """Return server search options allowed by non-admin."""
         opt_list = ('reservation_id', 'name', 'status', 'image', 'flavor',
                     'ip', 'changes-since', 'all_tenants')
-        req_ver = req.api_version_request
-        if req_ver > api_version_request.APIVersionRequest("2.4"):
+        if api_version_request.is_supported(req, min_version='2.5'):
             opt_list += ('ip6',)
         return opt_list
 

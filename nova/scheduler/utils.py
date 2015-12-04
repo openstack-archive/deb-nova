@@ -57,12 +57,12 @@ def build_request_spec(ctxt, image, instances, instance_type=None):
     """
     instance = instances[0]
     if instance_type is None:
-        if isinstance(instance, obj_instance._BaseInstance):
+        if isinstance(instance, obj_instance.Instance):
             instance_type = instance.get_flavor()
         else:
             instance_type = flavors.extract_flavor(instance)
 
-    if isinstance(instance, obj_instance._BaseInstance):
+    if isinstance(instance, obj_instance.Instance):
         instance = obj_base.obj_to_primitive(instance)
         # obj_to_primitive doesn't copy this enough, so be sure
         # to detach our metadata blob because we modify it below.
@@ -166,15 +166,15 @@ def populate_retry(filter_properties, instance_uuid):
     retry['num_attempts'] += 1
 
     _log_compute_error(instance_uuid, retry)
-    exc = retry.pop('exc', None)
+    exc_reason = retry.pop('exc_reason', None)
 
     if retry['num_attempts'] > max_attempts:
         msg = (_('Exceeded max scheduling attempts %(max_attempts)d '
                  'for instance %(instance_uuid)s. '
-                 'Last exception: %(exc)s')
+                 'Last exception: %(exc_reason)s')
                % {'max_attempts': max_attempts,
                   'instance_uuid': instance_uuid,
-                  'exc': exc})
+                  'exc_reason': exc_reason})
         raise exception.MaxRetriesExceeded(reason=msg)
 
 

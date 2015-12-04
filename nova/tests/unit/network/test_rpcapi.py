@@ -17,7 +17,6 @@ Unit Tests for nova.network.rpcapi
 """
 
 import collections
-import contextlib
 
 import mock
 from mox3 import mox
@@ -46,7 +45,7 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
 
         rpcapi = network_rpcapi.NetworkAPI()
         self.assertIsNotNone(rpcapi.client)
-        self.assertEqual(rpcapi.client.target.topic, CONF.network_topic)
+        self.assertEqual(CONF.network_topic, rpcapi.client.target.topic)
 
         expected_retval = 'foo' if rpc_method == 'call' else None
         expected_version = kwargs.pop('version', None)
@@ -108,7 +107,7 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
 
         retval = getattr(rpcapi, method)(ctxt, **kwargs)
-        self.assertEqual(retval, expected_retval)
+        self.assertEqual(expected_retval, retval)
 
     def test_create_networks(self):
         self._test_network_api('create_networks', rpc_method='call',
@@ -217,7 +216,7 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
         rpcapi = network_rpcapi.NetworkAPI()
         cast_mock = mock.Mock()
         cctxt_mock = mock.Mock(cast=cast_mock)
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(rpcapi.client, 'can_send_version',
                               return_value=False),
             mock.patch.object(rpcapi.client, 'prepare',
@@ -246,7 +245,7 @@ class NetworkRpcAPITestCase(test.NoDBTestCase):
         rpcapi = network_rpcapi.NetworkAPI()
         call_mock = mock.Mock()
         cctxt_mock = mock.Mock(call=call_mock)
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(rpcapi.client, 'can_send_version',
                               return_value=False),
             mock.patch.object(rpcapi.client, 'prepare',

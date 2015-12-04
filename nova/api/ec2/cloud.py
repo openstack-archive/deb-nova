@@ -237,8 +237,8 @@ class CloudController(object):
         versionutils.report_deprecated_feature(
             LOG,
             _LW('The in tree EC2 API is deprecated as of Kilo release and may '
-                'be removed in a future release. The stackforge ec2-api '
-                'project http://git.openstack.org/cgit/stackforge/ec2-api/ '
+                'be removed in a future release. The openstack ec2-api '
+                'project http://git.openstack.org/cgit/openstack/ec2-api/ '
                 'is the target replacement for this functionality.')
         )
         self.image_service = s3.S3ImageService()
@@ -1802,7 +1802,7 @@ class CloudController(object):
                     raise exception.InternalError(message=err)
 
         # meaningful image name
-        name_map = dict(instance=instance_uuid, now=timeutils.isotime())
+        name_map = dict(instance=instance_uuid, now=utils.isotime())
         name = name or _('image of %(instance)s at %(now)s') % name_map
 
         new_image = self.compute_api.snapshot_volume_backed(context,

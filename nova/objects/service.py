@@ -13,14 +13,15 @@
 #    under the License.
 
 from oslo_log import log as logging
+from oslo_utils import versionutils
 
 from nova import availability_zones
 from nova import db
 from nova import exception
+from nova.i18n import _LW
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova import utils
 
 
 LOG = logging.getLogger(__name__)
@@ -49,7 +50,7 @@ SERVICE_VERSION = 2
 # in the cluster are at the same level.
 SERVICE_VERSION_HISTORY = (
     # Version 0: Pre-history
-    None,
+    {'compute_rpc': '4.0'},
 
     # Version 1: Introduction of SERVICE_VERSION
     {'compute_rpc': '4.4'},
@@ -81,7 +82,8 @@ class Service(base.NovaPersistentObject, base.NovaObject,
     # Version 1.16: Added version
     # Version 1.17: ComputeNode version 1.13
     # Version 1.18: ComputeNode version 1.14
-    VERSION = '1.18'
+    # Version 1.19: Added get_minimum_version()
+    VERSION = '1.19'
 
     fields = {
         'id': fields.IntegerField(read_only=True),
@@ -96,13 +98,6 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         'last_seen_up': fields.DateTimeField(nullable=True),
         'forced_down': fields.BooleanField(),
         'version': fields.IntegerField(),
-    }
-
-    obj_relationships = {
-        'compute_node': [('1.1', '1.4'), ('1.3', '1.5'), ('1.5', '1.6'),
-                         ('1.7', '1.8'), ('1.8', '1.9'), ('1.9', '1.10'),
-                         ('1.12', '1.11'), ('1.15', '1.12'), ('1.17', '1.13'),
-                         ('1.18', '1.14')],
     }
 
     def __init__(self, *args, **kwargs):
@@ -123,9 +118,11 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         super(Service, self).__init__(*args, **kwargs)
         self.version = SERVICE_VERSION
 
-    def obj_make_compatible(self, primitive, target_version):
-        super(Service, self).obj_make_compatible(primitive, target_version)
-        _target_version = utils.convert_version_to_tuple(target_version)
+    def obj_make_compatible_from_manifest(self, primitive, target_version,
+                                          version_manifest):
+        super(Service, self).obj_make_compatible_from_manifest(
+            primitive, target_version, version_manifest)
+        _target_version = versionutils.convert_version_to_tuple(target_version)
         if _target_version < (1, 16) and 'version' in primitive:
             del primitive['version']
         if _target_version < (1, 14) and 'forced_down' in primitive:
@@ -133,15 +130,14 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         if _target_version < (1, 13) and 'last_seen_up' in primitive:
             del primitive['last_seen_up']
         if _target_version < (1, 10):
-            target_compute_version = self.obj_calculate_child_version(
-                target_version, 'compute_node')
             # service.compute_node was not lazy-loaded, we need to provide it
             # when called
             self._do_compute_node(self._context, primitive,
-                                  target_compute_version)
+                                  version_manifest)
 
-    def _do_compute_node(self, context, primitive, target_version):
+    def _do_compute_node(self, context, primitive, version_manifest):
         try:
+            target_version = version_manifest['ComputeNode']
             # NOTE(sbauza): Some drivers (VMware, Ironic) can have multiple
             # nodes for the same service, but for keeping same behaviour,
             # returning only the first elem of the list
@@ -150,7 +146,8 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         except Exception:
             return
         primitive['compute_node'] = compute.obj_to_primitive(
-            target_version=target_version)
+            target_version=target_version,
+            version_manifest=version_manifest)
 
     @staticmethod
     def _from_db_object(context, service, db_service):
@@ -229,11 +226,36 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         db_service = db.service_get_by_host_and_binary(context, host, binary)
         return cls._from_db_object(context, cls(), db_service)
 
+    def _check_minimum_version(self):
+        """Enforce that we are not older that the minimum version.
+
+        This is a loose check to avoid creating or updating our service
+        record if we would do so with a version that is older that the current
+        minimum of all services. This could happen if we were started with
+        older code by accident, either due to a rollback or an old and
+        un-updated node suddenly coming back onto the network.
+
+        There is technically a race here between the check and the update,
+        but since the minimum version should always roll forward and never
+        backwards, we don't need to worry about doing it atomically. Further,
+        the consequence for getting this wrong is minor, in that we'll just
+        fail to send messages that other services understand.
+        """
+        if not self.obj_attr_is_set('version'):
+            return
+        if not self.obj_attr_is_set('binary'):
+            return
+        minver = self.get_minimum_version(self._context, self.binary)
+        if minver > self.version:
+            raise exception.ServiceTooOld(thisver=self.version,
+                                          minver=minver)
+
     @base.remotable
     def create(self):
         if self.obj_attr_is_set('id'):
             raise exception.ObjectActionError(action='create',
                                               reason='already created')
+        self._check_minimum_version()
         updates = self.obj_get_changes()
         db_service = db.service_create(self._context, updates)
         self._from_db_object(self._context, self, db_service)
@@ -247,12 +269,28 @@ class Service(base.NovaPersistentObject, base.NovaObject,
             # do a save if that's all that has changed. This keeps the
             # "save is a no-op if nothing has changed" behavior.
             return
+        self._check_minimum_version()
         db_service = db.service_update(self._context, self.id, updates)
         self._from_db_object(self._context, self, db_service)
 
     @base.remotable
     def destroy(self):
         db.service_destroy(self._context, self.id)
+
+    @base.remotable_classmethod
+    def get_minimum_version(cls, context, binary, use_slave=False):
+        if not binary.startswith('nova-'):
+            LOG.warning(_LW('get_minimum_version called with likely-incorrect '
+                            'binary `%s\''), binary)
+            raise exception.ObjectActionError(action='get_minimum_version',
+                                              reason='Invalid binary prefix')
+        version = db.service_get_minimum_version(context, binary,
+                                                 use_slave=use_slave)
+        if version is None:
+            return 0
+        # NOTE(danms): Since our return value is not controlled by object
+        # schema, be explicit here.
+        return int(version)
 
 
 @base.NovaObjectRegistry.register
@@ -275,20 +313,12 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
     # Version 1.14: Service version 1.16
     # Version 1.15: Service version 1.17
     # Version 1.16: Service version 1.18
-    VERSION = '1.16'
+    # Version 1.17: Service version 1.19
+    VERSION = '1.17'
 
     fields = {
         'objects': fields.ListOfObjectsField('Service'),
         }
-    # NOTE(danms): Service was at 1.2 before we added this
-    obj_relationships = {
-        'objects': [('1.0', '1.2'), ('1.1', '1.3'), ('1.2', '1.4'),
-                    ('1.3', '1.5'), ('1.4', '1.6'), ('1.5', '1.7'),
-                    ('1.6', '1.8'), ('1.7', '1.9'), ('1.8', '1.10'),
-                    ('1.9', '1.11'), ('1.10', '1.12'), ('1.11', '1.13'),
-                    ('1.12', '1.14'), ('1.13', '1.15'), ('1.14', '1.16'),
-                    ('1.15', '1.17'), ('1.16', '1.18')],
-    }
 
     @base.remotable_classmethod
     def get_by_topic(cls, context, topic):

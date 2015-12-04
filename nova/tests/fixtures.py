@@ -39,6 +39,7 @@ _TRUE_VALUES = ('True', 'true', '1', 'yes')
 
 CONF = cfg.CONF
 DB_SCHEMA = {'main': "", 'api': ""}
+SESSION_CONFIGURED = False
 
 
 class ServiceFixture(fixtures.Fixture):
@@ -195,6 +196,12 @@ class Timeout(fixtures.Fixture):
 class Database(fixtures.Fixture):
     def __init__(self, database='main'):
         super(Database, self).__init__()
+        # NOTE(pkholkin): oslo_db.enginefacade is configured in tests the same
+        # way as it is done for any other service that uses db
+        global SESSION_CONFIGURED
+        if not SESSION_CONFIGURED:
+            session.configure(CONF)
+            SESSION_CONFIGURED = True
         self.database = database
         if database == 'main':
             self.get_engine = session.get_engine
@@ -315,16 +322,18 @@ class OSAPIFixture(fixtures.Fixture):
 
     """
 
-    def __init__(self, api_version='v2'):
+    def __init__(self, api_version='v2', project_id='openstack'):
         """Constructor
 
         :param api_version: the API version that we're interested in
         using. Currently this expects 'v2' or 'v2.1' as possible
         options.
+        :param project_id: the project id to use on the API.
 
         """
         super(OSAPIFixture, self).__init__()
         self.api_version = api_version
+        self.project_id = project_id
 
     def setUp(self):
         super(OSAPIFixture, self).setUp()
@@ -347,9 +356,10 @@ class OSAPIFixture(fixtures.Fixture):
         self.auth_url = 'http://%(host)s:%(port)s/%(api_version)s' % ({
             'host': self.osapi.host, 'port': self.osapi.port,
             'api_version': self.api_version})
-        self.api = client.TestOpenStackClient('fake', 'fake', self.auth_url)
+        self.api = client.TestOpenStackClient('fake', 'fake', self.auth_url,
+                                              self.project_id)
         self.admin_api = client.TestOpenStackClient(
-            'admin', 'admin', self.auth_url)
+            'admin', 'admin', self.auth_url, self.project_id)
 
 
 class PoisonFunctions(fixtures.Fixture):

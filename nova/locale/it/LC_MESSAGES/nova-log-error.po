@@ -4,21 +4,22 @@
 #
 # Translators:
 # Saverio <saverio.brancaccio@gmail.com>, 2014
+# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-09-08 06:24+0000\n"
-"PO-Revision-Date: 2015-08-30 00:41+0000\n"
+"POT-Creation-Date: 2015-12-01 06:32+0000\n"
+"PO-Revision-Date: 2015-08-30 12:41+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
-"Language-Team: Italian (http://www.transifex.com/openstack/nova/language/"
-"it/)\n"
+"Language-Team: Italian\n"
 "Language: it\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"Generated-By: Babel 2.0\n"
+"X-Generator: Zanata 3.7.3\n"
 
 #, python-format
 msgid ""
@@ -61,10 +62,6 @@ msgstr "Collegamento volume non riuscito: %s"
 #, python-format
 msgid "Attaching PCI devices %(dev)s to %(dom)s failed."
 msgstr "Il collegamento dei dispositivi PCI %(dev)s a %(dom)s è fallito."
-
-#, python-format
-msgid "Attaching network adapter failed. Exception:  %s"
-msgstr "Collegamento della scheda di rete fallito. Eccezione: %s"
 
 msgid "Cannot cleanup migration files"
 msgstr "Impossibile ripulire i file di migrazione"
@@ -631,11 +628,6 @@ msgid "Instance type %s not found for deletion"
 msgstr "Tipo di istanza %s nono trovato per l'eliminazione"
 
 #, python-format
-msgid "Instance update attempted for '%(key)s' on %(instance_uuid)s"
-msgstr ""
-"Tentativo di aggiornamento dell'istanza per '%(key)s' in %(instance_uuid)s"
-
-#, python-format
 msgid "Interface %s not found"
 msgstr "Interfaccia %s non trovata"
 
@@ -821,11 +813,6 @@ msgstr "La chiamata a %(method)s restituito un errore: %(e)s."
 #, python-format
 msgid "The call to %(method)s returned an error: %(e)s. args=%(args)r"
 msgstr "La chiamata a %(method)s ha restituito un errore: %(e)s. args=%(args)r"
-
-#, python-format
-msgid "Unable to access floating IP %(fixed_ip)s for port %(port_id)s"
-msgstr ""
-"Impossibile accedere all'IP mobile %(fixed_ip)s per la porta %(port_id)s"
 
 #, python-format
 msgid "Unable to access floating IP %s"

@@ -13,6 +13,7 @@
 #    under the License.
 
 from oslo_utils import uuidutils
+from oslo_utils import versionutils
 
 from nova.compute import utils as compute_utils
 from nova import db
@@ -20,7 +21,6 @@ from nova import exception
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
-from nova import utils
 
 
 LAZY_LOAD_FIELDS = ['hosts']
@@ -58,7 +58,7 @@ class InstanceGroup(base.NovaPersistentObject, base.NovaObject,
         }
 
     def obj_make_compatible(self, primitive, target_version):
-        target_version = utils.convert_version_to_tuple(target_version)
+        target_version = versionutils.convert_version_to_tuple(target_version)
         if target_version < (1, 7):
             # NOTE(danms): Before 1.7, we had an always-empty
             # metadetails property
@@ -242,12 +242,6 @@ class InstanceGroupList(base.ObjectListBase, base.NovaObject):
 
     fields = {
         'objects': fields.ListOfObjectsField('InstanceGroup'),
-        }
-    # NOTE(danms): InstanceGroup was at 1.3 before we added this
-    obj_relationships = {
-        'objects': [('1.0', '1.3'), ('1.1', '1.4'), ('1.2', '1.5'),
-                    ('1.3', '1.6'), ('1.4', '1.7'), ('1.5', '1.8'),
-                    ('1.6', '1.9'), ('1.7', '1.10')],
         }
 
     @base.remotable_classmethod

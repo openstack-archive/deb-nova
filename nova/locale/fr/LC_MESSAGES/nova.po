@@ -27,14 +27,13 @@
 # Tom Cocozzello <tjcocozz@us.ibm.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev16\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-08 06:39+0000\n"
-"PO-Revision-Date: 2015-10-07 09:07+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
+"PO-Revision-Date: 2015-10-07 11:52+0000\n"
 "Last-Translator: Corinne Verheyde <cverheyd@gmail.com>\n"
 "Language: fr\n"
-"Language-Team: French (http://www.transifex.com/openstack/nova/language/"
-"fr/)\n"
+"Language-Team: French\n"
 "Plural-Forms: nplurals=2; plural=(n > 1)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -389,11 +388,6 @@ msgstr ""
 
 msgid "Attempted overwrite of an existing value."
 msgstr "Tentative d'écriture d'une valeur existante."
-
-#, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr ""
-"Tentative de réclamation : mémoire %(memory_mb)d Mo, disque %(disk_gb)d Go"
 
 #, python-format
 msgid "Attribute not supported: %(attr)s"
@@ -950,9 +944,6 @@ msgstr "Les extension de Core API sont manquantes : %(missing_apis)s"
 msgid "Could not attach image to loopback: %s"
 msgstr "Impossible de lier l'image au loopback : %s"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr "Impossible de nettoyer la génération qui a échoué, ne pas replanifier"
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "Impossible d'extraire l'image %(image_id)s"
@@ -1043,10 +1034,6 @@ msgstr "DNS1"
 
 msgid "DNS2"
 msgstr "DNS2"
-
-#, python-format
-msgid "Database migration failed: %(reason)s"
-msgstr "Echec de la migration de la base de donnée: %(reason)s"
 
 #, python-format
 msgid "Datastore regex %s did not match any datastores"
@@ -1163,9 +1150,6 @@ msgstr "Disque introuvable avec l'ID %s et connecté à l'instance."
 msgid "Driver Error: %s"
 msgstr "Erreur du pilote: %s"
 
-msgid "Driver must implement select_destinations"
-msgstr "Le pilote doit implémenter select_destinations"
-
 #, python-format
 msgid "Duplicate VM name found: %s"
 msgstr "Nom de machine virtuelle en double trouvé : %s"
@@ -1278,14 +1262,6 @@ msgstr "Evénement %(event)s non trouvé pour l'ID action %(action_id)s"
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "L'événement doit être une instance de nova.virt.event.Event"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"Tentatives de planification max %(max_attempts)d pour l'instance "
-"%(instance_uuid)s. Dernière exception : %(exc)s"
 
 #, python-format
 msgid ""
@@ -1805,10 +1781,6 @@ msgstr ""
 "migrations live effectuée avec cette version peuvent causer des pertes de "
 "données. Mettez à jour Nova sur %(server)s et essayez à nouveau."
 
-#, python-format
-msgid "Host '%(name)s' is not mapped to any cell"
-msgstr "Le host '%(name)s' n'est pas mappé à une cellule"
-
 msgid "Host PowerOn is not supported by the Hyper-V driver"
 msgstr ""
 "La mise sous tension de l'hôte n'est pas prise en charge par le pilote Hyper-"
@@ -1838,10 +1810,6 @@ msgid "Hypervisor driver does not support post_live_migration_at_source method"
 msgstr ""
 "Le pilote de l'hyperviseur ne prend pas en charge la méthode "
 "post_live_migration_at_source"
-
-#, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "La version d'hyperviseur %s est invalide."
 
 #, python-format
 msgid "Hypervisor virtualization type '%(hv_type)s' is not recognised"
@@ -2146,14 +2114,6 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "Instantanés d'instance non autorisés pour l'instant."
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"Espace insuffisant sur le groupe de volumes %(vg)s. Seulement "
-"%(free_space)db disponibles, mais %(size)db requis par volume %(lv)s."
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "Ressources de calcul insuffisante : %(reason)s."
 
@@ -2162,10 +2122,6 @@ msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr ""
 "Mémoire libre insuffisante sur le noeud de calcul pour le démarrage de "
 "%(uuid)s."
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "IntegrityError détecté lors de l'archivage de la table %s"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -3442,10 +3398,6 @@ msgstr "L'action de garde fourni (%(action)s) n'est pas supportée"
 msgid "QEMU guest agent is not enabled"
 msgstr "L'agent invité QEMU n'est pas activé"
 
-#, fuzzy, python-format
-msgid "Quiescing is not supported in instance %(instance_id)s"
-msgstr "Mise en veille non supportée par l'instance %(instance_id)s"
-
 msgid "Quota"
 msgstr "Quota"
 
@@ -3952,15 +3904,6 @@ msgstr ""
 
 msgid "Template for cloudpipe instance boot script"
 msgstr "Modèle pour le script d'amorçage de l'instance cloudpipe"
-
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"L'option \"force_hyperv_utils_v1\" ne peut pas être défini sur \"True\" sous "
-"Windows Server / Hyper-V Server 2012 R2 ou ultérieur en tant qu'espace de "
-"nom WMI \"root/virtualization\" n'est plus pris en charge."
 
 #, python-format
 msgid "The CA file for %(project)s could not be found"
@@ -4601,10 +4544,6 @@ msgstr "Action inconnu"
 #, python-format
 msgid "Unknown action %s"
 msgstr "Action inconnue %s"
-
-#, python-format
-msgid "Unknown alembic cmd %s"
-msgstr "Cmd alembic inconnue %s"
 
 msgid "Unknown argument : port"
 msgstr "Argument inconnu : port"
@@ -5414,10 +5353,6 @@ msgstr "trop de clés de corps"
 
 msgid "type"
 msgstr "type"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "Nom de pilote ServiceGroup inconnu : %s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "annulation de la mise en pause non prise en charge pour vmwareapi"

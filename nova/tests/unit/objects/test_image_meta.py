@@ -14,6 +14,7 @@
 
 import datetime
 
+from nova import exception
 from nova import objects
 from nova import test
 
@@ -185,7 +186,7 @@ class TestImageMetaProps(test.NoDBTestCase):
 
     def test_legacy_compat_vmware_adapter_types(self):
         legacy_types = ['lsiLogic', 'busLogic', 'ide', 'lsiLogicsas',
-                        'paraVirtual']
+                        'paraVirtual', None, '']
 
         for legacy_type in legacy_types:
             legacy_props = {
@@ -195,6 +196,9 @@ class TestImageMetaProps(test.NoDBTestCase):
             image_meta = objects.ImageMetaProps.from_dict(legacy_props)
             if legacy_type == 'ide':
                 self.assertEqual('ide', image_meta.hw_disk_bus)
+            elif not legacy_type:
+                self.assertFalse(image_meta.obj_attr_is_set('hw_disk_bus'))
+                self.assertFalse(image_meta.obj_attr_is_set('hw_scsi_model'))
             else:
                 self.assertEqual('scsi', image_meta.hw_disk_bus)
                 if legacy_type == 'lsiLogicsas':
@@ -271,3 +275,23 @@ class TestImageMetaProps(test.NoDBTestCase):
         self.assertIsNone(virtprops.get("hw_numa_nodes"))
         self.assertEqual([set([0, 1, 2, 3])],
                          virtprops.hw_numa_cpus)
+
+    def test_obj_make_compatible(self):
+        props = {
+            'img_config_drive': 'mandatory',
+            'os_admin_user': 'root',
+            'hw_vif_multiqueue_enabled': True,
+            'img_hv_type': 'kvm',
+            'img_hv_requested_version': '>= 1.0',
+            'os_require_quiesce': True,
+        }
+
+        obj = objects.ImageMetaProps(**props)
+        primitive = obj.obj_to_primitive('1.0')
+        self.assertFalse(any([x in primitive['nova_object.data']
+                              for x in props]))
+
+        for bus in ('lxc', 'uml'):
+            obj.hw_disk_bus = bus
+            self.assertRaises(exception.ObjectActionError,
+                              obj.obj_to_primitive, '1.0')

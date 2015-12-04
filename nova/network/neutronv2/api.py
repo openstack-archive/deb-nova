@@ -346,14 +346,15 @@ class API(base_api.NetworkAPI):
         except neutron_client_exc.InvalidIpForNetworkClient:
             LOG.warning(_LW('Neutron error: %(ip)s is not a valid ip address '
                             'for network %(network_id)s.'),
-                        {'ip': fixed_ip, 'network_id': network_id})
+                        {'ip': fixed_ip, 'network_id': network_id},
+                        instance=instance)
             msg = (_('Fixed IP %(ip)s is not a valid ip address for '
                      'network %(network_id)s.') %
                    {'ip': fixed_ip, 'network_id': network_id})
             raise exception.InvalidInput(reason=msg)
         except neutron_client_exc.IpAddressInUseClient:
             LOG.warning(_LW('Neutron error: Fixed IP %s is '
-                            'already in use.'), fixed_ip)
+                            'already in use.'), fixed_ip, instance=instance)
             msg = _("Fixed IP %s is already in use.") % fixed_ip
             raise exception.FixedIpAlreadyInUse(message=msg)
         except neutron_client_exc.OverQuotaClient:
@@ -729,7 +730,8 @@ class API(base_api.NetworkAPI):
             context, instance, networks=nets_in_requested_order,
             port_ids=ports_in_requested_order,
             admin_client=admin_client,
-            preexisting_port_ids=preexisting_port_ids)
+            preexisting_port_ids=preexisting_port_ids,
+            update_cells=True)
         # NOTE(danms): Only return info about ports we created in this run.
         # In the initial allocation case, this will be everything we created,
         # and in later runs will only be what was created that time. Thus,
@@ -801,7 +803,8 @@ class API(base_api.NetworkAPI):
                 neutron.delete_port(port)
             except neutron_client_exc.NeutronClientException as e:
                 if e.status_code == 404:
-                    LOG.warning(_LW("Port %s does not exist"), port)
+                    LOG.warning(_LW("Port %s does not exist"), port,
+                                instance=instance)
                 else:
                     exceptions.append(e)
                     LOG.warning(
@@ -935,9 +938,9 @@ class API(base_api.NetworkAPI):
 
         if ((networks is None and port_ids is not None) or
             (port_ids is None and networks is not None)):
-            message = ("This method needs to be called with either "
-                       "networks=None and port_ids=None or port_ids and "
-                       " networks as not none.")
+            message = _("This method needs to be called with either "
+                        "networks=None and port_ids=None or port_ids and "
+                        "networks as not none.")
             raise exception.NovaException(message=message)
 
         ifaces = compute_utils.get_nw_info_for_instance(instance)
@@ -995,7 +998,7 @@ class API(base_api.NetworkAPI):
                            "%(subnet_id)s with failure: %(exception)s")
                     LOG.debug(msg, {'portid': p['id'],
                                     'subnet_id': subnet['id'],
-                                    'exception': ex})
+                                    'exception': ex}, instance=instance)
 
         raise exception.NetworkNotFoundForInstance(
                 instance_id=instance.uuid)
@@ -1022,7 +1025,8 @@ class API(base_api.NetworkAPI):
             except Exception as ex:
                 msg = ("Unable to update port %(portid)s with"
                        " failure: %(exception)s")
-                LOG.debug(msg, {'portid': p['id'], 'exception': ex})
+                LOG.debug(msg, {'portid': p['id'], 'exception': ex},
+                          instance=instance)
             return self._get_instance_nw_info(context, instance)
 
         raise exception.FixedIpNotFoundForSpecificInstance(
@@ -1039,7 +1043,7 @@ class API(base_api.NetworkAPI):
                                fields=['binding:vnic_type', 'network_id'])
         vnic_type = port.get('binding:vnic_type',
                              network_model.VNIC_TYPE_NORMAL)
-        if vnic_type != network_model.VNIC_TYPE_NORMAL:
+        if vnic_type in network_model.VNIC_TYPES_SRIOV:
             net_id = port['network_id']
             net = neutron.show_network(net_id,
                 fields='provider:physical_network').get('network')
@@ -1065,7 +1069,7 @@ class API(base_api.NetworkAPI):
                 vnic_type, phynet_name = self._get_port_vnic_info(
                     context, neutron, request_net.port_id)
             pci_request_id = None
-            if vnic_type != network_model.VNIC_TYPE_NORMAL:
+            if vnic_type in network_model.VNIC_TYPES_SRIOV:
                 request = objects.InstancePCIRequest(
                     count=1,
                     spec=[{pci_request.PCI_NET_TAG: phynet_name}],
@@ -1251,7 +1255,8 @@ class API(base_api.NetworkAPI):
             msg_dict = dict(address=floating_address,
                             instance_id=orig_instance_uuid)
             LOG.info(_LI('re-assign floating IP %(address)s from '
-                         'instance %(instance_id)s'), msg_dict)
+                         'instance %(instance_id)s'), msg_dict,
+                     instance=instance)
             orig_instance = objects.Instance.get_by_uuid(context,
                                                          orig_instance_uuid)
 
@@ -1399,7 +1404,9 @@ class API(base_api.NetworkAPI):
     def get_floating_ips_by_project(self, context):
         client = get_client(context)
         project_id = context.project_id
-        fips = client.list_floatingips(tenant_id=project_id)['floatingips']
+        fips = self._safe_get_floating_ips(client, tenant_id=project_id)
+        if not fips:
+            return []
         pool_dict = self._setup_pools_dict(client)
         port_dict = self._setup_ports_dict(client, project_id)
         return [self._format_floating_ip_model(fip, pool_dict, port_dict)
@@ -1457,12 +1464,29 @@ class API(base_api.NetworkAPI):
 
         return fip['floatingip']['floating_ip_address']
 
+    def _safe_get_floating_ips(self, client, **kwargs):
+        """Get floatingip gracefully handling 404 from Neutron."""
+        try:
+            return client.list_floatingips(**kwargs)['floatingips']
+        # If a neutron plugin does not implement the L3 API a 404 from
+        # list_floatingips will be raised.
+        except neutron_client_exc.NotFound:
+            return []
+        except neutron_client_exc.NeutronClientException as e:
+            # bug/1513879 neutron client is currently using
+            # NeutronClientException when there is no L3 API
+            if e.status_code == 404:
+                return []
+            with excutils.save_and_reraise_exception():
+                LOG.exception(_LE('Unable to access floating IP for %s'),
+                        ', '.join(['%s %s' % (k, v)
+                                   for k, v in six.iteritems(kwargs)]))
+
     def _get_floating_ip_by_address(self, client, address):
         """Get floatingip from floating ip address."""
         if not address:
             raise exception.FloatingIpNotFoundForAddress(address=address)
-        data = client.list_floatingips(floating_ip_address=address)
-        fips = data['floatingips']
+        fips = self._safe_get_floating_ips(client, floating_ip_address=address)
         if len(fips) == 0:
             raise exception.FloatingIpNotFoundForAddress(address=address)
         elif len(fips) > 1:
@@ -1471,19 +1495,8 @@ class API(base_api.NetworkAPI):
 
     def _get_floating_ips_by_fixed_and_port(self, client, fixed_ip, port):
         """Get floatingips from fixed ip and port."""
-        try:
-            data = client.list_floatingips(fixed_ip_address=fixed_ip,
+        return self._safe_get_floating_ips(client, fixed_ip_address=fixed_ip,
                                            port_id=port)
-        # If a neutron plugin does not implement the L3 API a 404 from
-        # list_floatingips will be raised.
-        except neutron_client_exc.NeutronClientException as e:
-            if e.status_code == 404:
-                return []
-            with excutils.save_and_reraise_exception():
-                LOG.exception(_LE('Unable to access floating IP %(fixed_ip)s '
-                                  'for port %(port_id)s'),
-                              {'fixed_ip': fixed_ip, 'port_id': port})
-        return data['floatingips']
 
     def release_floating_ip(self, context, address,
                             affect_auto_assigned=False):
@@ -1850,7 +1863,7 @@ class API(base_api.NetworkAPI):
                 except Exception:
                     with excutils.save_and_reraise_exception():
                         LOG.exception(_LE("Unable to update host of port %s"),
-                                      p['id'])
+                                      p['id'], instance=instance)
 
     def update_instance_vnic_index(self, context, instance, vif, index):
         """Update instance vnic index.

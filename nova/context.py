@@ -22,6 +22,7 @@ import copy
 from keystoneclient import auth
 from keystoneclient import service_catalog
 from oslo_context import context
+from oslo_db.sqlalchemy import enginefacade
 from oslo_log import log as logging
 from oslo_utils import timeutils
 import six
@@ -29,7 +30,7 @@ import six
 from nova import exception
 from nova.i18n import _, _LW
 from nova import policy
-
+from nova import utils
 
 LOG = logging.getLogger(__name__)
 
@@ -60,6 +61,7 @@ class _ContextAuthPlugin(auth.BaseAuthPlugin):
                                             region_name=region_name)
 
 
+@enginefacade.transaction_context_provider
 class RequestContext(context.RequestContext):
     """Security context and request information.
 
@@ -177,7 +179,7 @@ class RequestContext(context.RequestContext):
             'read_deleted': getattr(self, 'read_deleted', 'no'),
             'roles': getattr(self, 'roles', None),
             'remote_address': getattr(self, 'remote_address', None),
-            'timestamp': timeutils.strtime(self.timestamp) if hasattr(
+            'timestamp': utils.strtime(self.timestamp) if hasattr(
                 self, 'timestamp') else None,
             'request_id': getattr(self, 'request_id', None),
             'quota_class': getattr(self, 'quota_class', None),

@@ -10,20 +10,19 @@
 # Travis Nguyen <travisn@us.ibm.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
-"PO-Revision-Date: 2015-10-02 04:02+0000\n"
+"POT-Creation-Date: 2015-12-01 06:32+0000\n"
+"PO-Revision-Date: 2015-10-07 05:39+0000\n"
 "Last-Translator: Travis Nguyen <travisn@us.ibm.com>\n"
-"Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
-"es/)\n"
+"Language-Team: Spanish\n"
 "Language: es\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
-"X-Generator: Zanata 3.7.1\n"
+"Generated-By: Babel 2.0\n"
+"X-Generator: Zanata 3.7.3\n"
 
 #, python-format
 msgid ""
@@ -115,9 +114,6 @@ msgstr "El intento de auto_configure_disk ha fallado por: %s"
 #, python-format
 msgid "Attempted to remove chain %s which does not exist"
 msgstr "Se ha intentado eliminar la cadena %s que no existe"
-
-msgid "Bandwidth usage not supported by hypervisor."
-msgstr "Uso de ancho de banda no soportado por el hipervisor."
 
 #, python-format
 msgid ""
@@ -480,14 +476,6 @@ msgstr ""
 "Se han encontrado varias coincidencias para el dominio %(domain)s.\n"
 "%(entry)s"
 
-#, python-format
-msgid ""
-"Host %(hostname)s has more disk space than database expected (%(physical)sgb "
-"> %(database)sgb)"
-msgstr ""
-"Host %(hostname)s tiene más espacio de disco que lo estimado por la base de "
-"datos (%(physical)sgb > %(database)sgb)"
-
 msgid ""
 "Host field should not be set on the instance until resources have been "
 "claimed."
@@ -502,14 +490,8 @@ msgstr ""
 "La longitud del nombre de host %(hostname)s es más de 63, se trunca a "
 "%(truncated_name)s"
 
-msgid "Hypervisor driver does not support firewall rules"
-msgstr "El controlador de hipervisor no soporta reglas de cortafuegos "
-
 msgid "Hypervisor driver does not support resume guests"
 msgstr "El controlador de hipervisor no soporta reanudar invitados "
-
-msgid "Hypervisor driver does not support security groups."
-msgstr "El controlador del hipervisor no soporta grupos de seguridad."
 
 #, python-format
 msgid "IP %s leased that is not associated"
@@ -869,14 +851,6 @@ msgid "No valid host found for unshelve instance"
 msgstr "No se ha encontrado anfitrión válido para extraer instancia"
 
 #, python-format
-msgid ""
-"No valid network found in %(opaque)s, from %(bridge)s or "
-"%(integration_bridge)s"
-msgstr ""
-"No se ha encontrado red válida en %(opaque)s, de %(bridge)s o "
-"%(integration_bridge)s"
-
-#, python-format
 msgid "Node %(uuid)s has a malformed \"%(prop)s\". It should be an integer."
 msgstr "Nodo %(uuid)s tiene \"%(prop)s\" incorrectas. Debe ser un entero."
 
@@ -966,14 +940,6 @@ msgstr "El puerto %s no existe"
 #, python-format
 msgid "Power state %s not found."
 msgstr "No se ha encontrado estado de energía %s."
-
-#, python-format
-msgid ""
-"Problem with acquiring the list of children of %(path)r within a given "
-"timeout=%(timeout)rs"
-msgstr ""
-"Ha ocurrido un problema al adquirir la lista de niños de %(path)r dentro de "
-"un tiempo de espera dado=%(timeout)rs"
 
 #, python-format
 msgid "Quota exceeded for %s, tried to allocate floating IP"
@@ -1117,16 +1083,6 @@ msgstr ""
 "cambiar en el futuro, pero los implementadores actuales deben estar "
 "conscientes que su uso en producción puede ser riesgoso en este momento."
 
-msgid ""
-"The in tree EC2 API is deprecated as of Kilo release and may be removed in a "
-"future release. The stackforge ec2-api project http://git.openstack.org/cgit/"
-"stackforge/ec2-api/ is the target replacement for this functionality."
-msgstr ""
-"Se desaprueba el uso de EC2 API en forma de árbol como una versión de Kilo y "
-"puede ser eliminada en una próxima versión. El proyecto stackforge ec2-api "
-"http://git.openstack.org/cgit/stackforge/ec2-api/ es el reemplazo de destino "
-"para esta funcionalidad."
-
 #, python-format
 msgid ""
 "The libvirt driver is not tested on %(type)s/%(arch)s by the OpenStack "
@@ -1136,13 +1092,6 @@ msgstr ""
 "El controlador libvirt no ha sido probado en %(type)s/%(arch)s por el "
 "projecto de OpenStack  por lo cual su calidad no puede ser asegurada. Para "
 "mas información, ver: https://wiki.openstack.org/wiki/HypervisorSupportMatrix"
-
-msgid ""
-"The setting \"always\" will be deprecated in the Liberty version. Please use "
-"\"True\" instead"
-msgstr ""
-"Se descarta el uso de la configuración \"always\" en la version Liberty. Por "
-"favor utilice en cambio \"True\""
 
 msgid ""
 "This key manager is insecure and is not recommended for production "
@@ -1337,16 +1286,6 @@ msgstr ""
 
 #, python-format
 msgid ""
-"Volume group %(vg)s will not be able to hold sparse volume %(lv)s. Virtual "
-"volume size is %(size)db, but free space on volume group is only "
-"%(free_space)db."
-msgstr ""
-"El grupo de volumen %(vg)s no podrá retener el volumen disperso %(lv)s. El "
-"tamaño del volumen virtual es %(size)db, pero el espacio libre en el grupo "
-"de volúmenes es solo %(free_space)db."
-
-#, python-format
-msgid ""
 "Volume id: %(vol_id)s finished being created but its status is "
 "%(vol_status)s."
 msgstr ""
@@ -1403,22 +1342,6 @@ msgstr ""
 "%(expected_signature)s para id: %(requestor_id)s. Solicitud de: "
 "%(requestor_address)s"
 
-msgid ""
-"Your libvirt version does not support the VIR_DOMAIN_XML_MIGRATABLE flag, "
-"and the  graphics (VNC and/or SPICE) listen addresses on the destination "
-"node do not match the addresses on the source node. Since the source node "
-"has listen addresses set to either the catch-all address (0.0.0.0 or ::) or "
-"the local address (127.0.0.1 or ::1), the live migration will succeed, but "
-"the VM will continue to listen on the current addresses."
-msgstr ""
-"Su versión de libvirt no soporta el indicador VIR_DOMAIN_XML_MIGRATABLE y la "
-"dirección de escucha de respuesta de las gráficas  (VNC y/o SPICE) en el "
-"nodo de destino no coincide con la dirección del nodo de origen. Ya que el "
-"nodo de origen tiene direcciones de escucha de respuesta configuradas a una "
-"dirección por defecto (0.0.0.0 ó ::) o dirección local (127.0.0.1 ó ::1), la "
-"migración en vivo tendrá éxito pero la VM continuará escuchando respuestas "
-"en las direcciones actuales."
-
 #, python-format
 msgid "_migrate_disk_resizing_up failed to rollback: %s"
 msgstr "_migrate_disk_rezising_up fallido al revertir: %s"
@@ -1437,13 +1360,6 @@ msgstr "no se pudo obtener el XML del dominio: %(uuid)s, excepción: %(ex)s"
 #, python-format
 msgid "couldn't obtain the memory from domain: %(uuid)s, exception: %(ex)s"
 msgstr "no se pudo obtener la memoria del dominio: %(uuid)s, excepción: %(ex)s"
-
-#, python-format
-msgid ""
-"couldn't obtain the vpu count from domain id: %(uuid)s, exception: %(ex)s"
-msgstr ""
-"no se puede obtener el conteo de vpu del identificador del dominio: "
-"%(uuid)s, excepción: %(ex)s"
 
 #, python-format
 msgid "cpu_arch not defined for node '%s'"
@@ -1541,9 +1457,6 @@ msgstr ""
 msgid "set_admin_password is not implemented by this driver or guest instance."
 msgstr ""
 "esta instancia de invitado o controlador no implementa set_admin_password ."
-
-msgid "set_bootable is not implemented for the current driver"
-msgstr "set_bootable no está implementado en el controlador actual"
 
 #, python-format
 msgid ""

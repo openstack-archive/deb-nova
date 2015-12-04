@@ -26,14 +26,13 @@
 # liujunpeng <liujunpeng@inspur.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
-"PO-Revision-Date: 2015-09-27 06:26+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
+"PO-Revision-Date: 2015-10-07 05:39+0000\n"
 "Last-Translator: liujunpeng <liujunpeng@inspur.com>\n"
 "Language: zh_Hans_CN\n"
-"Language-Team: Chinese (China) (http://www.transifex.com/openstack/nova/"
-"language/zh_CN/)\n"
+"Language-Team: Chinese (China)\n"
 "Plural-Forms: nplurals=1; plural=0\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -376,10 +375,6 @@ msgid "Attempted overwrite of an existing value."
 msgstr "尝试覆盖一个已存在的值。"
 
 #, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr "尝试声明：内存%(memory_mb)d MB, 磁盘 %(disk_gb)d GB"
-
-#, python-format
 msgid "Attribute not supported: %(attr)s"
 msgstr "属性不受支持: %(attr)s"
 
@@ -698,9 +693,6 @@ msgstr ""
 "不能调整根盘到更小的大小。当前大小：%(curr_root_gb)s GB。请求大小："
 "%(new_root_gb)s GB"
 
-msgid "Cannot run 'db sync' until 'db contract' is run"
-msgstr "在 'db contract'运行之前，不能运行 'db sync'"
-
 msgid "Cannot run any more instances of this type."
 msgstr "无法运行此类型的任何其他实例。"
 
@@ -892,9 +884,6 @@ msgstr "核心API扩展 %(missing_apis)s 未找到"
 msgid "Could not attach image to loopback: %s"
 msgstr "无法给loopback附加镜像：%s"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr "不能清理失败的构建，不重新调度"
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "未能访存映像 %(image_id)s"
@@ -981,10 +970,6 @@ msgid "DNS2"
 msgstr "DNS2"
 
 #, python-format
-msgid "Database migration failed: %(reason)s"
-msgstr "数据库迁移失败：%(reason)s"
-
-#, python-format
 msgid "Datastore regex %s did not match any datastores"
 msgstr "存储正则表达式%s没有匹配存储"
 
@@ -1003,9 +988,6 @@ msgstr "从表格 '%(table_name)s'删除%(records)d记录。"
 
 msgid "Deleting by fixed_range is not supported with the NeutronManager"
 msgstr "不支持使用NeutronManager删除fixed_range"
-
-msgid "Dependency loop exists in database migrations"
-msgstr "在数据库迁移中，存在依赖循环"
 
 #, python-format
 msgid "Desired state must be specified.  Valid states are: %s"
@@ -1086,9 +1068,6 @@ msgstr " id: %s 磁盘没有绑定到实例。"
 #, python-format
 msgid "Driver Error: %s"
 msgstr "驱动错误：%s"
-
-msgid "Driver must implement select_destinations"
-msgstr "驱动程序必须实现 select_destinations"
 
 #, python-format
 msgid "Duplicate VM name found: %s"
@@ -1212,14 +1191,6 @@ msgstr "对于操作标识 %(action_id)s，找不到事件 %(event)s"
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "事件必须是 nova.virt.event.Event 的实例"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"对于实例%(instance_uuid)s超过最大调度尝试次数%(max_attempts)d。最后的异常："
-"%(exc)s"
 
 #, python-format
 msgid ""
@@ -1733,10 +1704,6 @@ msgid "Hypervisor driver does not support post_live_migration_at_source method"
 msgstr "监测器驱动不支持post_live_migration_at_source方法"
 
 #, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "监测器版本%s无效。"
-
-#, python-format
 msgid "Hypervisor virt type '%s' is not valid"
 msgstr "监测器虚拟化类型'%s'无效"
 
@@ -2030,24 +1997,12 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "该时刻实例快照是不允许的。"
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"卷组 %(vg)s 上的空间不足。仅 %(free_space)db 可用，但是卷 %(lv)s 需要 "
-"%(size)db。"
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "计算资源不足：%(reason)s。"
 
 #, python-format
 msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr "没有足够的可用内存来启动计算节点  %(uuid)s。"
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "当归档表%s时，一致性检查错误"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -3768,15 +3723,6 @@ msgstr "任务 %(task_name)s 未在主机 %(host)s 上运行"
 msgid "Template for cloudpipe instance boot script"
 msgstr "cloudpipe实例的启动脚本模板"
 
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"在Windows Server / Hyper-V Server 2012 R2及以上版本，由于WMI \"root/"
-"virtualization\" 命名空间不再支持，\"force_hyperv_utils_v1\"选项不能设置为"
-"\"True\" 。"
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr "找不到用于 %(project)s 的 CA 文件"
@@ -4391,10 +4337,6 @@ msgstr "未知操作"
 msgid "Unknown action %s"
 msgstr "操作 %s 未知"
 
-#, python-format
-msgid "Unknown alembic cmd %s"
-msgstr "未知命令cmd %s"
-
 msgid "Unknown argument : port"
 msgstr "未知参数：port"
 
@@ -4577,10 +4519,6 @@ msgid ""
 "maximum is %(max_ver)s."
 msgstr ""
 "API不支持版本%(req_ver)s。小版本号是%(min_ver)s，大版本号是%(max_ver)s。"
-
-#, python-format
-msgid "Version %(val)s is not a valid predicate in field %(attr)s"
-msgstr "在字段%(attr)s中版本%(val)s不是一个有效的断言"
 
 msgid "Virt driver does not implement host disabled status."
 msgstr "虚拟驱动程序没有实现主机禁用状态。"
@@ -4884,9 +4822,6 @@ msgstr "事件实体包含不支持的条目：%s"
 msgid "event entity requires key %(key)s"
 msgstr "事件实体需要关键字%(key)s"
 
-msgid "expand phase still has operations that need to be executed"
-msgstr "展开阶段仍然有需要执行的操作"
-
 #, python-format
 msgid "failed to generate X509 fingerprint. Error message: %s"
 msgstr "生成X509指纹失败。错误消息：%s"
@@ -5023,9 +4958,6 @@ msgstr "未定义 memcached_servers"
 
 msgid "memory"
 msgstr "内存"
-
-msgid "migrate phase still has operations that need to be executed"
-msgstr "迁移阶段仍然有需要执行的操作"
 
 msgid "min_count must be <= max_count"
 msgstr "min_count 必须小于或等于 max_count"
@@ -5168,10 +5100,6 @@ msgstr "过多主体密钥"
 
 msgid "type"
 msgstr "类型"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "ServiceGroup 驱动程序名称未知：%s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "vmwareapi 不支持取消暂停"

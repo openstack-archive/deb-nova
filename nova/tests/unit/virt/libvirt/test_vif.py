@@ -12,8 +12,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
-
 from lxml import etree
 import mock
 from oslo_concurrency import processutils
@@ -224,13 +222,6 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                     typeidversion="1",
                                     instanceid="ddd-eee-fff"))
 
-    network_mlnx = network_model.Network(id='network-id-xxx-yyy-zzz',
-                                         label=None,
-                                         bridge=None,
-                                         subnets=[subnet_bridge_4,
-                                                  subnet_bridge_6],
-                                         interface='eth0')
-
     network_midonet = network_model.Network(id='network-id-xxx-yyy-zzz',
                                             label=None,
                                             bridge=None,
@@ -250,12 +241,6 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                     type=network_model.VIF_TYPE_VROUTER,
                                     devname='tap-xxx-yyy-zzz')
 
-    vif_mlnx = network_model.VIF(id='vif-xxx-yyy-zzz',
-                                 address='ca:fe:de:ad:be:ef',
-                                 network=network_mlnx,
-                                 type=network_model.VIF_TYPE_MLNX_DIRECT,
-                                 devname='tap-xxx-yyy-zzz')
-
     vif_ib_hostdev = network_model.VIF(id='vif-xxx-yyy-zzz',
                                    address='ca:fe:de:ad:be:ef',
                                    network=network_8021,
@@ -267,14 +252,6 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                    profile={'pci_vendor_info': '1137:0043',
                                             'pci_slot': '0000:0a:00.1',
                                             'physical_network': 'phynet1'})
-
-    vif_mlnx_net = network_model.VIF(id='vif-xxx-yyy-zzz',
-                                     address='ca:fe:de:ad:be:ef',
-                                     network=network_mlnx,
-                                     type=network_model.VIF_TYPE_MLNX_DIRECT,
-                                     details={'physical_network':
-                                              'fake_phy_network'},
-                                     devname='tap-xxx-yyy-zzz')
 
     vif_midonet = network_model.VIF(id='vif-xxx-yyy-zzz',
                                     address='ca:fe:de:ad:be:ef',
@@ -601,7 +578,6 @@ class LibvirtVifTestCase(test.NoDBTestCase):
             self.vif_bridge,
             self.vif_8021qbg,
             self.vif_iovisor,
-            self.vif_mlnx,
             self.vif_ovs,
         )
 
@@ -612,8 +588,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
             self.vif_ovs,
             self.vif_ivs,
             self.vif_8021qbg,
-            self.vif_iovisor,
-            self.vif_mlnx,
+            self.vif_iovisor
         )
 
     def test_model_xen(self):
@@ -684,7 +659,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                               'ca:fe:de:ad:be:ef',
                                               'instance-uuid')]
         }
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(linux_net, 'device_exists',
                                   return_value=False),
                 mock.patch.object(utils, 'execute'),
@@ -709,7 +684,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                   'qbrvif-xxx-yyy', run_as_root=True)],
             'delete_ovs_vif_port': [mock.call('br0', 'qvovif-xxx-yyy')]
         }
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(linux_net, 'device_exists',
                                   return_value=True),
                 mock.patch.object(utils, 'execute'),
@@ -767,7 +742,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
             'device_exists': [mock.call('qbrvif-xxx-yyy')],
             'delete_ovs_vif_port': [mock.call('br0', 'qvovif-xxx-yyy')]
         }
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(linux_net, 'device_exists',
                                   return_value=False),
                 mock.patch.object(linux_net, 'delete_ovs_vif_port')
@@ -801,7 +776,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                               'ca:fe:de:ad:be:ef',
                                               'instance-uuid')]
         }
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(linux_net, 'device_exists',
                                   return_value=False),
                 mock.patch.object(utils, 'execute'),
@@ -825,7 +800,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                   'qbrvif-xxx-yyy', run_as_root=True)],
             'delete_ivs_vif_port': [mock.call('qvovif-xxx-yyy')]
         }
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(utils, 'execute'),
                 mock.patch.object(linux_net, 'delete_ivs_vif_port')
         ) as (execute, delete_ivs_vif_port):
@@ -861,37 +836,6 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                         uuid='instance-uuid',
                                         project_id='myproject')
             d.plug_iovisor(instance, self.vif_ivs)
-
-    def test_unplug_mlnx_with_details(self):
-        d = vif.LibvirtGenericVIFDriver()
-        with mock.patch.object(utils, 'execute') as execute:
-            execute.side_effect = processutils.ProcessExecutionError
-            d.unplug_mlnx_direct(None, self.vif_mlnx_net)
-            execute.assert_called_once_with('ebrctl', 'del-port',
-                                            'fake_phy_network',
-                                            'ca:fe:de:ad:be:ef',
-                                             run_as_root=True)
-
-    def test_plug_mlnx_with_details(self):
-        d = vif.LibvirtGenericVIFDriver()
-        with mock.patch.object(utils, 'execute') as execute:
-            d.plug_mlnx_direct(self.instance, self.vif_mlnx_net)
-            execute.assert_called_once_with('ebrctl', 'add-port',
-                                            'ca:fe:de:ad:be:ef',
-                                            'instance-uuid',
-                                            'fake_phy_network',
-                                            'mlnx_direct',
-                                            'eth-xxx-yyy-zzz',
-                                            run_as_root=True)
-
-    def test_plug_mlnx_no_physical_network(self):
-        d = vif.LibvirtGenericVIFDriver()
-        with mock.patch.object(utils, 'execute') as execute:
-            self.assertRaises(exception.NovaException,
-                              d.plug_mlnx_direct,
-                              self.instance,
-                              self.vif_mlnx)
-            self.assertEqual(0, execute.call_count)
 
     def test_unplug_vrouter_with_details(self):
         d = vif.LibvirtGenericVIFDriver()
@@ -1042,19 +986,6 @@ class LibvirtVifTestCase(test.NoDBTestCase):
         self._check_neutron_hybrid_driver(d,
                                           self.vif_ivs,
                                           br_want)
-
-    def test_mlnx_direct_vif_driver(self):
-        d = vif.LibvirtGenericVIFDriver()
-        xml = self._get_instance_xml(d,
-                                     self.vif_mlnx)
-        node = self._get_node(xml)
-        self.assertEqual(node.get("type"), "direct")
-        self._assertTypeEquals(node, "direct", "source",
-                               "dev", "eth-xxx-yyy-zzz")
-        self._assertTypeEquals(node, "direct", "source",
-                               "mode", "passthrough")
-        self._assertMacEquals(node, self.vif_mlnx)
-        self._assertModel(xml, network_model.VIF_MODEL_VIRTIO)
 
     def test_ib_hostdev_driver(self):
         d = vif.LibvirtGenericVIFDriver()
@@ -1295,7 +1226,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
                                                   'instance-uuid')],
                  'ovs_set_vhostuser_port_type': [mock.call('usv-xxx-yyy-zzz')]
         }
-        with contextlib.nested(
+        with test.nested(
                 mock.patch.object(linux_net, 'create_ovs_vif_port'),
                 mock.patch.object(linux_net, 'ovs_set_vhostuser_port_type')
         ) as (create_ovs_vif_port, ovs_set_vhostuser_port_type):

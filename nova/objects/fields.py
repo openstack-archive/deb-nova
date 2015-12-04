@@ -13,10 +13,8 @@
 #    under the License.
 
 from collections import OrderedDict
-from distutils import versionpredicate
 
 import netaddr
-from oslo_utils import strutils
 from oslo_versionedobjects import fields
 import six
 
@@ -57,6 +55,8 @@ ListOfDictOfNullableStringsField = fields.ListOfDictOfNullableStringsField
 DictProxyField = fields.DictProxyField
 ObjectField = fields.ObjectField
 ListOfObjectsField = fields.ListOfObjectsField
+VersionPredicateField = fields.VersionPredicateField
+FlexibleBooleanField = fields.FlexibleBooleanField
 
 
 # NOTE(danms): These are things we need to import for some of our
@@ -383,19 +383,6 @@ class MonitorMetricType(Enum):
             valid_values=MonitorMetricType.ALL)
 
 
-# NOTE(sbauza): Remove this on next release of oslo.versionedobjects
-class VersionPredicate(fields.String):
-    @staticmethod
-    def coerce(obj, attr, value):
-        try:
-            versionpredicate.VersionPredicate('check (%s)' % value)
-        except ValueError:
-            raise ValueError(_('Version %(val)s is not a valid predicate in '
-                               'field %(attr)s') %
-                             {'val': value, 'attr': attr})
-        return value
-
-
 class PciDeviceStatus(Enum):
 
     AVAILABLE = "available"
@@ -424,13 +411,6 @@ class PciDeviceType(Enum):
     def __init__(self):
         super(PciDeviceType, self).__init__(
             valid_values=PciDeviceType.ALL)
-
-
-# NOTE(danms): Remove this on next release of oslo.versionedobjects
-class FlexibleBoolean(fields.Boolean):
-    @staticmethod
-    def coerce(obj, attr, value):
-        return strutils.bool_from_string(value)
 
 
 class IPAddress(FieldType):
@@ -667,27 +647,12 @@ class MonitorMetricTypeField(BaseEnumField):
     AUTO_TYPE = MonitorMetricType()
 
 
-# FIXME(sbauza): Remove this after oslo.versionedobjects gets it
-class VersionPredicateField(AutoTypedField):
-    AUTO_TYPE = VersionPredicate()
-
-
 class PciDeviceStatusField(BaseEnumField):
     AUTO_TYPE = PciDeviceStatus()
 
 
 class PciDeviceTypeField(BaseEnumField):
     AUTO_TYPE = PciDeviceType()
-
-
-# FIXME(danms): Remove this after oslo.versionedobjects gets it
-# This is a flexible interpretation of boolean
-# values using common user friendly semantics for
-# truth/falsehood. ie strings like 'yes', 'no',
-# 'on', 'off', 't', 'f' get mapped to values you
-# would expect.
-class FlexibleBooleanField(AutoTypedField):
-    AUTO_TYPE = FlexibleBoolean()
 
 
 class IPAddressField(AutoTypedField):

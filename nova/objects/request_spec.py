@@ -18,6 +18,7 @@ from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.objects import instance as obj_instance
+from nova.virt import hardware
 
 
 @base.NovaObjectRegistry.register
@@ -53,17 +54,6 @@ class RequestSpec(base.NovaObject):
         'instance_uuid': fields.UUIDField(),
     }
 
-    obj_relationships = {
-        'image': [('1.0', '1.5'), ('1.1', '1.6'),
-                  ('1.4', '1.7')],
-        'numa_topology': [('1.0', '1.2')],
-        'flavor': [('1.0', '1.1')],
-        'pci_requests': [('1.0', '1.1')],
-        'retry': [('1.0', '1.0'), ('1.2', '1.1')],
-        'limits': [('1.0', '1.0')],
-        'instance_group': [('1.0', '1.9'), ('1.3', '1.10')],
-    }
-
     @property
     def vcpus(self):
         return self.flavor.vcpus
@@ -97,7 +87,7 @@ class RequestSpec(base.NovaObject):
             self.image = None
 
     def _from_instance(self, instance):
-        if isinstance(instance, obj_instance._BaseInstance):
+        if isinstance(instance, obj_instance.Instance):
             # NOTE(sbauza): Instance should normally be a NovaObject...
             getter = getattr
         elif isinstance(instance, dict):
@@ -117,8 +107,27 @@ class RequestSpec(base.NovaObject):
         for field in instance_fields:
             if field == 'uuid':
                 setattr(self, 'instance_uuid', getter(instance, field))
+            elif field == 'pci_requests':
+                self._from_instance_pci_requests(getter(instance, field))
+            elif field == 'numa_topology':
+                self._from_instance_numa_topology(getter(instance, field))
             else:
                 setattr(self, field, getter(instance, field))
+
+    def _from_instance_pci_requests(self, pci_requests):
+        if isinstance(pci_requests, dict):
+            pci_req_cls = objects.InstancePCIRequests
+            self.pci_requests = pci_req_cls.from_request_spec_instance_props(
+                pci_requests)
+        else:
+            self.pci_requests = pci_requests
+
+    def _from_instance_numa_topology(self, numa_topology):
+        if isinstance(numa_topology, dict):
+            self.numa_topology = hardware.instance_topology_from_instance(
+                dict(numa_topology=numa_topology))
+        else:
+            self.numa_topology = numa_topology
 
     def _from_flavor(self, flavor):
         if isinstance(flavor, objects.Flavor):
@@ -316,10 +325,6 @@ class SchedulerRetries(base.NovaObject):
         'hosts': fields.ObjectField('ComputeNodeList'),
     }
 
-    obj_relationships = {
-        'hosts': [('1.0', '1.13'), ('1.1', '1.14')],
-    }
-
     @classmethod
     def from_dict(cls, context, retry_dict):
         # NOTE(sbauza): We are not persisting the user context since it's only
@@ -355,10 +360,6 @@ class SchedulerLimits(base.NovaObject):
         'vcpu': fields.IntegerField(nullable=True, default=None),
         'disk_gb': fields.IntegerField(nullable=True, default=None),
         'memory_mb': fields.IntegerField(nullable=True, default=None),
-    }
-
-    obj_relationships = {
-        'numa_topology': [('1.0', '1.0')],
     }
 
     @classmethod

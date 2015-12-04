@@ -191,7 +191,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         # Adding shelved_* keys in system metadata to verify
         # whether those are deleted after unshelve call.
         sys_meta = dict(instance.system_metadata)
-        sys_meta['shelved_at'] = timeutils.strtime(at=cur_time)
+        sys_meta['shelved_at'] = cur_time.isoformat()
         sys_meta['shelved_image_id'] = image['id']
         sys_meta['shelved_host'] = host
         instance.system_metadata = sys_meta
@@ -335,49 +335,114 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
     @mock.patch.object(objects.InstanceList, 'get_by_filters')
     def test_shelved_poll_none_offloaded(self, mock_get_by_filters):
         # Test instances are not offloaded when shelved_offload_time is -1
-        CONF.set_override('shelved_offload_time', -1)
+        self.flags(shelved_offload_time=-1)
         self.compute._poll_shelved_instances(self.context)
         self.assertEqual(0, mock_get_by_filters.call_count)
 
-    def test_shelved_poll_none_exist(self):
-        self.mox.StubOutWithMock(self.compute.driver, 'destroy')
-        self.mox.StubOutWithMock(timeutils, 'is_older_than')
-        self.mox.ReplayAll()
-        self.compute._poll_shelved_instances(self.context)
+    @mock.patch('oslo_utils.timeutils.is_older_than')
+    def test_shelved_poll_none_exist(self, mock_older):
+        self.flags(shelved_offload_time=1)
+        mock_older.return_value = False
 
-    def test_shelved_poll_not_timedout(self):
-        instance = self._create_fake_instance_obj()
-        sys_meta = instance.system_metadata
+        with mock.patch.object(self.compute, 'shelve_offload_instance') as soi:
+            self.compute._poll_shelved_instances(self.context)
+            self.assertFalse(soi.called)
+
+    @mock.patch('oslo_utils.timeutils.is_older_than')
+    def test_shelved_poll_not_timedout(self, mock_older):
+        mock_older.return_value = False
+        self.flags(shelved_offload_time=1)
         shelved_time = timeutils.utcnow()
         timeutils.set_time_override(shelved_time)
         timeutils.advance_time_seconds(CONF.shelved_offload_time - 1)
-        sys_meta['shelved_at'] = timeutils.strtime(at=shelved_time)
-        db.instance_update_and_get_original(self.context, instance['uuid'],
-                {'vm_state': vm_states.SHELVED, 'system_metadata': sys_meta})
+        instance = self._create_fake_instance_obj()
+        instance.vm_state = vm_states.SHELVED
+        instance.task_state = None
+        instance.host = self.compute.host
+        sys_meta = instance.system_metadata
+        sys_meta['shelved_at'] = shelved_time.isoformat()
+        instance.save()
 
-        self.mox.StubOutWithMock(self.compute.driver, 'destroy')
-        self.mox.ReplayAll()
-        self.compute._poll_shelved_instances(self.context)
+        with mock.patch.object(self.compute, 'shelve_offload_instance') as soi:
+            self.compute._poll_shelved_instances(self.context)
+            self.assertFalse(soi.called)
+            self.assertTrue(mock_older.called)
 
     def test_shelved_poll_timedout(self):
-        instance = self._create_fake_instance_obj()
-        sys_meta = instance.system_metadata
+        self.flags(shelved_offload_time=1)
         shelved_time = timeutils.utcnow()
         timeutils.set_time_override(shelved_time)
-        timeutils.advance_time_seconds(CONF.shelved_offload_time + 1)
-        sys_meta['shelved_at'] = timeutils.strtime(at=shelved_time)
-        (old, instance) = db.instance_update_and_get_original(self.context,
-                instance['uuid'], {'vm_state': vm_states.SHELVED,
-                                   'system_metadata': sys_meta})
+        timeutils.advance_time_seconds(CONF.shelved_offload_time + 10)
+        instance = self._create_fake_instance_obj()
+        instance.vm_state = vm_states.SHELVED
+        instance.task_state = None
+        instance.host = self.compute.host
+        sys_meta = instance.system_metadata
+        sys_meta['shelved_at'] = shelved_time.isoformat()
+        instance.save()
 
-        def fake_destroy(inst, nw_info, bdm):
-            # NOTE(alaski) There are too many differences between an instance
-            # as returned by instance_update_and_get_original and
-            # instance_get_all_by_filters so just compare the uuid.
-            self.assertEqual(instance['uuid'], inst['uuid'])
+        data = []
 
-        self.stubs.Set(self.compute.driver, 'destroy', fake_destroy)
-        self.compute._poll_shelved_instances(self.context)
+        def fake_soi(context, instance, **kwargs):
+            data.append(instance.uuid)
+
+        with mock.patch.object(self.compute, 'shelve_offload_instance') as soi:
+            soi.side_effect = fake_soi
+            self.compute._poll_shelved_instances(self.context)
+            self.assertTrue(soi.called)
+            self.assertEqual(instance.uuid, data[0])
+
+    @mock.patch('oslo_utils.timeutils.is_older_than')
+    @mock.patch('oslo_utils.timeutils.parse_strtime')
+    def test_shelved_poll_filters_task_state(self, mock_parse, mock_older):
+        self.flags(shelved_offload_time=1)
+        mock_older.return_value = True
+        instance1 = self._create_fake_instance_obj()
+        instance1.task_state = task_states.SPAWNING
+        instance1.vm_state = vm_states.SHELVED
+        instance1.host = self.compute.host
+        instance1.system_metadata = {'shelved_at': ''}
+        instance1.save()
+        instance2 = self._create_fake_instance_obj()
+        instance2.task_state = None
+        instance2.vm_state = vm_states.SHELVED
+        instance2.host = self.compute.host
+        instance2.system_metadata = {'shelved_at': ''}
+        instance2.save()
+
+        data = []
+
+        def fake_soi(context, instance, **kwargs):
+            data.append(instance.uuid)
+
+        with mock.patch.object(self.compute, 'shelve_offload_instance') as soi:
+            soi.side_effect = fake_soi
+            self.compute._poll_shelved_instances(self.context)
+            self.assertTrue(soi.called)
+            self.assertEqual([instance2.uuid], data)
+
+    @mock.patch('oslo_utils.timeutils.is_older_than')
+    @mock.patch('oslo_utils.timeutils.parse_strtime')
+    def test_shelved_poll_checks_task_state_on_save(self, mock_parse,
+                                                    mock_older):
+        self.flags(shelved_offload_time=1)
+        mock_older.return_value = True
+        instance = self._create_fake_instance_obj()
+        instance.task_state = None
+        instance.vm_state = vm_states.SHELVED
+        instance.host = self.compute.host
+        instance.system_metadata = {'shelved_at': ''}
+        instance.save()
+
+        def fake_parse_hook(timestring):
+            instance.task_state = task_states.SPAWNING
+            instance.save()
+
+        mock_parse.side_effect = fake_parse_hook
+
+        with mock.patch.object(self.compute, 'shelve_offload_instance') as soi:
+            self.compute._poll_shelved_instances(self.context)
+            self.assertFalse(soi.called)
 
 
 class ShelveComputeAPITestCase(test_compute.BaseTestCase):

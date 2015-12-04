@@ -100,6 +100,12 @@ def service_get(context, service_id, use_slave=False):
                             use_slave=use_slave)
 
 
+def service_get_minimum_version(context, binary, use_slave=False):
+    """Get the minimum service version in the database."""
+    return IMPL.service_get_minimum_version(context, binary,
+                                            use_slave=use_slave)
+
+
 def service_get_by_host_and_topic(context, host, topic):
     """Get a service by hostname and topic it listens to."""
     return IMPL.service_get_by_host_and_topic(context, host, topic)
@@ -1191,6 +1197,14 @@ def block_device_mapping_update_or_create(context, values, legacy=True):
     return IMPL.block_device_mapping_update_or_create(context, values, legacy)
 
 
+def block_device_mapping_get_all_by_instance_uuids(context, instance_uuids,
+                                                   use_slave=False):
+    """Get all block device mapping belonging to a list of instances."""
+    return IMPL.block_device_mapping_get_all_by_instance_uuids(context,
+                                                               instance_uuids,
+                                                               use_slave)
+
+
 def block_device_mapping_get_all_by_instance(context, instance_uuid,
                                              use_slave=False):
     """Get all block device mapping belonging to an instance."""
@@ -1889,23 +1903,23 @@ def task_log_get(context, task_name, period_beginning,
 ####################
 
 
-def archive_deleted_rows(context, max_rows=None):
+def archive_deleted_rows(max_rows=None):
     """Move up to max_rows rows from production tables to corresponding shadow
     tables.
 
-    :returns: number of rows archived.
+    :returns: dict that maps table name to number of rows archived from that
+              table, for example:
+
+    ::
+
+        {
+            'instances': 5,
+            'block_device_mapping': 5,
+            'pci_devices': 2,
+        }
+
     """
-    return IMPL.archive_deleted_rows(context, max_rows=max_rows)
-
-
-def archive_deleted_rows_for_table(context, tablename, max_rows=None):
-    """Move up to max_rows rows from tablename to corresponding shadow
-    table.
-
-    :returns: number of rows archived.
-    """
-    return IMPL.archive_deleted_rows_for_table(context, tablename,
-                                               max_rows=max_rows)
+    return IMPL.archive_deleted_rows(max_rows=max_rows)
 
 
 ####################

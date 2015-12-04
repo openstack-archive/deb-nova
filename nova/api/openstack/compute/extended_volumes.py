@@ -25,16 +25,13 @@ soft_authorize = extensions.os_compute_soft_authorizer(ALIAS)
 class ExtendedVolumesController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(ExtendedVolumesController, self).__init__(*args, **kwargs)
-        self.api_version_2_3 = api_version_request.APIVersionRequest('2.3')
 
-    def _extend_server(self, context, server, instance, requested_version):
-        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                context, instance.uuid)
+    def _extend_server(self, context, server, req, bdms):
         volumes_attached = []
         for bdm in bdms:
             if bdm.get('volume_id'):
                 volume_attached = {'id': bdm['volume_id']}
-                if requested_version >= self.api_version_2_3:
+                if api_version_request.is_supported(req, min_version='2.3'):
                     volume_attached['delete_on_termination'] = (
                         bdm['delete_on_termination'])
                 volumes_attached.append(volume_attached)
@@ -46,23 +43,29 @@ class ExtendedVolumesController(wsgi.Controller):
         context = req.environ['nova.context']
         if soft_authorize(context):
             server = resp_obj.obj['server']
-            db_instance = req.get_db_instance(server['id'])
-            # server['id'] is guaranteed to be in the cache due to
-            # the core API adding it in its 'show' method.
-            self._extend_server(context, server, db_instance,
-                                req.api_version_request)
+            bdms = objects.BlockDeviceMappingList.bdms_by_instance_uuid(
+                context, [server['id']])
+            instance_bdms = self._get_instance_bdms(bdms, server)
+            self._extend_server(context, server, req, instance_bdms)
 
     @wsgi.extends
     def detail(self, req, resp_obj):
         context = req.environ['nova.context']
         if soft_authorize(context):
             servers = list(resp_obj.obj['servers'])
+            instance_uuids = [server['id'] for server in servers]
+            bdms = objects.BlockDeviceMappingList.bdms_by_instance_uuid(
+                context, instance_uuids)
             for server in servers:
-                db_instance = req.get_db_instance(server['id'])
-                # server['id'] is guaranteed to be in the cache due to
-                # the core API adding it in its 'detail' method.
-                self._extend_server(context, server, db_instance,
-                                    req.api_version_request)
+                instance_bdms = self._get_instance_bdms(bdms, server)
+                self._extend_server(context, server, req, instance_bdms)
+
+    def _get_instance_bdms(self, bdms, server):
+        # server['id'] is guaranteed to be in the cache due to
+        # the core API adding it in the 'detail' or 'show' method.
+        # If that instance has since been deleted, it won't be in the
+        # 'bdms' dictionary though, so use 'get' to avoid KeyErrors.
+        return bdms.get(server['id'], [])
 
 
 class ExtendedVolumes(extensions.V21APIExtensionBase):

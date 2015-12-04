@@ -12,14 +12,13 @@
 # Tom Cocozzello <tjcocozz@us.ibm.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
 "PO-Revision-Date: 2015-09-06 10:17+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language: it\n"
-"Language-Team: Italian (http://www.transifex.com/openstack/nova/language/"
-"it/)\n"
+"Language-Team: Italian\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -341,10 +340,6 @@ msgstr ""
 
 msgid "Attempted overwrite of an existing value."
 msgstr "Si è tentato di sovrascrivere un valore esistente."
-
-#, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr "Tentativo di recupero: memoria %(memory_mb)d MB, disco %(disk_gb)d GB"
 
 #, python-format
 msgid "Attribute not supported: %(attr)s"
@@ -867,10 +862,6 @@ msgstr "Le estensioni delle API principali mancano: %(missing_apis)s"
 msgid "Could not attach image to loopback: %s"
 msgstr "Impossibile collegare l'immagine al loopback: %s"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr ""
-"Impossibile ripulire il build non riuscito, nuova pianificazione non prevista"
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "Impossibile recuperare l'immagine %(image_id)s"
@@ -1077,9 +1068,6 @@ msgstr "Il disco con ID: %s non è stato trovato collegato all'istanza."
 msgid "Driver Error: %s"
 msgstr "Errore del driver: %s"
 
-msgid "Driver must implement select_destinations"
-msgstr "Il driver deve implementare select_destinations"
-
 #, python-format
 msgid "Duplicate VM name found: %s"
 msgstr "Trovato nome VM duplicato: %s"
@@ -1191,14 +1179,6 @@ msgstr "L'evento %(event)s per l'id azione %(action_id)s non è stato trovato"
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "L'evento deve essere un'istanza di nova.virt.event.Event"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"Superamento numero max tentativi di pianificazione %(max_attempts)d per "
-"l'istanza %(instance_uuid)s. Ultima eccezione: %(exc)s"
 
 #, python-format
 msgid ""
@@ -1718,10 +1698,6 @@ msgstr ""
 "Il driver hypervisor non supporta il metodo post_live_migration_at_source"
 
 #, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "La versione hypervisor %s non è valida."
-
-#, python-format
 msgid "Hypervisor virtualization type '%(hv_type)s' is not recognised"
 msgstr ""
 "Il tipo di virtualizzazione di hypervisor '%(hv_type)s' non è riconosciuto"
@@ -2019,14 +1995,6 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "Le istantanee dell'istanza non sono consentite in questo momento."
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"Spazio insufficiente nel gruppo volume %(vg)s. Solo %(free_space)db "
-"disponibile, ma %(size)db richiesto dal volume %(lv)s."
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "Risorse di elaborazione insufficienti: %(reason)s."
 
@@ -2034,10 +2002,6 @@ msgstr "Risorse di elaborazione insufficienti: %(reason)s."
 msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr ""
 "Memoria disponibile insufficiente sul nodo di calcolo per avviare %(uuid)s."
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "Rilevato IntegrityError durante l'archiviazione della tabella %s"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -3769,15 +3733,6 @@ msgstr "L'attività %(task_name)s non è in esecuzione nell'host %(host)s"
 msgid "Template for cloudpipe instance boot script"
 msgstr "Template per lo script di avvio dell'istanza cloudpipe"
 
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"L'opzione \"force_hyperv_utils_v1\" non può essere impostata su  \"True\" "
-"sul server Windows / Hyper-V Server 2012 R2 o successivo poiché lo spazio "
-"nome WMI \"root/virtualization\"non è più supportato."
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr "Impossibile trovare il file CA per %(project)s"
@@ -5131,10 +5086,6 @@ msgstr "troppe chiavi del corpo"
 
 msgid "type"
 msgstr "tipo"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "Nome driver ServiceGroup sconosciuto: %s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "annullamento sospensione non supportato per vmwareapi"

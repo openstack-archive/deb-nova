@@ -10,7 +10,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import contextlib
 import copy
 
 import mock
@@ -398,7 +397,7 @@ def setup_rt(hostname, nodename, virt_resources=_VIRT_DRIVER_AVAIL_RESOURCES,
     vd.get_available_resource.return_value = virt_resources
     vd.estimate_instance_overhead.side_effect = estimate_overhead
 
-    with contextlib.nested(
+    with test.nested(
             mock.patch('nova.scheduler.client.SchedulerClient',
                        return_value=sched_client_mock),
             mock.patch('nova.rpc.get_notifier', return_value=notifier_mock)):
@@ -539,7 +538,14 @@ class TestUpdateAvailableResources(BaseTestCase):
                                           get_cn_mock):
         self.flags(reserved_host_disk_mb=0,
                    reserved_host_memory_mb=0)
-        self._setup_rt()
+
+        # Setup virt resources to match used resources to number
+        # of defined instances on the hypervisor
+        virt_resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        virt_resources.update(vcpus_used=1,
+                              memory_mb_used=128,
+                              local_gb_used=1)
+        self._setup_rt(virt_resources=virt_resources)
 
         get_mock.return_value = _INSTANCE_FIXTURES
         migr_mock.return_value = []
@@ -565,18 +571,7 @@ class TestUpdateAvailableResources(BaseTestCase):
             'free_ram_mb': 384,  # 512 - 128 used
             'memory_mb_used': 128,
             'pci_device_pools': objects.PciDevicePoolList(),
-            # NOTE(jaypipes): Due to the design of the ERT, which now is used
-            #                 track VCPUs, the actual used VCPUs isn't
-            #                 "written" to the resources dictionary that is
-            #                 passed to _update() like all the other
-            #                 resources are. Instead, _update()
-            #                 calls the ERT's write_resources() method, which
-            #                 then queries each resource handler plugin for the
-            #                 changes in its resource usage and the plugin
-            #                 writes changes to the supplied "values" dict. For
-            #                 this reason, all other resources except VCPUs
-            #                 are accurate here. :(
-            'vcpus_used': 0,
+            'vcpus_used': 1,
             'hypervisor_type': 'fake',
             'local_gb_used': 1,
             'memory_mb': 512,
@@ -595,7 +590,12 @@ class TestUpdateAvailableResources(BaseTestCase):
                                               get_cn_mock):
         self.flags(reserved_host_disk_mb=0,
                    reserved_host_memory_mb=0)
-        self._setup_rt()
+
+        # Setup virt resources to match used resources to number
+        # of defined instances on the hypervisor
+        virt_resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        virt_resources.update(memory_mb_used=64)
+        self._setup_rt(virt_resources=virt_resources)
 
         get_mock.return_value = []
         migr_mock.return_value = []
@@ -672,7 +672,14 @@ class TestUpdateAvailableResources(BaseTestCase):
         # node in case of a revert of the resize.
         self.flags(reserved_host_disk_mb=0,
                    reserved_host_memory_mb=0)
-        self._setup_rt()
+
+        # Setup virt resources to match used resources to number
+        # of defined instances on the hypervisor
+        virt_resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        virt_resources.update(vcpus_used=4,
+                              memory_mb_used=128,
+                              local_gb_used=1)
+        self._setup_rt(virt_resources=virt_resources)
 
         get_mock.return_value = []
         migr_obj = _MIGRATION_FIXTURES['source-only']
@@ -706,7 +713,7 @@ class TestUpdateAvailableResources(BaseTestCase):
             'free_ram_mb': 384,  # 512 total - 128 for possible revert of orig
             'memory_mb_used': 128,  # 128 possible revert amount
             'pci_device_pools': objects.PciDevicePoolList(),
-            'vcpus_used': 0,
+            'vcpus_used': 1,
             'hypervisor_type': 'fake',
             'local_gb_used': 1,
             'memory_mb': 512,
@@ -735,7 +742,14 @@ class TestUpdateAvailableResources(BaseTestCase):
         # node in case of a confirm of the resize.
         self.flags(reserved_host_disk_mb=0,
                    reserved_host_memory_mb=0)
-        self._setup_rt()
+
+        # Setup virt resources to match used resources to number
+        # of defined instances on the hypervisor
+        virt_resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        virt_resources.update(vcpus_used=2,
+                              memory_mb_used=256,
+                              local_gb_used=5)
+        self._setup_rt(virt_resources=virt_resources)
 
         get_mock.return_value = []
         migr_obj = _MIGRATION_FIXTURES['dest-only']
@@ -766,7 +780,7 @@ class TestUpdateAvailableResources(BaseTestCase):
             'free_ram_mb': 256,  # 512 total - 256 for possible confirm of new
             'memory_mb_used': 256,  # 256 possible confirmed amount
             'pci_device_pools': objects.PciDevicePoolList(),
-            'vcpus_used': 0,  # See NOTE(jaypipes) above about why this is 0
+            'vcpus_used': 2,
             'hypervisor_type': 'fake',
             'local_gb_used': 5,
             'memory_mb': 512,
@@ -792,7 +806,14 @@ class TestUpdateAvailableResources(BaseTestCase):
         # is in progress, but not finished yet.
         self.flags(reserved_host_disk_mb=0,
                    reserved_host_memory_mb=0)
-        self._setup_rt()
+
+        # Setup virt resources to match used resources to number
+        # of defined instances on the hypervisor
+        virt_resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        virt_resources.update(vcpus_used=2,
+                              memory_mb_used=256,
+                              local_gb_used=5)
+        self._setup_rt(virt_resources=virt_resources)
 
         get_mock.return_value = []
         migr_obj = _MIGRATION_FIXTURES['dest-only-evac']
@@ -823,7 +844,7 @@ class TestUpdateAvailableResources(BaseTestCase):
             'free_ram_mb': 256,  # 512 total - 256 for possible confirm of new
             'memory_mb_used': 256,  # 256 possible confirmed amount
             'pci_device_pools': objects.PciDevicePoolList(),
-            'vcpus_used': 0,  # See NOTE(jaypipes) above about why this is 0
+            'vcpus_used': 2,
             'hypervisor_type': 'fake',
             'local_gb_used': 5,
             'memory_mb': 512,
@@ -854,7 +875,14 @@ class TestUpdateAvailableResources(BaseTestCase):
         # resize instance types as taking up space on the node.
         self.flags(reserved_host_disk_mb=0,
                    reserved_host_memory_mb=0)
-        self._setup_rt()
+
+        # Setup virt resources to match used resources to number
+        # of defined instances on the hypervisor
+        virt_resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
+        virt_resources.update(vcpus_used=4,
+                              memory_mb_used=512,
+                              local_gb_used=7)
+        self._setup_rt(virt_resources=virt_resources)
 
         migr_obj = _MIGRATION_FIXTURES['source-and-dest']
         migr_mock.return_value = [migr_obj]
@@ -891,9 +919,7 @@ class TestUpdateAvailableResources(BaseTestCase):
             'free_ram_mb': 0,
             'memory_mb_used': 512,  # 128 exist + 256 new flav + 128 old flav
             'pci_device_pools': objects.PciDevicePoolList(),
-            # See NOTE(jaypipes) above for reason why this isn't accurate until
-            # _update() is called.
-            'vcpus_used': 0,
+            'vcpus_used': 4,
             'hypervisor_type': 'fake',
             'local_gb_used': 7,  # 1G existing, 5G new flav + 1 old flav
             'memory_mb': 512,
@@ -1101,18 +1127,7 @@ class TestUpdateComputeNode(BaseTestCase):
             cpu_allocation_ratio=16.0,
             ram_allocation_ratio=1.5,
         )
-        expected_resources = copy.deepcopy(compute)
-        expected_resources.stats = {}
-        expected_resources.vcpus = 4
-        expected_resources.vcpus_used = 2
-
         self.rt.compute_node = compute
-        self.rt.ext_resources_handler.reset_resources(self.rt.compute_node,
-                                                      self.rt.driver)
-        # This emulates the behavior that occurs in the
-        # RT.update_available_resource() method, which updates resource
-        # information in the ERT differently than all other resources.
-        self.rt.ext_resources_handler.update_from_instance(dict(vcpus=2))
         self.rt._update(mock.sentinel.ctx)
 
         self.assertFalse(self.rt.disabled)
@@ -1125,6 +1140,7 @@ class TestInstanceClaim(BaseTestCase):
 
     def setUp(self):
         super(TestInstanceClaim, self).setUp()
+        self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
 
         self._setup_rt()
         self.rt.compute_node = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
@@ -1190,9 +1206,7 @@ class TestInstanceClaim(BaseTestCase):
             'free_disk_gb': expected['local_gb'] - disk_used,
             "free_ram_mb": expected['memory_mb'] - self.instance.memory_mb,
             'running_vms': 1,
-            # vcpus are claimed by the ERT in RT._update(), which is mocked
-            # out below...
-            'vcpus_used': 0,
+            'vcpus_used': 1,
             'pci_device_pools': objects.PciDevicePoolList(),
         })
         with mock.patch.object(self.rt, '_update') as update_mock:
@@ -1217,9 +1231,7 @@ class TestInstanceClaim(BaseTestCase):
             'free_disk_gb': expected['local_gb'] - disk_used,
             "free_ram_mb": expected['memory_mb'] - self.instance.memory_mb,
             'running_vms': 1,
-            # vcpus are claimed by the ERT in RT._update(), which is mocked
-            # out below...
-            'vcpus_used': 0,
+            'vcpus_used': 1,
             'pci_device_pools': objects.PciDevicePoolList(),
         })
         with mock.patch.object(self.rt, '_update') as update_mock:
@@ -1228,6 +1240,32 @@ class TestInstanceClaim(BaseTestCase):
             update_mock.assert_called_once_with(self.elevated)
             self.assertTrue(obj_base.obj_equal_prims(expected,
                                                      self.rt.compute_node))
+
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
+    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
+    def test_claim_abort_context_manager(self, migr_mock, pci_mock):
+        pci_mock.return_value = objects.InstancePCIRequests(requests=[])
+
+        self.assertEqual(0, self.rt.compute_node.local_gb_used)
+        self.assertEqual(0, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(0, self.rt.compute_node.running_vms)
+
+        @mock.patch.object(self.instance, 'save')
+        def _doit(mock_save):
+            with self.rt.instance_claim(self.ctx, self.instance, None):
+                # Raise an exception. Just make sure below that the abort()
+                # method of the claim object was called (and the resulting
+                # resources reset to the pre-claimed amounts)
+                raise test.TestingException()
+
+        self.assertRaises(test.TestingException, _doit)
+
+        # Assert that the resources claimed by the Claim() constructor
+        # are returned to the resource tracker due to the claim's abort()
+        # method being called when triggered by the exception raised above.
+        self.assertEqual(0, self.rt.compute_node.local_gb_used)
+        self.assertEqual(0, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(0, self.rt.compute_node.running_vms)
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
     @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
@@ -1318,7 +1356,7 @@ class TestMoveClaim(BaseTestCase):
 
         # Initialise extensible resource trackers
         self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
-        with contextlib.nested(
+        with test.nested(
             mock.patch('nova.objects.InstanceList.get_by_host_and_node'),
             mock.patch('nova.objects.MigrationList.'
                        'get_in_progress_by_host_and_node')
@@ -1394,6 +1432,39 @@ class TestMoveClaim(BaseTestCase):
         inst_save_mock.assert_called_once_with()
         self.assertTrue(obj_base.obj_equal_prims(expected,
                                                  self.rt.compute_node))
+
+    def test_claim_abort(self, pci_mock, inst_list_mock,
+            inst_by_uuid, migr_mock, inst_save_mock):
+        # Resize self.instance and check that the expected quantities of each
+        # resource have been consumed. The abort the resize claim and check
+        # that the resources have been set back to their original values.
+        self.register_mocks(pci_mock, inst_list_mock, inst_by_uuid, migr_mock,
+                            inst_save_mock)
+        self.driver_mock.get_host_ip_addr.return_value = "fake-host"
+        migr_obj = _MIGRATION_FIXTURES['dest-only']
+        self.instance = _MIGRATION_INSTANCE_FIXTURES[migr_obj['instance_uuid']]
+        mig_context_obj = _MIGRATION_CONTEXT_FIXTURES[self.instance.uuid]
+        self.instance.migration_context = mig_context_obj
+        self.flavor = _INSTANCE_TYPE_OBJ_FIXTURES[2]
+
+        with mock.patch.object(self.rt, '_create_migration') as migr_mock:
+            migr_mock.return_value = migr_obj
+            claim = self.rt.resize_claim(
+                self.ctx, self.instance, self.flavor, None)
+
+        self.assertIsInstance(claim, claims.MoveClaim)
+        self.assertEqual(5, self.rt.compute_node.local_gb_used)
+        self.assertEqual(256, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(1, len(self.rt.tracked_migrations))
+
+        with mock.patch('nova.objects.Instance.'
+                        'drop_migration_context') as drop_migr_mock:
+            claim.abort()
+            drop_migr_mock.assert_called_once_with()
+
+        self.assertEqual(0, self.rt.compute_node.local_gb_used)
+        self.assertEqual(0, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(0, len(self.rt.tracked_migrations))
 
     def test_same_host(self, pci_mock, inst_list_mock, inst_by_uuid,
             migr_mock, inst_save_mock):

@@ -709,8 +709,11 @@ class TrackerTestCase(BaseTrackerTestCase):
         self.assertFalse(self.tracker.disabled)
         self.assertEqual(0, self.tracker.compute_node.current_workload)
         expected = pci_device_pool.from_pci_stats(driver.pci_stats)
-        self.assertEqual(expected,
-                         self.tracker.compute_node.pci_device_pools)
+        self.assertEqual(len(expected),
+                         len(self.tracker.compute_node.pci_device_pools))
+        for expected_pool, actual_pool in zip(
+                expected, self.tracker.compute_node.pci_device_pools):
+            self.assertEqual(expected_pool, actual_pool)
 
     def test_set_instance_host_and_node(self):
         inst = objects.Instance()
@@ -915,50 +918,6 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    @mock.patch('nova.objects.Instance.save')
-    @mock.patch('nova.objects.InstanceList.get_by_host_and_node')
-    def test_instance_context_claim(self, mock_get_all, mock_save, mock_get):
-        flavor = self._fake_flavor_create(
-                memory_mb=1, root_gb=2, ephemeral_gb=3)
-        claim_topology = self._claim_topology(1)
-
-        instance_topology = self._instance_topology(1)
-        instance = self._fake_instance_obj(
-                flavor=flavor, numa_topology=instance_topology)
-        with self.tracker.instance_claim(self.context, instance):
-            # <insert exciting things that utilize resources>
-            self.assertEqual(flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD,
-                             self.tracker.compute_node.memory_mb_used)
-            self.assertEqual(flavor['root_gb'] + flavor['ephemeral_gb'],
-                             self.tracker.compute_node.local_gb_used)
-            self.assertEqual(flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD,
-                             self.compute['memory_mb_used'])
-            self.assertEqualNUMAHostTopology(
-                    claim_topology,
-                    objects.NUMATopology.obj_from_db_obj(
-                        self.compute['numa_topology']))
-            self.assertEqual(flavor['root_gb'] + flavor['ephemeral_gb'],
-                             self.compute['local_gb_used'])
-
-        # after exiting claim context, build is marked as finished.  usage
-        # totals should be same:
-        mock_get_all.return_value = [instance]
-        self.tracker.update_available_resource(self.context)
-        self.assertEqual(flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD,
-                         self.tracker.compute_node.memory_mb_used)
-        self.assertEqual(flavor['root_gb'] + flavor['ephemeral_gb'],
-                         self.tracker.compute_node.local_gb_used)
-        self.assertEqual(flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD,
-                         self.compute['memory_mb_used'])
-        self.assertEqualNUMAHostTopology(
-                claim_topology,
-                objects.NUMATopology.obj_from_db_obj(
-                    self.compute['numa_topology']))
-        self.assertEqual(flavor['root_gb'] + flavor['ephemeral_gb'],
-                         self.compute['local_gb_used'])
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
     def test_update_load_stats_for_instance(self, mock_get):
         instance = self._fake_instance_obj(task_state=task_states.SCHEDULING)
         with mock.patch.object(instance, 'save'):
@@ -1093,23 +1052,6 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
     @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
                 return_value=objects.InstancePCIRequests(requests=[]))
-    def test_abort(self, mock_get, mock_save):
-        try:
-            with self.claim_method(self.context, self.instance,
-                    self.instance_type, limits=self.limits):
-                raise test.TestingException("abort")
-        except test.TestingException:
-            pass
-
-        self._assert(0, 'memory_mb_used')
-        self._assert(0, 'local_gb_used')
-        self._assert(0, 'vcpus_used')
-        self.assertEqual(0, len(self.tracker.tracked_migrations))
-        mock_save.assert_called_once_with()
-
-    @mock.patch('nova.objects.Instance.save')
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
     def test_additive_claims(self, mock_get, mock_save):
 
         limits = self._limits(
@@ -1128,22 +1070,6 @@ class _MoveClaimTestCase(BaseTrackerTestCase):
         self._assert(2 * FAKE_VIRT_MEMORY_WITH_OVERHEAD, 'memory_mb_used')
         self._assert(2 * FAKE_VIRT_LOCAL_GB, 'local_gb_used')
         self._assert(2 * FAKE_VIRT_VCPUS, 'vcpus_used')
-
-    @mock.patch('nova.objects.Instance.save')
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    def test_revert(self, mock_get, mock_save):
-        self.claim_method(
-            self.context, self.instance, self.instance_type,
-            image_meta={}, limits=self.limits)
-        mock_save.assert_called_once_with()
-        self.tracker.drop_move_claim(self.context, self.instance)
-
-        self.assertEqual(0, len(self.tracker.tracked_instances))
-        self.assertEqual(0, len(self.tracker.tracked_migrations))
-        self._assert(0, 'memory_mb_used')
-        self._assert(0, 'local_gb_used')
-        self._assert(0, 'vcpus_used')
 
     @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
@@ -1256,8 +1182,8 @@ class ComputeMonitorTestCase(BaseTestCase):
             def get_metric_names(self):
                 return set(["cpu.frequency"])
 
-            def get_metric(self, name):
-                return 100, self.NOW_TS
+            def get_metrics(self):
+                return [("cpu.frequency", 100, self.NOW_TS)]
 
         self.tracker.monitors = [FakeCPUMonitor(None)]
         mock_notifier = mock.Mock()
@@ -1271,8 +1197,7 @@ class ComputeMonitorTestCase(BaseTestCase):
 
         expected_metrics = [
             {
-                'timestamp': timeutils.strtime(
-                    FakeCPUMonitor.NOW_TS),
+                'timestamp': FakeCPUMonitor.NOW_TS.isoformat(),
                 'name': 'cpu.frequency',
                 'value': 100,
                 'source': 'FakeCPUMonitor'
@@ -1342,7 +1267,7 @@ class StatsDictTestCase(BaseTrackerTestCase):
         stats = self.tracker.compute_node.stats
         # compute node stats are coerced to strings
         expected_stats = copy.deepcopy(FAKE_VIRT_STATS_COERCED)
-        for k, v in self.tracker.stats.iteritems():
+        for k, v in self.tracker.stats.items():
             expected_stats[k] = six.text_type(v)
         self.assertEqual(expected_stats, stats)
 
@@ -1374,7 +1299,7 @@ class StatsJsonTestCase(BaseTrackerTestCase):
         stats = self.tracker.compute_node.stats
         # compute node stats are coerced to strings
         expected_stats = copy.deepcopy(FAKE_VIRT_STATS_COERCED)
-        for k, v in self.tracker.stats.iteritems():
+        for k, v in self.tracker.stats.items():
             expected_stats[k] = six.text_type(v)
         self.assertEqual(expected_stats, stats)
 

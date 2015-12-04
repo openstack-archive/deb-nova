@@ -19,7 +19,7 @@ import oslo_messaging as messaging
 from oslo_utils import timeutils
 import six
 
-from nova.i18n import _, _LI, _LW
+from nova.i18n import _, _LI, _LW, _LE
 from nova.servicegroup import api
 from nova.servicegroup.drivers import base
 
@@ -82,6 +82,7 @@ class DbDriver(base.Driver):
 
     def _report_state(self, service):
         """Update the state of this service in the datastore."""
+
         try:
             service.service_ref.report_count += 1
             service.service_ref.save()
@@ -90,13 +91,20 @@ class DbDriver(base.Driver):
             if getattr(service, 'model_disconnected', False):
                 service.model_disconnected = False
                 LOG.info(
-                    _LI('Recovered connection to nova-conductor '
-                        'for reporting service status.'))
-
-        # because we are communicating over conductor, a failure to
-        # connect is going to be a messaging failure, not a db error.
+                    _LI('Recovered from being unable to report status.'))
         except messaging.MessagingTimeout:
+            # NOTE(johngarbutt) during upgrade we will see messaging timeouts
+            # as nova-conductor is restarted, so only log this error once.
             if not getattr(service, 'model_disconnected', False):
                 service.model_disconnected = True
                 LOG.warn(_LW('Lost connection to nova-conductor '
                              'for reporting service status.'))
+        except Exception:
+            # NOTE(rpodolyaka): we'd like to avoid catching of all possible
+            # exceptions here, but otherwise it would become possible for
+            # the state reporting thread to stop abruptly, and thus leave
+            # the service unusable until it's restarted.
+            LOG.exception(
+                _LE('Unexpected error while reporting service status'))
+            # trigger the recovery log message, if this error goes away
+            service.model_disconnected = True

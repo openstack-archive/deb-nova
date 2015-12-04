@@ -76,6 +76,7 @@ def cleanup():
 
 def _create_object(table, table_obj):
     """Create an object in the db."""
+    _db_content.setdefault(table, {})
     _db_content[table][table_obj.obj] = table_obj
 
 
@@ -134,16 +135,6 @@ class FakeRetrieveResult(object):
 
     def add_object(self, object):
         self.objects.append(object)
-
-
-class MissingProperty(object):
-    """Missing object in ObjectContent's missing set."""
-    def __init__(self, path='fake-path', message='fake_message',
-                 method_fault=None):
-        self.path = path
-        self.fault = DataObject()
-        self.fault.localizedMessage = message
-        self.fault.fault = method_fault
 
 
 def _get_object_refs(obj_type):

@@ -16,14 +16,13 @@
 Unit Tests for nova.compute.rpcapi
 """
 
-import contextlib
-
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 
 from nova.compute import rpcapi as compute_rpcapi
 from nova import context
+from nova import exception
 from nova.objects import block_device as objects_block_dev
 from nova import test
 from nova.tests.unit import fake_block_device
@@ -51,6 +50,29 @@ class ComputeRpcAPITestCase(test.NoDBTestCase):
                     {'source_type': 'volume', 'destination_type': 'volume',
                      'instance_uuid': self.fake_instance_obj.uuid,
                      'volume_id': 'fake-volume-id'}))
+
+    @mock.patch('nova.objects.Service.get_minimum_version')
+    def test_auto_pin(self, mock_get_min):
+        mock_get_min.return_value = 1
+        self.flags(compute='auto', group='upgrade_levels')
+        rpcapi = compute_rpcapi.ComputeAPI()
+        self.assertEqual('4.4', rpcapi.client.version_cap)
+        mock_get_min.assert_called_once_with(mock.ANY, 'nova-compute')
+
+    @mock.patch('nova.objects.Service.get_minimum_version')
+    def test_auto_pin_fails_if_too_old(self, mock_get_min):
+        mock_get_min.return_value = 1955
+        self.flags(compute='auto', group='upgrade_levels')
+        self.assertRaises(exception.ServiceTooOld,
+                          compute_rpcapi.ComputeAPI)
+
+    @mock.patch('nova.objects.Service.get_minimum_version')
+    def test_auto_pin_kilo(self, mock_get_min):
+        mock_get_min.return_value = 0
+        self.flags(compute='auto', group='upgrade_levels')
+        rpcapi = compute_rpcapi.ComputeAPI()
+        self.assertEqual('4.0', rpcapi.client.version_cap)
+        mock_get_min.assert_called_once_with(mock.ANY, 'nova-compute')
 
     def _test_compute_api(self, method, rpc_method,
                           expected_args=None, **kwargs):
@@ -88,7 +110,7 @@ class ComputeRpcAPITestCase(test.NoDBTestCase):
         if method == 'rebuild_instance' and 'node' in expected_kwargs:
             expected_kwargs['scheduled_node'] = expected_kwargs.pop('node')
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(rpcapi.client, rpc_method),
             mock.patch.object(rpcapi.client, 'prepare'),
             mock.patch.object(rpcapi.client, 'can_send_version'),
@@ -329,14 +351,6 @@ class ComputeRpcAPITestCase(test.NoDBTestCase):
     def refresh_provider_fw_rules(self):
         self._test_compute_api('refresh_provider_fw_rules', 'cast',
                 host='host')
-
-    def test_refresh_security_group_rules(self):
-        self._test_compute_api('refresh_security_group_rules', 'cast',
-                security_group_id='id', host='host', version='4.0')
-
-    def test_refresh_security_group_members(self):
-        self._test_compute_api('refresh_security_group_members', 'cast',
-                security_group_id='id', host='host', version='4.0')
 
     def test_refresh_instance_security_rules(self):
         expected_args = {'instance': self.fake_instance_obj}

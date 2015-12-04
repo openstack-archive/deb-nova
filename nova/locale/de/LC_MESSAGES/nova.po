@@ -15,14 +15,13 @@
 # Tom Cocozzello <tjcocozz@us.ibm.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 12.0.0.0rc2.dev3\n"
+"Project-Id-Version: nova 13.0.0.dev385\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-03 06:33+0000\n"
+"POT-Creation-Date: 2015-12-01 06:31+0000\n"
 "PO-Revision-Date: 2015-09-29 12:26+0000\n"
 "Last-Translator: Frank Kloeker <eumel@arcor.de>\n"
 "Language: de\n"
-"Language-Team: German (http://www.transifex.com/openstack/nova/language/"
-"de/)\n"
+"Language-Team: German\n"
 "Plural-Forms: nplurals=2; plural=(n != 1)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -386,11 +385,6 @@ msgstr ""
 
 msgid "Attempted overwrite of an existing value."
 msgstr "Versuchte Überschreibung eines vorhandenen Wertes."
-
-#, python-format
-msgid "Attempting claim: memory %(memory_mb)d MB, disk %(disk_gb)d GB"
-msgstr ""
-"Forderung wird versucht: Speicher %(memory_mb)d MB, Platte %(disk_gb)d GB"
 
 #, python-format
 msgid "Attribute not supported: %(attr)s"
@@ -762,9 +756,6 @@ msgstr ""
 "Rootdatenträger kann nicht verkleinert werden. Aktuelle Größe: "
 "%(curr_root_gb)s GB. Angeforderte Größe: %(new_root_gb)s GB"
 
-msgid "Cannot run 'db sync' until 'db contract' is run"
-msgstr "Kann 'db sync' unter 'db contract' nicht starten, da es bereits läuft"
-
 msgid "Cannot run any more instances of this type."
 msgstr "Es können keine Instanzen dieses Typs mehr ausgeführt werden."
 
@@ -979,10 +970,6 @@ msgstr "Erweiterungen der API-Kerndefinitionen fehlen: %(missing_apis)s"
 msgid "Could not attach image to loopback: %s"
 msgstr "Image konnte nicht an Loopback angehängt werden: %s"
 
-msgid "Could not clean up failed build, not rescheduling"
-msgstr ""
-"Fehlgeschlagener Build konnte nicht bereinigt werden; keine Neuterminierung"
-
 #, python-format
 msgid "Could not fetch image %(image_id)s"
 msgstr "Abbild %(image_id)s konnte nicht abgerufen werden"
@@ -1079,10 +1066,6 @@ msgid "DNS2"
 msgstr "DNS2"
 
 #, python-format
-msgid "Database migration failed: %(reason)s"
-msgstr "Datenbankmigration fehlgeschlagen: %(reason)s"
-
-#, python-format
 msgid "Datastore regex %s did not match any datastores"
 msgstr "Datenspeicher-regex %s stimmt mit keinem Datenspeicher überein"
 
@@ -1103,9 +1086,6 @@ msgstr "%(records)d Datensätze aus Tabelle '%(table_name)s' gelöscht."
 
 msgid "Deleting by fixed_range is not supported with the NeutronManager"
 msgstr "Löschen über fixed_range wird von NeutronManager nicht unterstützt"
-
-msgid "Dependency loop exists in database migrations"
-msgstr "Es existiert eine Abhängigkeitsschleife in der Datenbankmigration"
 
 #, python-format
 msgid "Desired state must be specified.  Valid states are: %s"
@@ -1199,9 +1179,6 @@ msgstr "Platte mit ID %s nicht an Instanz angehängt gefunden."
 #, python-format
 msgid "Driver Error: %s"
 msgstr "Treiberfehler: %s"
-
-msgid "Driver must implement select_destinations"
-msgstr "Treiber muss select_destinations implementieren"
 
 #, python-format
 msgid "Duplicate VM name found: %s"
@@ -1341,14 +1318,6 @@ msgstr "Ereignis %(event)s nicht gefunden für Aktions-ID '%(action_id)s'"
 
 msgid "Event must be an instance of nova.virt.event.Event"
 msgstr "Ereignis muss eine Instanz von 'nova.virt.event.Event' sein"
-
-#, python-format
-msgid ""
-"Exceeded max scheduling attempts %(max_attempts)d for instance "
-"%(instance_uuid)s. Last exception: %(exc)s"
-msgstr ""
-"Maximale Anzahl %(max_attempts)d Planungsversuche überschritten für Instanz "
-"%(instance_uuid)s. Letzte Ausnahme: %(exc)s"
 
 #, python-format
 msgid ""
@@ -1915,10 +1884,6 @@ msgstr ""
 "Hypervisortreiber unterstützt die Methode post_live_migration_at_source nicht"
 
 #, python-format
-msgid "Hypervisor version %s is invalid."
-msgstr "Hypervisor-Version %s ist ungültig."
-
-#, python-format
 msgid "Hypervisor virt type '%s' is not valid"
 msgstr "Der Hypervisor-Virtualisierungstype '%s' ist nicht gültig"
 
@@ -2231,15 +2196,6 @@ msgid "Instance snapshots are not permitted at this time."
 msgstr "Instanz-Momentaufnahmen sind derzeit nicht zulässig."
 
 #, python-format
-msgid ""
-"Insufficient Space on Volume Group %(vg)s. Only %(free_space)db available, "
-"but %(size)db required by volume %(lv)s."
-msgstr ""
-"Nicht ausreichend Speicherplatz in Datenträgergruppe '%(vg)s'. Nur "
-"%(free_space)d Byte verfügbar, aber %(size)d Byte für Datenträger %(lv)s "
-"erforderlich."
-
-#, python-format
 msgid "Insufficient compute resources: %(reason)s."
 msgstr "Nicht genug Compute Ressourcen: %(reason)s"
 
@@ -2248,10 +2204,6 @@ msgid "Insufficient free memory on compute node to start %(uuid)s."
 msgstr ""
 "Nicht genügend freier Speicherplatz auf Rechenknoten zum Starten von "
 "%(uuid)s."
-
-#, python-format
-msgid "IntegrityError detected when archiving table %s"
-msgstr "Integritätsfehler beim Archivieren von Tabelle %s erkannt"
 
 #, python-format
 msgid "Interface %(interface)s not found."
@@ -4086,15 +4038,6 @@ msgstr "Task %(task_name)s wird nicht auf Host %(host)s ausgeführt"
 msgid "Template for cloudpipe instance boot script"
 msgstr "Vorlage für Boot-Script von Cloudpipe-Instanz"
 
-msgid ""
-"The \"force_hyperv_utils_v1\" option cannot be set to \"True\" on Windows "
-"Server / Hyper-V Server 2012 R2 or above as the WMI \"root/virtualization\" "
-"namespace is no longer supported."
-msgstr ""
-"Die Option \"force_hyperv_utils_v1\" kann auf einem Windows-Server nicht auf "
-"\"True\" gesetzt werden / Hyper-V-Server 2012 R2 oder darüber wird als WMI-"
-"Namensbereich \"root/virtualization\" nicht mehr unterstützt."
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr ""
@@ -4778,10 +4721,6 @@ msgstr "Unbekannte Aktion"
 msgid "Unknown action %s"
 msgstr "Unbekannte Aktion %s"
 
-#, python-format
-msgid "Unknown alembic cmd %s"
-msgstr "Unbekanntes Alembic Kommando %s"
-
 msgid "Unknown argument : port"
 msgstr "Unbekanntes Argument : Port"
 
@@ -4982,10 +4921,6 @@ msgid ""
 msgstr ""
 "Version %(req_ver)s wird von der API nicht unterstützt. Minimum ist "
 "%(min_ver)s und Maximum ist %(max_ver)s."
-
-#, python-format
-msgid "Version %(val)s is not a valid predicate in field %(attr)s"
-msgstr "Version %(val)s ist kein korrekter Ausdruck im Feld %(attr)s"
 
 msgid "Virt driver does not implement host disabled status."
 msgstr "Virtueller Treiber implementiert den inaktivierten Hoststatus nicht."
@@ -5320,9 +5255,6 @@ msgstr "Ereignisentität enthält nicht unterstützte Elemente: %s"
 msgid "event entity requires key %(key)s"
 msgstr "Ereignisentität erfordert Schlüssel %(key)s"
 
-msgid "expand phase still has operations that need to be executed"
-msgstr "Erweiterungsphase hat noch Aufgaben, die erledigt werden müssen"
-
 #, python-format
 msgid "failed to generate X509 fingerprint. Error message: %s"
 msgstr "Generierung des X509 FIngerabdrucks fehlgeschlagen. Fehlermeldung: %s"
@@ -5466,9 +5398,6 @@ msgstr "'memcached_servers' nicht definiert"
 
 msgid "memory"
 msgstr "Speicher"
-
-msgid "migrate phase still has operations that need to be executed"
-msgstr "Migrationsphase hat noch Aufgaben, die erledigt werden müssen"
 
 msgid "min_count must be <= max_count"
 msgstr "'min_count' muss <= 'max_count' sein"
@@ -5618,10 +5547,6 @@ msgstr "zu viele Textschlüssel"
 
 msgid "type"
 msgstr "Typ"
-
-#, python-format
-msgid "unknown ServiceGroup driver name: %s"
-msgstr "unbekannter DienstGruppen-Treibername: %s"
 
 msgid "unpause not supported for vmwareapi"
 msgstr "'unpause' nicht unterstützt für 'vmwareapi'"

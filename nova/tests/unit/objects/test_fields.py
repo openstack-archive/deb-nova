@@ -16,13 +16,13 @@ import datetime
 
 import iso8601
 import netaddr
-from oslo_utils import timeutils
 from oslo_versionedobjects import exception as ovo_exc
 import six
 
 from nova.network import model as network_model
 from nova.objects import fields
 from nova import test
+from nova import utils
 
 
 class FakeFieldType(fields.FieldType):
@@ -308,6 +308,58 @@ class TestCPUFeaturePolicy(TestField):
         self.assertRaises(ValueError, self.field.stringify, 'disallow')
 
 
+class TestConfigDrivePolicy(TestField):
+    def setUp(self):
+        super(TestConfigDrivePolicy, self).setUp()
+        self.field = fields.ConfigDrivePolicyField()
+        self.coerce_good_values = [('optional', 'optional'),
+                                   ('mandatory', 'mandatory')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'optional'", self.field.stringify('optional'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestCPUAllocationPolicy(TestField):
+    def setUp(self):
+        super(TestCPUAllocationPolicy, self).setUp()
+        self.field = fields.CPUAllocationPolicyField()
+        self.coerce_good_values = [('dedicated', 'dedicated'),
+                                   ('shared', 'shared')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'shared'", self.field.stringify('shared'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestPciDeviceType(TestField):
+    def setUp(self):
+        super(TestPciDeviceType, self).setUp()
+        self.field = fields.PciDeviceTypeField()
+        self.coerce_good_values = [('type-PCI', 'type-PCI'),
+                                   ('type-PF', 'type-PF'),
+                                   ('type-VF', 'type-VF')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'type-VF'", self.field.stringify('type-VF'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
 class TestDiskBus(TestField):
     def setUp(self):
         super(TestDiskBus, self).setUp()
@@ -530,18 +582,6 @@ class TestMonitorMetricType(TestField):
         self.assertRaises(ValueError, self.field.stringify, 'cpufrequency')
 
 
-class TestVersionPredicate(TestString):
-    def setUp(self):
-        super(TestVersionPredicate, self).setUp()
-        self.field = fields.VersionPredicateField()
-        self.coerce_good_values = [('>=1.0', '>=1.0'),
-                                   ('==1.1', '==1.1'),
-                                   ('<1.1.0', '<1.1.0')]
-        self.coerce_bad_values = ['1', 'foo', '>1', 1.0, '1.0', '=1.0']
-        self.to_primitive_values = self.coerce_good_values[0:1]
-        self.from_primitive_values = self.coerce_good_values[0:1]
-
-
 class TestInteger(TestField):
     def setUp(self):
         super(TestInteger, self).setUp()
@@ -587,33 +627,16 @@ class TestBoolean(TestField):
         self.from_primitive_values = self.coerce_good_values[0:2]
 
 
-class TestFlexibleBoolean(TestField):
-    def setUp(self):
-        super(TestFlexibleBoolean, self).setUp()
-        self.field = fields.FlexibleBooleanField()
-        self.coerce_good_values = [(True, True), (False, False),
-                                   ("true", True), ("false", False),
-                                   ("t", True), ("f", False),
-                                   ("yes", True), ("no", False),
-                                   ("y", True), ("n", False),
-                                   ("on", True), ("off", False),
-                                   (1, True), (0, False),
-                                   ('frog', False), ('', False)]
-        self.coerce_bad_values = []
-        self.to_primitive_values = self.coerce_good_values[0:2]
-        self.from_primitive_values = self.coerce_good_values[0:2]
-
-
 class TestDateTime(TestField):
     def setUp(self):
         super(TestDateTime, self).setUp()
         self.dt = datetime.datetime(1955, 11, 5, tzinfo=iso8601.iso8601.Utc())
         self.field = fields.DateTimeField()
         self.coerce_good_values = [(self.dt, self.dt),
-                                   (timeutils.isotime(self.dt), self.dt)]
+                                   (utils.isotime(self.dt), self.dt)]
         self.coerce_bad_values = [1, 'foo']
-        self.to_primitive_values = [(self.dt, timeutils.isotime(self.dt))]
-        self.from_primitive_values = [(timeutils.isotime(self.dt), self.dt)]
+        self.to_primitive_values = [(self.dt, utils.isotime(self.dt))]
+        self.from_primitive_values = [(utils.isotime(self.dt), self.dt)]
 
     def test_stringify(self):
         self.assertEqual(

@@ -47,6 +47,7 @@ from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+from nova import conductor
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import crypto
 from nova.db import base
@@ -247,7 +248,7 @@ def check_policy(context, action, target, scope='compute'):
 
 def check_instance_cell(fn):
     def _wrapped(self, context, instance, *args, **kwargs):
-        self._validate_cell(instance, fn.__name__)
+        self._validate_cell(instance)
         return fn(self, context, instance, *args, **kwargs)
     _wrapped.__name__ = fn.__name__
     return _wrapped
@@ -285,22 +286,13 @@ class API(base.Base):
                 skip_policy_check=skip_policy_check))
         self.consoleauth_rpcapi = consoleauth_rpcapi.ConsoleAuthAPI()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
-        self._compute_task_api = None
+        self.compute_task_api = conductor.ComputeTaskAPI()
         self.servicegroup_api = servicegroup.API()
         self.notifier = rpc.get_notifier('compute', CONF.host)
         if CONF.ephemeral_storage_encryption.enabled:
             self.key_manager = keymgr.API()
 
         super(API, self).__init__(**kwargs)
-
-    @property
-    def compute_task_api(self):
-        if self._compute_task_api is None:
-            # TODO(alaski): Remove calls into here from conductor manager so
-            # that this isn't necessary. #1180540
-            from nova import conductor
-            self._compute_task_api = conductor.ComputeTaskAPI()
-        return self._compute_task_api
 
     @property
     def cell_type(self):
@@ -310,24 +302,13 @@ class API(base.Base):
             self._cell_type = cells_opts.get_cell_type()
             return self._cell_type
 
-    def _cell_read_only(self, cell_name):
-        """Is the target cell in a read-only mode?"""
-        # FIXME(comstud): Add support for this.
-        return False
-
-    def _validate_cell(self, instance, method):
+    def _validate_cell(self, instance):
         if self.cell_type != 'api':
             return
         cell_name = instance.cell_name
         if not cell_name:
             raise exception.InstanceUnknownCell(
                     instance_uuid=instance.uuid)
-        if self._cell_read_only(cell_name):
-            raise exception.InstanceInvalidState(
-                    attr="vm_state",
-                    instance_uuid=instance.uuid,
-                    state="temporary_readonly",
-                    method=method)
 
     def _record_action_start(self, context, instance, action):
         objects.InstanceAction.action_start(context, instance.uuid,
@@ -1233,7 +1214,7 @@ class API(base.Base):
     @staticmethod
     def _volume_size(instance_type, bdm):
         size = bdm.get('volume_size')
-        # NOTE (ndipanov): inherit flavour size only for swap and ephemeral
+        # NOTE (ndipanov): inherit flavor size only for swap and ephemeral
         if (size is None and bdm.get('source_type') == 'blank' and
                 bdm.get('destination_type') == 'local'):
             if bdm.get('guest_format') == 'swap':
@@ -1288,7 +1269,7 @@ class API(base.Base):
         This method makes a copy of the list in order to avoid using the same
         id field in case this is called for multiple instances.
         """
-        LOG.debug("block_device_mapping %s", block_device_mapping,
+        LOG.debug("block_device_mapping %s", list(block_device_mapping),
                   instance_uuid=instance_uuid)
         instance_block_device_mapping = copy.deepcopy(block_device_mapping)
         for bdm in instance_block_device_mapping:
@@ -1301,15 +1282,22 @@ class API(base.Base):
 
     def _validate_bdm(self, context, instance, instance_type, all_mappings):
         def _subsequent_list(l):
+            # Each device which is capable of being used as boot device should
+            # be given a unique boot index, starting from 0 in ascending order.
             return all(el + 1 == l[i + 1] for i, el in enumerate(l[:-1]))
 
-        # Make sure that the boot indexes make sense
+        # Make sure that the boot indexes make sense.
+        # Setting a negative value or None indicates that the device should not
+        # be used for booting.
         boot_indexes = sorted([bdm.boot_index
                                for bdm in all_mappings
                                if bdm.boot_index is not None
                                and bdm.boot_index >= 0])
 
         if 0 not in boot_indexes or not _subsequent_list(boot_indexes):
+            # Convert the BlockDeviceMappingList to a list for repr details.
+            LOG.debug('Invalid block device mapping boot sequence for '
+                      'instance: %s', list(all_mappings), instance=instance)
             raise exception.InvalidBDMBootSequence()
 
         for bdm in all_mappings:
@@ -1812,14 +1800,6 @@ class API(base.Base):
         else:
             LOG.warning(_LW("instance's host %s is down, deleting from "
                             "database"), instance.host, instance=instance)
-        if instance.info_cache is not None:
-            instance.info_cache.delete()
-        else:
-            # NOTE(yoshimatsu): Avoid AttributeError if instance.info_cache
-            # is None. When the root cause that instance.info_cache becomes
-            # None is fixed, the log level should be reconsidered.
-            LOG.warning(_LW("Info cache for instance could not be found. "
-                            "Ignore."), instance=instance)
         compute_utils.notify_about_instance_usage(
             self.notifier, context, instance, "%s.start" % delete_type)
 
@@ -2367,6 +2347,8 @@ class API(base.Base):
                 #                 Linux LVM snapshot creation completes in
                 #                 short time, it doesn't matter for now.
                 name = _('snapshot for %s') % image_meta['name']
+                LOG.debug('Creating snapshot from volume %s.', volume['id'],
+                          instance=instance)
                 snapshot = self.volume_api.create_snapshot_force(
                     context, volume['id'], name, volume['display_description'])
                 mapping_dict = block_device.snapshot_from_bdm(snapshot['id'],
@@ -2641,7 +2623,7 @@ class API(base.Base):
         current_instance_type_name = current_instance_type['name']
         new_instance_type_name = new_instance_type['name']
         LOG.debug("Old instance type %(current_instance_type_name)s, "
-                  " new instance type %(new_instance_type_name)s",
+                  "new instance type %(new_instance_type_name)s",
                   {'current_instance_type_name': current_instance_type_name,
                    'new_instance_type_name': new_instance_type_name},
                   instance=instance)
@@ -3251,18 +3233,6 @@ class API(base.Base):
                                                      diff=diff)
         return _metadata
 
-    def get_instance_faults(self, context, instances):
-        """Get all faults for a list of instance uuids."""
-
-        if not instances:
-            return {}
-
-        for instance in instances:
-            check_policy(context, 'get_instance_faults', instance)
-
-        uuids = [instance.uuid for instance in instances]
-        return self.db.instance_fault_get_by_instance_uuids(context, uuids)
-
     def _get_root_bdm(self, context, instance, bdms=None):
         if bdms is None:
             bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
@@ -3271,13 +3241,12 @@ class API(base.Base):
         return bdms.root_bdm()
 
     def is_volume_backed_instance(self, context, instance, bdms=None):
-        if not instance.image_ref:
-            return True
-
         root_bdm = self._get_root_bdm(context, instance, bdms)
-        if not root_bdm:
-            return False
-        return root_bdm.is_volume
+        if root_bdm is not None:
+            return root_bdm.is_volume
+        # in case we hit a very old instance without root bdm, we _assume_ that
+        # instance is backed by a volume, if and only if image_ref is not set
+        return not instance.image_ref
 
     @check_instance_lock
     @check_instance_cell
@@ -4068,10 +4037,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         self.db.instance_add_security_group(context.elevated(),
                                             instance_uuid,
                                             security_group['id'])
-        # NOTE(comstud): No instance_uuid argument to this compute manager
-        # call
-        self.compute_rpcapi.refresh_security_group_rules(context,
-                security_group['id'], host=instance.host)
+        if instance.host:
+            self.compute_rpcapi.refresh_instance_security_rules(
+                    context, instance.host, instance)
 
     @wrap_check_security_groups_policy
     def remove_from_instance(self, context, instance, security_group_name):
@@ -4091,10 +4059,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         self.db.instance_remove_security_group(context.elevated(),
                                                instance_uuid,
                                                security_group['id'])
-        # NOTE(comstud): No instance_uuid argument to this compute manager
-        # call
-        self.compute_rpcapi.refresh_security_group_rules(context,
-                security_group['id'], host=instance.host)
+        if instance.host:
+            self.compute_rpcapi.refresh_instance_security_rules(
+                    context, instance.host, instance)
 
     def get_rule(self, context, id):
         self.ensure_default(context)

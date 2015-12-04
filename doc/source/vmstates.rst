@@ -136,34 +136,6 @@ Create Instance States
 The following diagram shows the sequence of VM states, task states, and
 power states when a new VM instance is created.
 
-
-.. seqdiag::
-
-    seqdiag {
-      edge_length = 250;
-      span_height = 40;
-      node_width=200;
-      default_note_color = lightblue;
-
-      // Use note (put note on rightside)
-      api [label="Compute.api"];
-      manager [label="Compute.manager"];
-      api -> manager [label = "create_db_entry_for_new_instance",
-                      note = "VM: Building
-                             Task: Scheduling
-                             Power: No State"];
-      manager -> manager [label="_start_building",
-                          note ="VM: Building
-                                Task: None"];
-      manager -> manager [label="_allocate_network",
-                          note ="VM: Building
-                                Task: Networking"];
-      manager -> manager [label="_prep_block_device",
-                          note ="VM: Building
-                                Task: Block_Device_Mapping"];
-      manager -> manager [label="_spawn",
-                          note ="VM: Building
-                                Task: Spawning"];
-      api <-- manager [note ="VM: Active
-                             Task: None"];
-    }
+.. image:: ./images/create_vm_states.svg
+   :alt: Sequence of VM states, task states, and power states when a new
+         VM instance is created.

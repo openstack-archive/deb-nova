@@ -21,20 +21,21 @@ import mock
 
 from nova import context
 from nova import db
-from nova.scheduler import driver
+from nova import objects
 from nova.scheduler import host_manager
 from nova.scheduler import manager
 from nova import servicegroup
 from nova import test
 from nova.tests.unit import fake_server_actions
+from nova.tests.unit.scheduler import fakes
 
 
 class SchedulerManagerTestCase(test.NoDBTestCase):
     """Test case for scheduler manager."""
 
     manager_cls = manager.SchedulerManager
-    driver_cls = driver.Scheduler
-    driver_cls_name = 'nova.scheduler.driver.Scheduler'
+    driver_cls = fakes.FakeScheduler
+    driver_cls_name = 'nova.tests.unit.scheduler.fakes.FakeScheduler'
 
     @mock.patch.object(host_manager.HostManager, '_init_instance_info')
     @mock.patch.object(host_manager.HostManager, '_init_aggregates')
@@ -109,7 +110,7 @@ class SchedulerTestCase(test.NoDBTestCase):
     """Test case for base scheduler driver class."""
 
     # So we can subclass this test and re-use tests if we need.
-    driver_cls = driver.Scheduler
+    driver_cls = fakes.FakeScheduler
 
     @mock.patch.object(host_manager.HostManager, '_init_instance_info')
     @mock.patch.object(host_manager.HostManager, '_init_aggregates')
@@ -121,14 +122,14 @@ class SchedulerTestCase(test.NoDBTestCase):
         self.servicegroup_api = servicegroup.API()
 
     def test_hosts_up(self):
-        service1 = {'host': 'host1'}
-        service2 = {'host': 'host2'}
-        services = [service1, service2]
+        service1 = objects.Service(host='host1')
+        service2 = objects.Service(host='host2')
+        services = objects.ServiceList(objects=[service1, service2])
 
-        self.mox.StubOutWithMock(db, 'service_get_all_by_topic')
+        self.mox.StubOutWithMock(objects.ServiceList, 'get_by_topic')
         self.mox.StubOutWithMock(servicegroup.API, 'service_is_up')
 
-        db.service_get_all_by_topic(self.context,
+        objects.ServiceList.get_by_topic(self.context,
                 self.topic).AndReturn(services)
         self.servicegroup_api.service_is_up(service1).AndReturn(False)
         self.servicegroup_api.service_is_up(service2).AndReturn(True)
@@ -138,19 +139,9 @@ class SchedulerTestCase(test.NoDBTestCase):
         self.assertEqual(result, ['host2'])
 
 
-class SchedulerDriverBaseTestCase(SchedulerTestCase):
-    """Test cases for base scheduler driver class methods
-       that will fail if the driver is changed.
-    """
-
-    def test_unimplemented_select_destinations(self):
-        self.assertRaises(NotImplementedError,
-                self.driver.select_destinations, self.context, {}, {})
-
-
 class SchedulerInstanceGroupData(test.NoDBTestCase):
 
-    driver_cls = driver.Scheduler
+    driver_cls = fakes.FakeScheduler
 
     def setUp(self):
         super(SchedulerInstanceGroupData, self).setUp()

@@ -16,7 +16,6 @@
 
 import base64
 import collections
-import contextlib
 import copy
 import datetime
 import uuid
@@ -1663,7 +1662,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
             return dict(id='76fa36fc-c930-4bf3-8c8a-ea2a2420deb6',
                         name='public image', is_public=True, status='active')
 
-        with contextlib.nested(
+        with test.nested(
             mock.patch.object(fake._FakeImageService, 'show',
                               side_effect=fake_get_image),
             mock.patch.object(self.controller.compute_api, 'rebuild',
@@ -2960,6 +2959,35 @@ class ServersControllerCreateTest(test.TestCase):
                            name='instance-name'))
     def test_create_instance_raise_instance_exists(self, mock_create):
         self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    @mock.patch.object(compute_api.API, 'create',
+                       side_effect=exception.InvalidBDMEphemeralSize)
+    def test_create_instance_raise_invalid_bdm_ephsize(self, mock_create):
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    @mock.patch.object(compute_api.API, 'create',
+                       side_effect=exception.InvalidBDMFormat(details=''))
+    def test_create_instance_raise_invalid_bdm_format(self, mock_create):
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    @mock.patch.object(compute_api.API, 'create',
+                       side_effect=exception.InvalidBDMSwapSize)
+    def test_create_instance_raise_invalid_bdm_swapsize(self, mock_create):
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    @mock.patch.object(compute_api.API, 'create',
+                       side_effect=exception.ImageBadRequest(
+                        image_id='dummy', response='dummy'))
+    def test_create_instance_raise_image_bad_request(self, mock_create):
+        self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create,
                           self.req, body=self.body)
 

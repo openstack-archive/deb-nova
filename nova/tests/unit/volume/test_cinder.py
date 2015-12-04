@@ -44,22 +44,6 @@ class FakeCinderClient(object):
         self.volume_snapshots = self.volumes
 
 
-class FakeVolume(object):
-    def __init__(self, dict=dict()):
-        self.id = dict.get('id') or '1234'
-        self.status = dict.get('status') or 'available'
-        self.size = dict.get('size') or 1
-        self.availability_zone = dict.get('availability_zone') or 'cinder'
-        self.created_at = dict.get('created_at')
-        self.attach_time = dict.get('attach_time')
-        self.mountpoint = dict.get('mountpoint')
-        self.display_name = dict.get('display_name') or 'volume-' + self.id
-        self.display_description = dict.get('display_description') or 'fake'
-        self.volume_type_id = dict.get('volume_type_id')
-        self.snapshot_id = dict.get('snapshot_id')
-        self.metadata = dict.get('volume_metadata') or {}
-
-
 class CinderApiTestCase(test.NoDBTestCase):
     def setUp(self):
         super(CinderApiTestCase, self).setUp()
@@ -285,6 +269,36 @@ class CinderApiTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
 
         self.api.initialize_connection(self.ctx, 'id1', 'connector')
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_initialize_connection_rollback(self, mock_cinderclient):
+        mock_cinderclient.return_value.volumes.\
+            initialize_connection.side_effect = (
+                cinder_exception.ClientException(500, "500"))
+
+        connector = {'host': 'host1'}
+        ex = self.assertRaises(cinder_exception.ClientException,
+                               self.api.initialize_connection,
+                               self.ctx,
+                               'id1',
+                               connector)
+        self.assertEqual(500, ex.code)
+        mock_cinderclient.return_value.volumes.\
+            terminate_connection.assert_called_once_with('id1', connector)
+
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_initialize_connection_no_rollback(self, mock_cinderclient):
+        mock_cinderclient.return_value.volumes.\
+            initialize_connection.side_effect = test.TestingException
+
+        connector = {'host': 'host1'}
+        self.assertRaises(test.TestingException,
+                          self.api.initialize_connection,
+                          self.ctx,
+                          'id1',
+                          connector)
+        self.assertFalse(mock_cinderclient.return_value.volumes.
+            terminate_connection.called)
 
     def test_terminate_connection(self):
         cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)

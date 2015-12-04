@@ -50,8 +50,16 @@ resource_tracker_opts = [
                default='nova.compute.stats.Stats',
                help='Class that will manage stats for the local compute host'),
     cfg.ListOpt('compute_resources',
-                default=['vcpu'],
-                help='The names of the extra resources to track.'),
+                default=[],
+                help='DEPRECATED: The names of the extra resources to track. '
+                     'The Extensible Resource Tracker is deprecated and will '
+                     'be removed in the 14.0.0 release. If you '
+                     'use this functionality and have custom resources that '
+                     'are managed by the Extensible Resource Tracker, please '
+                     'contact the Nova development team by posting to the '
+                     'openstack-dev mailing list. There is no future planned '
+                     'support for the tracking of custom resources.',
+                deprecated_for_removal=True),
 ]
 
 allocation_ratio_opts = [
@@ -618,7 +626,8 @@ class ResourceTracker(object):
         else:
             tcpu = 0
             ucpu = 0
-        pci_stats = self.compute_node.pci_device_pools
+        pci_stats = (list(self.compute_node.pci_device_pools) if
+            self.compute_node.pci_device_pools else [])
         LOG.info(_LI("Final resource view: "
                      "name=%(node)s "
                      "phys_ram=%(phys_ram)sMB "
@@ -663,6 +672,7 @@ class ResourceTracker(object):
         self.compute_node.memory_mb_used += sign * mem_usage
         self.compute_node.local_gb_used += sign * usage.get('root_gb', 0)
         self.compute_node.local_gb_used += sign * usage.get('ephemeral_gb', 0)
+        self.compute_node.vcpus_used += sign * usage.get('vcpus', 0)
 
         # free ram and disk may be negative, depending on policy:
         self.compute_node.free_ram_mb = (self.compute_node.memory_mb -
@@ -852,6 +862,7 @@ class ResourceTracker(object):
         # set some initial values, reserve room for host/hypervisor:
         self.compute_node.local_gb_used = CONF.reserved_host_disk_mb / 1024
         self.compute_node.memory_mb_used = CONF.reserved_host_memory_mb
+        self.compute_node.vcpus_used = 0
         self.compute_node.free_ram_mb = (self.compute_node.memory_mb -
                                          self.compute_node.memory_mb_used)
         self.compute_node.free_disk_gb = (self.compute_node.local_gb -
