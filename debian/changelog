@@ -3,6 +3,7 @@ nova (1:13.0.0~b2-1) experimental; urgency=medium
   * New upstream release.
   * Fixed (build-)depends for this release.
   * Do not delete nova-api-ec2 (it's gone upstream...).
+  * Fixed debian/copyright.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 04 Dec 2015 13:25:23 +0100
 
