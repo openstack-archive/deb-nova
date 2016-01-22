@@ -1,3 +1,5 @@
+.. _code-review:
+
 ==========================
 Code Review Guide for Nova
 ==========================
@@ -85,8 +87,50 @@ Database Schema
   layer so that an object can load from either the old or new
   location, and save to the new one.
 
+REST API
+=========
+
+When making a change to the nova API, we should always follow
+`the API WG guidelines <https://specs.openstack.org/openstack/api-wg/>`_
+rather than going for "local" consistency.
+Developers and reviewers should read all of the guidelines, but they are
+very long. So here are some key points:
+
+* `Terms <https://specs.openstack.org/openstack/api-wg/guidelines/terms.html>`_
+
+    * ``project`` should be used in the REST API instead of ``tenant``.
+    * ``server`` should be used in the REST API instead of ``instance``.
+    * ``compute`` should be used in the REST API instead of ``nova``.
+
+* `Naming Conventions <https://specs.openstack.org/openstack/api-wg/guidelines/naming.html>`_
+
+    * URL should not include underscores; use hyphens ('-') instead.
+    * The field names contained in a request/response body should
+      use snake_case style, not CamelCase or Mixed_Case style.
+
+* `HTTP Response Codes <http://specs.openstack.org/openstack/api-wg/guidelines/http.html#http-response-codes>`_
+
+    * Synchronous resource creation: ``201 Created``
+    * Asynchronous resource creation: ``202 Accepted``
+    * Synchronous resource deletion: ``204 No Content``
+    * For all other successful operations: ``200 OK``
+
 Config Options
 ==============
+
+Location
+--------
+
+The central place where all config options should reside is the ``/nova/conf/``
+package. Options that are in named sections of ``nova.conf``, such as
+``[serial_console]``, should be in their own module. Options that are in the
+``[DEFAULT]`` section should be placed in modules that represent a natural
+grouping. For example, all of the options that affect the scheduler would be
+in the ``scheduler.py`` file, and all the networking options would be moved
+to ``network.py``.
+
+Implementation
+--------------
 
 A config option should be checked for:
 
@@ -102,15 +146,64 @@ A config option should be checked for:
   change its behavior nor should they set this in every ``nova.conf`` file to
   be sure.
 
-* Descriptions for the possible values.
+* Descriptions/Validations for the possible values.
 
     * If this is an option with numeric values (int, float), describe the
       edge cases (like the min value, max value, 0, -1).
     * If this is a DictOpt, describe the allowed keys.
-    * If this is a StrOpt, lookout for regex validations.
+    * If this is a StrOpt, list any possible regex validations, or provide a
+      list of acceptable and/or prohibited values.
 
 * Interdependencies to other options. If other config options have to be
   considered when this config option gets changed, is this described?
+
+Third Party Tests
+=================
+
+Any change that is not tested well by the Jenkins check jobs must have a
+recent +1 vote from an appropriate third party test (or tests) on the latest
+patchset, before a core reviewer is allowed to make a +2 vote.
+
+Virt drivers
+------------
+
+At a minimum, we must ensure that any technology specific code has a +1
+from the relevant third party test, on the latest patchset, before a +2 vote
+can be applied.
+Specifically, changes to nova/virt/driver/<NNNN> need a +1 vote from the
+respective third party CI.
+For example, if you change something in the XenAPI virt driver, you must wait
+for a +1 from the XenServer CI on the latest patchset, before you can give
+that patch set a +2 vote.
+
+This is important to ensure:
+
+* We keep those drivers stable
+* We don't break that third party CI
+
+Notes
+-----
+
+Please note:
+
+* Long term, we should ensure that any patch a third party CI is allowed to
+  vote on, can be blocked from merging by that third party CI.
+  But we need a lot more work to make something like that feasible, hence the
+  proposed compromise.
+* While its possible to break a virt driver CI system by changing code that is
+  outside the virt drivers, this policy is not focusing on fixing that.
+  A third party test failure should always be investigated, but the failure of
+  a third party test to report in a timely manner should not block others.
+* We are only talking about the testing of in-tree code. Please note the only
+  public API is our REST API, see: :doc:`policies`
+
+Microversion API
+================
+
+* If an new microversion API is added, the following needs to happen:
+
+ * A new patch for the microversion API change in python-novaclient side
+   should be submitted.
 
 Release Notes
 =============

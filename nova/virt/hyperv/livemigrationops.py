@@ -18,15 +18,16 @@ Management class for live migration VM operations.
 """
 import functools
 
+from os_win import utilsfactory
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 
 from nova.i18n import _
+from nova.objects import migrate_data as migrate_data_obj
 from nova.virt.hyperv import imagecache
-from nova.virt.hyperv import utilsfactory
+from nova.virt.hyperv import pathutils
 from nova.virt.hyperv import vmops
-from nova.virt.hyperv import vmutilsv2
 from nova.virt.hyperv import volumeops
 
 LOG = logging.getLogger(__name__)
@@ -53,11 +54,11 @@ class LiveMigrationOps(object):
         else:
             self._livemigrutils = None
 
-        self._pathutils = utilsfactory.get_pathutils()
+        self._pathutils = pathutils.PathUtils()
         self._vmops = vmops.VMOps()
         self._volumeops = volumeops.VolumeOps()
         self._imagecache = imagecache.ImageCache()
-        self._vmutils = vmutilsv2.VMUtilsV2()
+        self._vmutils = utilsfactory.get_vmutils()
 
     @check_os_version_requirement
     def live_migration(self, context, instance_ref, dest, post_method,
@@ -116,7 +117,7 @@ class LiveMigrationOps(object):
                                            block_migration=False,
                                            disk_over_commit=False):
         LOG.debug("check_can_live_migrate_destination called", instance_ref)
-        return {}
+        return migrate_data_obj.LiveMigrateData()
 
     @check_os_version_requirement
     def check_can_live_migrate_destination_cleanup(self, ctxt,

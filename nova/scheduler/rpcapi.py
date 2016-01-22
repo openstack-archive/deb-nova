@@ -16,24 +16,13 @@
 Client side of the scheduler manager RPC API.
 """
 
-from oslo_config import cfg
 import oslo_messaging as messaging
 
+import nova.conf
 from nova.objects import base as objects_base
 from nova import rpc
 
-rpcapi_opts = [
-    cfg.StrOpt('scheduler_topic',
-               default='scheduler',
-               help='The topic scheduler nodes listen on'),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(rpcapi_opts)
-
-rpcapi_cap_opt = cfg.StrOpt('scheduler',
-        help='Set a version cap for messages sent to scheduler services')
-CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
+CONF = nova.conf.CONF
 
 
 class SchedulerAPI(object):
@@ -96,6 +85,9 @@ class SchedulerAPI(object):
         done such that they can handle the version_cap being set to
         4.2.
 
+        * 4.3 - Modify select_destinations() signature by providing a
+                RequestSpec obj
+
     '''
 
     VERSION_ALIASES = {
@@ -116,10 +108,17 @@ class SchedulerAPI(object):
         self.client = rpc.get_client(target, version_cap=version_cap,
                                      serializer=serializer)
 
-    def select_destinations(self, ctxt, request_spec, filter_properties):
-        cctxt = self.client.prepare(version='4.0')
-        return cctxt.call(ctxt, 'select_destinations',
-            request_spec=request_spec, filter_properties=filter_properties)
+    def select_destinations(self, ctxt, spec_obj):
+        version = '4.3'
+        msg_args = {'spec_obj': spec_obj}
+        if not self.client.can_send_version(version):
+            del msg_args['spec_obj']
+            msg_args['request_spec'] = spec_obj.to_legacy_request_spec_dict()
+            msg_args['filter_properties'
+                     ] = spec_obj.to_legacy_filter_properties_dict()
+            version = '4.0'
+        cctxt = self.client.prepare(version=version)
+        return cctxt.call(ctxt, 'select_destinations', **msg_args)
 
     def update_aggregates(self, ctxt, aggregates):
         # NOTE(sbauza): Yes, it's a fanout, we need to update all schedulers

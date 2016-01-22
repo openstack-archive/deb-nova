@@ -52,6 +52,7 @@ from nova.tests.unit.objects import test_floating_ip
 from nova.tests.unit.objects import test_network
 from nova.tests.unit.objects import test_service
 from nova.tests.unit import utils as test_utils
+from nova.tests import uuidsentinel as uuids
 from nova import utils
 
 CONF = cfg.CONF
@@ -195,17 +196,17 @@ class FlatNetworkTestCase(test.TestCase):
     def test_get_instance_nw_info_fake(self):
         fake_get_instance_nw_info = fake_network.fake_get_instance_nw_info
 
-        nw_info = fake_get_instance_nw_info(self.stubs, 0, 2)
+        nw_info = fake_get_instance_nw_info(self, 0, 2)
         self.assertFalse(nw_info)
 
-        nw_info = fake_get_instance_nw_info(self.stubs, 1, 2)
+        nw_info = fake_get_instance_nw_info(self, 1, 2)
 
         for i, vif in enumerate(nw_info):
             nid = i + 1
             check = {'bridge': 'fake_br%d' % nid,
                      'cidr': '192.168.%s.0/24' % nid,
                      'cidr_v6': '2001:db8:0:%x::/64' % nid,
-                     'id': '00000000-0000-0000-0000-00000000000000%02d' % nid,
+                     'id': getattr(uuids, 'vif%i' % nid),
                      'multi_host': False,
                      'injected': False,
                      'bridge_interface': None,
@@ -220,8 +221,7 @@ class FlatNetworkTestCase(test.TestCase):
                      'rxtx_cap': 30,
                      'vif_type': net_model.VIF_TYPE_BRIDGE,
                      'vif_devname': None,
-                     'vif_uuid':
-                        '00000000-0000-0000-0000-00000000000000%02d' % nid,
+                     'vif_uuid': getattr(uuids, 'vif%i' % nid),
                      'ovs_interfaceid': None,
                      'qbh_params': None,
                      'qbg_params': None,
@@ -1620,7 +1620,7 @@ class VlanNetworkTestCase(test.TestCase):
     def test_ip_association_and_allocation_of_other_project(self, net_get,
                                                             fixed_get):
         """Makes sure that we cannot deallocaate or disassociate
-        a public ip of other project.
+        a public IP of other project.
         """
         net_get.return_value = dict(test_network.fake_network,
                                     **networks[1])
@@ -2677,10 +2677,7 @@ class AllocateTestCase(test.TestCase):
         dns = 'nova.network.noop_dns_driver.NoopDNSDriver'
         self.flags(instance_dns_manager=dns)
         self.useFixture(test.SampleNetworks())
-        self.conductor = self.start_service(
-            'conductor', manager=CONF.conductor.manager)
-        self.compute = self.start_service('compute')
-        self.network = self.start_service('network')
+        self.network = network_manager.VlanManager(host=HOST)
 
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -2698,7 +2695,7 @@ class AllocateTestCase(test.TestCase):
                               {'address': address,
                                'pool': 'nova'})
         inst = objects.Instance(context=self.context)
-        inst.host = self.compute.host
+        inst.host = HOST
         inst.display_name = HOST
         inst.instance_type_id = 1
         inst.uuid = FAKEUUID
@@ -2706,7 +2703,7 @@ class AllocateTestCase(test.TestCase):
         networks = db.network_get_all(self.context)
         for network in networks:
             db.network_update(self.context, network['id'],
-                              {'host': self.network.host})
+                              {'host': HOST})
         project_id = self.user_context.project_id
         nw_info = self.network.allocate_for_instance(self.user_context,
             instance_id=inst['id'], instance_uuid=inst['uuid'],
@@ -2724,7 +2721,7 @@ class AllocateTestCase(test.TestCase):
         for network in networks:
             # set all networks to other projects
             db.network_update(self.context, network['id'],
-                              {'host': self.network.host,
+                              {'host': HOST,
                                'project_id': 'otherid'})
             requested_networks.append((network['uuid'], None))
         # set the first network to our project
@@ -2732,7 +2729,7 @@ class AllocateTestCase(test.TestCase):
                           {'project_id': self.user_context.project_id})
 
         inst = objects.Instance(context=self.context)
-        inst.host = self.compute.host
+        inst.host = HOST
         inst.display_name = HOST
         inst.instance_type_id = 1
         inst.uuid = FAKEUUID
@@ -2746,13 +2743,13 @@ class AllocateTestCase(test.TestCase):
 
     def test_allocate_for_instance_with_mac(self):
         available_macs = set(['ca:fe:de:ad:be:ef'])
-        inst = db.instance_create(self.context, {'host': self.compute.host,
+        inst = db.instance_create(self.context, {'host': HOST,
                                                  'display_name': HOST,
                                                  'instance_type_id': 1})
         networks = db.network_get_all(self.context)
         for network in networks:
             db.network_update(self.context, network['id'],
-                              {'host': self.network.host})
+                              {'host': HOST})
         project_id = self.context.project_id
         nw_info = self.network.allocate_for_instance(self.user_context,
             instance_id=inst['id'], instance_uuid=inst['uuid'],
@@ -2768,7 +2765,7 @@ class AllocateTestCase(test.TestCase):
 
     def test_allocate_for_instance_not_enough_macs(self):
         available_macs = set()
-        inst = db.instance_create(self.context, {'host': self.compute.host,
+        inst = db.instance_create(self.context, {'host': HOST,
                                                  'display_name': HOST,
                                                  'instance_type_id': 1})
         networks = db.network_get_all(self.context)

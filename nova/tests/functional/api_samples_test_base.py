@@ -27,31 +27,56 @@ class NoMatch(test.TestingException):
     pass
 
 
+def pretty_data(data):
+    data = jsonutils.dumps(jsonutils.loads(data), sort_keys=True,
+                           indent=4)
+    return '\n'.join(line.rstrip() for line in data.split('\n')).strip()
+
+
+def objectify(data):
+    if not data:
+        return {}
+    # NOTE(sdague): templates will contain values like %(foo)s
+    # throughout them. If these are inside of double quoted
+    # strings, life is good, and we can treat it just like valid
+    # json to load it to python.
+    #
+    # However we've got some fields which are ints, like
+    # aggregate_id. This means we've got a snippet in the sample
+    # that looks like:
+    #
+    #     "id": %(aggregate_id)s,
+    #
+    # which is not valid json, and will explode. We do a quick and
+    # dirty transform of this to:
+    #
+    #     "id": "%(int:aggregate_id)s",
+    #
+    # That makes it valid data to convert to json, but keeps
+    # around the information that we need to drop those strings
+    # later. The regex anchors from the ': ', as all of these will
+    # be top rooted keys.
+    data = re.sub(r'(\: )%\((.+)\)s([^"])', r'\1"%(int:\2)s"\3', data)
+    return jsonutils.loads(data)
+
+
 class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
-    ctype = 'json'
     all_extensions = False
     extension_name = None
     sample_dir = None
-    request_api_version = None
+    microversion = None
     _use_common_server_api_samples = False
-
-    def _pretty_data(self, data):
-        data = jsonutils.dumps(jsonutils.loads(data), sort_keys=True,
-                indent=4)
-        return '\n'.join(line.rstrip() for line in data.split('\n')).strip()
-
-    def _objectify(self, data):
-        if not data:
-            return {}
-        # NOTE(vish): allow non-quoted replacements to survive json
-        data = re.sub(r'([^"])%\((.+)\)s([^"])', r'\1"%(int:\2)s"\3', data)
-        return jsonutils.loads(data)
 
     @classmethod
     def _get_sample_path(cls, name, dirname, suffix='', api_version=None):
         parts = [dirname]
         parts.append('api_samples')
-        if cls.all_extensions:
+        # TODO(gmann): Once all tests gets merged for all extension
+        # then we need to have a simple logic here to select sample file
+        # directory which will be based on cls.sample_dir and api_version.
+        # All other things will go away from here. Currently hacking this
+        # till we merge every extensions tests.
+        if cls.all_extensions and not cls.sample_dir:
             parts.append('all_extensions')
         # Note(gmann): if _use_common_server_api_samples is set to True
         # then common server sample files present in 'servers' directory
@@ -67,7 +92,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                 parts.append(cls.extension_name)
             if api_version:
                 parts.append('v' + api_version)
-        parts.append(name + "." + cls.ctype + suffix)
+        parts.append(name + ".json" + suffix)
         return os.path.join(*parts)
 
     @classmethod
@@ -86,18 +111,18 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                                     api_version=api_version)
 
     def _read_template(self, name):
-        template = self._get_template(name, self.request_api_version)
+        template = self._get_template(name, self.microversion)
         with open(template) as inf:
             return inf.read().strip()
 
     def _write_template(self, name, data):
         with open(self._get_template(name,
-                                     self.request_api_version), 'w') as outf:
+                                     self.microversion), 'w') as outf:
             outf.write(data)
 
     def _write_sample(self, name, data):
         with open(self._get_sample(
-            name, self.request_api_version), 'w') as outf:
+            name, self.microversion), 'w') as outf:
             outf.write(data)
 
     def _compare_result(self, subs, expected, result, result_str):
@@ -198,8 +223,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                 # TODO(tdurakov): remove this check as soon as
                 # hypervisor.cpu_info become common JSON object in REST API.
                 try:
-                    expected = self._objectify(expected)
-                    result = self._objectify(result)
+                    expected = objectify(expected)
+                    result = objectify(result)
                     return self._compare_result(subs, expected, result,
                                                 result_str)
                 except ValueError:
@@ -223,12 +248,27 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         """
         return subs
 
-    def _verify_response(self, name, subs, response, exp_code):
+    def _update_links(self, sample_data):
+        """Process sample data and update version specific links."""
+        url_re = self._get_host() + "/v(2\.1|2)"
+        new_url = self._get_host() + "/" + self.api_major_version
+        updated_data = re.sub(url_re, new_url, sample_data)
+        return updated_data
+
+    def _verify_response(self, name, subs, response, exp_code,
+                         update_links=True):
+        # Always also include the laundry list of base regular
+        # expressions for possible key values in our templates. Test
+        # specific patterns (the value of ``subs``) can override
+        # these.
+        regexes = self._get_regexes()
+        regexes.update(subs)
+        subs = regexes
         self.assertEqual(exp_code, response.status_code)
         response_data = response.content
-        response_data = self._pretty_data(response_data)
+        response_data = pretty_data(response_data)
         if not os.path.exists(self._get_template(name,
-                                                 self.request_api_version)):
+                                                 self.microversion)):
             self._write_template(name, response_data)
             template_data = response_data
         else:
@@ -236,17 +276,19 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
 
         if (self.generate_samples and
                 not os.path.exists(self._get_sample(
-                    name, self.request_api_version))):
+                    name, self.microversion))):
             self._write_sample(name, response_data)
             sample_data = response_data
         else:
             with file(self._get_sample(name,
-                                       self.request_api_version)) as sample:
+                                       self.microversion)) as sample:
                 sample_data = sample.read()
+                if update_links:
+                    sample_data = self._update_links(sample_data)
 
         try:
-            template_data = self._objectify(template_data)
-            response_data = self._objectify(response_data)
+            template_data = objectify(template_data)
+            response_data = objectify(response_data)
             response_result = self._compare_result(subs, template_data,
                                                    response_data, "Response")
             # NOTE(danms): replace some of the subs with patterns for the
@@ -256,8 +298,10 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             vanilla_regexes = self._get_regexes()
             subs['compute_host'] = vanilla_regexes['host_name']
             subs['id'] = vanilla_regexes['id']
+            subs['uuid'] = vanilla_regexes['uuid']
+            subs['image_id'] = vanilla_regexes['uuid']
             subs = self.generalize_subs(subs, vanilla_regexes)
-            sample_data = self._objectify(sample_data)
+            sample_data = objectify(sample_data)
             self._compare_result(subs, template_data, sample_data, "Sample")
             return response_result
         except NoMatch:
@@ -270,10 +314,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         return 'http://glance.openstack.example.com'
 
     def _get_regexes(self):
-        if self.ctype == 'json':
-            text = r'(\\"|[^"])*'
-        else:
-            text = r'[^<]*'
+        text = r'(\\"|[^"])*'
         isotime_re = '\d{4}-[0,1]\d-[0-3]\dT\d{2}:\d{2}:\d{2}Z'
         strtime_re = '\d{4}-[0,1]\d-[0-3]\dT\d{2}:\d{2}:\d{2}\.\d{6}'
         xmltime_re = ('\d{4}-[0,1]\d-[0-3]\d '
@@ -305,19 +346,33 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                            '[0-9a-f]{2}',
             'keypair_type': 'ssh|x509',
             'host': self._get_host(),
-            'host_name': '[0-9a-z]{32}',
+            'host_name': r'\w+',
             'glance_host': self._get_glance_host(),
             'compute_host': self.compute.host,
             'text': text,
             'int': '[0-9]+',
             'user_id': text,
+            'api_vers': self.api_major_version,
+            'compute_endpoint': self._get_compute_endpoint(),
+            'versioned_compute_endpoint': self._get_vers_compute_endpoint(),
         }
+
+    def _get_compute_endpoint(self):
+        # NOTE(sdague): "openstack" is stand in for project_id, it
+        # should be more generic in future.
+        return '%s/%s' % (self._get_host(), 'openstack')
+
+    def _get_vers_compute_endpoint(self):
+        # NOTE(sdague): "openstack" is stand in for project_id, it
+        # should be more generic in future.
+        return '%s/%s/%s' % (self._get_host(), self.api_major_version,
+                             'openstack')
 
     def _get_response(self, url, method, body=None, strip_version=False,
                       api_version=None, headers=None):
         headers = headers or {}
-        headers['Content-Type'] = 'application/' + self.ctype
-        headers['Accept'] = 'application/' + self.ctype
+        headers['Content-Type'] = 'application/json'
+        headers['Accept'] = 'application/json'
         if api_version:
             headers['X-OpenStack-Nova-API-Version'] = api_version
         return self.api.api_request(url, body=body, method=method,
@@ -327,35 +382,35 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                     headers=None):
         return self._get_response(url, 'OPTIONS', strip_version=strip_version,
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
 
     def _do_get(self, url, strip_version=False, api_version=None,
                 headers=None):
         return self._get_response(url, 'GET', strip_version=strip_version,
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
 
     def _do_post(self, url, name, subs, method='POST', api_version=None,
                  headers=None):
         body = self._read_template(name) % subs
-        sample = self._get_sample(name, self.request_api_version)
+        sample = self._get_sample(name, self.microversion)
         if self.generate_samples and not os.path.exists(sample):
                 self._write_sample(name, body)
         return self._get_response(url, method, body,
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
 
     def _do_put(self, url, name, subs, api_version=None, headers=None):
         return self._do_post(url, name, subs, method='PUT',
                              api_version=(api_version or
-                                          self.request_api_version),
+                                          self.microversion),
                              headers=headers)
 
     def _do_delete(self, url, api_version=None, headers=None):
         return self._get_response(url, 'DELETE',
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)

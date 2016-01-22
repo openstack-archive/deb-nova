@@ -43,12 +43,12 @@ the Open Attestation project at:
     https://github.com/OpenAttestation/OpenAttestation
 """
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
 import requests
 
+import nova.conf
 from nova import context
 from nova.i18n import _LW
 from nova import objects
@@ -56,31 +56,7 @@ from nova.scheduler import filters
 
 LOG = logging.getLogger(__name__)
 
-trusted_opts = [
-    cfg.StrOpt('attestation_server',
-               help='Attestation server HTTP'),
-    cfg.StrOpt('attestation_server_ca_file',
-               help='Attestation server Cert file for Identity verification'),
-    cfg.StrOpt('attestation_port',
-               default='8443',
-               help='Attestation server port'),
-    cfg.StrOpt('attestation_api_url',
-               default='/OpenAttestationWebServices/V1.0',
-               help='Attestation web API URL'),
-    cfg.StrOpt('attestation_auth_blob',
-               help='Attestation authorization blob - must change'),
-    cfg.IntOpt('attestation_auth_timeout',
-               default=60,
-               help='Attestation status cache valid period length'),
-    cfg.BoolOpt('attestation_insecure_ssl',
-                default=False,
-                help='Disable SSL cert verification for Attestation service')
-]
-
-CONF = cfg.CONF
-trust_group = cfg.OptGroup(name='trusted_computing', title='Trust parameters')
-CONF.register_group(trust_group)
-CONF.register_opts(trusted_opts, group=trust_group)
+CONF = nova.conf.CONF
 
 
 class AttestationService(object):
@@ -265,10 +241,10 @@ class TrustedFilter(filters.BaseHostFilter):
     # The hosts the instances are running on doesn't change within a request
     run_filter_once_per_request = True
 
-    @filters.compat_legacy_props
-    def host_passes(self, host_state, filter_properties):
-        instance_type = filter_properties.get('instance_type', {})
-        extra = instance_type.get('extra_specs', {})
+    def host_passes(self, host_state, spec_obj):
+        instance_type = spec_obj.flavor
+        extra = (instance_type.extra_specs
+                 if 'extra_specs' in instance_type else {})
         trust = extra.get('trust:trusted_host')
         host = host_state.nodename
         if trust:

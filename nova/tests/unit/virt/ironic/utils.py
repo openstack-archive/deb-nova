@@ -45,6 +45,7 @@ def get_test_node(**kw):
                 'properties': kw.get('properties', {}),
                 'reservation': kw.get('reservation'),
                 'maintenance': kw.get('maintenance', False),
+                'network_provider': kw.get('network_provider'),
                 'extra': kw.get('extra', {}),
                 'updated_at': kw.get('created_at'),
                 'created_at': kw.get('updated_at')})()
@@ -73,12 +74,8 @@ def get_test_flavor(**kw):
 
 
 def get_test_image_meta(**kw):
-    return {'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc')}
-
-
-def get_test_image_meta_object(**kw):
     return objects.ImageMeta.from_dict(
-        get_test_image_meta(**kw))
+        {'id': kw.get('id', 'cccccccc-cccc-cccc-cccc-cccccccccccc')})
 
 
 class FakePortClient(object):

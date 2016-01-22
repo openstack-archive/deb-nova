@@ -16,15 +16,13 @@
 """Test of Policy Engine For Nova."""
 
 import os.path
-from six.moves import StringIO
 
-import mock
+from oslo_policy import policy as oslo_policy
 from oslo_serialization import jsonutils
-import six.moves.urllib.request as urlrequest
+import requests_mock
 
 from nova import context
 from nova import exception
-from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import test
 from nova.tests.unit import fake_policy
@@ -42,7 +40,7 @@ class PolicyFileTestCase(test.NoDBTestCase):
         with utils.tempdir() as tmpdir:
             tmpfilename = os.path.join(tmpdir, 'policy')
 
-            self.flags(policy_file=tmpfilename)
+            self.flags(policy_file=tmpfilename, group='oslo_policy')
 
             # NOTE(uni): context construction invokes policy check to determin
             # is_admin or not. As a side-effect, policy reset is needed here
@@ -77,8 +75,7 @@ class PolicyTestCase(test.NoDBTestCase):
         }
         policy.reset()
         policy.init()
-        policy.set_rules({k: common_policy.parse_rule(v)
-                          for k, v in rules.items()})
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         self.context = context.RequestContext('fake', 'fake', roles=['member'])
         self.target = {}
 
@@ -95,24 +92,26 @@ class PolicyTestCase(test.NoDBTestCase):
     def test_enforce_bad_action_noraise(self):
         action = "example:denied"
         result = policy.enforce(self.context, action, self.target, False)
-        self.assertEqual(result, False)
+        self.assertFalse(result)
 
     def test_enforce_good_action(self):
         action = "example:allowed"
         result = policy.enforce(self.context, action, self.target)
-        self.assertEqual(result, True)
+        self.assertTrue(result)
 
-    @mock.patch.object(urlrequest, 'urlopen')
-    def test_enforce_http_true(self, mock_urlrequest):
-        mock_urlrequest.return_value = StringIO("True")
+    @requests_mock.mock()
+    def test_enforce_http_true(self, req_mock):
+        req_mock.post('http://www.example.com/',
+                      text='True')
         action = "example:get_http"
         target = {}
         result = policy.enforce(self.context, action, target)
-        self.assertEqual(result, True)
+        self.assertTrue(result)
 
-    @mock.patch.object(urlrequest, 'urlopen')
-    def test_enforce_http_false(self, mock_urlrequest):
-        mock_urlrequest.return_value = StringIO("False")
+    @requests_mock.mock()
+    def test_enforce_http_false(self, req_mock):
+        req_mock.post('http://www.example.com/',
+                      text='False')
         action = "example:get_http"
         target = {}
         self.assertRaises(exception.PolicyNotAuthorized, policy.enforce,
@@ -163,8 +162,7 @@ class DefaultPolicyTestCase(test.NoDBTestCase):
 
     def _set_rules(self, default_rule):
         policy.reset()
-        rules = {k: common_policy.parse_rule(v)
-                 for k, v in self.rules.items()}
+        rules = oslo_policy.Rules.from_dict(self.rules)
         policy.init(rules=rules, default_rule=default_rule, use_conf=False)
 
     def test_policy_called(self):
@@ -190,14 +188,14 @@ class IsAdminCheckTestCase(test.NoDBTestCase):
 
         self.assertEqual(check.kind, 'is_admin')
         self.assertEqual(check.match, 'True')
-        self.assertEqual(check.expected, True)
+        self.assertTrue(check.expected)
 
     def test_init_false(self):
         check = policy.IsAdminCheck('is_admin', 'nottrue')
 
         self.assertEqual(check.kind, 'is_admin')
         self.assertEqual(check.match, 'False')
-        self.assertEqual(check.expected, False)
+        self.assertFalse(check.expected)
 
     def test_call_true(self):
         check = policy.IsAdminCheck('is_admin', 'True')
@@ -301,6 +299,7 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "os_compute_api:servers:create:forced_host",
 "os_compute_api:servers:detail:get_all_tenants",
 "os_compute_api:servers:index:get_all_tenants",
+"os_compute_api:servers:show:host_status",
 "network:attach_external_network",
 "os_compute_api:os-admin-actions",
 "os_compute_api:os-admin-actions:reset_network",
@@ -371,6 +370,8 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute:delete",
 "compute:soft_delete",
 "compute:force_delete",
+"compute:lock",
+"compute:unlock",
 "compute_extension:admin_actions:pause",
 "compute_extension:admin_actions:unpause",
 "compute_extension:admin_actions:suspend",
@@ -434,14 +435,12 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute:backup",
 "compute:get_instance_diagnostics",
 "compute:get_instance_metadata",
-"compute:get_lock",
 "compute:get_mks_console",
 "compute:get_rdp_console",
 "compute:get_serial_console",
 "compute:get_spice_console",
 "compute:get_vnc_console",
 "compute:inject_network_info",
-"compute:lock",
 "compute:pause",
 "compute:remove_fixed_ip",
 "compute:rescue",
@@ -454,7 +453,6 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute:snapshot",
 "compute:suspend",
 "compute:swap_volume",
-"compute:unlock",
 "compute:unpause",
 "compute:unrescue",
 "compute:update",

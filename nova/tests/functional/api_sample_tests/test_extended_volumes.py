@@ -15,7 +15,6 @@
 
 from oslo_config import cfg
 
-from nova import db
 from nova.tests.functional.api_sample_tests import test_servers
 from nova.tests.unit.api.openstack import fakes
 
@@ -46,10 +45,10 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
 
     def test_show(self):
         uuid = self._post_server()
-        self.stubs.Set(db, 'block_device_mapping_get_all_by_instance_uuids',
-                       fakes.stub_bdm_get_all_by_instance_uuids)
+        self.stub_out('nova.db.block_device_mapping_get_all_by_instance_uuids',
+                      fakes.stub_bdm_get_all_by_instance_uuids)
         response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
+        subs = {}
         subs['hostid'] = '[a-f0-9]+'
         subs['access_ip_v4'] = '1.2.3.4'
         subs['access_ip_v6'] = '80fe::'
@@ -57,10 +56,10 @@ class ExtendedVolumesSampleJsonTests(test_servers.ServersSampleBase):
 
     def test_detail(self):
         uuid = self._post_server()
-        self.stubs.Set(db, 'block_device_mapping_get_all_by_instance_uuids',
-                       fakes.stub_bdm_get_all_by_instance_uuids)
+        self.stub_out('nova.db.block_device_mapping_get_all_by_instance_uuids',
+                      fakes.stub_bdm_get_all_by_instance_uuids)
         response = self._do_get('servers/detail')
-        subs = self._get_regexes()
+        subs = {}
         subs['id'] = uuid
         subs['hostid'] = '[a-f0-9]+'
         subs['access_ip_v4'] = '1.2.3.4'

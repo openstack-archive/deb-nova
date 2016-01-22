@@ -190,7 +190,6 @@ class XenAPIDriver(driver.ComputeDriver):
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
         """Create VM instance."""
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._vmops.spawn(context, instance, image_meta, injected_files,
                           admin_password, network_info, block_device_info)
 
@@ -211,7 +210,6 @@ class XenAPIDriver(driver.ComputeDriver):
                          network_info, image_meta, resize_instance,
                          block_device_info=None, power_on=True):
         """Completes a resize, turning on the migrated instance."""
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._vmops.finish_migration(context, migration, instance, disk_info,
                                      network_info, image_meta, resize_instance,
                                      block_device_info, power_on)
@@ -286,7 +284,6 @@ class XenAPIDriver(driver.ComputeDriver):
     def rescue(self, context, instance, network_info, image_meta,
                rescue_password):
         """Rescue the specified instance."""
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._vmops.rescue(context, instance, network_info, image_meta,
                            rescue_password)
 
@@ -454,13 +451,12 @@ class XenAPIDriver(driver.ComputeDriver):
                'vcpus_used': host_stats['vcpus_used'],
                'memory_mb_used': total_ram_mb - free_ram_mb,
                'local_gb_used': used_disk_gb,
-               'hypervisor_type': 'xen',
+               'hypervisor_type': 'XenServer',
                'hypervisor_version': hyper_ver,
                'hypervisor_hostname': host_stats['host_hostname'],
                'cpu_info': jsonutils.dumps(host_stats['cpu_model']),
                'disk_available_least': total_disk_gb - allocated_disk_gb,
-               'supported_instances': jsonutils.dumps(
-                   host_stats['supported_instances']),
+               'supported_instances': host_stats['supported_instances'],
                'pci_passthrough_devices': jsonutils.dumps(
                    host_stats['pci_passthrough_devices']),
                'numa_topology': None}
@@ -566,10 +562,10 @@ class XenAPIDriver(driver.ComputeDriver):
             at compute manager.
         """
         # TODO(JohnGarbutt) look again when boot-from-volume hits trunk
-        pre_live_migration_result = {}
-        pre_live_migration_result['sr_uuid_map'] = \
-                 self._vmops.connect_block_device_volumes(block_device_info)
-        return pre_live_migration_result
+        result = objects.XenapiLiveMigrateData()
+        result.sr_uuid_map = self._vmops.connect_block_device_volumes(
+            block_device_info)
+        return result
 
     def post_live_migration(self, context, instance, block_device_info,
                             migrate_data=None):

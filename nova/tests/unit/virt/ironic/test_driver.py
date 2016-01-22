@@ -18,7 +18,6 @@
 from ironicclient import exc as ironic_exception
 import mock
 from oslo_config import cfg
-from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 from oslo_utils import uuidutils
 import six
@@ -56,7 +55,7 @@ FAKE_CLIENT = ironic_utils.FakeClient()
 
 
 class FakeClientWrapper(cw.IronicClientWrapper):
-    def _get_client(self):
+    def _get_client(self, retry_on_conflict=True):
         return FAKE_CLIENT
 
 
@@ -287,7 +286,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(props_dict['local_gb'], result['local_gb_used'])
 
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
         self.assertIsNone(result['numa_topology'])
 
     def test__node_resource(self):
@@ -303,10 +302,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(uuid=node_uuid, properties=props)
 
         result = self.driver._node_resource(node)
-        self.assertEqual('i686',
-                         jsonutils.loads(result['supported_instances'])[0][0])
-        self.assertEqual('i386',
-                         jsonutils.loads(result['stats'])['cpu_arch'])
+        self.assertEqual('i686', result['supported_instances'][0][0])
+        self.assertEqual('i386', result['stats']['cpu_arch'])
 
     def test__node_resource_unknown_arch(self):
         node_uuid = uuidutils.generate_uuid()
@@ -315,14 +312,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(uuid=node_uuid, properties=props)
 
         result = self.driver._node_resource(node)
-        self.assertEqual([], jsonutils.loads(result['supported_instances']))
+        self.assertEqual([], result['supported_instances'])
 
     def test__node_resource_exposes_capabilities(self):
         props = _get_properties()
         props['capabilities'] = 'test:capability, test2:value2'
         node = ironic_utils.get_test_node(properties=props)
         result = self.driver._node_resource(node)
-        stats = jsonutils.loads(result['stats'])
+        stats = result['stats']
         self.assertIsNone(stats.get('capabilities'))
         self.assertEqual('capability', stats.get('test'))
         self.assertEqual('value2', stats.get('test2'))
@@ -332,14 +329,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
         props['capabilities'] = None
         node = ironic_utils.get_test_node(properties=props)
         result = self.driver._node_resource(node)
-        self.assertIsNone(jsonutils.loads(result['stats']).get('capabilities'))
+        self.assertIsNone(result['stats'].get('capabilities'))
 
     def test__node_resource_malformed_capabilities(self):
         props = _get_properties()
         props['capabilities'] = 'test:capability,:no_key,no_val:'
         node = ironic_utils.get_test_node(properties=props)
         result = self.driver._node_resource(node)
-        stats = jsonutils.loads(result['stats'])
+        stats = result['stats']
         self.assertEqual('capability', stats.get('test'))
 
     def test__node_resource_available(self):
@@ -361,7 +358,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(props['local_gb'], result['local_gb'])
         self.assertEqual(0, result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
 
     @mock.patch.object(ironic_driver.IronicDriver,
                        '_node_resources_unavailable')
@@ -382,7 +379,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(0, result['local_gb'])
         self.assertEqual(0, result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
 
     @mock.patch.object(ironic_driver.IronicDriver,
                        '_node_resources_used')
@@ -407,7 +404,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(instance_info['local_gb'], result['local_gb'])
         self.assertEqual(instance_info['local_gb'], result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
 
     @mock.patch.object(ironic_driver.LOG, 'warning')
     def test__parse_node_properties(self, mock_warning):
@@ -897,12 +894,11 @@ class IronicDriverTestCase(test.NoDBTestCase):
             self.driver.spawn, self.ctx, instance, None, [], None)
         self.assertEqual(0, mock_destroy.call_count)
 
-    @mock.patch.object(FAKE_CLIENT.node, 'update')
-    def test__add_driver_fields_good(self, mock_update):
+    def _test_add_driver_fields(self, mock_update=None, mock_call=None):
         node = ironic_utils.get_test_node(driver='fake')
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    node=node.uuid)
-        image_meta = ironic_utils.get_test_image_meta_object()
+        image_meta = ironic_utils.get_test_image_meta()
         flavor = ironic_utils.get_test_flavor()
         self.driver._add_driver_fields(node, instance, image_meta, flavor)
         expected_patch = [{'path': '/instance_info/image_source', 'op': 'add',
@@ -921,7 +917,23 @@ class IronicDriverTestCase(test.NoDBTestCase):
                            'value': str(node.properties.get('local_gb', 0))},
                           {'path': '/instance_uuid', 'op': 'add',
                            'value': instance.uuid}]
-        mock_update.assert_called_once_with(node.uuid, expected_patch)
+
+        if mock_call is not None:
+            # assert call() is invoked with retry_on_conflict False to
+            # avoid bug #1341420
+            mock_call.assert_called_once_with('node.update', node.uuid,
+                                              expected_patch,
+                                              retry_on_conflict=False)
+        if mock_update is not None:
+            mock_update.assert_called_once_with(node.uuid, expected_patch)
+
+    @mock.patch.object(FAKE_CLIENT.node, 'update')
+    def test__add_driver_fields_mock_update(self, mock_update):
+        self._test_add_driver_fields(mock_update=mock_update)
+
+    @mock.patch.object(cw.IronicClientWrapper, 'call')
+    def test__add_driver_fields_mock_call(self, mock_call):
+        self._test_add_driver_fields(mock_call=mock_call)
 
     @mock.patch.object(FAKE_CLIENT.node, 'update')
     def test__add_driver_fields_fail(self, mock_update):
@@ -929,7 +941,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(driver='fake')
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    node=node.uuid)
-        image_meta = ironic_utils.get_test_image_meta_object()
+        image_meta = ironic_utils.get_test_image_meta()
         flavor = ironic_utils.get_test_flavor()
         self.assertRaises(exception.InstanceDeployFailure,
                           self.driver._add_driver_fields,
@@ -1581,6 +1593,34 @@ class IronicDriverTestCase(test.NoDBTestCase):
                 context=self.ctx, instance=instance, image_meta=image_meta,
                 injected_files=None, admin_password=None, bdms=None,
                 detach_block_devices=None, attach_block_devices=None)
+
+    @mock.patch.object(FAKE_CLIENT.node, 'get')
+    def _test_network_binding_host_id(self, is_neutron, mock_get):
+        node_uuid = uuidutils.generate_uuid()
+        hostname = 'ironic-compute'
+        instance = fake_instance.fake_instance_obj(self.ctx,
+                                                   node=node_uuid,
+                                                   host=hostname)
+        if is_neutron:
+            provider = 'neutron'
+            expected = None
+        else:
+            provider = 'none'
+            expected = hostname
+        node = ironic_utils.get_test_node(uuid=node_uuid,
+                                          instance_uuid=self.instance_uuid,
+                                          instance_type_id=5,
+                                          network_provider=provider)
+        mock_get.return_value = node
+
+        host_id = self.driver.network_binding_host_id(self.ctx, instance)
+        self.assertEqual(expected, host_id)
+
+    def test_network_binding_host_id_neutron(self):
+        self._test_network_binding_host_id(True)
+
+    def test_network_binding_host_id_none(self):
+        self._test_network_binding_host_id(False)
 
 
 @mock.patch.object(instance_metadata, 'InstanceMetadata')

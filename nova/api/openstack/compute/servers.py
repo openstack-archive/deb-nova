@@ -64,12 +64,8 @@ class ServersController(wsgi.Controller):
     """The Server API base controller class for the OpenStack API."""
 
     EXTENSION_CREATE_NAMESPACE = 'nova.api.v21.extensions.server.create'
-    EXTENSION_DESERIALIZE_EXTRACT_SERVER_NAMESPACE = (
-        'nova.api.v21.extensions.server.create.deserialize')
 
     EXTENSION_REBUILD_NAMESPACE = 'nova.api.v21.extensions.server.rebuild'
-    EXTENSION_DESERIALIZE_EXTRACT_REBUILD_NAMESPACE = (
-        'nova.api.v21.extensions.server.rebuild.deserialize')
 
     EXTENSION_UPDATE_NAMESPACE = 'nova.api.v21.extensions.server.update'
 
@@ -92,8 +88,7 @@ class ServersController(wsgi.Controller):
         if 'server' not in robj.obj:
             return robj
 
-        link = filter(lambda l: l['rel'] == 'self',
-                      robj.obj['server']['links'])
+        link = [l for l in robj.obj['server']['links'] if l['rel'] == 'self']
         if link:
             robj['Location'] = utils.utf8(link[0]['href'])
 
@@ -103,25 +98,32 @@ class ServersController(wsgi.Controller):
     def __init__(self, **kwargs):
         def _check_load_extension(required_function):
 
-            def check_whiteblack_lists(ext):
+            def should_load_extension(ext):
                 # Check whitelist is either empty or if not then the extension
                 # is in the whitelist
-                if (not CONF.osapi_v21.extensions_whitelist or
-                        ext.obj.alias in CONF.osapi_v21.extensions_whitelist):
-
-                    # Check the extension is not in the blacklist
-                    extensions_blacklist = CONF.osapi_v21.extensions_blacklist
-                    if ext.obj.alias not in extensions_blacklist:
-                        return True
-                    else:
-                        LOG.warning(_LW("Not loading %s because it is "
-                                        "in the blacklist"), ext.obj.alias)
+                whitelist = CONF.osapi_v21.extensions_whitelist
+                blacklist = CONF.osapi_v21.extensions_blacklist
+                if not whitelist:
+                    # if there is no whitelist, we accept everything,
+                    # so we only care about the blacklist.
+                    if ext.obj.alias in blacklist:
                         return False
+                    else:
+                        return True
                 else:
-                    LOG.warning(
-                        _LW("Not loading %s because it is not in the "
-                            "whitelist"), ext.obj.alias)
-                    return False
+                    if ext.obj.alias in whitelist:
+                        if ext.obj.alias in blacklist:
+                            LOG.warning(
+                                _LW(
+                                    "Extension %s is both in whitelist and "
+                                    "blacklist, blacklisting takes precedence"
+                                ),
+                                ext.obj.alias)
+                            return False
+                        else:
+                            return True
+                    else:
+                        return False
 
             def check_load_extension(ext):
                 if isinstance(ext.obj, extensions.V21APIExtensionBase):
@@ -136,7 +138,7 @@ class ServersController(wsgi.Controller):
                                   'servers extension for function %(func)s',
                                   {'ext_alias': ext.obj.alias,
                                    'func': required_function})
-                        return check_whiteblack_lists(ext)
+                        return should_load_extension(ext)
                     else:
                         LOG.debug(
                             'extension %(ext_alias)s is missing %(func)s',
@@ -534,7 +536,7 @@ class ServersController(wsgi.Controller):
             self.create_extension_manager.map(self._create_extension_point,
                                               server_dict, create_kwargs, body)
 
-        availability_zone = create_kwargs.get("availability_zone")
+        availability_zone = create_kwargs.pop("availability_zone", None)
 
         target = {
             'project_id': context.project_id,
@@ -544,11 +546,10 @@ class ServersController(wsgi.Controller):
 
         # TODO(Shao He, Feng) move this policy check to os-availabilty-zone
         # extension after refactor it.
-        if availability_zone:
-            _dummy, host, node = self.compute_api._handle_availability_zone(
-                context, availability_zone)
-            if host or node:
-                authorize(context, {}, 'create:forced_host')
+        parse_az = self.compute_api.parse_availability_zone
+        availability_zone, host, node = parse_az(context, availability_zone)
+        if host or node:
+            authorize(context, {}, 'create:forced_host')
 
         block_device_mapping = create_kwargs.get("block_device_mapping")
         # TODO(Shao He, Feng) move this policy check to os-block-device-mapping
@@ -595,6 +596,8 @@ class ServersController(wsgi.Controller):
                             image_uuid,
                             display_name=name,
                             display_description=name,
+                            availability_zone=availability_zone,
+                            forced_host=host, forced_node=node,
                             metadata=server_dict.get('metadata', {}),
                             admin_password=password,
                             requested_networks=requested_networks,
@@ -627,6 +630,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=msg)
         except (exception.ImageNotActive,
                 exception.ImageBadRequest,
+                exception.FixedIpNotFoundForAddress,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
@@ -1169,10 +1173,11 @@ def remove_invalid_options(context, search_options, allowed_search_options):
     # Otherwise, strip out all unknown options
     unknown_options = [opt for opt in search_options
                         if opt not in allowed_search_options]
-    LOG.debug("Removing options '%s' from query",
-              ", ".join(unknown_options))
-    for opt in unknown_options:
-        search_options.pop(opt, None)
+    if unknown_options:
+        LOG.debug("Removing options '%s' from query",
+                  ", ".join(unknown_options))
+        for opt in unknown_options:
+            search_options.pop(opt, None)
 
 
 class Servers(extensions.V21APIExtensionBase):

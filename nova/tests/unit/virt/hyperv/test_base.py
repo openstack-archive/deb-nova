@@ -15,9 +15,10 @@
 #    under the License.
 
 import mock
+from os_win import utilsfactory
+from six.moves import builtins
 
 from nova import test
-from nova.virt.hyperv import utilsfactory
 
 
 class HyperVBaseTestCase(test.NoDBTestCase):
@@ -25,17 +26,15 @@ class HyperVBaseTestCase(test.NoDBTestCase):
         super(HyperVBaseTestCase, self).setUp()
 
         self._mock_wmi = mock.MagicMock()
-        wmi_patcher = mock.patch('__builtin__.wmi', create=True,
-                                 new=self._mock_wmi)
+        wmi_patcher = mock.patch.object(builtins, 'wmi', create=True,
+                                        new=self._mock_wmi)
         platform_patcher = mock.patch('sys.platform', 'win32')
-        hostutils_patcher = mock.patch.object(utilsfactory, 'utils')
+        utilsfactory_patcher = mock.patch.object(utilsfactory, '_get_class')
 
         platform_patcher.start()
         wmi_patcher.start()
-        patched_hostutils = hostutils_patcher.start()
-
-        patched_hostutils.check_min_windows_version.return_value = False
+        utilsfactory_patcher.start()
 
         self.addCleanup(wmi_patcher.stop)
         self.addCleanup(platform_patcher.stop)
-        self.addCleanup(hostutils_patcher.stop)
+        self.addCleanup(utilsfactory_patcher.stop)

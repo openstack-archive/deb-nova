@@ -371,7 +371,7 @@ def _create_vlan(pif_ref, vlan_num, network_ref):
 
 
 def get_all(table):
-    return _db_content[table].keys()
+    return list(_db_content[table].keys())
 
 
 def get_all_records(table):
@@ -482,7 +482,7 @@ class SessionBase(object):
         xenapi_session.apply_session_helpers(self)
 
     def pool_get_default_SR(self, _1, pool_ref):
-        return _db_content['pool'].values()[0]['default-SR']
+        return list(_db_content['pool'].values())[0]['default-SR']
 
     def VBD_insert(self, _1, vbd_ref, vdi_ref):
         vbd_rec = get_record('VBD', vbd_ref)
@@ -665,6 +665,7 @@ class SessionBase(object):
         return pickle.dumps(None)
 
     _plugin_glance_upload_vhd = _plugin_pickle_noop
+    _plugin_glance_upload_vhd2 = _plugin_pickle_noop
     _plugin_kernel_copy_vdi = _plugin_noop
     _plugin_kernel_create_kernel_ramdisk = _plugin_noop
     _plugin_kernel_remove_kernel_ramdisk = _plugin_noop
@@ -761,7 +762,7 @@ class SessionBase(object):
         return base64.b64encode(zlib.compress("dom_id: %s" % dom_id))
 
     def _plugin_nova_plugin_version_get_version(self, method, args):
-        return pickle.dumps("1.2")
+        return pickle.dumps("1.3")
 
     def _plugin_xenhost_query_gc(self, method, args):
         return pickle.dumps("False")
@@ -820,7 +821,7 @@ class SessionBase(object):
         pass
 
     def host_migrate_receive(self, session, destref, nwref, options):
-        return "fake_migrate_data"
+        return {"value": "fake_migrate_data"}
 
     def VM_assert_can_migrate(self, session, vmref, migrate_data, live,
                               vdi_map, vif_map, options):

@@ -15,7 +15,6 @@
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import versionutils
-import six
 
 from nova import db
 from nova import exception
@@ -72,6 +71,9 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         'metrics': fields.StringField(nullable=True),
         'stats': fields.DictOfNullableStringsField(nullable=True),
         'host_ip': fields.IPAddressField(nullable=True),
+        # TODO(rlrossit): because of history, numa_topology is held here as a
+        # StringField, not a NUMATopology object. In version 2 of ComputeNode
+        # this will be converted over to a fields.ObjectField('NUMATopology')
         'numa_topology': fields.StringField(nullable=True),
         # NOTE(pmurray): the supported_hv_specs field maps to the
         # supported_instances field in the database
@@ -332,12 +334,8 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
                 self[key] = resources[key]
 
         # supported_instances has a different name in compute_node
-        # TODO(pmurray): change virt drivers not to json encode
-        # values they add to the resources dict
         if 'supported_instances' in resources:
             si = resources['supported_instances']
-            if isinstance(si, six.string_types):
-                si = jsonutils.loads(si)
             self.supported_hv_specs = [objects.HVSpec.from_list(s) for s in si]
 
 

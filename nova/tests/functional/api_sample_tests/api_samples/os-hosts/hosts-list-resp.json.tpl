@@ -12,11 +12,6 @@
         },
         {
             "host_name": "%(host_name)s",
-            "service": "cert",
-            "zone": "internal"
-        },
-        {
-            "host_name": "%(host_name)s",
             "service": "consoleauth",
             "zone": "internal"
         },
@@ -28,11 +23,6 @@
         {
             "host_name": "%(host_name)s",
             "service": "scheduler",
-            "zone": "internal"
-        },
-        {
-            "host_name": "%(host_name)s",
-            "service": "cells",
             "zone": "internal"
         }
     ]

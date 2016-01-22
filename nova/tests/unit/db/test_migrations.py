@@ -60,9 +60,6 @@ from nova import test
 from nova.tests import fixtures as nova_fixtures
 
 
-LOG = logging.getLogger(__name__)
-
-
 class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
                              test_migrations.WalkVersionsMixin):
     """Test sqlalchemy-migrate migrations."""
@@ -804,6 +801,23 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
     def _check_302(self, engine, data):
         self.assertIndexMembers(engine, 'instance_system_metadata',
                                 'instance_uuid', ['instance_uuid'])
+
+    def _check_313(self, engine, data):
+
+        self.assertColumnExists(engine, 'pci_devices', 'parent_addr')
+        self.assertColumnExists(engine, 'shadow_pci_devices', 'parent_addr')
+        pci_devices = oslodbutils.get_table(engine, 'pci_devices')
+        shadow_pci_devices = oslodbutils.get_table(
+            engine, 'shadow_pci_devices')
+        self.assertIsInstance(pci_devices.c.parent_addr.type,
+                              sqlalchemy.types.String)
+        self.assertTrue(pci_devices.c.parent_addr.nullable)
+        self.assertIsInstance(shadow_pci_devices.c.parent_addr.type,
+                              sqlalchemy.types.String)
+        self.assertTrue(shadow_pci_devices.c.parent_addr.nullable)
+        self.assertIndexMembers(engine, 'pci_devices',
+                        'ix_pci_devices_compute_node_id_parent_addr_deleted',
+                        ['compute_node_id', 'parent_addr', 'deleted'])
 
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,

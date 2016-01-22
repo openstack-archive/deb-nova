@@ -66,7 +66,7 @@ EXP_VERSIONS = {
     "v2.1": {
         "id": "v2.1",
         "status": "CURRENT",
-        "version": "2.12",
+        "version": "2.16",
         "min_version": "2.1",
         "updated": "2013-07-23T11:33:21Z",
         "links": [
@@ -128,7 +128,7 @@ class VersionsTestV20(test.NoDBTestCase):
             {
                 "id": "v2.1",
                 "status": "CURRENT",
-                "version": "2.12",
+                "version": "2.16",
                 "min_version": "2.1",
                 "updated": "2013-07-23T11:33:21Z",
                 "links": [
@@ -418,6 +418,22 @@ class VersionsViewBuilderTests(test.NoDBTestCase):
         actual = builder.generate_href('foo')
 
         self.assertEqual(expected, actual)
+
+    def test_generate_href_with_path(self):
+        path = "random/path"
+        base_url = "http://example.org/app/"
+        expected = "http://example.org/app/v2/%s" % path
+        builder = views.versions.ViewBuilder(base_url)
+        actual = builder.generate_href("v2", path)
+        self.assertEqual(actual, expected)
+
+    def test_generate_href_with_empty_path(self):
+        path = ""
+        base_url = "http://example.org/app/"
+        expected = "http://example.org/app/v2/"
+        builder = views.versions.ViewBuilder(base_url)
+        actual = builder.generate_href("v2", path)
+        self.assertEqual(actual, expected)
 
 
 # NOTE(oomichi): Now version API of v2.0 covers "/"(root).

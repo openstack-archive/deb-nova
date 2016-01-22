@@ -24,11 +24,13 @@ import sys
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_reports import guru_meditation_report as gmr
 
 from nova import config
 from nova import objects
 from nova import service
 from nova import utils
+from nova import version
 
 CONF = cfg.CONF
 CONF.import_opt('enabled_apis', 'nova.service')
@@ -41,13 +43,11 @@ def main():
     utils.monkey_patch()
     objects.register_all()
 
+    gmr.TextGuruMeditation.setup_autorun(version)
+
     launcher = service.process_launcher()
     for api in CONF.enabled_apis:
         should_use_ssl = api in CONF.enabled_ssl_apis
-        if api == 'ec2':
-            server = service.WSGIService(api, use_ssl=should_use_ssl,
-                                         max_url_len=16384)
-        else:
-            server = service.WSGIService(api, use_ssl=should_use_ssl)
+        server = service.WSGIService(api, use_ssl=should_use_ssl)
         launcher.launch_service(server, workers=server.workers or 1)
     launcher.wait()

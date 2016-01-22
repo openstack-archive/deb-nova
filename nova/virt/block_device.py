@@ -27,8 +27,6 @@ from nova import exception
 from nova.i18n import _LE
 from nova.i18n import _LI
 from nova.i18n import _LW
-from nova import objects
-from nova.objects import base as obj_base
 from nova.volume import encryptors
 
 CONF = cfg.CONF
@@ -121,14 +119,7 @@ class DriverBlockDevice(dict):
                        'device_type': None}
 
     def __init__(self, bdm):
-        # TODO(ndipanov): Remove this check when we have all the rpc methods
-        # use objects for block devices.
-        if isinstance(bdm, obj_base.NovaObject):
-            self.__dict__['_bdm_obj'] = bdm
-        else:
-            self.__dict__['_bdm_obj'] = objects.BlockDeviceMapping()
-            self._bdm_obj.update(block_device.BlockDeviceDict(bdm))
-            self._bdm_obj.obj_reset_changes()
+        self.__dict__['_bdm_obj'] = bdm
 
         if self._bdm_obj.no_device:
             raise _NotTransformable()
@@ -499,10 +490,29 @@ def attach_block_devices(block_device_mapping, *attach_args, **attach_kwargs):
     def _log_and_attach(bdm):
         context = attach_args[0]
         instance = attach_args[1]
-        LOG.info(_LI('Booting with volume %(volume_id)s at %(mountpoint)s'),
-                  {'volume_id': bdm.volume_id,
-                   'mountpoint': bdm['mount_device']},
-                  context=context, instance=instance)
+        if bdm.get('volume_id'):
+            LOG.info(_LI('Booting with volume %(volume_id)s at '
+                         '%(mountpoint)s'),
+                     {'volume_id': bdm.volume_id,
+                      'mountpoint': bdm['mount_device']},
+                     context=context, instance=instance)
+        elif bdm.get('snapshot_id'):
+            LOG.info(_LI('Booting with volume snapshot %(snapshot_id)s at '
+                         '%(mountpoint)s'),
+                     {'snapshot_id': bdm.snapshot_id,
+                      'mountpoint': bdm['mount_device']},
+                     context=context, instance=instance)
+        elif bdm.get('image_id'):
+            LOG.info(_LI('Booting with volume-backed-image %(image_id)s at '
+                         '%(mountpoint)s'),
+                     {'image_id': bdm.image_id,
+                      'mountpoint': bdm['mount_device']},
+                     context=context, instance=instance)
+        else:
+            LOG.info(_LI('Booting with blank volume at %(mountpoint)s'),
+                     {'mountpoint': bdm['mount_device']},
+                     context=context, instance=instance)
+
         bdm.attach(*attach_args, **attach_kwargs)
 
     map(_log_and_attach, block_device_mapping)

@@ -37,23 +37,21 @@ class MultipleCreateJsonTest(test_servers.ServersSampleBase):
     def test_multiple_create(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'min_count': "2",
             'max_count': "3"
         }
         response = self._do_post('servers', 'multiple-create-post-req', subs)
-        subs.update(self._get_regexes())
         self._verify_response('multiple-create-post-resp', subs, response, 202)
 
     def test_multiple_create_without_reservation_id(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'min_count': "2",
             'max_count': "3"
         }
         response = self._do_post('servers', 'multiple-create-no-resv-post-req',
                                   subs)
-        subs.update(self._get_regexes())
         self._verify_response('multiple-create-no-resv-post-resp', subs,
                               response, 202)

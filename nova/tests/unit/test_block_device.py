@@ -364,11 +364,11 @@ class TestBlockDeviceDict(test.NoDBTestCase):
         def fake_validate(obj, dct):
             pass
 
-        self.stubs.Set(block_device.BlockDeviceDict, '_fields',
+        self.stub_out('nova.block_device.BlockDeviceDict._fields',
                        set(['field1', 'field2']))
-        self.stubs.Set(block_device.BlockDeviceDict, '_db_only_fields',
+        self.stub_out('nova.block_device.BlockDeviceDict._db_only_fields',
                        set(['db_field1', 'db_field2']))
-        self.stubs.Set(block_device.BlockDeviceDict, '_validate',
+        self.stub_out('nova.block_device.BlockDeviceDict._validate',
                        fake_validate)
 
         # Make sure db fields are not picked up if they are not
@@ -435,7 +435,7 @@ class TestBlockDeviceDict(test.NoDBTestCase):
                'volume_id': 'fake-volume-id-1',
                'boot_index': 0}
         bdm_dict = block_device.BlockDeviceDict(bdm)
-        self.assertEqual(False, bdm_dict['delete_on_termination'])
+        self.assertFalse(bdm_dict['delete_on_termination'])
 
     def test_validate(self):
         self.assertRaises(exception.InvalidBDMFormat,
@@ -477,7 +477,7 @@ class TestBlockDeviceDict(test.NoDBTestCase):
         truthy_bdm = dict(self.new_mapping[2])
         truthy_bdm['delete_on_termination'] = '1'
         truthy_bdm = block_device.BlockDeviceDict(truthy_bdm)
-        self.assertEqual(True, truthy_bdm['delete_on_termination'])
+        self.assertTrue(truthy_bdm['delete_on_termination'])
 
         verbose_bdm = dict(self.new_mapping[2])
         verbose_bdm['boot_index'] = 'first'

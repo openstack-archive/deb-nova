@@ -46,6 +46,7 @@ from nova import context as nova_context
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
+from nova.objects import migrate_data as migrate_data_obj
 from nova.pci import manager as pci_manager
 from nova import utils
 from nova.virt import configdrive
@@ -726,7 +727,7 @@ class VMOps(object):
             if not type_.startswith('/dev'):
                 continue
 
-            # Convert device name to userdevice number, e.g. /dev/xvdb -> 1
+            # Convert device name to user device number, e.g. /dev/xvdb -> 1
             userdevice = ord(block_device.strip_prefix(type_)) - ord('a')
             vm_utils.create_vbd(self._session, vm_ref, vdi_info['ref'],
                                 userdevice, bootable=False,
@@ -1179,7 +1180,7 @@ class VMOps(object):
     def migrate_disk_and_power_off(self, context, instance, dest,
                                    flavor, block_device_info):
         """Copies a VHD from one host machine to another, possibly
-        resizing filesystem before hand.
+        resizing filesystem beforehand.
 
         :param instance: the instance that owns the VHD in question.
         :param dest: the destination host machine.
@@ -1524,21 +1525,30 @@ class VMOps(object):
                         instance=instance)
             # NOTE(alaski): There should not be a block device mapping here,
             # but if there is it very likely means there was an error cleaning
-            # it up previously and there is now an orphaned sr/pbd.  This will
+            # it up previously and there is now an orphaned sr/pbd. This will
             # prevent both volume and instance deletes from completing.
             bdms = block_device_info['block_device_mapping'] or []
             if not bdms:
                 return
             for bdm in bdms:
                 volume_id = bdm['connection_info']['data']['volume_id']
+                # Note(bobba): Check for the old-style SR first; if this
+                # doesn't find the SR, also look for the new-style from
+                # parse_sr_info
                 sr_uuid = 'FA15E-D15C-%s' % volume_id
                 sr_ref = None
                 try:
                     sr_ref = volume_utils.find_sr_by_uuid(self._session,
-                            sr_uuid)
+                                                          sr_uuid)
+                    if not sr_ref:
+                        connection_data = bdm['connection_info']['data']
+                        (sr_uuid, _, _) = volume_utils.parse_sr_info(
+                            connection_data)
+                        sr_ref = volume_utils.find_sr_by_uuid(self._session,
+                                                              sr_uuid)
                 except Exception:
                     LOG.exception(_LE('Failed to find an SR for volume %s'),
-                            volume_id, instance=instance)
+                                  volume_id, instance=instance)
 
                 try:
                     if sr_ref:
@@ -1683,12 +1693,12 @@ class VMOps(object):
                 self._session.call_xenapi("task.cancel", task_ref)
 
     def poll_rebooting_instances(self, timeout, instances):
-        """Look for expirable rebooting instances.
+        """Look for rebooting instances that can be expired.
 
             - issue a "hard" reboot to any instance that has been stuck in a
               reboot state for >= the given timeout
         """
-        # NOTE(jk0): All existing clean_reboot tasks must be cancelled before
+        # NOTE(jk0): All existing clean_reboot tasks must be canceled before
         # we can kick off the hard_reboot tasks.
         self._cancel_stale_tasks(timeout, 'VM.clean_reboot')
 
@@ -1925,7 +1935,7 @@ class VMOps(object):
             hostname = 'RESCUE-%s' % hostname
 
         if instance['os_type'] == "windows":
-            # NOTE(jk0): Windows hostnames can only be <= 15 chars.
+            # NOTE(jk0): Windows host names can only be <= 15 chars.
             hostname = hostname[:15]
 
         LOG.debug("Injecting hostname (%s) into xenstore", hostname,
@@ -1957,11 +1967,10 @@ class VMOps(object):
 
     def _read_from_xenstore(self, instance, path, ignore_missing_path=True,
                             vm_ref=None):
-        """Reads the passed location from xenstore for the given vm.
-        Missing paths are ignored, unless explicitely stated not to
-        which will cause and exception to be raised by xenstore.
-        A XenAPIPlugin.PluginError will be raised if any error is
-        encountered in the read process.
+        """Reads the passed location from xenstore for the given vm. Missing
+        paths are ignored, unless explicitly stated not to, which causes
+        xenstore to raise an exception. A XenAPIPlugin.PluginError is raised
+        if any error is encountered in the read process.
         """
         # NOTE(sulo): These need to be string for valid field type
         # for xapi.
@@ -2089,14 +2098,14 @@ class VMOps(object):
             msg = _('No suitable network for migrate')
             raise exception.MigrationPreCheckError(reason=msg)
 
-        pifkey = pifs.keys()[0]
+        pifkey = list(pifs.keys())[0]
         if not (netutils.is_valid_ipv4(pifs[pifkey]['IP']) or
                 netutils.is_valid_ipv6(pifs[pifkey]['IPv6'])):
             msg = (_('PIF %s does not contain IP address')
                    % pifs[pifkey]['uuid'])
             raise exception.MigrationPreCheckError(reason=msg)
 
-        nwref = pifs[pifs.keys()[0]]['network']
+        nwref = pifs[list(pifs.keys())[0]]['network']
         try:
             options = {}
             migrate_data = self._session.call_xenapi("host.migrate_receive",
@@ -2135,15 +2144,14 @@ class VMOps(object):
         :param disk_over_commit: if true, allow disk over commit
 
         """
-        dest_check_data = {}
+        dest_check_data = migrate_data_obj.XenapiLiveMigrateData()
         if block_migration:
-            migrate_send_data = self._migrate_receive(ctxt)
-            destination_sr_ref = vm_utils.safe_find_sr(self._session)
-            dest_check_data.update(
-                {"block_migration": block_migration,
-                 "migrate_data": {"migrate_send_data": migrate_send_data,
-                                  "destination_sr_ref": destination_sr_ref}})
+            dest_check_data.block_migration = True
+            dest_check_data.migrate_send_data = self._migrate_receive(ctxt)
+            dest_check_data.destination_sr_ref = vm_utils.safe_find_sr(
+                self._session)
         else:
+            dest_check_data.block_migration = False
             src = instance_ref['host']
             self._ensure_host_in_aggregate(ctxt, src)
             # TODO(johngarbutt) we currently assume
@@ -2182,12 +2190,17 @@ class VMOps(object):
                 raise exception.MigrationError(reason=_('XAPI supporting '
                                 'relax-xsm-sr-check=true required'))
 
-        if 'migrate_data' in dest_check_data:
+        if not isinstance(dest_check_data, migrate_data_obj.LiveMigrateData):
+            obj = migrate_data_obj.XenapiLiveMigrateData()
+            obj.from_legacy_dict(dest_check_data)
+            dest_check_data = obj
+
+        if ('block_migration' in dest_check_data and
+                dest_check_data.block_migration):
             vm_ref = self._get_vm_opaque_ref(instance_ref)
-            migrate_data = dest_check_data['migrate_data']
             try:
                 self._call_live_migrate_command(
-                    "VM.assert_can_migrate", vm_ref, migrate_data)
+                    "VM.assert_can_migrate", vm_ref, dest_check_data)
             except self._session.XenAPI.Failure as exc:
                 reason = exc.details[0]
                 msg = _('assert_can_migrate failed because: %s') % reason
@@ -2200,7 +2213,7 @@ class VMOps(object):
         present but not reported, try to fake the info for live-migration.
         """
         if self._pv_driver_version_reported(instance, vm_ref):
-            # Since driver version is reported we dont need to do anything
+            # Since driver version is reported we do not need to do anything
             return
 
         if self._pv_device_reported(instance, vm_ref):
@@ -2271,8 +2284,8 @@ class VMOps(object):
 
     def _call_live_migrate_command(self, command_name, vm_ref, migrate_data):
         """unpack xapi specific parameters, and call a live migrate command."""
-        destination_sr_ref = migrate_data['destination_sr_ref']
-        migrate_send_data = migrate_data['migrate_send_data']
+        destination_sr_ref = migrate_data.destination_sr_ref
+        migrate_send_data = migrate_data.migrate_send_data
 
         vdi_map = self._generate_vdi_map(destination_sr_ref, vm_ref)
 
@@ -2314,8 +2327,8 @@ class VMOps(object):
             if migrate_data is not None:
                 (kernel, ramdisk) = vm_utils.lookup_kernel_ramdisk(
                     self._session, vm_ref)
-                migrate_data['kernel-file'] = kernel
-                migrate_data['ramdisk-file'] = ramdisk
+                migrate_data.kernel_file = kernel
+                migrate_data.ramdisk_file = ramdisk
 
             if block_migration:
                 if not migrate_data:
@@ -2349,8 +2362,8 @@ class VMOps(object):
     def post_live_migration(self, context, instance, migrate_data=None):
         if migrate_data is not None:
             vm_utils.destroy_kernel_ramdisk(self._session, instance,
-                                            migrate_data.get('kernel-file'),
-                                            migrate_data.get('ramdisk-file'))
+                                            migrate_data.kernel_file,
+                                            migrate_data.ramdisk_file)
 
     def post_live_migration_at_destination(self, context, instance,
                                            network_info, block_migration,

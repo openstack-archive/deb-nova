@@ -12,21 +12,19 @@
 
 import itertools
 
+import nova.conf
 import nova.virt.configdrive
 import nova.virt.disk.api
 import nova.virt.disk.mount.nbd
 import nova.virt.disk.vfs.guestfs
 import nova.virt.driver
 import nova.virt.firewall
-import nova.virt.hardware
 import nova.virt.hyperv.pathutils
-import nova.virt.hyperv.utilsfactory
 import nova.virt.hyperv.vif
 import nova.virt.hyperv.vmops
 import nova.virt.hyperv.volumeops
 import nova.virt.imagecache
 import nova.virt.images
-import nova.virt.ironic.driver
 import nova.virt.libvirt.driver
 import nova.virt.libvirt.imagebackend
 import nova.virt.libvirt.imagecache
@@ -61,21 +59,19 @@ def list_opts():
              nova.virt.disk.mount.nbd.nbd_opts,
              nova.virt.driver.driver_opts,
              nova.virt.firewall.firewall_opts,
-             nova.virt.hardware.virt_cpu_opts,
              nova.virt.imagecache.imagecache_opts,
              nova.virt.images.image_opts,
              nova.virt.netutils.netutils_opts,
          )),
         ('guestfs', nova.virt.disk.vfs.guestfs.guestfs_opts),
+        nova.conf.virt.list_opts(),
         ('hyperv',
          itertools.chain(
              nova.virt.hyperv.pathutils.hyperv_opts,
-             nova.virt.hyperv.utilsfactory.hyper_opts,
              nova.virt.hyperv.vif.hyperv_opts,
              nova.virt.hyperv.vmops.hyperv_opts,
              nova.virt.hyperv.volumeops.hyper_volumeops_opts,
          )),
-        ('ironic', nova.virt.ironic.driver.opts),
         ('libvirt',
          itertools.chain(
              nova.virt.libvirt.driver.libvirt_opts,

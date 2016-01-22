@@ -29,6 +29,7 @@ then used by all the other libvirt related classes
 
 from lxml import etree
 from oslo_log import log as logging
+from oslo_service import loopingcall
 from oslo_utils import encodeutils
 from oslo_utils import excutils
 from oslo_utils import importutils
@@ -277,6 +278,55 @@ class Guest(object):
                 devs.append(dev)
         return devs
 
+    def detach_device_with_retry(self, get_device_conf_func, device,
+                                 persistent, live, max_retry_count=7,
+                                 inc_sleep_time=2,
+                                 max_sleep_time=30):
+        """Detaches a device from the guest. After the initial detach request,
+        a function is returned which can be used to ensure the device is
+        successfully removed from the guest domain (retrying the removal as
+        necessary).
+
+        :param get_device_conf_func: function which takes device as a parameter
+                                     and returns the configuration for device
+        :param device: device to detach
+        :param persistent: bool to indicate whether the change is
+                           persistent or not
+        :param live: bool to indicate whether it affects the guest in running
+                     state
+        :param max_retry_count: number of times the returned function will
+                                retry a detach before failing
+        :param inc_sleep_time: incremental time to sleep in seconds between
+                               detach retries
+        :param max_sleep_time: max sleep time in seconds beyond which the sleep
+                               time will not be incremented using param
+                               inc_sleep_time. On reaching this threshold,
+                               max_sleep_time will be used as the sleep time.
+        """
+
+        conf = get_device_conf_func(device)
+        if conf is None:
+            raise exception.DeviceNotFound(device=device)
+
+        self.detach_device(conf, persistent, live)
+
+        @loopingcall.RetryDecorator(max_retry_count=max_retry_count,
+                                    inc_sleep_time=inc_sleep_time,
+                                    max_sleep_time=max_sleep_time,
+                                    exceptions=exception.DeviceDetachFailed)
+        def _do_wait_and_retry_detach():
+            config = get_device_conf_func(device)
+            if config is not None:
+                # Device is already detached from persistent domain
+                # and only transient domain needs update
+                self.detach_device(config, persistent=False, live=live)
+                # Raise error since the device still existed on the guest
+                reason = _("Unable to detach from guest transient domain.")
+                raise exception.DeviceDetachFailed(device=device,
+                                                   reason=reason)
+
+        return _do_wait_and_retry_detach
+
     def detach_device(self, conf, persistent=False, live=False):
         """Detaches device to the guest.
 
@@ -368,6 +418,48 @@ class Guest(object):
     def is_active(self):
         "Determines whether guest is currently running."
         return self._domain.isActive()
+
+    def freeze_filesystems(self):
+        """Freeze filesystems within guest."""
+        self._domain.fsFreeze()
+
+    def thaw_filesystems(self):
+        """Thaw filesystems within guest."""
+        self._domain.fsThaw()
+
+    def snapshot(self, conf, no_metadata=False,
+                 disk_only=False, reuse_ext=False, quiesce=False):
+        """Creates a guest snapshot.
+
+        :param conf: libvirt.LibvirtConfigGuestSnapshotDisk
+        :param no_metadata: Make snapshot without remembering it
+        :param disk_only: Disk snapshot, no system checkpoint
+        :param reuse_ext: Reuse any existing external files
+        :param quiesce: Use QGA to quiece all mounted file systems
+        """
+        flags = no_metadata and (libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA
+                                 or 0)
+        flags |= disk_only and (libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY
+                                or 0)
+        flags |= reuse_ext and (libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REUSE_EXT
+                                or 0)
+        flags |= quiesce and libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE or 0
+        self._domain.snapshotCreateXML(conf.to_xml(), flags=flags)
+
+    def shutdown(self):
+        """Shutdown guest"""
+        self._domain.shutdown()
+
+    def pause(self):
+        """Suspends an active guest
+
+        Process is frozen without further access to CPU resources and
+        I/O but the memory used by the domain at the hypervisor level
+        will stay allocated.
+
+        See method "resume()" to reactive guest.
+        """
+        self._domain.suspend()
 
 
 class BlockDevice(object):

@@ -35,6 +35,7 @@ from nova.pci import stats as pci_stats
 from nova.scheduler import filters
 from nova.scheduler import host_manager
 from nova import test
+from nova.tests import fixtures
 from nova.tests.unit import fake_instance
 from nova.tests.unit import matchers
 from nova.tests.unit.scheduler import fakes
@@ -71,16 +72,16 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.fake_hosts += [host_manager.HostState('fake_multihost',
                 'fake-node%s' % x) for x in range(1, 5)]
 
+        self.useFixture(fixtures.SpawnIsSynchronousFixture())
+
     def test_load_filters(self):
         filters = self.host_manager._load_filters()
         self.assertEqual(filters, ['FakeFilterClass1'])
 
     @mock.patch.object(nova.objects.InstanceList, 'get_by_filters')
     @mock.patch.object(nova.objects.ComputeNodeList, 'get_all')
-    @mock.patch('nova.utils.spawn_n')
-    def test_init_instance_info_batches(self, mock_spawn, mock_get_all,
+    def test_init_instance_info_batches(self, mock_get_all,
                                         mock_get_by_filters):
-        mock_spawn.side_effect = lambda f, *a, **k: f(*a, **k)
         cn_list = objects.ComputeNodeList()
         for num in range(22):
             host_name = 'host_%s' % num
@@ -91,10 +92,8 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     @mock.patch.object(nova.objects.InstanceList, 'get_by_filters')
     @mock.patch.object(nova.objects.ComputeNodeList, 'get_all')
-    @mock.patch('nova.utils.spawn_n')
-    def test_init_instance_info(self, mock_spawn, mock_get_all,
+    def test_init_instance_info(self, mock_get_all,
                                 mock_get_by_filters):
-        mock_spawn.side_effect = lambda f, *a, **k: f(*a, **k)
         cn1 = objects.ComputeNode(host='host1')
         cn2 = objects.ComputeNode(host='host2')
         inst1 = objects.Instance(host='host1', uuid='uuid1')
@@ -111,6 +110,8 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.assertIn('uuid1', fake_info['instances'])
         self.assertIn('uuid2', fake_info['instances'])
         self.assertNotIn('uuid3', fake_info['instances'])
+        exp_filters = {'deleted': False, 'host': [u'host1', u'host2']}
+        mock_get_by_filters.assert_called_once_with(mock.ANY, exp_filters)
 
     def test_default_filters(self):
         default_filters = self.host_manager.default_filters
@@ -281,8 +282,12 @@ class HostManagerTestCase(test.NoDBTestCase):
                 'expected_fprops': fake_properties}
         self._mock_get_filtered_hosts(info)
 
-        result = self.host_manager.get_filtered_hosts(self.fake_hosts,
-                fake_properties)
+        with mock.patch.object(self.host_manager.filter_handler,
+                'get_filtered_objects') as fake_filter:
+            result = self.host_manager.get_filtered_hosts(self.fake_hosts,
+                    fake_properties)
+            self.assertFalse(fake_filter.called)
+
         self._verify_result(info, result, False)
 
     def test_get_filtered_hosts_with_ignore_and_force_hosts(self):
@@ -461,7 +466,7 @@ class HostManagerTestCase(test.NoDBTestCase):
                          8388608)
 
     @mock.patch.object(nova.objects.InstanceList, 'get_by_host')
-    @mock.patch.object(host_manager.HostState, 'update_from_compute_node')
+    @mock.patch.object(host_manager.HostState, '_update_from_compute_node')
     @mock.patch.object(objects.ComputeNodeList, 'get_all')
     @mock.patch.object(objects.ServiceList, 'get_by_binary')
     def test_get_all_host_states_with_no_aggs(self, svc_get_by_binary,
@@ -478,7 +483,7 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.assertEqual([], host_state.aggregates)
 
     @mock.patch.object(nova.objects.InstanceList, 'get_by_host')
-    @mock.patch.object(host_manager.HostState, 'update_from_compute_node')
+    @mock.patch.object(host_manager.HostState, '_update_from_compute_node')
     @mock.patch.object(objects.ComputeNodeList, 'get_all')
     @mock.patch.object(objects.ServiceList, 'get_by_binary')
     def test_get_all_host_states_with_matching_aggs(self, svc_get_by_binary,
@@ -499,7 +504,7 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.assertEqual([fake_agg], host_state.aggregates)
 
     @mock.patch.object(nova.objects.InstanceList, 'get_by_host')
-    @mock.patch.object(host_manager.HostState, 'update_from_compute_node')
+    @mock.patch.object(host_manager.HostState, '_update_from_compute_node')
     @mock.patch.object(objects.ComputeNodeList, 'get_all')
     @mock.patch.object(objects.ServiceList, 'get_by_binary')
     def test_get_all_host_states_with_not_matching_aggs(self,
@@ -539,7 +544,8 @@ class HostManagerTestCase(test.NoDBTestCase):
         host_state = host_manager.HostState('host1', cn1)
         self.assertFalse(host_state.instances)
         mock_get_by_host.return_value = None
-        hm._add_instance_info(context, cn1, host_state)
+        host_state.update(
+                inst_dict=hm._get_instance_info(context, cn1))
         self.assertFalse(mock_get_by_host.called)
         self.assertTrue(host_state.instances)
         self.assertEqual(host_state.instances['uuid1'], inst1)
@@ -561,7 +567,8 @@ class HostManagerTestCase(test.NoDBTestCase):
         host_state = host_manager.HostState('host1', cn1)
         self.assertFalse(host_state.instances)
         mock_get_by_host.return_value = objects.InstanceList(objects=[inst1])
-        hm._add_instance_info(context, cn1, host_state)
+        host_state.update(
+                inst_dict=hm._get_instance_info(context, cn1))
         mock_get_by_host.assert_called_once_with(context, cn1.host)
         self.assertTrue(host_state.instances)
         self.assertEqual(host_state.instances['uuid1'], inst1)
@@ -797,7 +804,9 @@ class HostStateTestCase(test.NoDBTestCase):
     # update_from_compute_node() and consume_from_request() are tested
     # in HostManagerTestCase.test_get_all_host_states()
 
-    def test_stat_consumption_from_compute_node(self):
+    @mock.patch('nova.utils.synchronized',
+                side_effect=lambda a: lambda f: lambda *args: f(*args))
+    def test_stat_consumption_from_compute_node(self, sync_mock):
         stats = {
             'num_instances': '5',
             'num_proj_12345': '3',
@@ -825,8 +834,9 @@ class HostStateTestCase(test.NoDBTestCase):
             cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
 
         host = host_manager.HostState("fakehost", "fakenode")
-        host.update_from_compute_node(compute)
+        host.update(compute=compute)
 
+        sync_mock.assert_called_once_with(("fakehost", "fakenode"))
         self.assertEqual(5, host.num_instances)
         self.assertEqual(42, host.num_io_ops)
         self.assertEqual(10, len(host.stats))
@@ -866,7 +876,7 @@ class HostStateTestCase(test.NoDBTestCase):
             cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
 
         host = host_manager.HostState("fakehost", "fakenode")
-        host.update_from_compute_node(compute)
+        host.update(compute=compute)
         self.assertEqual([], host.pci_stats.pools)
         self.assertEqual(hyper_ver_int, host.hypervisor_version)
 
@@ -898,7 +908,7 @@ class HostStateTestCase(test.NoDBTestCase):
             cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
 
         host = host_manager.HostState("fakehost", "fakenode")
-        host.update_from_compute_node(compute)
+        host.update(compute=compute)
 
         self.assertEqual(5, host.num_instances)
         self.assertEqual(42, host.num_io_ops)
@@ -907,6 +917,8 @@ class HostStateTestCase(test.NoDBTestCase):
         self.assertEqual([], host.pci_stats.pools)
         self.assertEqual(hyper_ver_int, host.hypervisor_version)
 
+    @mock.patch('nova.utils.synchronized',
+                side_effect=lambda a: lambda f: lambda *args: f(*args))
     @mock.patch('nova.virt.hardware.get_host_numa_usage_from_instance')
     @mock.patch('nova.objects.Instance')
     @mock.patch('nova.virt.hardware.numa_fit_instance_to_host')
@@ -914,7 +926,8 @@ class HostStateTestCase(test.NoDBTestCase):
     def test_stat_consumption_from_instance(self, host_topo_mock,
                                             numa_fit_mock,
                                             instance_init_mock,
-                                            numa_usage_mock):
+                                            numa_usage_mock,
+                                            sync_mock):
         fake_numa_topology = objects.InstanceNUMATopology(
             cells=[objects.InstanceNUMACell()])
         fake_host_numa_topology = mock.Mock()
@@ -938,6 +951,7 @@ class HostStateTestCase(test.NoDBTestCase):
                                               limits=None, pci_requests=None,
                                               pci_stats=None)
         numa_usage_mock.assert_called_once_with(host, fake_instance)
+        sync_mock.assert_called_once_with(("fakehost", "fakenode"))
         self.assertEqual(fake_host_numa_topology, host.numa_topology)
         self.assertIsNotNone(host.updated)
 
@@ -1053,7 +1067,7 @@ class HostStateTestCase(test.NoDBTestCase):
             stats=None, pci_device_pools=None,
             cpu_allocation_ratio=16.0, ram_allocation_ratio=1.5)
         host = host_manager.HostState("fakehost", "fakenode")
-        host.update_from_compute_node(compute)
+        host.update(compute=compute)
 
         self.assertEqual(len(host.metrics), 2)
         self.assertEqual(1.0, host.metrics.to_list()[0]['value'])

@@ -57,13 +57,13 @@ class PreserveEphemeralOnRebuildJsonTest(test_servers.ServersSampleBase):
                 return old_rebuild(self_, context, instance, image_href,
                                    admin_password, files_to_inject=None,
                                    **kwargs)
-        self.stubs.Set(compute_api.API, 'rebuild', fake_rebuild)
+        self.stub_out('nova.compute.api.API.rebuild', fake_rebuild)
 
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-action-rebuild-preserve-ephemeral',
                                  subs)
         if resp_tpl:
-            subs.update(self._get_regexes())
+            del subs['uuid']
             self._verify_response(resp_tpl, subs, response, 202)
         else:
             self.assertEqual(202, response.status_code)

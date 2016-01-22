@@ -21,21 +21,14 @@ Scheduler base class that all Schedulers should inherit from
 
 import abc
 
-from oslo_config import cfg
 from oslo_utils import importutils
 import six
 
+import nova.conf
 from nova import objects
 from nova import servicegroup
 
-scheduler_driver_opts = [
-    cfg.StrOpt('scheduler_host_manager',
-               default='nova.scheduler.host_manager.HostManager',
-               help='The scheduler host manager class to use'),
-    ]
-
-CONF = cfg.CONF
-CONF.register_opts(scheduler_driver_opts)
+CONF = nova.conf.CONF
 
 
 @six.add_metaclass(abc.ABCMeta)
@@ -60,7 +53,7 @@ class Scheduler(object):
                 if self.servicegroup_api.service_is_up(service)]
 
     @abc.abstractmethod
-    def select_destinations(self, context, request_spec, filter_properties):
+    def select_destinations(self, context, spec_obj):
         """Must override select_destinations method.
 
         :return: A list of dicts with 'host', 'nodename' and 'limits' as keys

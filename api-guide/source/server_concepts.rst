@@ -8,6 +8,10 @@ a physical machine or a container.
 Server status
 ~~~~~~~~~~~~~
 
+TODO: This section's content is old, we need to update the status list.
+The task_state and vm_state which expose to Administrator need description to
+help user to understand the difference.
+
 You can filter the list of servers by image, flavor, name, and status
 through the respective query parameters.
 
@@ -30,7 +34,12 @@ server status is one of the following values:
    pulling the power plug on a physical server, plugging it back in, and
    rebooting it.
 
+-  ``MIGRATING``: The server is under migrating. This is caused by a
+   live migration (moving a server that is active) action.
+
 -  ``PASSWORD``: The password is being reset on the server.
+
+-  ``PAUSED``: The server is paused.
 
 -  ``REBOOT``: The server is in a soft reboot state. A reboot command
    was passed to the operating system.
@@ -46,6 +55,12 @@ server status is one of the following values:
    some reason. The destination server is being cleaned up and the
    original source server is restarting.
 
+-  ``SHELVED``: The server is in shelved state. Depends on the shelve offload
+   time, the server will be automatically shelved off loaded.
+
+-  ``SHELVED_OFFLOADED``: The shelved server is offloaded (removed from the
+   compute host) and it needs unshelved action to be used again.
+
 -  ``SHUTOFF``: The virtual machine (VM) was powered down by the user,
    but not through the OpenStack Compute API. For example, the user
    issued a ``shutdown -h`` command from within the server. If
@@ -54,6 +69,11 @@ server status is one of the following values:
    the OpenStack Compute API to restart the server, it might
    be deleted first, depending on the value in the
    *``shutdown_terminate``* database field on the Instance model.
+
+-  ``SOFT_DELETED``: The server is marked as deleted while will keep in the
+   cloud for some time(configurable), during the period authorized user can
+   restore the server back to normal state. When the time expires, the
+   server will be deleted permanently.
 
 -  ``SUSPENDED``: The server is suspended, either by request or
    necessity. This status appears for only the following hypervisors:
@@ -87,8 +107,6 @@ Status Transition:
 
 ``ACTIVE``
 
-``BUILD``
-
 ``ERROR`` (on error)
 
 When you create a server, the operation asynchronously provisions a new
@@ -103,6 +121,12 @@ when creating a server, only the server ID, its links, and the
 administrative password are guaranteed to be returned in the request.
 You can retrieve additional attributes by performing subsequent **GET**
 operations on the server.
+
+Server query
+~~~~~~~~~~~~
+
+TODO: We should introduce that there are multiple methods to filter the
+response of list servers.
 
 Server actions
 ~~~~~~~~~~~~~~~
@@ -124,7 +148,7 @@ Server actions
 
 -  **Evacuate**
 
-   Should a compute node actually go offline, it can no longer report
+   Should a nova-compute service actually go offline, it can no longer report
    status about any of the servers on it. This means they'll be
    listed in an 'ACTIVE' state forever.
 
@@ -149,10 +173,10 @@ Server actions
    spawned in the virt layer and revert all changes, the original server
    will still be used from then on.
 
-   Also, there there is a periodic task configured by param
-   CONF.resize_confirm_window(in seconds), if this value is not 0, nova compute
+   Also, there there is a periodic task configured by configuration option
+   resize_confirm_window(in seconds), if this value is not 0, nova compute
    will check whether the server is in resized state longer than
-   CONF.resize_confirm_window, it will automatically confirm the resize
+   value of resize_confirm_window, it will automatically confirm the resize
    of the server.
 
 -  **Pause**, **Unpause**
@@ -199,13 +223,13 @@ Server actions
    Power off the given server first then detach all the resources associated
    to the server such as network and volumes, then delete the server.
 
-   CONF.reclaim_instance_interval (in seconds) decides whether the server to
-   be deleted will still be in the system. If this value is greater than 0,
-   the deleted server will not be deleted immediately, instead it will be put
-   into a queue until it's too old(deleted time greater than the value of
-   CONF.reclaim_instance_interval). Admin is able to use Restore action to
-   recover the server from the delete queue. If the deleted server stays
-   more than the CONF.reclaim_instance_interval, it will be deleted by compute
+   The configuration option 'reclaim_instance_interval' (in seconds) decides whether
+   the server to be deleted will still be in the system. If this value is greater
+   than 0, the deleted server will not be deleted immediately, instead it will be
+   put into a queue until it's too old (deleted time greater than the value of
+   reclaim_instance_interval). Administrator is able to use Restore action to
+   recover the server from the delete queue. If the deleted server remains
+   longer than the value of reclaim_instance_interval, it will be deleted by compute
    service automatically.
 
 -  **Shelve**, **Shelve offload**, **Unshelve**
@@ -213,6 +237,13 @@ Server actions
    Shelving an server indicates it will not be needed for some time and may be
    temporarily removed from the hypervisors. This allows its resources to
    be freed up for use by someone else.
+
+   By default the configuration option 'shelved_offload_time' is 0 and the shelved
+   server will be removed from the hypervisor immediately after shelve operation;
+   Otherwise, the resource will be kept for the value of 'shelved_offload_time'
+   (in seconds) so that during the time period the unshelve action will be faster,
+   then the periodic task will remove the server from hypervisor. Set the option
+   'shelved_offload_time' to -1 make it never offload.
 
    Shelve will power off the given server and take a snapshot if it is booted
    from image. The server can then be offloaded from the compute host and its
@@ -222,7 +253,7 @@ Server actions
 
    Shelve offload is used to explicitly remove a shelved server that has been
    left on a host. This action can only be used on a shelved server and is
-   usually performed by an admin.
+   usually performed by an administrator.
 
    Unshelve is the reverse operation of Shelve. It builds and boots the server
    again, on a new scheduled host if it was offloaded, using the shelved image
@@ -231,10 +262,12 @@ Server actions
 -  **Lock**, **Unlock**
 
    Lock a server so no further actions are allowed to the server. This can
-   be done by either admin or the server's owner.
+   be done by either administrator or the server's owner. By default, only owner
+   or administrator can lock the sever, and administrator can overwrite owner's lock.
 
-   Unlock will unlock an server in locked state so additional
-   operations can be performed on the server.
+   Unlock will unlock a server in locked state so additional
+   operations can be performed on the server. By default, only owner or
+   administrator can unlock the server.
 
 -  **Rescue**, **Unrescue**
 
@@ -245,15 +278,15 @@ Server actions
    Unrescue is the reverse action of Rescue, the server spawned from the special
    root image will be deleted.
 
--  **Set admin password**
+-  **Set administrator password**
 
-   Set the root/admin password for the given server, it uses an
-   optional installed agent to inject the admin password.
+   Set the root/administrator password for the given server, it uses an
+   optional installed agent to inject the administrator password.
 
 -  **Migrate**, **Live migrate**
 
-   Migrate is usually utilized by admin, it will move a server to another
-   host; it utilize the 'resize' action but with same flavor, so during
+   Migrate is usually utilized by administrator, it will move a server to
+   another host; it utilize the 'resize' action but with same flavor, so during
    migration, the server will be power off and rebuilt on another host.
 
    Live migrate also moves an server from one host to another, but it won't
@@ -286,6 +319,21 @@ of key-value pairs that can be supplied per server is determined by the
 compute provider and may be queried via the maxServerMeta absolute
 limit.
 
+Block Device Mapping
+~~~~~~~~~~~~~~~~~~~~
+
+TODO: Add some description about BDM.
+
+Scheduler Hints
+~~~~~~~~~~~~~~~
+
+TODO: Add description about how to custom scheduling policy for server booting.
+
+Server Consoles
+~~~~~~~~~~~~~~~
+
+TODO: We have multiple endpoints about consoles, we should explain that.
+
 Server networks
 ~~~~~~~~~~~~~~~
 
@@ -294,32 +342,11 @@ time. One or more networks can be specified. User can also specify a
 specific port on the network or the fixed IP address to assign to the
 server interface.
 
-Server personality
-~~~~~~~~~~~~~~~~~~
-
-You can customize the personality of a server by injecting data
-into its file system. For example, you might want to insert ssh keys,
-set configuration files, or store data that you want to retrieve from
-inside the server. This feature provides a minimal amount of
-launch-time personalization. If you require significant customization,
-create a custom image.
-
-Follow these guidelines when you inject files:
-
--  The maximum size of the file path data is 255 bytes.
-
--  Encode the file contents as a Base64 string. The maximum size of the
-   file contents is determined by the compute provider and may vary
-   based on the image that is used to create the server
-
 Considerations
 ~~~~~~~~~~~~~~
 
    The maximum limit refers to the number of bytes in the decoded data
    and not the number of characters in the encoded data.
-
--  You can inject text files only. You cannot inject binary or zip files
-   into a new build.
 
 -  The maximum number of file path/content pairs that you can supply is
    also determined by the compute provider and is defined by the
@@ -331,11 +358,6 @@ Considerations
 
 The file injection might not occur until after the server is built and
 booted.
-
-During file injection, any existing files that match specified files are
-renamed to include the BAK extension appended with a time stamp. For
-example, if the ``/etc/passwd`` file exists, it is backed up as
-``/etc/passwd.bak.1246036261.5785``.
 
 After file injection, personality files are accessible by only system
 administrators. For example, on Linux, all files have root and the root
@@ -563,3 +585,46 @@ of resources on single hosts due to moving out old servers.
 Shelving a server is not normally a choice that is available to
 the cloud operator because it affects the availability of the server
 being provided to the user.
+
+Configure Guest OS
+~~~~~~~~~~~~~~~~~~
+
+Metadata API
+------------
+
+TODO
+
+Config Drive
+------------
+
+TODO
+
+User data
+---------
+A user data file is a special key in the metadata service that holds a file
+that cloud-aware applications in the server can access.
+
+Nova has two ways to send user data to the deployed server, one is by
+metadata service to let server able to access to its metadata through
+a predefined ip address (169.254.169.254), then other way is to use config
+drive which will wrap metadata into a iso9660 or vfat format disk so that
+the deployed server can consume it by active engines such as cloud-init
+during its boot process.
+
+Server personality
+------------------
+
+You can customize the personality of a server by injecting data
+into its file system. For example, you might want to insert ssh keys,
+set configuration files, or store data that you want to retrieve from
+inside the server. This feature provides a minimal amount of
+launch-time personalization. If you require significant customization,
+create a custom image.
+
+Follow these guidelines when you inject files:
+
+-  The maximum size of the file path data is 255 bytes.
+
+-  Encode the file contents as a Base64 string. The maximum size of the
+   file contents is determined by the compute provider and may vary
+   based on the image that is used to create the server.

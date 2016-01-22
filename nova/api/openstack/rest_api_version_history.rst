@@ -44,7 +44,7 @@ user documentation.
   ``reservation_id``, ``launch_index``, ``ramdisk_id``, ``kernel_id``, ``hostname``,
   ``root_device_name``, ``userdata``.
 
-  Exposed ``delete_on_termination`` for ``attached_volumes`` in ``os-extended-volumes``.
+  Exposed ``delete_on_termination`` for ``volumes_attached`` in ``os-extended-volumes``.
 
   This change is required for the extraction of EC2 API into a standalone
   service. It exposes necessary properties absent in public nova APIs yet.
@@ -130,3 +130,30 @@ user documentation.
   Exposes VIF ``net-id`` attribute in ``os-virtual-interfaces``.
   User will be able to get Virtual Interfaces ``net-id`` in Virtual Interfaces
   list and can determine in which network a Virtual Interface is plugged into.
+
+2.13
+----
+
+  Add information ``project_id`` and ``user_id`` to ``os-server-groups``
+  API response data.
+
+2.14
+----
+
+  Remove ``onSharedStorage`` parameter from server's evacuate action. Nova will
+  automatically detect if the instance is on shared storage.
+  Also adminPass is removed from the response body. The user can get the
+  password with the server's os-server-password action.
+
+2.15
+----
+
+  From this version of the API users can choose 'soft-affinity' and
+  'soft-anti-affinity' rules too for server-groups.
+
+2.16
+----
+
+  Exposes new host_status attribute for servers/detail and servers/{server_id}.
+  Ability to get nova-compute status when querying servers. By default, this is
+  only exposed to cloud administrators.

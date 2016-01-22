@@ -53,15 +53,20 @@ REST_API_VERSION_HISTORY = """REST API Version History:
              user.
     * 2.11 - Exposes forced_down attribute for os-services
     * 2.12 - Exposes VIF net-id in os-virtual-interfaces
+    * 2.13 - Add project id and user id information for os-server-groups API
+    * 2.14 - Remove onSharedStorage from evacuate request body and remove
+             adminPass from the response body
+    * 2.15 - Add soft-affinity and soft-anti-affinity policies
+    * 2.16 - Exposes host_status for servers/detail and servers/{server_id}
 """
 
 # The minimum and maximum versions of the API supported
-# The default api version request is definied to be the
+# The default api version request is defined to be the
 # the minimum version of the API supported.
 # Note(cyeoh): This only applies for the v2.1 API once microversions
 # support is fully merged. It does not affect the V2 API.
 _MIN_API_VERSION = "2.1"
-_MAX_API_VERSION = "2.12"
+_MAX_API_VERSION = "2.16"
 DEFAULT_API_VERSION = _MIN_API_VERSION
 
 

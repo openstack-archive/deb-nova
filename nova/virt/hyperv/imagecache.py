@@ -17,15 +17,15 @@ Image caching and management.
 """
 import os
 
+from os_win import utilsfactory
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import units
 
-from nova.i18n import _
+from nova import exception
 from nova import utils
-from nova.virt.hyperv import utilsfactory
-from nova.virt.hyperv import vmutils
+from nova.virt.hyperv import pathutils
 from nova.virt import images
 
 LOG = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ CONF.import_opt('use_cow_images', 'nova.virt.driver')
 
 class ImageCache(object):
     def __init__(self):
-        self._pathutils = utilsfactory.get_pathutils()
+        self._pathutils = pathutils.PathUtils()
         self._vhdutils = utilsfactory.get_vhdutils()
 
     def _get_root_vhd_size_gb(self, instance):
@@ -46,8 +46,7 @@ class ImageCache(object):
             return instance.root_gb
 
     def _resize_and_cache_vhd(self, instance, vhd_path):
-        vhd_info = self._vhdutils.get_vhd_info(vhd_path)
-        vhd_size = vhd_info['MaxInternalSize']
+        vhd_size = self._vhdutils.get_vhd_size(vhd_path)['VirtualSize']
 
         root_vhd_size_gb = self._get_root_vhd_size_gb(instance)
         root_vhd_size = root_vhd_size_gb * units.Gi
@@ -57,12 +56,8 @@ class ImageCache(object):
                     vhd_path, root_vhd_size))
 
         if root_vhd_internal_size < vhd_size:
-            raise vmutils.HyperVException(
-                _("Cannot resize the image to a size smaller than the VHD "
-                  "max. internal size: %(vhd_size)s. Requested disk size: "
-                  "%(root_vhd_size)s") %
-                {'vhd_size': vhd_size, 'root_vhd_size': root_vhd_size}
-            )
+            raise exception.FlavorDiskSmallerThanImage(
+                flavor_size=root_vhd_size, image_size=vhd_size)
         if root_vhd_internal_size > vhd_size:
             path_parts = os.path.splitext(vhd_path)
             resized_vhd_path = '%s_%s%s' % (path_parts[0],

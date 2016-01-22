@@ -19,6 +19,7 @@ from oslo_db import exception as db_exc
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
+from oslo_utils import versionutils
 
 from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
@@ -40,7 +41,7 @@ LOG = logging.getLogger(__name__)
 # List of fields that can be joined in DB layer.
 _INSTANCE_OPTIONAL_JOINED_FIELDS = ['metadata', 'system_metadata',
                                     'info_cache', 'security_groups',
-                                    'pci_devices', 'tags']
+                                    'pci_devices', 'tags', 'services']
 # These are fields that are optional but don't translate to db columns
 _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault', 'flavor', 'old_flavor',
                                         'new_flavor', 'ec2_ids']
@@ -86,7 +87,8 @@ _NO_DATA_SENTINEL = object()
 class Instance(base.NovaPersistentObject, base.NovaObject,
                base.NovaObjectDictCompat):
     # Version 2.0: Initial version
-    VERSION = '2.0'
+    # Version 2.1: Added services
+    VERSION = '2.1'
 
     fields = {
         'id': fields.IntegerField(),
@@ -106,6 +108,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         'power_state': fields.IntegerField(nullable=True),
         'vm_state': fields.StringField(nullable=True),
         'task_state': fields.StringField(nullable=True),
+
+        'services': fields.ObjectField('ServiceList'),
 
         'memory_mb': fields.IntegerField(nullable=True),
         'vcpus': fields.IntegerField(nullable=True),
@@ -187,9 +191,19 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
 
     obj_extra_fields = ['name']
 
+    def obj_make_compatible(self, primitive, target_version):
+        super(Instance, self).obj_make_compatible(primitive, target_version)
+        target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (2, 1) and 'services' in primitive:
+            del primitive['services']
+
     def __init__(self, *args, **kwargs):
         super(Instance, self).__init__(*args, **kwargs)
         self._reset_metadata_tracking()
+
+    @property
+    def image_meta(self):
+        return objects.ImageMeta.from_instance(self)
 
     def _reset_metadata_tracking(self, fields=None):
         if fields is None or 'system_metadata' in fields:
@@ -359,6 +373,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 context, objects.TagList(context),
                 objects.Tag, db_inst['tags'])
             instance['tags'] = tags
+
+        if 'services' in expected_attrs:
+            services = base.obj_make_list(
+                    context, objects.ServiceList(context),
+                    objects.Service, db_inst['services'])
+            instance['services'] = services
 
         instance.obj_reset_changes()
         return instance
@@ -837,7 +857,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             raise exception.OrphanedObjectError(method='obj_load_attr',
                                                 objtype=self.obj_name())
 
-        LOG.debug("Lazy-loading `%(attr)s' on %(name)s uuid %(uuid)s",
+        LOG.debug("Lazy-loading '%(attr)s' on %(name)s uuid %(uuid)s",
                   {'attr': attrname,
                    'name': self.obj_name(),
                    'uuid': self.uuid,
@@ -877,22 +897,6 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             # so emulate it for this helper, even though the actual attribute
             # is not nullable.
             return None
-
-    def set_flavor(self, flavor, namespace=None):
-        prefix = ('%s_' % namespace) if namespace is not None else ''
-        attr = '%sflavor' % prefix
-        if not isinstance(flavor, objects.Flavor):
-            flavor = objects.Flavor(**flavor)
-        setattr(self, attr, flavor)
-
-        self.save()
-
-    def delete_flavor(self, namespace):
-        prefix = ('%s_' % namespace) if namespace else ''
-        attr = '%sflavor' % prefix
-        setattr(self, attr, None)
-
-        self.save()
 
     @base.remotable
     def delete_metadata_key(self, key):

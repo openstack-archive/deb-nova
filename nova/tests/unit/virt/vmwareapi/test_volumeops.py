@@ -36,7 +36,7 @@ class VMwareVolumeOpsTestCase(test.NoDBTestCase):
 
         super(VMwareVolumeOpsTestCase, self).setUp()
         vmwareapi_fake.reset()
-        stubs.set_stubs(self.stubs)
+        stubs.set_stubs(self)
         self._session = driver.VMwareAPISession()
         self._context = context.RequestContext('fake_user', 'fake_project')
 
@@ -424,7 +424,7 @@ class VMwareVolumeOpsTestCase(test.NoDBTestCase):
                 vm_ref, connection_info['data']['volume_id'], disk_uuid)
 
     def _test_attach_volume_iscsi(self, adapter_type=None):
-        connection_info = {'driver_volume_type': 'iscsi',
+        connection_info = {'driver_volume_type': constants.DISK_FORMAT_ISCSI,
                            'serial': 'volume-fake-id',
                            'data': {'volume': 'vm-10',
                                     'volume_id': 'volume-fake-id'}}

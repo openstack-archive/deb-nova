@@ -55,7 +55,7 @@ class LibvirtNFSVolumeDriver(fs.LibvirtBaseFileSystemVolumeDriver):
         return conf
 
     def connect_volume(self, connection_info, disk_info):
-        """Connect the volume. Returns xml for libvirt."""
+        """Connect the volume."""
         self._ensure_mounted(connection_info)
 
         connection_info['data']['device_path'] = \
@@ -73,6 +73,9 @@ class LibvirtNFSVolumeDriver(fs.LibvirtBaseFileSystemVolumeDriver):
             if ('device is busy' in six.text_type(exc) or
                 'target is busy' in six.text_type(exc)):
                 LOG.debug("The NFS share %s is still in use.", export)
+            elif ('not mounted' in six.text_type(exc)):
+                LOG.debug("The NFS share %s has already been unmounted.",
+                          export)
             else:
                 LOG.exception(_LE("Couldn't unmount the NFS share %s"), export)
 

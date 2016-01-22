@@ -71,19 +71,12 @@ def is_vpn_image(image_id):
 
 
 def _load_boot_script():
-    shellfile = open(CONF.boot_script_template, "r")
-    try:
+    with open(CONF.boot_script_template, "r") as shellfile:
         s = string.Template(shellfile.read())
-    finally:
-        shellfile.close()
 
-    CONF.import_opt('ec2_dmz_host', 'nova.api.ec2.cloud')
-    CONF.import_opt('ec2_port', 'nova.api.ec2.cloud')
     CONF.import_opt('cnt_vpn_clients', 'nova.network.manager')
 
-    return s.substitute(cc_dmz=CONF.ec2_dmz_host,
-                        cc_port=CONF.ec2_port,
-                        dmz_net=CONF.dmz_net,
+    return s.substitute(dmz_net=CONF.dmz_net,
                         dmz_mask=CONF.dmz_mask,
                         num_vpn=CONF.cnt_vpn_clients)
 
@@ -113,12 +106,12 @@ class CloudPipe(object):
                                       'server.crt')
             z.write(server_crt, 'server.crt')
             z.close()
-            zippy = open(zippath, "r")
-            # NOTE(vish): run instances expects encoded userdata, it is decoded
-            # in the get_metadata_call. autorun.sh also decodes the zip file,
-            # hence the double encoding.
-            encoded = zippy.read().encode("base64").encode("base64")
-            zippy.close()
+            with open(zippath, "r") as zippy:
+                # NOTE(vish): run instances expects encoded userdata,
+                # it is decoded in the get_metadata_call.
+                # autorun.sh also decodes the zip file,
+                # hence the double encoding.
+                encoded = zippy.read().encode("base64").encode("base64")
 
         return encoded
 

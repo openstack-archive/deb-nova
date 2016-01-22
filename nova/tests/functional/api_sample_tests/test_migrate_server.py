@@ -17,8 +17,6 @@ import mock
 from oslo_config import cfg
 from oslo_utils import versionutils
 
-from nova.conductor import manager as conductor_manager
-from nova import db
 from nova.tests.functional.api_sample_tests import test_servers
 
 CONF = cfg.CONF
@@ -28,7 +26,6 @@ CONF.import_opt('osapi_compute_extension',
 
 class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
     extension_name = "os-migrate-server"
-    ctype = 'json'
 
     def _get_flags(self):
         f = super(MigrateServerSamplesJsonTest, self)._get_flags()
@@ -61,9 +58,9 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
             host = scheduler_hint["host"]
             self.assertEqual(self.compute.host, host)
 
-        self.stubs.Set(conductor_manager.ComputeTaskManager,
-                       '_live_migrate',
-                       fake_live_migrate)
+        self.stub_out(
+            'nova.conductor.manager.ComputeTaskManager._live_migrate',
+            fake_live_migrate)
 
         def fake_get_compute(context, host):
             service = dict(host=host,
@@ -76,7 +73,7 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
                                 versionutils.convert_version_to_int('1.0')),
                            disabled=False)
             return {'compute_node': [service]}
-        self.stubs.Set(db, "service_get_by_compute_host", fake_get_compute)
+        self.stub_out("nova.db.service_get_by_compute_host", fake_get_compute)
 
         response = self._do_post('servers/%s/action' % self.uuid,
                                  'live-migrate-server',

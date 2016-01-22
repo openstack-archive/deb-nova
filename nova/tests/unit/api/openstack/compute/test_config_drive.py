@@ -46,9 +46,9 @@ class ConfigDriveTestV21(test.TestCase):
 
     def setUp(self):
         super(ConfigDriveTestV21, self).setUp()
-        fakes.stub_out_networking(self.stubs)
+        fakes.stub_out_networking(self)
         fakes.stub_out_rate_limiting(self.stubs)
-        fake.stub_out_image_service(self.stubs)
+        fake.stub_out_image_service(self)
         self._setup_wsgi()
 
     def test_show(self):
@@ -142,7 +142,7 @@ class ServersControllerCreateTestV21(test.TestCase):
 
             return instance
 
-        fake.stub_out_image_service(self.stubs)
+        fake.stub_out_image_service(self)
         self.stubs.Set(db, 'instance_create', instance_create)
 
     def _test_create_extra(self, params, override_controller):
@@ -152,7 +152,7 @@ class ServersControllerCreateTestV21(test.TestCase):
         body = dict(server=server)
         req = fakes.HTTPRequest.blank(self.base_url + 'servers')
         req.method = 'POST'
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
         if override_controller is not None:
             server = override_controller.create(req, body=body).obj['server']
@@ -193,7 +193,7 @@ class ServersControllerCreateTestV21(test.TestCase):
 
         req = fakes.HTTPRequest.blank(self.base_url + 'servers')
         req.method = 'POST'
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         return req, body

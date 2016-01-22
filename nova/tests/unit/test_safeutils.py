@@ -12,99 +12,59 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import functools
+
 from nova import safe_utils
 from nova import test
 
 
-class GetCallArgsTestCase(test.NoDBTestCase):
-    def _test_func(self, instance, red=None, blue=None):
-        pass
+class WrappedCodeTestCase(test.NoDBTestCase):
+    """Test the get_wrapped_function utility method."""
 
-    def test_all_kwargs(self):
-        args = ()
-        kwargs = {'instance': {'uuid': 1}, 'red': 3, 'blue': 4}
-        callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
-        # implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertIn('red', callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertIn('blue', callargs)
-        self.assertEqual(4, callargs['blue'])
+    def _wrapper(self, function):
+        @functools.wraps(function)
+        def decorated_function(self, *args, **kwargs):
+            function(self, *args, **kwargs)
+        return decorated_function
 
-    def test_all_args(self):
-        args = ({'uuid': 1}, 3, 4)
-        kwargs = {}
-        callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
-        # implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertIn('red', callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertIn('blue', callargs)
-        self.assertEqual(4, callargs['blue'])
-
-    def test_mixed_args(self):
-        args = ({'uuid': 1}, 3)
-        kwargs = {'blue': 4}
-        callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
-        # implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertIn('red', callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertIn('blue', callargs)
-        self.assertEqual(4, callargs['blue'])
-
-    def test_partial_kwargs(self):
-        args = ()
-        kwargs = {'instance': {'uuid': 1}, 'red': 3}
-        callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
-        # implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertIn('red', callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertIn('blue', callargs)
-        self.assertIsNone(callargs['blue'])
-
-    def test_partial_args(self):
-        args = ({'uuid': 1}, 3)
-        kwargs = {}
-        callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
-        # implicit self counts as an arg
-        self.assertEqual(4, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertIn('red', callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertIn('blue', callargs)
-        self.assertIsNone(callargs['blue'])
-
-    def test_partial_mixed_args(self):
-        args = (3,)
-        kwargs = {'instance': {'uuid': 1}}
-        callargs = safe_utils.getcallargs(self._test_func, *args, **kwargs)
-        self.assertEqual(4, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
-        self.assertIn('red', callargs)
-        self.assertEqual(3, callargs['red'])
-        self.assertIn('blue', callargs)
-        self.assertIsNone(callargs['blue'])
-
-    def test_no_named_args(self):
-        def _fake(*args, **kwargs):
+    def test_single_wrapped(self):
+        @self._wrapper
+        def wrapped(self, instance, red=None, blue=None):
             pass
 
-        # This is not captured by getcallargs
-        args = (3,)
-        kwargs = {'instance': {'uuid': 1}}
-        callargs = safe_utils.getcallargs(_fake, *args, **kwargs)
-        self.assertEqual(1, len(callargs))
-        self.assertIn('instance', callargs)
-        self.assertEqual({'uuid': 1}, callargs['instance'])
+        func = safe_utils.get_wrapped_function(wrapped)
+        func_code = func.__code__
+        self.assertEqual(4, len(func_code.co_varnames))
+        self.assertIn('self', func_code.co_varnames)
+        self.assertIn('instance', func_code.co_varnames)
+        self.assertIn('red', func_code.co_varnames)
+        self.assertIn('blue', func_code.co_varnames)
+
+    def test_double_wrapped(self):
+        @self._wrapper
+        @self._wrapper
+        def wrapped(self, instance, red=None, blue=None):
+            pass
+
+        func = safe_utils.get_wrapped_function(wrapped)
+        func_code = func.__code__
+        self.assertEqual(4, len(func_code.co_varnames))
+        self.assertIn('self', func_code.co_varnames)
+        self.assertIn('instance', func_code.co_varnames)
+        self.assertIn('red', func_code.co_varnames)
+        self.assertIn('blue', func_code.co_varnames)
+
+    def test_triple_wrapped(self):
+        @self._wrapper
+        @self._wrapper
+        @self._wrapper
+        def wrapped(self, instance, red=None, blue=None):
+            pass
+
+        func = safe_utils.get_wrapped_function(wrapped)
+        func_code = func.__code__
+        self.assertEqual(4, len(func_code.co_varnames))
+        self.assertIn('self', func_code.co_varnames)
+        self.assertIn('instance', func_code.co_varnames)
+        self.assertIn('red', func_code.co_varnames)
+        self.assertIn('blue', func_code.co_varnames)

@@ -45,21 +45,29 @@ import nova.image.download as image_xfers
 glance_opts = [
     cfg.StrOpt('host',
                default='$my_ip',
-               help='Default glance hostname or IP address'),
+               # TODO(sdague): remove in N
+               deprecated_for_removal=True,
+               help='Glance server hostname or IP address'),
     cfg.IntOpt('port',
                default=9292,
                min=1,
                max=65535,
-               help='Default glance port'),
+               # TODO(sdague): remove in N
+               deprecated_for_removal=True,
+               help='Glance server port'),
     cfg.StrOpt('protocol',
                 default='http',
                 choices=('http', 'https'),
-                help='Default protocol to use when connecting to glance. '
+                # TODO(sdague): remove in N
+                deprecated_for_removal=True,
+                help='Protocol to use when connecting to glance. '
                      'Set to https for SSL.'),
     cfg.ListOpt('api_servers',
-                help='A list of the glance api servers available to nova. '
-                     'Prefix with https:// for ssl-based glance api servers. '
-                     '([hostname|ip]:port)'),
+                help='''
+A list of the glance api servers endpoints available to nova. These
+should be fully qualified urls of the form
+"scheme://hostname:port[/path]" (i.e. "http://10.0.1.0:9292" or
+"https://my.glance.server/image")'''),
     cfg.BoolOpt('api_insecure',
                 default=False,
                 help='Allow to perform insecure SSL (https) requests to '
@@ -98,20 +106,18 @@ def generate_image_url(image_ref):
     return "%s/images/%s" % (generate_glance_url(), image_ref)
 
 
-def _parse_image_ref(image_href):
-    """Parse an image href into composite parts.
+def _endpoint_from_image_ref(image_href):
+    """Return the image_ref and guessed endpoint from an image url.
 
     :param image_href: href of an image
-    :returns: a tuple of the form (image_id, host, port)
-    :raises ValueError
-
+    :returns: a tuple of the form (image_id, endpoint_url)
     """
-    o = urlparse.urlparse(image_href)
-    port = o.port or 80
-    host = o.netloc.rsplit(':', 1)[0]
-    image_id = o.path.split('/')[-1]
-    use_ssl = (o.scheme == 'https')
-    return (image_id, host, port, use_ssl)
+    parts = image_href.split('/')
+    image_id = parts[-1]
+    # the endpoint is everything in the url except the last 3 bits
+    # which are version, 'images', and image_id
+    endpoint = '/'.join(parts[:-3])
+    return (image_id, endpoint)
 
 
 def generate_identity_headers(context, status='Confirmed'):
@@ -119,40 +125,29 @@ def generate_identity_headers(context, status='Confirmed'):
         'X-Auth-Token': getattr(context, 'auth_token', None),
         'X-User-Id': getattr(context, 'user', None),
         'X-Tenant-Id': getattr(context, 'tenant', None),
-        'X-Roles': ','.join(context.roles),
+        'X-Roles': ','.join(getattr(context, 'roles', [])),
         'X-Identity-Status': status,
     }
 
 
-def _create_glance_client(context, host, port, use_ssl, version=1):
-    """Instantiate a new glanceclient.Client object."""
-    params = {}
-    if use_ssl:
-        scheme = 'https'
-        # https specific params
-        params['insecure'] = CONF.glance.api_insecure
-        params['ssl_compression'] = False
-        sslutils.is_enabled(CONF)
-        if CONF.ssl.cert_file:
-            params['cert_file'] = CONF.ssl.cert_file
-        if CONF.ssl.key_file:
-            params['key_file'] = CONF.ssl.key_file
-        if CONF.ssl.ca_file:
-            params['cacert'] = CONF.ssl.ca_file
-    else:
-        scheme = 'http'
-
-    if CONF.auth_strategy == 'keystone':
-        # NOTE(isethi): Glanceclient <= 0.9.0.49 accepts only
-        # keyword 'token', but later versions accept both the
-        # header 'X-Auth-Token' and 'token'
-        params['token'] = context.auth_token
+def _glanceclient_from_endpoint(context, endpoint, version=1):
+        """Instantiate a new glanceclient.Client object."""
+        params = {}
+        # NOTE(sdague): even if we aren't using keystone, it doesn't
+        # hurt to send these headers.
         params['identity_headers'] = generate_identity_headers(context)
-    if netutils.is_valid_ipv6(host):
-        # if so, it is ipv6 address, need to wrap it with '[]'
-        host = '[%s]' % host
-    endpoint = '%s://%s:%s' % (scheme, host, port)
-    return glanceclient.Client(str(version), endpoint, **params)
+        if endpoint.startswith('https://'):
+            # https specific params
+            params['insecure'] = CONF.glance.api_insecure
+            params['ssl_compression'] = False
+            sslutils.is_enabled(CONF)
+            if CONF.ssl.cert_file:
+                params['cert_file'] = CONF.ssl.cert_file
+            if CONF.ssl.key_file:
+                params['key_file'] = CONF.ssl.key_file
+            if CONF.ssl.ca_file:
+                params['cacert'] = CONF.ssl.ca_file
+        return glanceclient.Client(str(version), endpoint, **params)
 
 
 def _determine_curr_major_version(endpoint):
@@ -181,19 +176,19 @@ def get_api_servers():
     """
     api_servers = []
 
-    configured_servers = (['%s:%s' % (CONF.glance.host, CONF.glance.port)]
+    configured_servers = ([generate_glance_url()]
                           if CONF.glance.api_servers is None
                           else CONF.glance.api_servers)
     for api_server in configured_servers:
         if '//' not in api_server:
             api_server = 'http://' + api_server
-        o = urlparse.urlparse(api_server)
-        port = o.port or 80
-        host = o.netloc.rsplit(':', 1)[0]
-        if host[0] == '[' and host[-1] == ']':
-            host = host[1:-1]
-        use_ssl = (o.scheme == 'https')
-        api_servers.append((host, port, use_ssl))
+            # NOTE(sdague): remove in N.
+            LOG.warn(
+                _LW("No protocol specified in for api_server '%s', "
+                    "please update [glance] api_servers with fully "
+                    "qualified url including scheme (http / https)"),
+                api_server)
+        api_servers.append(api_server)
     random.shuffle(api_servers)
     return itertools.cycle(api_servers)
 
@@ -201,34 +196,26 @@ def get_api_servers():
 class GlanceClientWrapper(object):
     """Glance client wrapper class that implements retries."""
 
-    def __init__(self, context=None, host=None, port=None, use_ssl=False,
-                 version=1):
-        if host is not None:
+    def __init__(self, context=None, endpoint=None, version=1):
+        if endpoint is not None:
             self.client = self._create_static_client(context,
-                                                     host, port,
-                                                     use_ssl, version)
+                                                     endpoint,
+                                                     version)
         else:
             self.client = None
         self.api_servers = None
 
-    def _create_static_client(self, context, host, port, use_ssl, version):
+    def _create_static_client(self, context, endpoint, version):
         """Create a client that we'll use for every call."""
-        self.host = host
-        self.port = port
-        self.use_ssl = use_ssl
-        self.version = version
-        return _create_glance_client(context,
-                                     self.host, self.port,
-                                     self.use_ssl, self.version)
+        self.api_server = str(endpoint)
+        return _glanceclient_from_endpoint(context, endpoint, version)
 
     def _create_onetime_client(self, context, version):
         """Create a client that will be used for one call."""
         if self.api_servers is None:
             self.api_servers = get_api_servers()
-        self.host, self.port, self.use_ssl = next(self.api_servers)
-        return _create_glance_client(context,
-                                     self.host, self.port,
-                                     self.use_ssl, version)
+        self.api_server = next(self.api_servers)
+        return _glanceclient_from_endpoint(context, self.api_server, version)
 
     def call(self, context, version, method, *args, **kwargs):
         """Call a glance client method.  If we get a connection error,
@@ -251,22 +238,19 @@ class GlanceClientWrapper(object):
             try:
                 return getattr(client.images, method)(*args, **kwargs)
             except retry_excs as e:
-                host = self.host
-                port = self.port
-
                 if attempt < num_attempts:
                     extra = "retrying"
                 else:
                     extra = 'done trying'
 
                 LOG.exception(_LE("Error contacting glance server "
-                                  "'%(host)s:%(port)s' for '%(method)s', "
+                                  "'%(server)s' for '%(method)s', "
                                   "%(extra)s."),
-                              {'host': host, 'port': port,
+                              {'server': self.api_server,
                                'method': method, 'extra': extra})
                 if attempt == num_attempts:
                     raise exception.GlanceConnectionFailed(
-                            host=host, port=port, reason=six.text_type(e))
+                        server=str(self.api_server), reason=six.text_type(e))
                 time.sleep(1)
 
 
@@ -598,9 +582,12 @@ def _extract_attributes(image, include_locations=False):
         elif attr in include_locations_attrs:
             if include_locations:
                 output[attr] = getattr(image, attr, None)
+        # NOTE(mdorman): 'size' attribute must not be 'None', so use 0 instead
+        elif attr == 'size':
+            output[attr] = getattr(image, attr) or 0
         else:
             # NOTE(xarses): Anything that is caught with the default value
-            # will result in a additional lookup to glance for said attr.
+            # will result in an additional lookup to glance for said attr.
             # Notable attributes that could have this issue:
             # disk_format, container_format, name, deleted, checksum
             output[attr] = getattr(image, attr, None)
@@ -675,10 +662,9 @@ def get_remote_image_service(context, image_href):
         return image_service, image_href
 
     try:
-        (image_id, glance_host, glance_port, use_ssl) = \
-            _parse_image_ref(image_href)
+        (image_id, endpoint) = _endpoint_from_image_ref(image_href)
         glance_client = GlanceClientWrapper(context=context,
-                host=glance_host, port=glance_port, use_ssl=use_ssl)
+                                            endpoint=endpoint)
     except ValueError:
         raise exception.InvalidImageRef(image_href=image_href)
 

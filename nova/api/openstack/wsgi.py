@@ -86,6 +86,17 @@ def get_media_map():
     return dict(_MEDIA_TYPE_MAP.items())
 
 
+# NOTE(rlrossit): This function allows a get on both a dict-like and an
+# object-like object. cache_db_items() is used on both versioned objects and
+# dicts, so the function can't be totally changed over to [] syntax, nor
+# can it be changed over to use getattr().
+def item_get(item, item_key):
+    if hasattr(item, '__getitem__'):
+        return item[item_key]
+    else:
+        return getattr(item, item_key)
+
+
 class Request(wsgi.Request):
     """Add some OpenStack API-specific logic to the base webob.Request."""
 
@@ -105,7 +116,7 @@ class Request(wsgi.Request):
         """
         db_items = self._extension_data['db_items'].setdefault(key, {})
         for item in items:
-            db_items[item[item_key]] = item
+            db_items[item_get(item, item_key)] = item
 
     def get_db_items(self, key):
         """Allow an API extension to get previously stored objects within
@@ -297,7 +308,7 @@ class JSONDictSerializer(DictSerializer):
     """Default JSON request body serialization."""
 
     def default(self, data):
-        return jsonutils.dumps(data)
+        return six.text_type(jsonutils.dumps(data))
 
 
 def serializers(**serializers):
@@ -457,14 +468,20 @@ class ResponseObject(object):
                                                       default_serializers)
             serializer = _serializer()
 
-        response = webob.Response()
+        body = None
+        if self.obj is not None:
+            body = serializer.serialize(self.obj)
+        response = webob.Response(body=body)
+        if response.headers.get('Content-Length'):
+            # NOTE(andreykurilin): we need to encode 'Content-Length' header,
+            # since webob.Response auto sets it if "body" attr is presented.
+            # https://github.com/Pylons/webob/blob/1.5.0b0/webob/response.py#L147
+            response.headers['Content-Length'] = utils.utf8(
+                response.headers['Content-Length'])
         response.status_int = self.code
         for hdr, value in self._headers.items():
-            response.headers[hdr] = utils.utf8(str(value))
+            response.headers[hdr] = utils.utf8(value)
         response.headers['Content-Type'] = utils.utf8(content_type)
-        if self.obj is not None:
-            response.body = serializer.serialize(self.obj)
-
         return response
 
     @property
@@ -495,7 +512,7 @@ def action_peek_json(body):
         raise exception.MalformedRequestBody(reason=msg)
 
     # Return the action and the decoded body...
-    return decoded.keys()[0]
+    return list(decoded.keys())[0]
 
 
 class ResourceExceptionHandler(object):
@@ -645,7 +662,7 @@ class Resource(wsgi.Application):
             content_type = request.get_content_type()
         except exception.InvalidContentType:
             LOG.debug("Unrecognized Content-Type provided in request")
-            return None, ''
+            return None, b''
 
         return content_type, request.body
 
@@ -860,10 +877,9 @@ class Resource(wsgi.Application):
                                               self.default_serializers)
 
         if hasattr(response, 'headers'):
-
-            for hdr, val in response.headers.items():
+            for hdr, val in list(response.headers.items()):
                 # Headers must be utf-8 strings
-                response.headers[hdr] = utils.utf8(str(val))
+                response.headers[hdr] = utils.utf8(val)
 
             if not request.api_version_request.is_null():
                 response.headers[API_VERSION_REQUEST_HEADER] = \
@@ -1158,7 +1174,7 @@ class Fault(webob.exc.HTTPException):
     def __init__(self, exception):
         """Create a Fault for the given webob.exc.exception."""
         self.wrapped_exc = exception
-        for key, value in self.wrapped_exc.headers.items():
+        for key, value in list(self.wrapped_exc.headers.items()):
             self.wrapped_exc.headers[key] = str(value)
         self.status_int = exception.status_int
 
@@ -1195,8 +1211,9 @@ class Fault(webob.exc.HTTPException):
             'application/json': JSONDictSerializer(),
         }[content_type]
 
-        self.wrapped_exc.body = serializer.serialize(fault_data)
         self.wrapped_exc.content_type = content_type
+        self.wrapped_exc.charset = 'UTF-8'
+        self.wrapped_exc.text = serializer.serialize(fault_data)
 
         return self.wrapped_exc
 
@@ -1245,7 +1262,8 @@ class RateLimitFault(webob.exc.HTTPException):
         }[content_type]
 
         content = serializer.serialize(self.content)
-        self.wrapped_exc.body = content
+        self.wrapped_exc.charset = 'UTF-8'
         self.wrapped_exc.content_type = content_type
+        self.wrapped_exc.text = content
 
         return self.wrapped_exc

@@ -24,7 +24,7 @@ responses from the server.
 
 .. warning:: The ``latest`` value is mostly meant for integration testing and
   would be dangerous to rely on in client code since Nova microversions are not
-  following semver and therefore backward compability is not guaranteed.
+  following semver and therefore backward compatibility is not guaranteed.
   Clients, like python-novaclient, should always require a specific
   microversion but limit what is acceptable to the version range that it
   understands at the time.
@@ -177,6 +177,20 @@ we need a microversion".
   validation can fail with a 400 for invalid json request body. Request to
   url/resource that does not exist always fails with 404.
 
+When a microversion is not needed
+---------------------------------
+
+A microversion is not needed in the following situation:
+
+- the response
+
+  - Changing the error message without changing the response code
+    does not require a new microversion.
+
+  - Removing an inapplicable HTTP header, for example, suppose the Retry-After
+    HTTP header is being returned with a 4xx code. This header should only be
+    returned with a 503 or 3xx response, so it may be removed without bumping
+    the microversion.
 
 In Code
 -------
@@ -233,25 +247,6 @@ It is vital that the two methods have the same name, so the second of
 them will need ``# noqa`` to avoid failing flake8's ``F811`` rule. The
 two methods may be different in any kind of semantics (schema
 validation, return values, response codes, etc)
-
-A method with only small changes between versions
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-A method may have only small changes between microversions, in which
-case you can decorate a private method::
-
-    @api_version("2.1", "2.4")
-    def _version_specific_func(self, req, arg1):
-        pass
-
-    @api_version(min_version="2.5")  # noqa
-    def _version_specific_func(self, req, arg1):
-        pass
-
-    def show(self, req, id):
-        .... common stuff ....
-        self._version_specific_func(req, "foo")
-        .... common stuff ....
 
 A change in schema only
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -328,6 +323,9 @@ necessary to add changes to other places which describe your change:
 * Update the get versions api sample files:
   ``doc/api_samples/versions/versions-get-resp.json`` and
   ``nova/tests/functional/api_samples/versions/versions-get-resp.json.tpl``.
+
+* Make a new commit to python-novaclient and update corresponding
+  files to enable the newly added microversion API.
 
 Allocating a microversion
 -------------------------

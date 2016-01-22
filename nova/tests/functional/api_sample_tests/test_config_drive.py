@@ -43,14 +43,14 @@ class ConfigDriveSampleJsonTest(test_servers.ServersSampleBase):
 
     def setUp(self):
         super(ConfigDriveSampleJsonTest, self).setUp()
-        fakes.stub_out_networking(self.stubs)
+        fakes.stub_out_networking(self)
         fakes.stub_out_rate_limiting(self.stubs)
-        fake.stub_out_image_service(self.stubs)
+        fake.stub_out_image_service(self)
 
     def test_config_drive_show(self):
         uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
+        subs = {}
         subs['hostid'] = '[a-f0-9]+'
         # config drive can be a string for True or empty value for False
         subs['cdrive'] = '.*'
@@ -62,7 +62,7 @@ class ConfigDriveSampleJsonTest(test_servers.ServersSampleBase):
     def test_config_drive_detail(self):
         self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/detail')
-        subs = self._get_regexes()
+        subs = {}
         subs['hostid'] = '[a-f0-9]+'
         # config drive can be a string for True or empty value for False
         subs['cdrive'] = '.*'

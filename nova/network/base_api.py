@@ -114,27 +114,27 @@ class NetworkAPI(base.Base):
         raise NotImplementedError()
 
     def get_fixed_ip(self, context, id):
-        """Get fixed ip by id."""
+        """Get fixed IP by id."""
         raise NotImplementedError()
 
     def get_fixed_ip_by_address(self, context, address):
-        """Get fixed ip by address."""
+        """Get fixed IP by address."""
         raise NotImplementedError()
 
     def get_floating_ip(self, context, id):
-        """Get floating ip by id."""
+        """Get floating IP by id."""
         raise NotImplementedError()
 
     def get_floating_ip_pools(self, context):
-        """Get floating ip pools."""
+        """Get floating IP pools."""
         raise NotImplementedError()
 
     def get_floating_ip_by_address(self, context, address):
-        """Get floating ip by address."""
+        """Get floating IP by address."""
         raise NotImplementedError()
 
     def get_floating_ips_by_project(self, context):
-        """Get floating ips by project."""
+        """Get floating IPs by project."""
         raise NotImplementedError()
 
     def get_instance_id_by_floating_address(self, context, address):
@@ -150,34 +150,34 @@ class NetworkAPI(base.Base):
         raise NotImplementedError()
 
     def allocate_floating_ip(self, context, pool=None):
-        """Adds (allocate) floating ip to a project from a pool."""
+        """Adds (allocate) floating IP to a project from a pool."""
         raise NotImplementedError()
 
     def release_floating_ip(self, context, address,
                             affect_auto_assigned=False):
-        """Removes (deallocates) a floating ip with address from a project."""
+        """Removes (deallocates) a floating IP with address from a project."""
         raise NotImplementedError()
 
     def disassociate_and_release_floating_ip(self, context, instance,
                                            floating_ip):
-        """Removes (deallocates) and deletes the floating ip."""
+        """Removes (deallocates) and deletes the floating IP."""
         raise NotImplementedError()
 
     def associate_floating_ip(self, context, instance,
                               floating_address, fixed_address,
                               affect_auto_assigned=False):
-        """Associates a floating ip with a fixed ip."""
+        """Associates a floating IP with a fixed IP."""
         raise NotImplementedError()
 
     def disassociate_floating_ip(self, context, instance, address,
                                  affect_auto_assigned=False):
-        """Disassociates a floating ip from fixed ip it is associated with."""
+        """Disassociates a floating IP from fixed IP it is associated with."""
         raise NotImplementedError()
 
     def allocate_for_instance(self, context, instance, vpn,
                               requested_networks, macs=None,
                               security_groups=None,
-                              dhcp_options=None):
+                              dhcp_options=None, bind_host_id=None):
         """Allocates all network structures for an instance.
 
         :param context: The request context.
@@ -195,6 +195,7 @@ class NetworkAPI(base.Base):
             configured with the baremetal hypervisor. It is expected that these
             are already formatted for the neutron v2 api.
             See nova/virt/driver.py:dhcp_options_for_instance for an example.
+        :param bind_host_id: the host ID to attach to the ports being created.
         :returns: network info as from get_instance_nw_info() below
         """
         raise NotImplementedError()
@@ -205,7 +206,8 @@ class NetworkAPI(base.Base):
         raise NotImplementedError()
 
     def allocate_port_for_instance(self, context, instance, port_id,
-                                   network_id=None, requested_ip=None):
+                                   network_id=None, requested_ip=None,
+                                   bind_host_id=None):
         """Allocate port for instance."""
         raise NotImplementedError()
 
@@ -222,11 +224,11 @@ class NetworkAPI(base.Base):
         raise NotImplementedError()
 
     def add_fixed_ip_to_instance(self, context, instance, network_id):
-        """Adds a fixed ip to instance from specified network."""
+        """Adds a fixed IP to instance from specified network."""
         raise NotImplementedError()
 
     def remove_fixed_ip_from_instance(self, context, instance, address):
-        """Removes a fixed ip from instance from specified network."""
+        """Removes a fixed IP from instance from specified network."""
         raise NotImplementedError()
 
     def add_network_to_project(self, context, project_id, network_uuid=None):
@@ -277,7 +279,7 @@ class NetworkAPI(base.Base):
 
     def get_dns_domains(self, context):
         """Returns a list of available dns domains.
-        These can be used to create DNS entries for floating ips.
+        These can be used to create DNS entries for floating IPs.
         """
         raise NotImplementedError()
 

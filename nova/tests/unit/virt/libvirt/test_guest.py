@@ -78,6 +78,11 @@ class GuestTestCase(test.NoDBTestCase):
         self.domain.createWithFlags.assert_called_once_with(
             fakelibvirt.VIR_DOMAIN_START_PAUSED)
 
+    def test_shutdown(self):
+        self.domain.shutdown = mock.MagicMock()
+        self.guest.shutdown()
+        self.domain.shutdown.assert_called_once_with()
+
     @mock.patch.object(encodeutils, 'safe_decode')
     def test_launch_exception(self, mock_safe_decode):
         self.domain.createWithFlags.side_effect = test.TestingException
@@ -135,13 +140,13 @@ class GuestTestCase(test.NoDBTestCase):
         self.domain.resume.assert_called_once_with()
 
     def test_get_vcpus_info(self):
-        self.domain.vcpus.return_value = ([(0, 1, long(10290000000), 2)],
+        self.domain.vcpus.return_value = ([(0, 1, int(10290000000), 2)],
                                      [(True, True)])
         vcpus = list(self.guest.get_vcpus_info())
         self.assertEqual(0, vcpus[0].id)
         self.assertEqual(2, vcpus[0].cpu)
         self.assertEqual(1, vcpus[0].state)
-        self.assertEqual(long(10290000000), vcpus[0].time)
+        self.assertEqual(int(10290000000), vcpus[0].time)
 
     def test_delete_configuration(self):
         self.guest.delete_configuration()
@@ -212,6 +217,56 @@ class GuestTestCase(test.NoDBTestCase):
         self.domain.detachDeviceFlags.assert_called_once_with(
             "</xml>", flags=(fakelibvirt.VIR_DOMAIN_AFFECT_CONFIG |
                              fakelibvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+    def test_detach_device_with_retry_detach_success(self):
+        conf = mock.Mock(spec=vconfig.LibvirtConfigGuestDevice)
+        conf.to_xml.return_value = "</xml>"
+        get_config = mock.Mock()
+        # Force multiple retries of detach
+        get_config.side_effect = [conf, conf, conf, None]
+        dev_path = "/dev/vdb"
+
+        retry_detach = self.guest.detach_device_with_retry(
+            get_config, dev_path, persistent=True, live=True,
+            inc_sleep_time=.01)
+        # Ensure we've only done the initial detach call
+        self.domain.detachDeviceFlags.assert_called_once_with(
+            "</xml>", flags=(fakelibvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                             fakelibvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+        get_config.assert_called_with(dev_path)
+
+        # Some time later, we can do the wait/retry to ensure detach succeeds
+        self.domain.detachDeviceFlags.reset_mock()
+        retry_detach()
+        # Should have two retries before we pretend device is detached
+        self.assertEqual(2, self.domain.detachDeviceFlags.call_count)
+
+    def test_detach_device_with_retry_detach_failure(self):
+        conf = mock.Mock(spec=vconfig.LibvirtConfigGuestDevice)
+        conf.to_xml.return_value = "</xml>"
+        # Continue to return some value for the disk config
+        get_config = mock.Mock(return_value=conf)
+
+        retry_detach = self.guest.detach_device_with_retry(
+            get_config, "/dev/vdb", persistent=True, live=True,
+            inc_sleep_time=.01, max_retry_count=3)
+        # Ensure we've only done the initial detach call
+        self.domain.detachDeviceFlags.assert_called_once_with(
+            "</xml>", flags=(fakelibvirt.VIR_DOMAIN_AFFECT_CONFIG |
+                             fakelibvirt.VIR_DOMAIN_AFFECT_LIVE))
+
+        # Some time later, we can do the wait/retry to ensure detach
+        self.domain.detachDeviceFlags.reset_mock()
+        # Should hit max # of retries
+        self.assertRaises(exception.DeviceDetachFailed, retry_detach)
+        self.assertEqual(4, self.domain.detachDeviceFlags.call_count)
+
+    def test_detach_device_with_retry_device_not_found(self):
+        get_config = mock.Mock(return_value=None)
+        self.assertRaises(
+            exception.DeviceNotFound, self.guest.detach_device_with_retry,
+            get_config, "/dev/vdb", persistent=True, live=True)
 
     def test_get_xml_desc(self):
         self.guest.get_xml_desc()
@@ -368,6 +423,71 @@ class GuestTestCase(test.NoDBTestCase):
     def test_is_active_when_domain_not_active(self):
         with mock.patch.object(self.domain, "isActive", return_value=False):
             self.assertFalse(self.guest.is_active())
+
+    def test_freeze_filesystems(self):
+        self.guest.freeze_filesystems()
+        self.domain.fsFreeze.assert_called_once_with()
+
+    def test_thaw_filesystems(self):
+        self.guest.thaw_filesystems()
+        self.domain.fsThaw.assert_called_once_with()
+
+    def _conf_snapshot(self):
+        conf = mock.Mock(spec=vconfig.LibvirtConfigGuestSnapshotDisk)
+        conf.to_xml.return_value = '<disk/>'
+        return conf
+
+    def test_snapshot(self):
+        conf = self._conf_snapshot()
+        self.guest.snapshot(conf)
+        self.domain.snapshotCreateXML('<disk/>', flags=0)
+        conf.to_xml.assert_called_once_with()
+
+    def test_snapshot_no_metadata(self):
+        conf = self._conf_snapshot()
+        self.guest.snapshot(conf, no_metadata=True)
+        self.domain.snapshotCreateXML(
+            '<disk/>',
+            flags=fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA)
+        conf.to_xml.assert_called_once_with()
+
+    def test_snapshot_disk_only(self):
+        conf = self._conf_snapshot()
+        self.guest.snapshot(conf, disk_only=True)
+        self.domain.snapshotCreateXML(
+            '<disk/>', flags=fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY)
+        conf.to_xml.assert_called_once_with()
+
+    def test_snapshot_reuse_ext(self):
+        conf = self._conf_snapshot()
+        self.guest.snapshot(conf, reuse_ext=True)
+        self.domain.snapshotCreateXML(
+            '<disk/>', flags=fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REUSE_EXT)
+        conf.to_xml.assert_called_once_with()
+
+    def test_snapshot_quiesce(self):
+        conf = self._conf_snapshot()
+        self.guest.snapshot(conf, quiesce=True)
+        self.domain.snapshotCreateXML(
+            '<disk/>', flags=fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE)
+        conf.to_xml.assert_called_once_with()
+
+    def test_snapshot_all(self):
+        conf = self._conf_snapshot()
+        self.guest.snapshot(conf, no_metadata=True,
+                            disk_only=True, reuse_ext=True,
+                            quiesce=True)
+        self.domain.snapshotCreateXML(
+            '<disk/>', flags=(
+                fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REUSE_EXT
+                | fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY
+                | fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA
+                | fakelibvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE))
+        conf.to_xml.assert_called_once_with()
+
+    def test_pause(self):
+        self.guest.pause()
+        self.domain.suspend.assert_called_once_with()
 
 
 class GuestBlockTestCase(test.NoDBTestCase):

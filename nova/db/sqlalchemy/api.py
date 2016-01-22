@@ -21,6 +21,7 @@ import collections
 import copy
 import datetime
 import functools
+import inspect
 import sys
 import uuid
 
@@ -64,6 +65,7 @@ from nova.db.sqlalchemy import models
 from nova import exception
 from nova.i18n import _, _LI, _LE, _LW
 from nova import quota
+from nova import safe_utils
 
 db_opts = [
     cfg.StrOpt('osapi_compute_unique_server_name_scope',
@@ -159,22 +161,21 @@ def configure(conf):
 
 
 def get_engine(use_slave=False):
-    return main_context_manager._factory.get_legacy_facade().get_engine(
+    return main_context_manager.get_legacy_facade().get_engine(
         use_slave=use_slave)
 
 
 def get_api_engine():
-    return api_context_manager._factory.get_legacy_facade().get_engine()
+    return api_context_manager.get_legacy_facade().get_engine()
 
 
 def get_session(use_slave=False, **kwargs):
-    return main_context_manager._factory.get_legacy_facade().get_session(
+    return main_context_manager.get_legacy_facade().get_session(
         use_slave=use_slave, **kwargs)
 
 
 def get_api_session(**kwargs):
-    return api_context_manager._factory.get_legacy_facade().get_session(
-        **kwargs)
+    return api_context_manager.get_legacy_facade().get_session(**kwargs)
 
 
 _SHADOW_TABLE_PREFIX = 'shadow_'
@@ -230,6 +231,34 @@ def require_aggregate_exists(f):
     def wrapper(context, aggregate_id, *args, **kwargs):
         aggregate_get(context, aggregate_id)
         return f(context, aggregate_id, *args, **kwargs)
+    return wrapper
+
+
+def select_db_reader_mode(f):
+    """Decorator to select synchronous or asynchronous reader mode.
+
+    The kwarg argument 'use_slave' defines reader mode. Asynchronous reader
+    will be used if 'use_slave' is True and synchronous reader otherwise.
+    If 'use_slave' is not specified default value 'False' will be used.
+
+    Wrapped function must have a context in the arguments.
+    """
+
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        wrapped_func = safe_utils.get_wrapped_function(f)
+        keyed_args = inspect.getcallargs(wrapped_func, *args, **kwargs)
+
+        context = keyed_args['context']
+        use_slave = keyed_args.get('use_slave', False)
+
+        if use_slave:
+            reader_mode = main_context_manager.async
+        else:
+            reader_mode = main_context_manager.reader
+
+        with reader_mode.using(context):
+            return f(*args, **kwargs)
     return wrapper
 
 
@@ -724,8 +753,8 @@ def floating_ip_get(context, id):
         if not result:
             raise exception.FloatingIpNotFound(id=id)
     except db_exc.DBError:
-        msg = _LW("Invalid floating ip id %s in request") % id
-        LOG.warn(msg)
+        msg = _LW("Invalid floating IP ID %s in request") % id
+        LOG.warning(msg)
         raise exception.InvalidID(id=id)
     return result
 
@@ -989,7 +1018,7 @@ def _floating_ip_get_by_address(context, address, session=None):
             raise exception.FloatingIpNotFoundForAddress(address=address)
     except db_exc.DBError:
         msg = _("Invalid floating IP %s in request") % address
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidIpAddressError(msg)
 
     # If the floating IP has a project ID set, check to make sure
@@ -1030,23 +1059,20 @@ def floating_ip_update(context, address, values):
         return float_ip_ref
 
 
-def _dnsdomain_get(context, session, fqdomain):
-    return model_query(context, models.DNSDomain,
-                       session=session, read_deleted="no").\
+###################
+
+
+@require_context
+@main_context_manager.reader
+def dnsdomain_get(context, fqdomain):
+    return model_query(context, models.DNSDomain, read_deleted="no").\
                filter_by(domain=fqdomain).\
                with_lockmode('update').\
                first()
 
 
-@require_context
-def dnsdomain_get(context, fqdomain):
-    session = get_session()
-    with session.begin():
-        return _dnsdomain_get(context, session, fqdomain)
-
-
-def _dnsdomain_get_or_create(context, session, fqdomain):
-    domain_ref = _dnsdomain_get(context, session, fqdomain)
+def _dnsdomain_get_or_create(context, fqdomain):
+    domain_ref = dnsdomain_get(context, fqdomain)
     if not domain_ref:
         dns_ref = models.DNSDomain()
         dns_ref.update({'domain': fqdomain,
@@ -1057,30 +1083,30 @@ def _dnsdomain_get_or_create(context, session, fqdomain):
     return domain_ref
 
 
+@main_context_manager.writer
 def dnsdomain_register_for_zone(context, fqdomain, zone):
-    session = get_session()
-    with session.begin():
-        domain_ref = _dnsdomain_get_or_create(context, session, fqdomain)
-        domain_ref.scope = 'private'
-        domain_ref.availability_zone = zone
-        session.add(domain_ref)
+    domain_ref = _dnsdomain_get_or_create(context, fqdomain)
+    domain_ref.scope = 'private'
+    domain_ref.availability_zone = zone
+    context.session.add(domain_ref)
 
 
+@main_context_manager.writer
 def dnsdomain_register_for_project(context, fqdomain, project):
-    session = get_session()
-    with session.begin():
-        domain_ref = _dnsdomain_get_or_create(context, session, fqdomain)
-        domain_ref.scope = 'public'
-        domain_ref.project_id = project
-        session.add(domain_ref)
+    domain_ref = _dnsdomain_get_or_create(context, fqdomain)
+    domain_ref.scope = 'public'
+    domain_ref.project_id = project
+    context.session.add(domain_ref)
 
 
+@main_context_manager.writer
 def dnsdomain_unregister(context, fqdomain):
     model_query(context, models.DNSDomain).\
                  filter_by(domain=fqdomain).\
                  delete()
 
 
+@main_context_manager.reader
 def dnsdomain_get_all(context):
     return model_query(context, models.DNSDomain, read_deleted="no").all()
 
@@ -1094,7 +1120,7 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
                        reserved=False, virtual_interface_id=None):
     """Keyword arguments:
     reserved -- should be a boolean value(True or False), exact value will be
-    used to filter on the fixed ip address
+    used to filter on the fixed IP address
     """
     if not uuidutils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(uuid=instance_uuid)
@@ -1158,6 +1184,7 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
                                filter_by(reserved=False).\
                                filter_by(instance_uuid=None).\
                                filter_by(host=None).\
+                               filter_by(leased=False).\
                                first()
 
         if not fixed_ip_ref:
@@ -1180,6 +1207,7 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
             filter_by(reserved=False).\
             filter_by(instance_uuid=None).\
             filter_by(host=None).\
+            filter_by(leased=False).\
             filter_by(address=fixed_ip_ref['address']).\
             update(params, synchronize_session='evaluate')
 
@@ -1306,7 +1334,7 @@ def _fixed_ip_get_by_address(context, address, session=None,
                 raise exception.FixedIpNotFoundForAddress(address=address)
         except db_exc.DBError:
             msg = _("Invalid fixed IP Address %s in request") % address
-            LOG.warn(msg)
+            LOG.warning(msg)
             raise exception.FixedIpInvalid(msg)
 
         # NOTE(sirp): shouldn't we just use project_only here to restrict the
@@ -1462,7 +1490,7 @@ def virtual_interface_get_by_address(context, address):
                           first()
     except db_exc.DBError:
         msg = _("Invalid virtual interface address %s in request") % address
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidIpAddressError(msg)
     return vif_ref
 
@@ -1558,7 +1586,7 @@ def _validate_unique_server_name(context, session, name):
         msg = _('Unknown osapi_compute_unique_server_name_scope value: %s'
                 ' Flag must be empty, "global" or'
                 ' "project"') % CONF.osapi_compute_unique_server_name_scope
-        LOG.warn(msg)
+        LOG.warning(msg)
         return
 
     if instance_with_same_name > 0:
@@ -1747,7 +1775,7 @@ def instance_get(context, instance_id, columns_to_join=None):
         # NOTE(sdague): catch all in case the db engine chokes on the
         # id because it's too long of an int to store.
         msg = _("Invalid instance id %s in request") % instance_id
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidID(id=instance_id)
 
 
@@ -1976,7 +2004,6 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
         query_prefix = query_prefix.\
                             filter(models.Instance.updated_at >= changes_since)
 
-    deleted = False
     if 'deleted' in filters:
         # Instances can be soft or hard deleted and the query needs to
         # include or exclude both
@@ -2205,7 +2232,7 @@ def _exact_instance_filter(query, filters, legal_keys):
             column_attr = getattr(model, key)
             if isinstance(value, list):
                 for item in value:
-                    for k, v in item.iteritems():
+                    for k, v in item.items():
                         query = query.filter(column_attr.any(key=k))
                         query = query.filter(column_attr.any(value=v))
 
@@ -2225,8 +2252,8 @@ def _exact_instance_filter(query, filters, legal_keys):
 
     # Apply simple exact matches
     if filter_dict:
-        query = query.filter_by(**filter_dict)
-
+        query = query.filter(*[getattr(models.Instance, k) == v
+                               for k, v in filter_dict.items()])
     return query
 
 
@@ -3797,17 +3824,16 @@ def reservation_expire(context):
 ###################
 
 
-def _ec2_volume_get_query(context, session=None):
-    return model_query(context, models.VolumeIdMapping,
-                       session=session, read_deleted='yes')
+def _ec2_volume_get_query(context):
+    return model_query(context, models.VolumeIdMapping, read_deleted='yes')
 
 
-def _ec2_snapshot_get_query(context, session=None):
-    return model_query(context, models.SnapshotIdMapping,
-                       session=session, read_deleted='yes')
+def _ec2_snapshot_get_query(context):
+    return model_query(context, models.SnapshotIdMapping, read_deleted='yes')
 
 
 @require_context
+@main_context_manager.writer
 def ec2_volume_create(context, volume_uuid, id=None):
     """Create ec2 compatible volume by provided uuid."""
     ec2_volume_ref = models.VolumeIdMapping()
@@ -3815,12 +3841,13 @@ def ec2_volume_create(context, volume_uuid, id=None):
     if id is not None:
         ec2_volume_ref.update({'id': id})
 
-    ec2_volume_ref.save()
+    ec2_volume_ref.save(context.session)
 
     return ec2_volume_ref
 
 
 @require_context
+@main_context_manager.reader
 def ec2_volume_get_by_uuid(context, volume_uuid):
     result = _ec2_volume_get_query(context).\
                     filter_by(uuid=volume_uuid).\
@@ -3833,6 +3860,7 @@ def ec2_volume_get_by_uuid(context, volume_uuid):
 
 
 @require_context
+@main_context_manager.reader
 def ec2_volume_get_by_id(context, volume_id):
     result = _ec2_volume_get_query(context).\
                     filter_by(id=volume_id).\
@@ -3845,6 +3873,7 @@ def ec2_volume_get_by_id(context, volume_id):
 
 
 @require_context
+@main_context_manager.writer
 def ec2_snapshot_create(context, snapshot_uuid, id=None):
     """Create ec2 compatible snapshot by provided uuid."""
     ec2_snapshot_ref = models.SnapshotIdMapping()
@@ -3852,12 +3881,13 @@ def ec2_snapshot_create(context, snapshot_uuid, id=None):
     if id is not None:
         ec2_snapshot_ref.update({'id': id})
 
-    ec2_snapshot_ref.save()
+    ec2_snapshot_ref.save(context.session)
 
     return ec2_snapshot_ref
 
 
 @require_context
+@main_context_manager.reader
 def ec2_snapshot_get_by_ec2_id(context, ec2_id):
     result = _ec2_snapshot_get_query(context).\
                     filter_by(id=ec2_id).\
@@ -3870,6 +3900,7 @@ def ec2_snapshot_get_by_ec2_id(context, ec2_id):
 
 
 @require_context
+@main_context_manager.reader
 def ec2_snapshot_get_by_uuid(context, snapshot_uuid):
     result = _ec2_snapshot_get_query(context).\
                     filter_by(uuid=snapshot_uuid).\
@@ -3996,11 +4027,22 @@ def block_device_mapping_get_all_by_instance(context, instance_uuid,
 
 
 @require_context
-def block_device_mapping_get_by_volume_id(context, volume_id,
+def block_device_mapping_get_all_by_volume_id(context, volume_id,
         columns_to_join=None):
     return _block_device_mapping_get_query(context,
             columns_to_join=columns_to_join).\
                  filter_by(volume_id=volume_id).\
+                 all()
+
+
+@require_context
+def block_device_mapping_get_by_instance_and_volume_id(context, volume_id,
+                                                       instance_uuid,
+                                                       columns_to_join=None):
+    return _block_device_mapping_get_query(context,
+            columns_to_join=columns_to_join).\
+                 filter_by(volume_id=volume_id).\
+                 filter_by(instance_uuid=instance_uuid).\
                  first()
 
 
@@ -4326,6 +4368,15 @@ def security_group_rule_get_by_security_group(context, security_group_id,
 
 
 @require_context
+def security_group_rule_get_by_instance(context, instance_uuid):
+    return (_security_group_rule_get_query(context).
+            join('parent_group', 'instances').
+            filter_by(uuid=instance_uuid).
+            options(joinedload('grantee_group')).
+            all())
+
+
+@require_context
 def security_group_rule_create(context, values):
     return _security_group_rule_create(context, values)
 
@@ -4441,25 +4492,25 @@ def project_get_networks(context, project_id, associate=True):
 ###################
 
 
+@main_context_manager.writer
 def migration_create(context, values):
     migration = models.Migration()
     migration.update(values)
-    migration.save()
+    migration.save(context.session)
     return migration
 
 
+@main_context_manager.writer
 def migration_update(context, id, values):
-    session = get_session()
-    with session.begin():
-        migration = _migration_get(context, id, session=session)
-        migration.update(values)
+    migration = migration_get(context, id)
+    migration.update(values)
 
     return migration
 
 
-def _migration_get(context, id, session=None):
-    result = model_query(context, models.Migration, session=session,
-                         read_deleted="yes").\
+@main_context_manager.reader
+def migration_get(context, id):
+    result = model_query(context, models.Migration, read_deleted="yes").\
                      filter_by(id=id).\
                      first()
 
@@ -4469,10 +4520,7 @@ def _migration_get(context, id, session=None):
     return result
 
 
-def migration_get(context, id):
-    return _migration_get(context, id)
-
-
+@main_context_manager.reader
 def migration_get_by_instance_and_status(context, instance_uuid, status):
     result = model_query(context, models.Migration, read_deleted="yes").\
                      filter_by(instance_uuid=instance_uuid).\
@@ -4486,19 +4534,20 @@ def migration_get_by_instance_and_status(context, instance_uuid, status):
     return result
 
 
+@main_context_manager.reader.allow_async
 def migration_get_unconfirmed_by_dest_compute(context, confirm_window,
-                                              dest_compute, use_slave=False):
+                                              dest_compute):
     confirm_window = (timeutils.utcnow() -
                       datetime.timedelta(seconds=confirm_window))
 
-    return model_query(context, models.Migration, read_deleted="yes",
-                       use_slave=use_slave).\
+    return model_query(context, models.Migration, read_deleted="yes").\
              filter(models.Migration.updated_at <= confirm_window).\
              filter_by(status="finished").\
              filter_by(dest_compute=dest_compute).\
              all()
 
 
+@main_context_manager.reader
 def migration_get_in_progress_by_host_and_node(context, host, node):
 
     return model_query(context, models.Migration).\
@@ -4506,16 +4555,19 @@ def migration_get_in_progress_by_host_and_node(context, host, node):
                             models.Migration.source_node == node),
                        and_(models.Migration.dest_compute == host,
                             models.Migration.dest_node == node))).\
-            filter(~models.Migration.status.in_(['confirmed', 'reverted',
-                                                 'error'])).\
+            filter(~models.Migration.status.in_(['accepted', 'confirmed',
+                                                 'reverted', 'error'])).\
             options(joinedload_all('instance.system_metadata')).\
             all()
 
 
+@main_context_manager.reader
 def migration_get_all_by_filters(context, filters):
     query = model_query(context, models.Migration)
     if "status" in filters:
-        query = query.filter(models.Migration.status == filters["status"])
+        status = filters["status"]
+        status = [status] if isinstance(status, str) else status
+        query = query.filter(models.Migration.status.in_(status))
     if "host" in filters:
         host = filters["host"]
         query = query.filter(or_(models.Migration.source_compute == host,
@@ -5121,17 +5173,19 @@ def instance_system_metadata_update(context, instance_uuid, metadata, delete):
 ####################
 
 
+@main_context_manager.writer
 def agent_build_create(context, values):
     agent_build_ref = models.AgentBuild()
     agent_build_ref.update(values)
     try:
-        agent_build_ref.save()
+        agent_build_ref.save(context.session)
     except db_exc.DBDuplicateEntry:
         raise exception.AgentBuildExists(hypervisor=values['hypervisor'],
                         os=values['os'], architecture=values['architecture'])
     return agent_build_ref
 
 
+@main_context_manager.reader
 def agent_build_get_by_triple(context, hypervisor, os, architecture):
     return model_query(context, models.AgentBuild, read_deleted="no").\
                    filter_by(hypervisor=hypervisor).\
@@ -5140,6 +5194,7 @@ def agent_build_get_by_triple(context, hypervisor, os, architecture):
                    first()
 
 
+@main_context_manager.reader
 def agent_build_get_all(context, hypervisor=None):
     if hypervisor:
         return model_query(context, models.AgentBuild, read_deleted="no").\
@@ -5150,6 +5205,7 @@ def agent_build_get_all(context, hypervisor=None):
                    all()
 
 
+@main_context_manager.writer
 def agent_build_destroy(context, agent_build_id):
     rows_affected = model_query(context, models.AgentBuild).filter_by(
                                         id=agent_build_id).soft_delete()
@@ -5157,6 +5213,7 @@ def agent_build_destroy(context, agent_build_id):
         raise exception.AgentBuildNotFound(id=agent_build_id)
 
 
+@main_context_manager.writer
 def agent_build_update(context, agent_build_id, values):
     rows_affected = model_query(context, models.AgentBuild).\
                    filter_by(id=agent_build_id).\
@@ -5652,7 +5709,7 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False,
                     msg = _("Add metadata failed for aggregate %(id)s after "
                             "%(retries)s retries") % {"id": aggregate_id,
                                                       "retries": max_retries}
-                    LOG.warn(msg)
+                    LOG.warning(msg)
 
 
 @require_aggregate_exists
@@ -5725,28 +5782,29 @@ def instance_fault_get_by_instance_uuids(context, instance_uuids):
 ##################
 
 
+@main_context_manager.writer
 def action_start(context, values):
     convert_objects_related_datetimes(values, 'start_time')
     action_ref = models.InstanceAction()
     action_ref.update(values)
-    action_ref.save()
+    action_ref.save(context.session)
     return action_ref
 
 
+@main_context_manager.writer
 def action_finish(context, values):
     convert_objects_related_datetimes(values, 'start_time', 'finish_time')
-    session = get_session()
-    with session.begin():
-        query = model_query(context, models.InstanceAction, session=session).\
-                           filter_by(instance_uuid=values['instance_uuid']).\
-                           filter_by(request_id=values['request_id'])
-        if query.update(values) != 1:
-            raise exception.InstanceActionNotFound(
-                                        request_id=values['request_id'],
-                                        instance_uuid=values['instance_uuid'])
-        return query.one()
+    query = model_query(context, models.InstanceAction).\
+                        filter_by(instance_uuid=values['instance_uuid']).\
+                        filter_by(request_id=values['request_id'])
+    if query.update(values) != 1:
+        raise exception.InstanceActionNotFound(
+                                    request_id=values['request_id'],
+                                    instance_uuid=values['instance_uuid'])
+    return query.one()
 
 
+@main_context_manager.reader
 def actions_get(context, instance_uuid):
     """Get all instance actions for the provided uuid."""
     actions = model_query(context, models.InstanceAction).\
@@ -5756,99 +5814,96 @@ def actions_get(context, instance_uuid):
     return actions
 
 
+@main_context_manager.reader
 def action_get_by_request_id(context, instance_uuid, request_id):
     """Get the action by request_id and given instance."""
     action = _action_get_by_request_id(context, instance_uuid, request_id)
     return action
 
 
-def _action_get_by_request_id(context, instance_uuid, request_id,
-                                                                session=None):
-    result = model_query(context, models.InstanceAction, session=session).\
+def _action_get_by_request_id(context, instance_uuid, request_id):
+    result = model_query(context, models.InstanceAction).\
                          filter_by(instance_uuid=instance_uuid).\
                          filter_by(request_id=request_id).\
                          first()
     return result
 
 
-def _action_get_last_created_by_instance_uuid(context, instance_uuid,
-                                              session=None):
-    result = (model_query(context, models.InstanceAction, session=session).
+def _action_get_last_created_by_instance_uuid(context, instance_uuid):
+    result = (model_query(context, models.InstanceAction).
                      filter_by(instance_uuid=instance_uuid).
                      order_by(desc("created_at"), desc("id")).
                      first())
     return result
 
 
+@main_context_manager.writer
 def action_event_start(context, values):
     """Start an event on an instance action."""
     convert_objects_related_datetimes(values, 'start_time')
-    session = get_session()
-    with session.begin():
-        action = _action_get_by_request_id(context, values['instance_uuid'],
-                                           values['request_id'], session)
-        # When nova-compute restarts, the context is generated again in
-        # init_host workflow, the request_id was different with the request_id
-        # recorded in InstanceAction, so we can't get the original record
-        # according to request_id. Try to get the last created action so that
-        # init_instance can continue to finish the recovery action, like:
-        # powering_off, unpausing, and so on.
-        if not action and not context.project_id:
-            action = _action_get_last_created_by_instance_uuid(
-                context, values['instance_uuid'], session)
+    action = _action_get_by_request_id(context, values['instance_uuid'],
+                                       values['request_id'])
+    # When nova-compute restarts, the context is generated again in
+    # init_host workflow, the request_id was different with the request_id
+    # recorded in InstanceAction, so we can't get the original record
+    # according to request_id. Try to get the last created action so that
+    # init_instance can continue to finish the recovery action, like:
+    # powering_off, unpausing, and so on.
+    if not action and not context.project_id:
+        action = _action_get_last_created_by_instance_uuid(
+            context, values['instance_uuid'])
 
-        if not action:
-            raise exception.InstanceActionNotFound(
-                                        request_id=values['request_id'],
-                                        instance_uuid=values['instance_uuid'])
+    if not action:
+        raise exception.InstanceActionNotFound(
+                                    request_id=values['request_id'],
+                                    instance_uuid=values['instance_uuid'])
 
-        values['action_id'] = action['id']
+    values['action_id'] = action['id']
 
-        event_ref = models.InstanceActionEvent()
-        event_ref.update(values)
-        session.add(event_ref)
+    event_ref = models.InstanceActionEvent()
+    event_ref.update(values)
+    context.session.add(event_ref)
     return event_ref
 
 
+@main_context_manager.writer
 def action_event_finish(context, values):
     """Finish an event on an instance action."""
     convert_objects_related_datetimes(values, 'start_time', 'finish_time')
-    session = get_session()
-    with session.begin():
-        action = _action_get_by_request_id(context, values['instance_uuid'],
-                                           values['request_id'], session)
-        # When nova-compute restarts, the context is generated again in
-        # init_host workflow, the request_id was different with the request_id
-        # recorded in InstanceAction, so we can't get the original record
-        # according to request_id. Try to get the last created action so that
-        # init_instance can continue to finish the recovery action, like:
-        # powering_off, unpausing, and so on.
-        if not action and not context.project_id:
-            action = _action_get_last_created_by_instance_uuid(
-                context, values['instance_uuid'], session)
+    action = _action_get_by_request_id(context, values['instance_uuid'],
+                                       values['request_id'])
+    # When nova-compute restarts, the context is generated again in
+    # init_host workflow, the request_id was different with the request_id
+    # recorded in InstanceAction, so we can't get the original record
+    # according to request_id. Try to get the last created action so that
+    # init_instance can continue to finish the recovery action, like:
+    # powering_off, unpausing, and so on.
+    if not action and not context.project_id:
+        action = _action_get_last_created_by_instance_uuid(
+            context, values['instance_uuid'])
 
-        if not action:
-            raise exception.InstanceActionNotFound(
-                                        request_id=values['request_id'],
-                                        instance_uuid=values['instance_uuid'])
+    if not action:
+        raise exception.InstanceActionNotFound(
+                                    request_id=values['request_id'],
+                                    instance_uuid=values['instance_uuid'])
 
-        event_ref = model_query(context, models.InstanceActionEvent,
-                                session=session).\
+    event_ref = model_query(context, models.InstanceActionEvent).\
                             filter_by(action_id=action['id']).\
                             filter_by(event=values['event']).\
                             first()
 
-        if not event_ref:
-            raise exception.InstanceActionEventNotFound(action_id=action['id'],
-                                                        event=values['event'])
-        event_ref.update(values)
+    if not event_ref:
+        raise exception.InstanceActionEventNotFound(action_id=action['id'],
+                                                    event=values['event'])
+    event_ref.update(values)
 
-        if values['result'].lower() == 'error':
-            action.update({'message': 'Error'})
+    if values['result'].lower() == 'error':
+        action.update({'message': 'Error'})
 
     return event_ref
 
 
+@main_context_manager.reader
 def action_events_get(context, action_id):
     events = model_query(context, models.InstanceActionEvent).\
                          filter_by(action_id=action_id).\
@@ -5858,6 +5913,7 @@ def action_events_get(context, action_id):
     return events
 
 
+@main_context_manager.reader
 def action_event_get_by_id(context, action_id, event_id):
     event = model_query(context, models.InstanceActionEvent).\
                         filter_by(action_id=action_id).\
@@ -6044,7 +6100,7 @@ def _archive_deleted_rows_for_table(tablename, max_rows):
         # A foreign key constraint keeps us from deleting some of
         # these rows until we clean up a dependent table.  Just
         # skip this table for now; we'll come back to it later.
-        LOG.warn(_LW("IntegrityError detected when archiving table "
+        LOG.warning(_LW("IntegrityError detected when archiving table "
                      "%(tablename)s: %(error)s"),
                  {'tablename': tablename, 'error': six.text_type(ex)})
         return rows_archived
@@ -6172,7 +6228,7 @@ def instance_group_get_by_instance(context, instance_uuid):
 
 
 def instance_group_update(context, group_uuid, values):
-    """Update the attributes of an group.
+    """Update the attributes of a group.
 
     If values contains a metadata key, it updates the aggregate metadata
     too. Similarly for the policies and members.
@@ -6211,7 +6267,7 @@ def instance_group_update(context, group_uuid, values):
 
 
 def instance_group_delete(context, group_uuid):
-    """Delete an group."""
+    """Delete a group."""
     session = get_session()
     with session.begin():
         group_id = _instance_group_id(context, group_uuid, session=session)
@@ -6397,6 +6453,13 @@ def pci_device_get_by_id(context, id):
 def pci_device_get_all_by_node(context, node_id):
     return model_query(context, models.PciDevice).\
                        filter_by(compute_node_id=node_id).\
+                       all()
+
+
+def pci_device_get_all_by_parent_addr(context, node_id, parent_addr):
+    return model_query(context, models.PciDevice).\
+                       filter_by(compute_node_id=node_id).\
+                       filter_by(parent_addr=parent_addr).\
                        all()
 
 

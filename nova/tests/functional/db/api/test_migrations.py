@@ -48,7 +48,6 @@ from nova import test
 
 
 CONF = cfg.CONF
-LOG = logging.getLogger(__name__)
 
 
 class NovaAPIModelsSync(test_migrations.ModelsMigrationsSync):
@@ -187,6 +186,17 @@ class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
         self.assertEqual('cell_mappings', fk['referred_table'])
         self.assertEqual(['id'], fk['referred_columns'])
         self.assertEqual(['cell_id'], fk['constrained_columns'])
+
+    def _check_004(self, engine, data):
+        columns = ['created_at', 'updated_at', 'id', 'instance_uuid', 'spec']
+        for column in columns:
+            self.assertColumnExists(engine, 'request_specs', column)
+
+        self.assertUniqueConstraintExists(engine, 'request_specs',
+                ['instance_uuid'])
+        if engine.name != 'ibm_db_sa':
+            self.assertIndexExists(engine, 'request_specs',
+                    'request_spec_instance_uuid_idx')
 
 
 class TestNovaAPIMigrationsWalkSQLite(NovaAPIMigrationsWalk,

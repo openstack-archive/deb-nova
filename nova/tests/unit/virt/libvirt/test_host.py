@@ -19,6 +19,7 @@ import uuid
 import eventlet
 from eventlet import greenthread
 import mock
+import six
 
 from nova.compute import arch
 from nova import exception
@@ -343,9 +344,9 @@ class HostTestCase(test.NoDBTestCase):
             self.assertFalse(self.host.has_version(lv_ver, hv_ver_, hv_type))
         self.assertFalse(self.host.has_version(lv_ver, hv_ver, 'abc'))
 
-        self.assertTrue(self.host.has_min_version(lv_ver, hv_ver, None))
-        self.assertTrue(self.host.has_min_version(lv_ver, None, hv_type))
-        self.assertTrue(self.host.has_min_version(None, hv_ver, hv_type))
+        self.assertTrue(self.host.has_version(lv_ver, hv_ver, None))
+        self.assertTrue(self.host.has_version(lv_ver, None, hv_type))
+        self.assertTrue(self.host.has_version(None, hv_ver, hv_type))
 
     @mock.patch.object(fakelibvirt.virConnect, "lookupByID")
     def test_get_domain_by_id(self, fake_lookup):
@@ -605,6 +606,18 @@ class HostTestCase(test.NoDBTestCase):
         self.assertEqual(doms[2].name(), vm2.name())
         mock_list.assert_called_with(True)
 
+    @mock.patch.object(host.Host, "list_instance_domains")
+    def test_list_guests(self, mock_list_domains):
+        dom0 = mock.Mock(spec=fakelibvirt.virDomain)
+        dom1 = mock.Mock(spec=fakelibvirt.virDomain)
+        mock_list_domains.return_value = [
+            dom0, dom1]
+        result = self.host.list_guests(True, False)
+        mock_list_domains.assert_called_once_with(
+            only_running=True, only_guests=False)
+        self.assertEqual(dom0, result[0]._domain)
+        self.assertEqual(dom1, result[1]._domain)
+
     def test_cpu_features_bug_1217630(self):
         self.host.get_connection()
 
@@ -772,7 +785,7 @@ SwapCached:            0 kB
 Active:          8381604 kB
 """)
         with test.nested(
-                mock.patch("__builtin__.open", m, create=True),
+                mock.patch.object(six.moves.builtins, "open", m, create=True),
                 mock.patch.object(host.Host,
                                   "get_connection"),
                 mock.patch('sys.platform', 'linux2'),
@@ -813,17 +826,17 @@ Active:          8381604 kB
 """)
 
         with test.nested(
-                mock.patch("__builtin__.open", m, create=True),
+                mock.patch.object(six.moves.builtins, "open", m, create=True),
                 mock.patch.object(host.Host,
-                                  "list_instance_domains"),
+                                  "list_guests"),
                 mock.patch.object(libvirt_driver.LibvirtDriver,
                                   "_conn"),
                 mock.patch('sys.platform', 'linux2'),
                 ) as (mock_file, mock_list, mock_conn, mock_platform):
             mock_list.return_value = [
-                DiagFakeDomain(0, 15814),
-                DiagFakeDomain(1, 750),
-                DiagFakeDomain(2, 1042)]
+                libvirt_guest.Guest(DiagFakeDomain(0, 15814)),
+                libvirt_guest.Guest(DiagFakeDomain(1, 750)),
+                libvirt_guest.Guest(DiagFakeDomain(2, 1042))]
             mock_conn.getInfo.return_value = [
                 arch.X86_64, 15814, 8, 1208, 1, 1, 4, 2]
 
@@ -860,6 +873,28 @@ Active:          8381604 kB
     def test_compare_cpu(self, mock_compareCPU):
         self.host.compare_cpu("cpuxml")
         mock_compareCPU.assert_called_once_with("cpuxml", 0)
+
+    def test_is_cpu_control_policy_capable_ok(self):
+        m = mock.mock_open(
+            read_data="""cg /cgroup/cpu,cpuacct cg opt1,cpu,opt3 0 0
+cg /cgroup/memory cg opt1,opt2 0 0
+""")
+        with mock.patch(
+                "six.moves.builtins.open", m, create=True):
+            self.assertTrue(self.host.is_cpu_control_policy_capable())
+
+    def test_is_cpu_control_policy_capable_ko(self):
+        m = mock.mock_open(
+            read_data="""cg /cgroup/cpu,cpuacct cg opt1,opt2,opt3 0 0
+cg /cgroup/memory cg opt1,opt2 0 0
+""")
+        with mock.patch(
+                "six.moves.builtins.open", m, create=True):
+            self.assertFalse(self.host.is_cpu_control_policy_capable())
+
+    @mock.patch('six.moves.builtins.open', side_effect=IOError)
+    def test_is_cpu_control_policy_capable_ioerror(self, mock_open):
+        self.assertFalse(self.host.is_cpu_control_policy_capable())
 
 
 class DomainJobInfoTestCase(test.NoDBTestCase):

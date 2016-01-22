@@ -78,7 +78,7 @@ linux_net_opts = [
     cfg.MultiStrOpt('force_snat_range',
                default=[],
                help='Traffic to this range will always be snatted to the '
-                    'fallback ip, even if it would normally be bridged out '
+                    'fallback IP, even if it would normally be bridged out '
                     'of the node. Can be specified multiple times.'),
     cfg.StrOpt('dnsmasq_config_file',
                default='',
@@ -251,8 +251,8 @@ class IptablesTable(object):
             self.remove_chains.add(name)
         chain_set.remove(name)
         if not wrap:
-            self.remove_rules += filter(lambda r: r.chain == name, self.rules)
-        self.rules = filter(lambda r: r.chain != name, self.rules)
+            self.remove_rules += [r for r in self.rules if r.chain == name]
+        self.rules = [r for r in self.rules if r.chain != name]
 
         if wrap:
             jump_snippet = '-j %s-%s' % (binary_name, name)
@@ -260,9 +260,9 @@ class IptablesTable(object):
             jump_snippet = '-j %s' % (name,)
 
         if not wrap:
-            self.remove_rules += filter(lambda r: jump_snippet in r.rule,
-                                        self.rules)
-        self.rules = filter(lambda r: jump_snippet not in r.rule, self.rules)
+            self.remove_rules += [r for r in self.rules
+                                  if jump_snippet in r.rule]
+        self.rules = [r for r in self.rules if jump_snippet not in r.rule]
 
     def add_rule(self, chain, rule, wrap=True, top=False):
         """Add a rule to the table.
@@ -319,7 +319,7 @@ class IptablesTable(object):
         if isinstance(regex, six.string_types):
             regex = re.compile(regex)
         num_rules = len(self.rules)
-        self.rules = filter(lambda r: not regex.match(str(r)), self.rules)
+        self.rules = [r for r in self.rules if not regex.match(str(r))]
         removed = num_rules - len(self.rules)
         if removed > 0:
             self.dirty = True
@@ -500,26 +500,26 @@ class IptablesManager(object):
             current_lines = fake_table
 
         # Remove any trace of our rules
-        new_filter = filter(lambda line: binary_name not in line,
-                            current_lines)
+        new_filter = [line for line in current_lines
+                      if binary_name not in line]
 
         top_rules = []
         bottom_rules = []
 
         if CONF.iptables_top_regex:
             regex = re.compile(CONF.iptables_top_regex)
-            temp_filter = filter(lambda line: regex.search(line), new_filter)
+            temp_filter = [line for line in new_filter if regex.search(line)]
             for rule_str in temp_filter:
-                new_filter = filter(lambda s: s.strip() != rule_str.strip(),
-                                    new_filter)
+                new_filter = [s for s in new_filter
+                              if s.strip() != rule_str.strip()]
             top_rules = temp_filter
 
         if CONF.iptables_bottom_regex:
             regex = re.compile(CONF.iptables_bottom_regex)
-            temp_filter = filter(lambda line: regex.search(line), new_filter)
+            temp_filter = [line for line in new_filter if regex.search(line)]
             for rule_str in temp_filter:
-                new_filter = filter(lambda s: s.strip() != rule_str.strip(),
-                    new_filter)
+                new_filter = [s for s in new_filter
+                              if s.strip() != rule_str.strip()]
             bottom_rules = temp_filter
 
         seen_chains = False
@@ -552,16 +552,15 @@ class IptablesManager(object):
                 # ignore [packet:byte] counts at beginning of line
                 if rule_str.startswith('['):
                     rule_str = rule_str.split(']', 1)[1]
-                dup_filter = filter(lambda s: rule_str.strip() in s.strip(),
-                                    new_filter)
+                dup_filter = [s for s in new_filter
+                              if rule_str.strip() in s.strip()]
 
-                new_filter = filter(lambda s:
-                                    rule_str.strip() not in s.strip(),
-                                    new_filter)
+                new_filter = [s for s in new_filter
+                              if rule_str.strip() not in s.strip()]
                 # if no duplicates, use original rule
                 if dup_filter:
                     # grab the last entry, if there is one
-                    dup = dup_filter[-1]
+                    dup = list(dup_filter)[-1]
                     rule_str = str(dup)
                 else:
                     rule_str = str(rule)
@@ -573,6 +572,7 @@ class IptablesManager(object):
 
         our_rules += bot_rules
 
+        new_filter = list(new_filter)
         new_filter[rules_index:rules_index] = our_rules
 
         new_filter[rules_index:rules_index] = [':%s - [0:0]' % (name,)
@@ -628,9 +628,11 @@ class IptablesManager(object):
         # We filter duplicates, letting the *last* occurrence take
         # precedence.  We also filter out anything in the "remove"
         # lists.
+        new_filter = list(new_filter)
         new_filter.reverse()
         new_filter = filter(_weed_out_duplicates, new_filter)
         new_filter = filter(_weed_out_removes, new_filter)
+        new_filter = list(new_filter)
         new_filter.reverse()
 
         # flush lists, just in case we didn't find something
@@ -761,11 +763,11 @@ def send_arp_for_ip(ip, device, count):
                         run_as_root=True, check_exit_code=False)
 
     if err:
-        LOG.debug('arping error for ip %s', ip)
+        LOG.debug('arping error for IP %s', ip)
 
 
 def bind_floating_ip(floating_ip, device):
-    """Bind ip to public interface."""
+    """Bind IP to public interface."""
     _execute('ip', 'addr', 'add', str(floating_ip) + '/32',
              'dev', device,
              run_as_root=True, check_exit_code=[0, 2, 254])
@@ -775,14 +777,14 @@ def bind_floating_ip(floating_ip, device):
 
 
 def unbind_floating_ip(floating_ip, device):
-    """Unbind a public ip from public interface."""
+    """Unbind a public IP from public interface."""
     _execute('ip', 'addr', 'del', str(floating_ip) + '/32',
              'dev', device,
              run_as_root=True, check_exit_code=[0, 2, 254])
 
 
 def ensure_metadata_ip():
-    """Sets up local metadata ip."""
+    """Sets up local metadata IP."""
     _execute('ip', 'addr', 'add', '169.254.169.254/32',
              'scope', 'link', 'dev', 'lo',
              run_as_root=True, check_exit_code=[0, 2, 254])
@@ -806,12 +808,12 @@ def ensure_vpn_forward(public_ip, port, private_ip):
 
 
 def ensure_floating_forward(floating_ip, fixed_ip, device, network):
-    """Ensure floating ip forwarding rule."""
+    """Ensure floating IP forwarding rule."""
     # NOTE(vish): Make sure we never have duplicate rules for the same ip
     regex = '.*\s+%s(/32|\s+|$)' % floating_ip
     num_rules = iptables_manager.ipv4['nat'].remove_rules_regex(regex)
     if num_rules:
-        msg = _LW('Removed %(num)d duplicate rules for floating ip %(float)s')
+        msg = _LW('Removed %(num)d duplicate rules for floating IP %(float)s')
         LOG.warn(msg, {'num': num_rules, 'float': floating_ip})
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].add_rule(chain, rule)
@@ -821,7 +823,7 @@ def ensure_floating_forward(floating_ip, fixed_ip, device, network):
 
 
 def remove_floating_forward(floating_ip, fixed_ip, device, network):
-    """Remove forwarding for floating ip."""
+    """Remove forwarding for floating IP."""
     for chain, rule in floating_forward_rules(floating_ip, fixed_ip, device):
         iptables_manager.ipv4['nat'].remove_rule(chain, rule)
     iptables_manager.apply()
@@ -1063,11 +1065,6 @@ def update_dns(context, dev, network_ref):
                                                   host=host)
     write_to_file(hostsfile, get_dns_hosts(context, network_ref))
     restart_dhcp(context, dev, network_ref, fixedips)
-
-
-def update_dhcp_hostfile_with_text(dev, hosts_text):
-    conffile = _dhcp_file(dev, 'conf')
-    write_to_file(conffile, hosts_text)
 
 
 def kill_dhcp(dev):
@@ -1324,7 +1321,7 @@ def _ra_pid_for(dev):
 
 
 def _ip_bridge_cmd(action, params, device):
-    """Build commands to add/del ips to bridges/devices."""
+    """Build commands to add/del IPs to bridges/devices."""
     cmd = ['ip', 'addr', action]
     cmd.extend(params)
     cmd.extend(['dev', device])
@@ -1598,7 +1595,7 @@ class LinuxBridgeInterfaceDriver(LinuxNetInterfaceDriver):
         using net_attrs['broadcast'] and net_attrs['cidr'].  It will also add
         the ip_v6 address specified in net_attrs['cidr_v6'] if use_ipv6 is set.
 
-        The code will attempt to move any ips that already exist on the
+        The code will attempt to move any IPs that already exist on the
         interface onto the bridge and reset the default gateway if necessary.
 
         """

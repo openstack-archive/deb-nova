@@ -15,15 +15,17 @@
 #
 
 """Base proxy module used to create compatible consoles
-for Openstack Nova."""
+for OpenStack Nova."""
 
 import os
 import sys
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_reports import guru_meditation_report as gmr
 
 from nova.console import websocketproxy
+from nova import version
 
 
 CONF = cfg.CONF
@@ -37,7 +39,8 @@ CONF.import_opt('web', 'nova.cmd.novnc')
 
 
 def exit_with_error(msg, errno=-1):
-    print(msg) and sys.exit(errno)
+    sys.stderr.write(msg + '\n')
+    sys.exit(errno)
 
 
 def proxy(host, port):
@@ -50,6 +53,8 @@ def proxy(host, port):
         exit_with_error("Can not find html/js files at %s." % CONF.web)
 
     logging.setup(CONF, "nova")
+
+    gmr.TextGuruMeditation.setup_autorun(version)
 
     # Create and start the NovaWebSockets proxy
     websocketproxy.NovaWebSocketProxy(

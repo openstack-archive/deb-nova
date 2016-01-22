@@ -20,7 +20,6 @@ Tests For Scheduler
 import mock
 
 from nova import context
-from nova import db
 from nova import objects
 from nova.scheduler import host_manager
 from nova.scheduler import manager
@@ -56,10 +55,22 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.assertIsInstance(manager.driver, self.driver_cls)
 
     def test_select_destination(self):
+        fake_spec = objects.RequestSpec()
         with mock.patch.object(self.manager.driver, 'select_destinations'
                 ) as select_destinations:
-            self.manager.select_destinations(None, None, {})
-            select_destinations.assert_called_once_with(None, None, {})
+            self.manager.select_destinations(None, spec_obj=fake_spec)
+            select_destinations.assert_called_once_with(None, fake_spec)
+
+    # TODO(sbauza): Remove that test once the API v4 is removed
+    @mock.patch.object(objects.RequestSpec, 'from_primitives')
+    def test_select_destination_with_old_client(self, from_primitives):
+        fake_spec = objects.RequestSpec()
+        from_primitives.return_value = fake_spec
+        with mock.patch.object(self.manager.driver, 'select_destinations'
+                ) as select_destinations:
+            self.manager.select_destinations(None, request_spec='fake_spec',
+                                             filter_properties='fake_props')
+            select_destinations.assert_called_once_with(None, fake_spec)
 
     def test_update_aggregates(self):
         with mock.patch.object(self.manager.driver.host_manager,
@@ -137,25 +148,3 @@ class SchedulerTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
         result = self.driver.hosts_up(self.context, self.topic)
         self.assertEqual(result, ['host2'])
-
-
-class SchedulerInstanceGroupData(test.NoDBTestCase):
-
-    driver_cls = fakes.FakeScheduler
-
-    def setUp(self):
-        super(SchedulerInstanceGroupData, self).setUp()
-        self.user_id = 'fake_user'
-        self.project_id = 'fake_project'
-        self.context = context.RequestContext(self.user_id, self.project_id)
-        self.driver = self.driver_cls()
-
-    def _get_default_values(self):
-        return {'name': 'fake_name',
-                'user_id': self.user_id,
-                'project_id': self.project_id}
-
-    def _create_instance_group(self, context, values, policies=None,
-                               metadata=None, members=None):
-        return db.instance_group_create(context, values, policies=policies,
-                                        metadata=metadata, members=members)

@@ -19,34 +19,19 @@
 Scheduler Service
 """
 
-from oslo_config import cfg
-from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
 from oslo_service import periodic_task
 from oslo_utils import importutils
 
+import nova.conf
 from nova import exception
 from nova import manager
+from nova import objects
 from nova import quota
 
 
-LOG = logging.getLogger(__name__)
-
-scheduler_driver_opts = [
-    cfg.StrOpt('scheduler_driver',
-               default='nova.scheduler.filter_scheduler.FilterScheduler',
-               help='Default driver to use for the scheduler'),
-    cfg.IntOpt('scheduler_driver_task_period',
-               default=60,
-               help='How often (in seconds) to run periodic tasks in '
-                    'the scheduler driver of your choice. '
-                    'Please note this is likely to interact with the value '
-                    'of service_down_time, but exactly how they interact '
-                    'will depend on your choice of scheduler driver.'),
-]
-CONF = cfg.CONF
-CONF.register_opts(scheduler_driver_opts)
+CONF = nova.conf.CONF
 
 QUOTAS = quota.QUOTAS
 
@@ -54,7 +39,9 @@ QUOTAS = quota.QUOTAS
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
-    target = messaging.Target(version='4.2')
+    target = messaging.Target(version='4.3')
+
+    _sentinel = object()
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
@@ -73,15 +60,22 @@ class SchedulerManager(manager.Manager):
         self.driver.run_periodic_tasks(context)
 
     @messaging.expected_exceptions(exception.NoValidHost)
-    def select_destinations(self, context, request_spec, filter_properties):
-        """Returns destinations(s) best suited for this request_spec and
-        filter_properties.
+    def select_destinations(self, ctxt,
+                            request_spec=None, filter_properties=None,
+                            spec_obj=_sentinel):
+        """Returns destinations(s) best suited for this RequestSpec.
 
         The result should be a list of dicts with 'host', 'nodename' and
         'limits' as keys.
         """
-        dests = self.driver.select_destinations(context, request_spec,
-            filter_properties)
+
+        # TODO(sbauza): Change the method signature to only accept a spec_obj
+        # argument once API v5 is provided.
+        if spec_obj is self._sentinel:
+            spec_obj = objects.RequestSpec.from_primitives(ctxt,
+                                                           request_spec,
+                                                           filter_properties)
+        dests = self.driver.select_destinations(ctxt, spec_obj)
         return jsonutils.to_primitive(dests)
 
     def update_aggregates(self, ctxt, aggregates):

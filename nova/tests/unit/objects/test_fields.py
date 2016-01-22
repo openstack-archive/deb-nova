@@ -109,7 +109,7 @@ class TestString(TestField):
         self.field = fields.StringField()
         self.coerce_good_values = [('foo', 'foo'), (1, '1'), (True, 'True')]
         if six.PY2:
-            self.coerce_good_values.append((long(1), '1'))
+            self.coerce_good_values.append((int(1), '1'))
         self.coerce_bad_values = [None]
         self.to_primitive_values = self.coerce_good_values[0:1]
         self.from_primitive_values = self.coerce_good_values[0:1]
@@ -150,7 +150,7 @@ class TestEnum(TestField):
             valid_values=['foo', 'bar', 1, 1, True])
         self.coerce_good_values = [('foo', 'foo'), (1, '1'), (True, 'True')]
         if six.PY2:
-            self.coerce_good_values.append((long(1), '1'))
+            self.coerce_good_values.append((int(1), '1'))
         self.coerce_bad_values = ['boo', 2, False]
         self.to_primitive_values = self.coerce_good_values[0:1]
         self.from_primitive_values = self.coerce_good_values[0:1]
@@ -337,6 +337,24 @@ class TestCPUAllocationPolicy(TestField):
 
     def test_stringify(self):
         self.assertEqual("'shared'", self.field.stringify('shared'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestCPUThreadAllocationPolicy(TestField):
+    def setUp(self):
+        super(TestCPUThreadAllocationPolicy, self).setUp()
+        self.field = fields.CPUThreadAllocationPolicyField()
+        self.coerce_good_values = [('prefer', 'prefer'),
+                                   ('isolate', 'isolate'),
+                                   ('require', 'require')]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'prefer'", self.field.stringify('prefer'))
 
     def test_stringify_invalid(self):
         self.assertRaises(ValueError, self.field.stringify, 'acme')
@@ -580,6 +598,31 @@ class TestMonitorMetricType(TestField):
 
     def test_stringify_invalid(self):
         self.assertRaises(ValueError, self.field.stringify, 'cpufrequency')
+
+
+class TestDiskFormat(TestField):
+    def setUp(self):
+        super(TestDiskFormat, self).setUp()
+        self.field = fields.DiskFormatField()
+        self.coerce_good_values = [('qcow2', 'qcow2'),
+                                   ('raw', 'raw'),
+                                   ('lvm', 'lvm'),
+                                   ('rbd', 'rbd'),
+                                   ('ploop', 'ploop'),
+                                   ('vhd', 'vhd'),
+                                   ('vmdk', 'vmdk'),
+                                   ('vdi', 'vdi'),
+                                   ('iso', 'iso')]
+
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'rbd'", self.field.stringify('rbd'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'acme')
 
 
 class TestInteger(TestField):
@@ -838,22 +881,6 @@ class TestListOfSetsOfIntegers(TestField):
 
     def test_stringify(self):
         self.assertEqual('[set([1,2])]', self.field.stringify([set([1, 2])]))
-
-
-class TestDictOfListOfStrings(TestField):
-    def setUp(self):
-        super(TestDictOfListOfStrings, self).setUp()
-        self.field = fields.DictOfListOfStringsField()
-        self.coerce_good_values = [({'foo': ['1', '2']}, {'foo': ['1', '2']}),
-                                   ({'foo': [1]}, {'foo': ['1']})]
-        self.coerce_bad_values = [{'foo': [None, None]}, 'foo']
-        self.to_primitive_values = [({'foo': ['1', '2']}, {'foo': ['1', '2']})]
-        self.from_primitive_values = [({'foo': ['1', '2']},
-                                       {'foo': ['1', '2']})]
-
-    def test_stringify(self):
-        self.assertEqual("{foo=['1','2']}",
-                         self.field.stringify({'foo': ['1', '2']}))
 
 
 class TestNetworkModel(TestField):

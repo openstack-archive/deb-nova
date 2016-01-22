@@ -25,7 +25,7 @@ CONF.import_opt('osapi_compute_extension',
 
 class DiskConfigJsonTest(test_servers.ServersSampleBase):
     extension_name = 'os-disk-config'
-    extra_extensions_to_load = ["images", "os-access-ips"]
+    extra_extensions_to_load = ["os-access-ips"]
 
     def _get_flags(self):
         f = super(DiskConfigJsonTest, self)._get_flags()
@@ -45,7 +45,7 @@ class DiskConfigJsonTest(test_servers.ServersSampleBase):
     def test_list_servers_detail(self):
         uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/detail')
-        subs = self._get_regexes()
+        subs = {}
         subs['hostid'] = '[a-f0-9]+'
         subs['access_ip_v4'] = ''
         subs['access_ip_v6'] = ''
@@ -55,7 +55,7 @@ class DiskConfigJsonTest(test_servers.ServersSampleBase):
     def test_get_server(self):
         uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
+        subs = {}
         subs['hostid'] = '[a-f0-9]+'
         subs['access_ip_v4'] = ''
         subs['access_ip_v6'] = ''
@@ -65,7 +65,7 @@ class DiskConfigJsonTest(test_servers.ServersSampleBase):
         uuid = self._post_server(use_common_server_api_samples=False)
         response = self._do_put('servers/%s' % uuid,
                                 'server-update-put-req', {})
-        subs = self._get_regexes()
+        subs = {}
         subs['hostid'] = '[a-f0-9]+'
         subs['access_ip_v4'] = ''
         subs['access_ip_v6'] = ''
@@ -85,25 +85,12 @@ class DiskConfigJsonTest(test_servers.ServersSampleBase):
         uuid = self._post_server(use_common_server_api_samples=False)
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
         }
         response = self._do_post('servers/%s/action' % uuid,
                                  'server-action-rebuild-req', subs)
-        subs = self._get_regexes()
         subs['hostid'] = '[a-f0-9]+'
         subs['access_ip_v4'] = ''
         subs['access_ip_v6'] = ''
         self._verify_response('server-action-rebuild-resp',
                               subs, response, 202)
-
-    def test_get_image(self):
-        image_id = fake.get_valid_image_id()
-        response = self._do_get('images/%s' % image_id)
-        subs = self._get_regexes()
-        subs['image_id'] = image_id
-        self._verify_response('image-get-resp', subs, response, 200)
-
-    def test_list_images(self):
-        response = self._do_get('images/detail')
-        subs = self._get_regexes()
-        self._verify_response('image-list-resp', subs, response, 200)

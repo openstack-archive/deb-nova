@@ -22,17 +22,18 @@ import os
 import re
 import time
 
+from os_win import exceptions as os_win_exc
+from os_win import utilsfactory
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from six.moves import range
 
+from nova import block_device
 from nova import exception
 from nova.i18n import _, _LE, _LW
 from nova import utils
 from nova.virt import driver
-from nova.virt.hyperv import utilsfactory
-from nova.virt.hyperv import vmutils
 
 LOG = logging.getLogger(__name__)
 
@@ -65,7 +66,7 @@ class VolumeOps(object):
 
     def __init__(self):
         self._vmutils = utilsfactory.get_vmutils()
-        self._volutils = utilsfactory.get_volumeutils()
+        self._volutils = utilsfactory.get_iscsi_initiator_utils()
         self._initiator = None
         self._default_root_device = 'vda'
         self.volume_drivers = {'smbfs': SMBFSVolumeDriver(),
@@ -111,8 +112,8 @@ class VolumeOps(object):
             root_device = block_device_info.get('root_device_name')
             if not root_device:
                 root_device = self._default_root_device
-            return self._volutils.volume_in_mapping(root_device,
-                                                    block_device_info)
+            return block_device.volume_in_mapping(root_device,
+                                                  block_device_info)
 
     def fix_instance_volume_disk_paths(self, instance_name, block_device_info):
         mapping = driver.block_device_info_get_mapping(block_device_info)
@@ -161,7 +162,7 @@ class VolumeOps(object):
 class ISCSIVolumeDriver(object):
     def __init__(self):
         self._vmutils = utilsfactory.get_vmutils()
-        self._volutils = utilsfactory.get_volumeutils()
+        self._volutils = utilsfactory.get_iscsi_initiator_utils()
 
     def login_storage_target(self, connection_info):
         data = connection_info['data']
@@ -173,11 +174,12 @@ class ISCSIVolumeDriver(object):
         auth_password = data.get('auth_password')
 
         if auth_method and auth_method.upper() != 'CHAP':
-            raise vmutils.HyperVException(
-                _("Cannot log in target %(target_iqn)s. Unsupported iSCSI "
-                  "authentication method: %(auth_method)s.") %
-                 {'target_iqn': target_iqn,
-                  'auth_method': auth_method})
+            LOG.error(_LE("Cannot log in target %(target_iqn)s. Unsupported "
+                          "iSCSI authentication method: %(auth_method)s."),
+                      {'target_iqn': target_iqn,
+                       'auth_method': auth_method})
+            raise exception.UnsupportedBDMVolumeAuthMethod(
+                auth_method=auth_method)
 
         # Check if we already logged in
         if self._volutils.get_device_number_for_target(target_iqn, target_lun):
@@ -357,7 +359,6 @@ class SMBFSVolumeDriver(object):
     def __init__(self):
         self._pathutils = utilsfactory.get_pathutils()
         self._vmutils = utilsfactory.get_vmutils()
-        self._volutils = utilsfactory.get_volumeutils()
         self._username_regex = re.compile(r'user(?:name)?=([^, ]+)')
         self._password_regex = re.compile(r'pass(?:word)?=([^, ]+)')
 
@@ -381,10 +382,13 @@ class SMBFSVolumeDriver(object):
                                        disk_path,
                                        ctrller_path,
                                        slot)
-        except vmutils.HyperVException as exn:
-            LOG.exception(_LE('Attach volume failed: %s'), exn)
-            raise vmutils.HyperVException(_('Unable to attach volume '
-                                            'to instance %s') % instance_name)
+        except os_win_exc.HyperVException as exn:
+            LOG.exception(_LE('Attach volume failed to %(instance_name)s: '
+                              '%(exn)s'), {'instance_name': instance_name,
+                                           'exn': exn})
+            raise exception.VolumeAttachFailed(
+                volume_id=connection_info['data']['volume_id'],
+                reason=exn.message)
 
     def detach_volume(self, connection_info, instance_name):
         LOG.debug("Detaching volume: %(connection_info)s "

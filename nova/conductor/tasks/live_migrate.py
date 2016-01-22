@@ -173,8 +173,12 @@ class LiveMigrationTask(base.TaskBase):
             filter_properties = {'ignore_hosts': attempted_hosts}
             scheduler_utils.setup_instance_group(self.context, request_spec,
                                                  filter_properties)
+            # TODO(sbauza): Hydrate here the object until we modify the
+            # scheduler.utils methods to directly use the RequestSpec object
+            spec_obj = objects.RequestSpec.from_primitives(
+                self.context, request_spec, filter_properties)
             host = self.scheduler_client.select_destinations(self.context,
-                            request_spec, filter_properties)[0]['host']
+                            spec_obj)[0]['host']
             try:
                 self._check_compatible_with_source_hypervisor(host)
                 self._call_livem_checks_on_host(host)
@@ -191,6 +195,9 @@ class LiveMigrationTask(base.TaskBase):
 
         retries = len(attempted_hosts) - 1
         if retries > CONF.migrate_max_retries:
+            if self.migration:
+                self.migration.status = 'failed'
+                self.migration.save()
             msg = (_('Exceeded max scheduling retries %(max_retries)d for '
                      'instance %(instance_uuid)s during live migration')
                    % {'max_retries': retries,

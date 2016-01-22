@@ -17,7 +17,6 @@ import datetime
 
 from oslo_config import cfg
 
-from nova.compute import api as compute_api
 from nova.tests.functional.api_sample_tests import api_sample_base
 
 CONF = cfg.CONF
@@ -79,12 +78,11 @@ class MigrationsSamplesJsonTest(api_sample_base.ApiSampleTestBaseV21):
 
     def setUp(self):
         super(MigrationsSamplesJsonTest, self).setUp()
-        self.stubs.Set(compute_api.API, 'get_migrations',
-                       self._stub_migrations)
+        self.stub_out('nova.compute.api.API.get_migrations',
+                      self._stub_migrations)
 
     def test_get_migrations(self):
         response = self._do_get('os-migrations')
-        subs = self._get_regexes()
 
         self.assertEqual(200, response.status_code)
-        self._verify_response('migrations-get', subs, response, 200)
+        self._verify_response('migrations-get', {}, response, 200)

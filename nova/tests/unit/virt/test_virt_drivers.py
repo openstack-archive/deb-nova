@@ -139,6 +139,22 @@ class _FakeDriverBackendTestCase(object):
         def fake_delete_instance_files(_self, _instance):
             pass
 
+        def fake_wait():
+            pass
+
+        def fake_detach_device_with_retry(_self, get_device_conf_func, device,
+                                          persistent, live,
+                                          max_retry_count=7,
+                                          inc_sleep_time=2,
+                                          max_sleep_time=30):
+            # Still calling detach, but instead of returning function
+            # that actually checks if device is gone from XML, just continue
+            # because XML never gets updated in these tests
+            _self.detach_device(get_device_conf_func(device),
+                                persistent=persistent,
+                                live=live)
+            return fake_wait
+
         self.stubs.Set(nova.virt.libvirt.driver.LibvirtDriver,
                        '_get_instance_disk_info',
                        fake_get_instance_disk_info)
@@ -149,6 +165,10 @@ class _FakeDriverBackendTestCase(object):
         self.stubs.Set(nova.virt.libvirt.driver.LibvirtDriver,
                        'delete_instance_files',
                        fake_delete_instance_files)
+
+        self.stubs.Set(nova.virt.libvirt.guest.Guest,
+                       'detach_device_with_retry',
+                       fake_detach_device_with_retry)
 
         # Like the existing fakelibvirt.migrateToURI, do nothing,
         # but don't fail for these tests.
@@ -170,7 +190,7 @@ class _FakeDriverBackendTestCase(object):
         # TODO(sdague): it would be nice to do this in a way that only
         # the relevant backends where replaced for tests, though this
         # should not harm anything by doing it for all backends
-        fake_image.stub_out_image_service(self.stubs)
+        fake_image.stub_out_image_service(self)
         self._setup_fakelibvirt()
 
     def tearDown(self):
@@ -239,8 +259,8 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         network_info = test_utils.get_test_network_info()
         network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
             '1.1.1.1'
-        image_info = test_utils.get_test_image_info(None, instance_ref)
-        self.connection.spawn(self.ctxt, instance_ref, image_info,
+        image_meta = test_utils.get_test_image_object(None, instance_ref)
+        self.connection.spawn(self.ctxt, instance_ref, image_meta,
                               [], 'herp', network_info=network_info)
         return instance_ref, network_info
 
@@ -324,7 +344,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
     @catch_notimplementederror
     def test_rescue(self):
-        image_meta = {}
+        image_meta = objects.ImageMeta.from_dict({})
         instance_ref, network_info = self._get_running_instance()
         self.connection.rescue(self.ctxt, instance_ref, network_info,
                                image_meta, '')
@@ -336,7 +356,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
 
     @catch_notimplementederror
     def test_unrescue_rescued_instance(self):
-        image_meta = {}
+        image_meta = objects.ImageMeta.from_dict({})
         instance_ref, network_info = self._get_running_instance()
         self.connection.rescue(self.ctxt, instance_ref, network_info,
                                image_meta, '')
@@ -506,17 +526,19 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
             'swap': None,
             'ephemerals': [],
             'block_device_mapping': driver_block_device.convert_volumes([
-                fake_block_device.FakeDbBlockDeviceDict(
-                       {'id': 1, 'instance_uuid': instance_ref['uuid'],
-                        'device_name': '/dev/sda',
-                        'source_type': 'volume',
-                        'destination_type': 'volume',
-                        'delete_on_termination': False,
-                        'snapshot_id': None,
-                        'volume_id': 'abcdedf',
-                        'volume_size': None,
-                        'no_device': None
-                        }),
+                objects.BlockDeviceMapping(
+                    self.ctxt,
+                    **fake_block_device.FakeDbBlockDeviceDict(
+                        {'id': 1, 'instance_uuid': instance_ref['uuid'],
+                         'device_name': '/dev/sda',
+                         'source_type': 'volume',
+                         'destination_type': 'volume',
+                         'delete_on_termination': False,
+                         'snapshot_id': None,
+                         'volume_id': 'abcdedf',
+                         'volume_size': None,
+                         'no_device': None
+                         })),
                 ])
         }
         bdm['block_device_mapping'][0]['connection_info'] = (
@@ -787,6 +809,14 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         instance, _ = self._get_running_instance()
         self.connection.get_device_name_for_instance(
             instance, [], mock.Mock(spec=objects.BlockDeviceMapping))
+
+    def test_network_binding_host_id(self):
+        # NOTE(jroll) self._get_running_instance calls spawn(), so we can't
+        # use it to test this method. Make a simple object instead; we just
+        # need instance.host.
+        instance = objects.Instance(self.ctxt, host='somehost')
+        self.assertEqual(instance.host,
+            self.connection.network_binding_host_id(self.ctxt, instance))
 
 
 class AbstractDriverTestCase(_VirtDriverTestCase, test.TestCase):

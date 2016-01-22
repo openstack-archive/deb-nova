@@ -26,7 +26,6 @@ import re
 import string
 import uuid
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
@@ -48,6 +47,7 @@ from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import conductor
+import nova.conf
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import crypto
 from nova.db import base
@@ -67,6 +67,7 @@ from nova import notifications
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import block_device as block_device_obj
+from nova.objects import fields as fields_obj
 from nova.objects import keypair as keypair_obj
 from nova.objects import quotas as quotas_obj
 from nova.objects import security_group as security_group_obj
@@ -85,73 +86,8 @@ get_notifier = functools.partial(rpc.get_notifier, service='compute')
 wrap_exception = functools.partial(exception.wrap_exception,
                                    get_notifier=get_notifier)
 
-compute_opts = [
-    cfg.BoolOpt('allow_resize_to_same_host',
-                default=False,
-                help='Allow destination machine to match source for resize. '
-                     'Useful when testing in single-host environments.'),
-    cfg.StrOpt('default_schedule_zone',
-               help='Availability zone to use when user doesn\'t specify one'),
-    cfg.ListOpt('non_inheritable_image_properties',
-                default=['cache_in_nova',
-                         'bittorrent'],
-                help='These are image properties which a snapshot should not'
-                     ' inherit from an instance'),
-    cfg.StrOpt('null_kernel',
-               default='nokernel',
-               help='Kernel image that indicates not to use a kernel, but to '
-                    'use a raw disk image instead'),
-    cfg.StrOpt('multi_instance_display_name_template',
-               default='%(name)s-%(count)d',
-               help='When creating multiple instances with a single request '
-                    'using the os-multiple-create API extension, this '
-                    'template will be used to build the display name for '
-                    'each instance. The benefit is that the instances '
-                    'end up with different hostnames. To restore legacy '
-                    'behavior of every instance having the same name, set '
-                    'this option to "%(name)s".  Valid keys for the '
-                    'template are: name, uuid, count.'),
-    cfg.IntOpt('max_local_block_devices',
-               default=3,
-               help='Maximum number of devices that will result '
-                    'in a local image being created on the hypervisor node. '
-                    'A negative number means unlimited. Setting '
-                    'max_local_block_devices to 0 means that any request that '
-                    'attempts to create a local disk will fail. This option '
-                    'is meant to limit the number of local discs (so root '
-                    'local disc that is the result of --image being used, and '
-                    'any other ephemeral and swap disks). 0 does not mean '
-                    'that images will be automatically converted to volumes '
-                    'and boot instances from volumes - it just means that all '
-                    'requests that attempt to create a local disk will fail.'),
-]
+CONF = nova.conf.CONF
 
-ephemeral_storage_encryption_group = cfg.OptGroup(
-    name='ephemeral_storage_encryption',
-    title='Ephemeral storage encryption options')
-
-ephemeral_storage_encryption_opts = [
-    cfg.BoolOpt('enabled',
-                default=False,
-                help='Whether to encrypt ephemeral storage'),
-    cfg.StrOpt('cipher',
-               default='aes-xts-plain64',
-               help='The cipher and mode to be used to encrypt ephemeral '
-                    'storage. Which ciphers are available ciphers depends '
-                    'on kernel support. See /proc/crypto for the list of '
-                    'available options.'),
-    cfg.IntOpt('key_size',
-               default=512,
-               help='The bit length of the encryption key to be used to '
-                    'encrypt ephemeral storage (in XTS mode only half of '
-                    'the bits are used for encryption key)')
-]
-
-CONF = cfg.CONF
-CONF.register_opts(compute_opts)
-CONF.register_group(ephemeral_storage_encryption_group)
-CONF.register_opts(ephemeral_storage_encryption_opts,
-                   group='ephemeral_storage_encryption')
 CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 CONF.import_opt('enable', 'nova.cells.opts', group='cells')
 CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
@@ -472,7 +408,9 @@ class API(base.Base):
 
         # Because metadata is stored in the DB, we hard-code the size limits
         # In future, we may support more variable length strings, so we act
-        #  as if this is quota-controlled for forwards compatibility
+        #  as if this is quota-controlled for forwards compatibility.
+        # Those are only used in V2 API, from V2.1 API, those checks are
+        # validated at API layer schema validation.
         for k, v in six.iteritems(metadata):
             try:
                 utils.check_string_length(v)
@@ -480,8 +418,6 @@ class API(base.Base):
             except exception.InvalidInput as e:
                 raise exception.InvalidMetadata(reason=e.format_message())
 
-            # For backward compatible we need raise HTTPRequestEntityTooLarge
-            # so we need to keep InvalidMetadataSize exception here
             if len(k) > 255:
                 msg = _("Metadata property key greater than 255 characters")
                 raise exception.InvalidMetadataSize(reason=msg)
@@ -558,7 +494,7 @@ class API(base.Base):
         return kernel_id, ramdisk_id
 
     @staticmethod
-    def _handle_availability_zone(context, availability_zone):
+    def parse_availability_zone(context, availability_zone):
         # NOTE(vish): We have a legacy hack to allow admins to specify hosts
         #             via az using az:host:node. It might be nice to expose an
         #             api to specify specific hosts to force onto, but for
@@ -823,7 +759,7 @@ class API(base.Base):
                 return not (bdm.get('boot_index') == 0 and
                             bdm.get('source_type') == 'image')
 
-            block_device_mapping = (
+            block_device_mapping = list(
                 filter(not_image_and_root_bdm, block_device_mapping))
 
         block_device_mapping = self._merge_bdms_lists(
@@ -862,23 +798,14 @@ class API(base.Base):
                                          kernel_id, ramdisk_id, display_name,
                                          display_description, key_name,
                                          key_data, security_groups,
-                                         availability_zone, forced_host,
-                                         user_data, metadata,
-                                         access_ip_v4, access_ip_v6,
+                                         availability_zone, user_data,
+                                         metadata, access_ip_v4, access_ip_v6,
                                          requested_networks, config_drive,
                                          auto_disk_config, reservation_id,
                                          max_count):
         """Verify all the input parameters regardless of the provisioning
         strategy being performed.
         """
-        if availability_zone:
-            available_zones = availability_zones.\
-                get_availability_zones(context.elevated(), True)
-            if forced_host is None and availability_zone not in \
-                    available_zones:
-                msg = _('The requested availability zone is not available')
-                raise exception.InvalidRequest(msg)
-
         if instance_type['disabled']:
             raise exception.FlavorNotFound(flavor_id=instance_type['id'])
 
@@ -1112,8 +1039,8 @@ class API(base.Base):
                min_count, max_count,
                display_name, display_description,
                key_name, key_data, security_groups,
-               availability_zone, user_data, metadata,
-               injected_files, admin_password,
+               availability_zone, forced_host, forced_node, user_data,
+               metadata, injected_files, admin_password,
                access_ip_v4, access_ip_v6,
                requested_networks, config_drive,
                block_device_mapping, auto_disk_config,
@@ -1145,21 +1072,13 @@ class API(base.Base):
         self._check_auto_disk_config(image=boot_meta,
                                      auto_disk_config=auto_disk_config)
 
-        handle_az = self._handle_availability_zone
-        availability_zone, forced_host, forced_node = handle_az(context,
-                                                            availability_zone)
-
-        if not self.skip_policy_check and (forced_host or forced_node):
-            check_policy(context, 'create:forced_host', {})
-
         base_options, max_net_count = self._validate_and_build_base_options(
-                context,
-                instance_type, boot_meta, image_href, image_id, kernel_id,
-                ramdisk_id, display_name, display_description,
+                context, instance_type, boot_meta, image_href, image_id,
+                kernel_id, ramdisk_id, display_name, display_description,
                 key_name, key_data, security_groups, availability_zone,
-                forced_host, user_data, metadata, access_ip_v4,
-                access_ip_v6, requested_networks, config_drive,
-                auto_disk_config, reservation_id, max_count)
+                user_data, metadata, access_ip_v4, access_ip_v6,
+                requested_networks, config_drive, auto_disk_config,
+                reservation_id, max_count)
 
         # max_net_count is the maximum number of instances requested by the
         # user adjusted for any network quota constraints, including
@@ -1492,7 +1411,8 @@ class API(base.Base):
         return instance
 
     def _check_create_policies(self, context, availability_zone,
-            requested_networks, block_device_mapping):
+            requested_networks, block_device_mapping, forced_host,
+            forced_node):
         """Check policies for create()."""
         target = {'project_id': context.project_id,
                   'user_id': context.user_id,
@@ -1505,6 +1425,9 @@ class API(base.Base):
 
             if block_device_mapping:
                 check_policy(context, 'create:attach_volume', target)
+
+            if forced_host or forced_node:
+                check_policy(context, 'create:forced_host', {})
 
     def _check_multiple_instances_neutron_ports(self, requested_networks):
         """Check whether multiple instances are created from port id(s)."""
@@ -1530,21 +1453,23 @@ class API(base.Base):
                min_count=None, max_count=None,
                display_name=None, display_description=None,
                key_name=None, key_data=None, security_group=None,
-               availability_zone=None, user_data=None, metadata=None,
-               injected_files=None, admin_password=None,
-               block_device_mapping=None, access_ip_v4=None,
-               access_ip_v6=None, requested_networks=None, config_drive=None,
-               auto_disk_config=None, scheduler_hints=None, legacy_bdm=True,
-               shutdown_terminate=False, check_server_group_quota=False):
+               availability_zone=None, forced_host=None, forced_node=None,
+               user_data=None, metadata=None, injected_files=None,
+               admin_password=None, block_device_mapping=None,
+               access_ip_v4=None, access_ip_v6=None, requested_networks=None,
+               config_drive=None, auto_disk_config=None, scheduler_hints=None,
+               legacy_bdm=True, shutdown_terminate=False,
+               check_server_group_quota=False):
         """Provision instances, sending instance information to the
         scheduler.  The scheduler will determine where the instance(s)
         go and will handle creating the DB entries.
 
         Returns a tuple of (instances, reservation_id)
         """
-
+        # Check policies up front to fail before performing more expensive work
         self._check_create_policies(context, availability_zone,
-                requested_networks, block_device_mapping)
+                requested_networks, block_device_mapping, forced_host,
+                forced_node)
 
         if requested_networks and max_count > 1:
             self._check_multiple_instances_and_specified_ip(requested_networks)
@@ -1552,13 +1477,22 @@ class API(base.Base):
                 self._check_multiple_instances_neutron_ports(
                     requested_networks)
 
+        if availability_zone:
+            available_zones = availability_zones.\
+                get_availability_zones(context.elevated(), True)
+            if forced_host is None and availability_zone not in \
+                    available_zones:
+                msg = _('The requested availability zone is not available')
+                raise exception.InvalidRequest(msg)
+
         return self._create_instance(
                        context, instance_type,
                        image_href, kernel_id, ramdisk_id,
                        min_count, max_count,
                        display_name, display_description,
                        key_name, key_data, security_group,
-                       availability_zone, user_data, metadata,
+                       availability_zone, forced_host, forced_node,
+                       user_data, metadata,
                        injected_files, admin_password,
                        access_ip_v4, access_ip_v6,
                        requested_networks, config_drive,
@@ -1764,25 +1698,19 @@ class API(base.Base):
 
     def _create_reservations(self, context, instance, original_task_state,
                              project_id, user_id):
-        instance_vcpus = instance.vcpus
-        instance_memory_mb = instance.memory_mb
         # NOTE(wangpan): if the instance is resizing, and the resources
         #                are updated to new instance type, we should use
         #                the old instance type to create reservation.
         # see https://bugs.launchpad.net/nova/+bug/1099729 for more details
         if original_task_state in (task_states.RESIZE_MIGRATED,
                                    task_states.RESIZE_FINISH):
-            try:
-                migration = objects.Migration.get_by_instance_and_status(
-                    context.elevated(), instance.uuid, 'post-migrating')
-            except exception.MigrationNotFoundByStatus:
-                migration = None
-            if (migration and
-                    instance.instance_type_id ==
-                        migration.new_instance_type_id):
-                get_inst_attrs = compute_utils.get_inst_attrs_from_migration
-                instance_vcpus, instance_memory_mb = get_inst_attrs(migration,
-                                                                    instance)
+            old_flavor = instance.old_flavor
+            instance_vcpus = old_flavor.vcpus
+            vram_mb = old_flavor.extra_specs.get('hw_video:ram_max_mb', 0)
+            instance_memory_mb = old_flavor.memory_mb + vram_mb
+        else:
+            instance_vcpus = instance.vcpus
+            instance_memory_mb = instance.memory_mb
 
         quotas = objects.Quotas(context=context)
         quotas.reserve(project_id=project_id,
@@ -1989,6 +1917,19 @@ class API(base.Base):
         #                 It is used only for osapi. not for ec2 api.
         #                 availability_zone isn't used by run_instance.
         self.compute_rpcapi.start_instance(context, instance)
+
+    @check_instance_lock
+    @check_instance_host
+    @check_instance_cell
+    @check_instance_state(vm_state=vm_states.ALLOW_TRIGGER_CRASH_DUMP)
+    def trigger_crash_dump(self, context, instance):
+        """Trigger crash dump in an instance."""
+        LOG.debug("Try to trigger crash dump", instance=instance)
+
+        self._record_action_start(context, instance,
+                                  instance_actions.TRIGGER_CRASH_DUMP)
+
+        self.compute_rpcapi.trigger_crash_dump(context, instance)
 
     def get(self, context, instance_id, want_objects=False,
             expected_attrs=None):
@@ -2370,50 +2311,45 @@ class API(base.Base):
 
     @wrap_check_policy
     @check_instance_lock
-    @check_instance_state(vm_state=set(
-                    vm_states.ALLOW_SOFT_REBOOT + vm_states.ALLOW_HARD_REBOOT),
-                          task_state=[None, task_states.REBOOTING,
-                                      task_states.REBOOT_PENDING,
-                                      task_states.REBOOT_STARTED,
-                                      task_states.REBOOTING_HARD,
-                                      task_states.RESUMING,
-                                      task_states.UNPAUSING,
-                                      task_states.PAUSING,
-                                      task_states.SUSPENDING])
     def reboot(self, context, instance, reboot_type):
         """Reboot the given instance."""
-        if (reboot_type == 'SOFT' and
-            (instance.vm_state not in vm_states.ALLOW_SOFT_REBOOT)):
-            raise exception.InstanceInvalidState(
-                attr='vm_state',
-                instance_uuid=instance.uuid,
-                state=instance.vm_state,
-                method='soft reboot')
-        if reboot_type == 'SOFT' and instance.task_state is not None:
-            raise exception.InstanceInvalidState(
-                attr='task_state',
-                instance_uuid=instance.uuid,
-                state=instance.task_state,
-                method='reboot')
+        if reboot_type == 'SOFT':
+            self._soft_reboot(context, instance)
+        else:
+            self._hard_reboot(context, instance)
+
+    @check_instance_state(vm_state=set(vm_states.ALLOW_SOFT_REBOOT),
+                          task_state=[None])
+    def _soft_reboot(self, context, instance):
         expected_task_state = [None]
-        if reboot_type == 'HARD':
-            expected_task_state.extend([task_states.REBOOTING,
-                                        task_states.REBOOT_PENDING,
-                                        task_states.REBOOT_STARTED,
-                                        task_states.REBOOTING_HARD,
-                                        task_states.RESUMING,
-                                        task_states.UNPAUSING,
-                                        task_states.SUSPENDING])
-        state = {'SOFT': task_states.REBOOTING,
-                 'HARD': task_states.REBOOTING_HARD}[reboot_type]
-        instance.task_state = state
+        instance.task_state = task_states.REBOOTING
         instance.save(expected_task_state=expected_task_state)
 
         self._record_action_start(context, instance, instance_actions.REBOOT)
 
         self.compute_rpcapi.reboot_instance(context, instance=instance,
                                             block_device_info=None,
-                                            reboot_type=reboot_type)
+                                            reboot_type='SOFT')
+
+    @check_instance_state(vm_state=set(vm_states.ALLOW_HARD_REBOOT),
+                          task_state=task_states.ALLOW_REBOOT)
+    def _hard_reboot(self, context, instance):
+        instance.task_state = task_states.REBOOTING_HARD
+        expected_task_state = [None,
+                               task_states.REBOOTING,
+                               task_states.REBOOT_PENDING,
+                               task_states.REBOOT_STARTED,
+                               task_states.REBOOTING_HARD,
+                               task_states.RESUMING,
+                               task_states.UNPAUSING,
+                               task_states.SUSPENDING]
+        instance.save(expected_task_state = expected_task_state)
+
+        self._record_action_start(context, instance, instance_actions.REBOOT)
+
+        self.compute_rpcapi.reboot_instance(context, instance=instance,
+                                            block_device_info=None,
+                                            reboot_type='HARD')
 
     @wrap_check_policy
     @check_instance_lock
@@ -2454,7 +2390,7 @@ class API(base.Base):
 
             orig_sys_metadata = dict(instance.system_metadata)
             # Remove the old keys
-            for key in instance.system_metadata.keys():
+            for key in list(instance.system_metadata.keys()):
                 if key.startswith(utils.SM_IMAGE_PROP_PREFIX):
                     del instance.system_metadata[key]
 
@@ -3018,11 +2954,6 @@ class API(base.Base):
         instance.save()
 
     @wrap_check_policy
-    def get_lock(self, context, instance):
-        """Return the boolean state of given instance's lock."""
-        return self.get(context, instance.uuid)['locked']
-
-    @wrap_check_policy
     @check_instance_lock
     @check_instance_cell
     def reset_network(self, context, instance):
@@ -3327,7 +3258,7 @@ class API(base.Base):
 
     @wrap_check_policy
     def volume_snapshot_create(self, context, volume_id, create_info):
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
+        bdm = objects.BlockDeviceMapping.get_by_volume(
                 context, volume_id, expected_attrs=['instance'])
         self.compute_rpcapi.volume_snapshot_create(context, bdm.instance,
                 volume_id, create_info)
@@ -3342,7 +3273,7 @@ class API(base.Base):
     @wrap_check_policy
     def volume_snapshot_delete(self, context, volume_id, snapshot_id,
                                delete_info):
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
+        bdm = objects.BlockDeviceMapping.get_by_volume(
                 context, volume_id, expected_attrs=['instance'])
         self.compute_rpcapi.volume_snapshot_delete(context, bdm.instance,
                 volume_id, snapshot_id, delete_info)
@@ -3373,6 +3304,40 @@ class API(base.Base):
             # will not prevent processing events on other hosts
             self.compute_rpcapi.external_instance_event(
                 context, instances_by_host[host], events_by_host[host])
+
+    def get_instance_host_status(self, instance):
+        if instance.host:
+            try:
+                service = [service for service in instance.services if
+                           service.binary == 'nova-compute'][0]
+                if service.forced_down:
+                    host_status = fields_obj.HostStatus.DOWN
+                elif service.disabled:
+                    host_status = fields_obj.HostStatus.MAINTENANCE
+                else:
+                    alive = self.servicegroup_api.service_is_up(service)
+                    host_status = ((alive and fields_obj.HostStatus.UP) or
+                                   fields_obj.HostStatus.UNKNOWN)
+            except IndexError:
+                host_status = fields_obj.HostStatus.NONE
+        else:
+            host_status = fields_obj.HostStatus.NONE
+        return host_status
+
+    def get_instances_host_statuses(self, instance_list):
+        host_status_dict = dict()
+        host_statuses = dict()
+        for instance in instance_list:
+            if instance.host:
+                if instance.host not in host_status_dict:
+                    host_status = self.get_instance_host_status(instance)
+                    host_status_dict[instance.host] = host_status
+                else:
+                    host_status = host_status_dict[instance.host]
+            else:
+                host_status = fields_obj.HostStatus.NONE
+            host_statuses[instance.uuid] = host_status
+        return host_statuses
 
 
 class HostAPI(base.Base):
@@ -3693,7 +3658,7 @@ class AggregateAPI(base.Base):
         # NOTE(jogo): Send message to host to support resource pools
         self.compute_rpcapi.add_aggregate_host(context,
                 aggregate=aggregate, host_param=host_name, host=host_name)
-        aggregate_payload.update({'name': aggregate['name']})
+        aggregate_payload.update({'name': aggregate.name})
         compute_utils.notify_about_aggregate_update(context,
                                                     "addhost.end",
                                                     aggregate_payload)

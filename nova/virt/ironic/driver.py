@@ -27,9 +27,7 @@ import shutil
 import tempfile
 import time
 
-from oslo_config import cfg
 from oslo_log import log as logging
-from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 from oslo_utils import excutils
 from oslo_utils import importutils
@@ -42,6 +40,7 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_mode
 from nova.compute import vm_states
+import nova.conf
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
@@ -62,49 +61,8 @@ ironic = None
 
 LOG = logging.getLogger(__name__)
 
-opts = [
-    cfg.IntOpt('api_version',
-               default=1,
-               help='Version of Ironic API service endpoint.'),
-    cfg.StrOpt('api_endpoint',
-               help='URL for Ironic API endpoint.'),
-    cfg.StrOpt('admin_username',
-               help='Ironic keystone admin name'),
-    cfg.StrOpt('admin_password',
-               secret=True,
-               help='Ironic keystone admin password.'),
-    cfg.StrOpt('admin_auth_token',
-               secret=True,
-               deprecated_for_removal=True,
-               help='Ironic keystone auth token.'
-                    'DEPRECATED: use admin_username, admin_password, and '
-                    'admin_tenant_name instead'),
-    cfg.StrOpt('admin_url',
-               help='Keystone public API endpoint.'),
-    cfg.StrOpt('client_log_level',
-               deprecated_for_removal=True,
-               help='Log level override for ironicclient. Set this in '
-                    'order to override the global "default_log_levels", '
-                    '"verbose", and "debug" settings. '
-                    'DEPRECATED: use standard logging configuration.'),
-    cfg.StrOpt('admin_tenant_name',
-               help='Ironic keystone tenant name.'),
-    cfg.IntOpt('api_max_retries',
-               default=60,
-               help=('How many retries when a request does conflict. '
-                     'If <= 0, only try once, no retries.')),
-    cfg.IntOpt('api_retry_interval',
-               default=2,
-               help='How often to retry in seconds when a request '
-                    'does conflict'),
-    ]
 
-ironic_group = cfg.OptGroup(name='ironic',
-                            title='Ironic Options')
-
-CONF = cfg.CONF
-CONF.register_group(ironic_group)
-CONF.register_opts(opts, ironic_group)
+CONF = nova.conf.CONF
 
 _POWER_STATE_MAP = {
     ironic_states.POWER_ON: power_state.RUNNING,
@@ -366,9 +324,8 @@ class IronicDriver(virt_driver.ComputeDriver):
             'disk_available_least': local_gb - local_gb_used,
             'memory_mb': memory_mb,
             'memory_mb_used': memory_mb_used,
-            'supported_instances': jsonutils.dumps(
-                _get_nodes_supported_instances(cpu_arch)),
-            'stats': jsonutils.dumps(nodes_extra_specs),
+            'supported_instances': _get_nodes_supported_instances(cpu_arch),
+            'stats': nodes_extra_specs,
             'numa_topology': None,
         }
         return dic
@@ -392,7 +349,12 @@ class IronicDriver(virt_driver.ComputeDriver):
         patch.append({'path': '/instance_uuid', 'op': 'add',
                       'value': instance.uuid})
         try:
-            self.ironicclient.call('node.update', node.uuid, patch)
+            # FIXME(lucasagomes): The "retry_on_conflict" parameter was added
+            # to basically causes the deployment to fail faster in case the
+            # node picked by the scheduler is already associated with another
+            # instance due bug #1341420.
+            self.ironicclient.call('node.update', node.uuid, patch,
+                                   retry_on_conflict=False)
         except ironic.exc.BadRequest:
             msg = (_("Failed to add deploy parameters on node %(node)s "
                      "when provisioning the instance %(instance)s")
@@ -741,8 +703,6 @@ class IronicDriver(virt_driver.ComputeDriver):
             information. Ignored by this driver.
         """
         LOG.debug('Spawn called for instance', instance=instance)
-
-        image_meta = objects.ImageMeta.from_dict(image_meta)
 
         # The compute manager is meant to know the node uuid, so missing uuid
         # is a significant issue. It may mean we've been passed the wrong data.
@@ -1169,8 +1129,6 @@ class IronicDriver(virt_driver.ComputeDriver):
         """
         LOG.debug('Rebuild called for instance', instance=instance)
 
-        image_meta = objects.ImageMeta.from_dict(image_meta)
-
         instance.task_state = task_states.REBUILD_SPAWNING
         instance.save(expected_task_state=[task_states.REBUILDING])
 
@@ -1199,3 +1157,26 @@ class IronicDriver(virt_driver.ComputeDriver):
                                                      instance)
         timer.start(interval=CONF.ironic.api_retry_interval).wait()
         LOG.info(_LI('Instance was successfully rebuilt'), instance=instance)
+
+    def network_binding_host_id(self, context, instance):
+        """Get host ID to associate with network ports.
+
+        This defines the binding:host_id parameter to the port-create
+        calls for Neutron. If using a flat network, use the default behavior
+        and allow the port to bind immediately. If using separate networks
+        for the control plane and tenants, return None here to indicate
+        that the port should not yet be bound; Ironic will make a port-update
+        call to Neutron later to tell Neutron to bind the port.
+
+        :param context:  request context
+        :param instance: nova.objects.instance.Instance that the network
+                         ports will be associated with
+        :returns: a string representing the host ID
+        """
+
+        node = self.ironicclient.call("node.get", instance.node)
+        if getattr(node, 'network_provider', 'none') == 'none':
+            # flat network, go ahead and allow the port to be bound
+            return super(IronicDriver, self).network_binding_host_id(
+                context, instance)
+        return None

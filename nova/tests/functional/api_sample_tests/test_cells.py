@@ -16,9 +16,7 @@
 from oslo_config import cfg
 from six.moves import range
 
-from nova.cells import rpcapi as cells_rpcapi
 from nova.cells import state
-from nova import db
 from nova.db.sqlalchemy import models
 from nova import exception
 from nova.tests.functional.api_sample_tests import api_sample_base
@@ -44,6 +42,7 @@ class CellsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
         # db_check_interval < 0 makes cells manager always hit the DB
         self.flags(enable=True, db_check_interval=-1, group='cells')
         super(CellsSampleJsonTest, self).setUp()
+        self.cells = self.start_service('cells', manager=CONF.cells.manager)
         self._stub_cells()
 
     def _stub_cells(self, num_cells=5):
@@ -69,25 +68,22 @@ class CellsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
                          'is_parent': our_id % 2 == 0})
             self.cell_list.append(cell)
 
-        self.stubs.Set(db, 'cell_get_all', _fake_cell_get_all)
-        self.stubs.Set(cells_rpcapi.CellsAPI, 'cell_get', _fake_cell_get)
+        self.stub_out('nova.db.cell_get_all', _fake_cell_get_all)
+        self.stub_out('nova.cells.rpcapi.CellsAPI.cell_get', _fake_cell_get)
 
     def test_cells_empty_list(self):
         # Override this
         self._stub_cells(num_cells=0)
         response = self._do_get('os-cells')
-        subs = self._get_regexes()
-        self._verify_response('cells-list-empty-resp', subs, response, 200)
+        self._verify_response('cells-list-empty-resp', {}, response, 200)
 
     def test_cells_list(self):
         response = self._do_get('os-cells')
-        subs = self._get_regexes()
-        self._verify_response('cells-list-resp', subs, response, 200)
+        self._verify_response('cells-list-resp', {}, response, 200)
 
     def test_cells_get(self):
         response = self._do_get('os-cells/cell3')
-        subs = self._get_regexes()
-        self._verify_response('cells-get-resp', subs, response, 200)
+        self._verify_response('cells-get-resp', {}, response, 200)
 
     def test_get_cell_capacity(self):
         self._mock_cell_capacity()
@@ -95,16 +91,14 @@ class CellsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
         my_state = state_manager.get_my_state()
         response = self._do_get('os-cells/%s/capacities' %
                 my_state.name)
-        subs = self._get_regexes()
         return self._verify_response('cells-capacities-resp',
-                                        subs, response, 200)
+                                        {}, response, 200)
 
     def test_get_all_cells_capacity(self):
         self._mock_cell_capacity()
         response = self._do_get('os-cells/capacities')
-        subs = self._get_regexes()
         return self._verify_response('cells-capacities-resp',
-                                        subs, response, 200)
+                                        {}, response, 200)
 
     def _mock_cell_capacity(self):
         self.mox.StubOutWithMock(self.cells.manager.state_manager,

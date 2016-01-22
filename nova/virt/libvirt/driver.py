@@ -78,6 +78,7 @@ from nova import image
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import fields
+from nova.objects import migrate_data as migrate_data_obj
 from nova.pci import manager as pci_manager
 from nova.pci import utils as pci_utils
 from nova import utils
@@ -91,6 +92,7 @@ from nova.virt import driver
 from nova.virt import firewall
 from nova.virt import hardware
 from nova.virt.image import model as imgmodel
+from nova.virt import images
 from nova.virt.libvirt import blockinfo
 from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt import firewall as libvirt_firewall
@@ -111,6 +113,8 @@ from nova import volume
 from nova.volume import encryptors
 
 libvirt = None
+
+uefi_logged = False
 
 LOG = logging.getLogger(__name__)
 
@@ -270,7 +274,12 @@ libvirt_opts = [
                 default=[],
                 help='List of guid targets and ranges.'
                      'Syntax is guest-gid:host-gid:count'
-                     'Maximum of 5 allowed.')
+                     'Maximum of 5 allowed.'),
+    cfg.IntOpt('realtime_scheduler_priority',
+               default=1,
+               help='In a realtime host context vCPUs for guest will run in '
+               'that scheduling priority. Priority depends on the host '
+               'kernel (usually 1-99)')
     ]
 
 CONF = cfg.CONF
@@ -287,7 +296,7 @@ CONF.import_opt('key_size', 'nova.compute.api',
 CONF.import_opt('live_migration_retry_count', 'nova.compute.manager')
 CONF.import_opt('vncserver_proxyclient_address', 'nova.vnc', group='vnc')
 CONF.import_opt('server_proxyclient_address', 'nova.spice', group='spice')
-CONF.import_opt('vcpu_pin_set', 'nova.virt.hardware')
+CONF.import_opt('vcpu_pin_set', 'nova.conf.virt')
 CONF.import_opt('vif_plugging_is_fatal', 'nova.virt.driver')
 CONF.import_opt('vif_plugging_timeout', 'nova.virt.driver')
 CONF.import_opt('hw_disk_discard', 'nova.virt.libvirt.imagebackend',
@@ -299,6 +308,11 @@ CONF.import_opt('iscsi_use_multipath', 'nova.virt.libvirt.volume.iscsi',
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     libvirt_firewall.__name__,
     libvirt_firewall.IptablesFirewallDriver.__name__)
+
+DEFAULT_UEFI_LOADER_PATH = {
+    "x86_64": "/usr/share/OVMF/OVMF_CODE.fd",
+    "aarch64": "/usr/share/AAVMF/AAVMF_CODE.fd"
+}
 
 MAX_CONSOLE_BYTES = 100 * units.Ki
 
@@ -353,20 +367,33 @@ def patch_tpool_proxy():
 
 patch_tpool_proxy()
 
-# This is effectively the min version for i686/x86_64 + KVM/QEMU
+# For information about when MIN_LIBVIRT_VERSION and
+# NEXT_MIN_LIBVIRT_VERSION can be changed, consult
+#
+#   https://wiki.openstack.org/wiki/LibvirtDistroSupportMatrix
+#
+# Currently this is effectively the min version for i686/x86_64
+# + KVM/QEMU, as other architectures/hypervisors require newer
+# versions. Over time, this will become a common min version
+# for all architectures/hypervisors, as this value rises to
+# meet them.
+#
 # TODO(berrange) find out what min version ppc64 needs as it
 # almost certainly wants something newer than this....
-MIN_LIBVIRT_VERSION = (0, 9, 11)
+MIN_LIBVIRT_VERSION = (0, 10, 2)
+# TODO(berrange): Re-evaluate this at start of each release cycle
+# to decide if we want to plan a future min version bump.
+# MIN_LIBVIRT_VERSION can be updated to match this after
+# NEXT_MIN_LIBVIRT_VERSION  has been at a higher value for
+# one cycle
+NEXT_MIN_LIBVIRT_VERSION = (1, 2, 1)
+
 # When the above version matches/exceeds this version
 # delete it & corresponding code using it
 MIN_LIBVIRT_DEVICE_CALLBACK_VERSION = (1, 1, 1)
-# TODO(mriedem): Change MIN_LIB_VERSION to this in the 13.0.0 'M' release.
-NEXT_MIN_LIBVIRT_VERSION = (0, 10, 2)
 # Live snapshot requirements
 MIN_LIBVIRT_LIVESNAPSHOT_VERSION = (1, 0, 0)
 MIN_QEMU_LIVESNAPSHOT_VERSION = (1, 3, 0)
-# block size tuning requirements
-MIN_LIBVIRT_BLOCKIO_VERSION = (0, 10, 2)
 # BlockJobInfo management requirement
 MIN_LIBVIRT_BLOCKJOBINFO_VERSION = (1, 1, 1)
 # Relative block commit & rebase (feature is detected,
@@ -402,6 +429,9 @@ MIN_QEMU_NUMA_HUGEPAGE_VERSION = (2, 1, 0)
 # fsFreeze/fsThaw requirement
 MIN_LIBVIRT_FSFREEZE_VERSION = (1, 2, 5)
 
+# UEFI booting support
+MIN_LIBVIRT_UEFI_VERSION = (1, 2, 9)
+
 # Hyper-V paravirtualized time source
 MIN_LIBVIRT_HYPERV_TIMER_VERSION = (1, 2, 2)
 MIN_QEMU_HYPERV_TIMER_VERSION = (2, 0, 0)
@@ -420,8 +450,17 @@ MIN_LIBVIRT_SET_ADMIN_PASSWD = (1, 2, 16)
 MIN_LIBVIRT_KVM_S390_VERSION = (1, 2, 13)
 MIN_QEMU_S390_VERSION = (2, 3, 0)
 
+# libvirt < 1.3 reported virt_functions capability
+# only when VFs are enabled.
+# libvirt 1.3 fix f391889f4e942e22b9ef8ecca492de05106ce41e
+MIN_LIBVIRT_PF_WITH_NO_VFS_CAP_VERSION = (1, 3, 0)
+
+
 # Names of the types that do not get compressed during migration
 NO_COMPRESSION_TYPES = ('qcow2',)
+
+# realtime suppport
+MIN_LIBVIRT_REALTIME_VERSION = (1, 2, 13)
 
 
 class LibvirtDriver(driver.ComputeDriver):
@@ -585,14 +624,13 @@ class LibvirtDriver(driver.ComputeDriver):
                   'libvirt version %s') %
                 self._version_to_string(MIN_LIBVIRT_PARALLELS_VERSION))
 
-        # TODO(mriedem): We plan to move to a minimum required version of
-        # libvirt 0.10.2 in the 13.0.0 'M' release so if we're running with
-        # less than that now, log a warning.
+        # Give the cloud admin a heads up if we are intending to
+        # change the MIN_LIBVIRT_VERSION in the next release.
         if not self._host.has_min_version(NEXT_MIN_LIBVIRT_VERSION):
             LOG.warning(_LW('Running Nova with a libvirt version less than '
                             '%(version)s is deprecated. The required minimum '
                             'version of libvirt will be raised to %(version)s '
-                            'in the 13.0.0 release.'),
+                            'in the next release.'),
                         {'version': self._version_to_string(
                             NEXT_MIN_LIBVIRT_VERSION)})
 
@@ -663,15 +701,15 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def list_instances(self):
         names = []
-        for dom in self._host.list_instance_domains(only_running=False):
-            names.append(dom.name())
+        for guest in self._host.list_guests(only_running=False):
+            names.append(guest.name)
 
         return names
 
     def list_instance_uuids(self):
         uuids = []
-        for dom in self._host.list_instance_domains(only_running=False):
-            uuids.append(dom.UUIDString())
+        for guest in self._host.list_guests(only_running=False):
+            uuids.append(guest.uuid)
 
         return uuids
 
@@ -727,7 +765,6 @@ class LibvirtDriver(driver.ComputeDriver):
                     # Code=55 Error=Requested operation is not valid:
                     # domain is not running
 
-                    # TODO(sahid): At this point we should be a Guest object
                     state = guest.get_power_state(self._host)
                     if state == power_state.SHUTDOWN:
                         is_okay = True
@@ -804,7 +841,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise loopingcall.LoopingCallDone()
 
             # NOTE(wangpan): If the instance was booted again after destroy,
-            #                this may be a endless loop, so check the id of
+            #                this may be an endless loop, so check the id of
             #                domain here, if it changed and the instance is
             #                still running, we should destroy it again.
             # see https://bugs.launchpad.net/nova/+bug/1111213 for more details
@@ -930,9 +967,10 @@ class LibvirtDriver(driver.ComputeDriver):
             if CONF.libvirt.images_type == 'rbd':
                 self._cleanup_rbd(instance)
 
-        if destroy_disks or (
-                migrate_data and migrate_data.get('is_shared_block_storage',
-                                                  False)):
+        is_shared_block_storage = False
+        if migrate_data and 'is_shared_block_storage' in migrate_data:
+            is_shared_block_storage = migrate_data.is_shared_block_storage
+        if destroy_disks or is_shared_block_storage:
             attempts = int(instance.system_metadata.get('clean_attempts',
                                                         '0'))
             success = self.delete_instance_files(instance)
@@ -1060,21 +1098,38 @@ class LibvirtDriver(driver.ComputeDriver):
         return self.volume_drivers[driver_type]
 
     def _connect_volume(self, connection_info, disk_info):
-        driver = self._get_volume_driver(connection_info)
-        driver.connect_volume(connection_info, disk_info)
+        vol_driver = self._get_volume_driver(connection_info)
+        vol_driver.connect_volume(connection_info, disk_info)
 
     def _disconnect_volume(self, connection_info, disk_dev):
-        driver = self._get_volume_driver(connection_info)
-        driver.disconnect_volume(connection_info, disk_dev)
+        vol_driver = self._get_volume_driver(connection_info)
+        vol_driver.disconnect_volume(connection_info, disk_dev)
 
     def _get_volume_config(self, connection_info, disk_info):
-        driver = self._get_volume_driver(connection_info)
-        return driver.get_config(connection_info, disk_info)
+        vol_driver = self._get_volume_driver(connection_info)
+        return vol_driver.get_config(connection_info, disk_info)
 
     def _get_volume_encryptor(self, connection_info, encryption):
         encryptor = encryptors.get_volume_encryptor(connection_info,
                                                     **encryption)
         return encryptor
+
+    def _check_discard_for_attach_volume(self, conf, instance):
+        """Perform some checks for volumes configured for discard support.
+
+        If discard is configured for the volume, and the guest is using a
+        configuration known to not work, we will log a message explaining
+        the reason why.
+        """
+        if conf.driver_discard == 'unmap' and conf.target_bus == 'virtio':
+            LOG.debug('Attempting to attach volume %(id)s with discard '
+                      'support enabled to an instance using an '
+                      'unsupported configuration. target_bus = '
+                      '%(bus)s. Trim commands will not be issued to '
+                      'the storage device.',
+                      {'bus': conf.target_bus,
+                       'id': conf.serial},
+                      instance=instance)
 
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):
@@ -1103,17 +1158,13 @@ class LibvirtDriver(driver.ComputeDriver):
                         "block size") % CONF.libvirt.virt_type
                 raise exception.InvalidHypervisorType(msg)
 
-            if not self._host.has_min_version(MIN_LIBVIRT_BLOCKIO_VERSION):
-                ver = ".".join([str(x) for x in MIN_LIBVIRT_BLOCKIO_VERSION])
-                msg = _("Volume sets block size, but libvirt '%s' or later is "
-                        "required.") % ver
-                raise exception.Invalid(msg)
-
         disk_info = blockinfo.get_info_from_bdm(
             instance, CONF.libvirt.virt_type, image_meta, bdm)
         self._connect_volume(connection_info, disk_info)
         conf = self._get_volume_config(connection_info, disk_info)
         self._set_cache_mode(conf)
+
+        self._check_discard_for_attach_volume(conf, instance)
 
         try:
             state = guest.get_power_state(self._host)
@@ -1199,8 +1250,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         # Save updates made in connection_info when connect_volume was called
         volume_id = new_connection_info.get('serial')
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
-            nova_context.get_admin_context(), volume_id)
+        bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+            nova_context.get_admin_context(), volume_id, instance.uuid)
         driver_bdm = driver_block_device.DriverVolumeBlockDevice(bdm)
         driver_bdm['connection_info'] = new_connection_info
         driver_bdm.save()
@@ -1230,13 +1281,14 @@ class LibvirtDriver(driver.ComputeDriver):
         disk_dev = mountpoint.rpartition("/")[2]
         try:
             guest = self._host.get_guest(instance)
-            conf = guest.get_disk(disk_dev)
-            if not conf:
-                raise exception.DiskNotFound(location=disk_dev)
 
             state = guest.get_power_state(self._host)
             live = state in (power_state.RUNNING, power_state.PAUSED)
-            guest.detach_device(conf, persistent=True, live=live)
+
+            wait_for_detach = guest.detach_device_with_retry(guest.get_disk,
+                                                             disk_dev,
+                                                             persistent=True,
+                                                             live=live)
 
             if encryption:
                 # The volume must be detached from the VM before
@@ -1245,12 +1297,16 @@ class LibvirtDriver(driver.ComputeDriver):
                 encryptor = self._get_volume_encryptor(connection_info,
                                                        encryption)
                 encryptor.detach_volume(**encryption)
+
+            wait_for_detach()
         except exception.InstanceNotFound:
             # NOTE(zhaoqin): If the instance does not exist, _lookup_by_name()
             #                will throw InstanceNotFound exception. Need to
             #                disconnect volume under this circumstance.
             LOG.warn(_LW("During detach_volume, instance disappeared."),
                      instance=instance)
+        except exception.DeviceNotFound:
+            raise exception.DiskNotFound(location=disk_dev)
         except libvirt.libvirtError as ex:
             # NOTE(vish): This is called to cleanup volumes after live
             #             migration, so we should still disconnect even if
@@ -1266,7 +1322,6 @@ class LibvirtDriver(driver.ComputeDriver):
         self._disconnect_volume(connection_info, disk_dev)
 
     def attach_interface(self, instance, image_meta, vif):
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         guest = self._host.get_guest(instance)
 
         self.vif_driver.plug(instance, vif)
@@ -1357,10 +1412,23 @@ class LibvirtDriver(driver.ComputeDriver):
 
         snapshot = self._image_api.get(context, image_id)
 
-        disk_path = libvirt_utils.find_disk(virt_dom)
-        source_format = libvirt_utils.get_disk_type(disk_path)
+        # source_format is an on-disk format
+        # source_type is a backend type
+        disk_path, source_format = libvirt_utils.find_disk(virt_dom)
+        source_type = libvirt_utils.get_disk_type_from_path(disk_path)
 
-        image_format = CONF.libvirt.snapshot_image_format or source_format
+        # We won't have source_type for raw or qcow2 disks, because we can't
+        # determine that from the path. We should have it from the libvirt
+        # xml, though.
+        if source_type is None:
+            source_type = source_format
+        # For lxc instances we won't have it either from libvirt xml
+        # (because we just gave libvirt the mounted filesystem), or the path,
+        # so source_type is still going to be None. In this case,
+        # snapshot_backend is going to default to CONF.libvirt.images_type
+        # below, which is still safe.
+
+        image_format = CONF.libvirt.snapshot_image_format or source_type
 
         # NOTE(bfilippov): save lvm and rbd as raw
         if image_format == 'lvm' or image_format == 'rbd':
@@ -1386,7 +1454,7 @@ class LibvirtDriver(driver.ComputeDriver):
         if (self._host.has_min_version(MIN_LIBVIRT_LIVESNAPSHOT_VERSION,
                                        MIN_QEMU_LIVESNAPSHOT_VERSION,
                                        host.HV_DRIVER_QEMU)
-             and source_format not in ('lvm', 'rbd')
+             and source_type not in ('lvm', 'rbd')
              and not CONF.ephemeral_storage_encryption.enabled
              and not CONF.workarounds.disable_libvirt_livesnapshot):
             live_snapshot = True
@@ -1395,7 +1463,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # confirms the running instance, as opposed to the system as a
             # whole, has a new enough version of the hypervisor (bug 1193146).
             try:
-                virt_dom.blockJobAbort(disk_path, 0)
+                guest.get_block_device(disk_path).abort_job()
             except libvirt.libvirtError as ex:
                 error_code = ex.get_error_code()
                 if error_code == libvirt.VIR_ERR_CONFIG_UNSUPPORTED:
@@ -1421,7 +1489,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         snapshot_backend = self.image_backend.snapshot(instance,
                 disk_path,
-                image_type=source_format)
+                image_type=source_type)
 
         if live_snapshot:
             LOG.info(_LI("Beginning live snapshot process"),
@@ -1440,7 +1508,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     # NOTE(xqueralt): libvirt needs o+x in the temp directory
                     os.chmod(tmpdir, 0o701)
                     self._live_snapshot(context, instance, guest, disk_path,
-                                        out_path, image_format, image_meta)
+                                        out_path, source_format, image_format,
+                                        image_meta)
                 else:
                     snapshot_backend.snapshot_extract(out_path, image_format)
             finally:
@@ -1515,15 +1584,10 @@ class LibvirtDriver(driver.ComputeDriver):
         self._can_quiesce(instance, image_meta)
         try:
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove domain at the end.
-            domain = guest._domain
             if quiesced:
-                domain.fsFreeze()
+                guest.freeze_filesystems()
             else:
-                domain.fsThaw()
+                guest.thaw_filesystems()
         except libvirt.libvirtError as ex:
             error_code = ex.get_error_code()
             msg = (_('Error from libvirt while quiescing %(instance_name)s: '
@@ -1537,16 +1601,14 @@ class LibvirtDriver(driver.ComputeDriver):
 
         The qemu-guest-agent must be setup to execute fsfreeze.
         """
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._set_quiesced(context, instance, image_meta, True)
 
     def unquiesce(self, context, instance, image_meta):
         """Thaw the guest filesystems after snapshot."""
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._set_quiesced(context, instance, image_meta, False)
 
     def _live_snapshot(self, context, instance, guest, disk_path, out_path,
-                       image_format, image_meta):
+                       source_format, image_format, image_meta):
         """Snapshot an instance without downtime."""
         dev = guest.get_block_device(disk_path)
 
@@ -1564,9 +1626,11 @@ class LibvirtDriver(driver.ComputeDriver):
         #             in QEMU 1.3. In order to do this, we need to create
         #             a destination image with the original backing file
         #             and matching size of the instance root disk.
-        src_disk_size = libvirt_utils.get_disk_size(disk_path)
+        src_disk_size = libvirt_utils.get_disk_size(disk_path,
+                                                    format=source_format)
         src_back_path = libvirt_utils.get_disk_backing_file(disk_path,
-                                                            basename=False)
+                                                        format=source_format,
+                                                        basename=False)
         disk_delta = out_path + '.delta'
         libvirt_utils.create_cow_image(src_back_path, disk_delta,
                                        src_disk_size)
@@ -1626,19 +1690,15 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.exception(_LE('Failed to send updated snapshot status '
                               'to volume service.'))
 
-    def _volume_snapshot_create(self, context, instance, domain,
+    def _volume_snapshot_create(self, context, instance, guest,
                                 volume_id, new_file):
         """Perform volume snapshot.
 
-           :param domain: VM that volume is attached to
+           :param guest: VM that volume is attached to
            :param volume_id: volume UUID to snapshot
            :param new_file: relative path to new qcow2 file present on share
 
         """
-
-        # TODO(sahid): An object Guest should be passed instead of
-        # a "domain" as virDomain.
-        guest = libvirt_guest.Guest(domain)
         xml = guest.get_xml_desc()
         xml_doc = etree.fromstring(xml)
 
@@ -1721,16 +1781,9 @@ class LibvirtDriver(driver.ComputeDriver):
         snapshot_xml = snapshot.to_xml()
         LOG.debug("snap xml: %s", snapshot_xml, instance=instance)
 
-        snap_flags = (libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY |
-                      libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA |
-                      libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REUSE_EXT)
-
-        QUIESCE = libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE
-
         try:
-            domain.snapshotCreateXML(snapshot_xml,
-                                     snap_flags | QUIESCE)
-
+            guest.snapshot(snapshot, no_metadata=True, disk_only=True,
+                           reuse_ext=True, quiesce=True)
             return
         except libvirt.libvirtError:
             LOG.exception(_LE('Unable to create quiesced VM snapshot, '
@@ -1738,7 +1791,8 @@ class LibvirtDriver(driver.ComputeDriver):
                           instance=instance)
 
         try:
-            domain.snapshotCreateXML(snapshot_xml, snap_flags)
+            guest.snapshot(snapshot, no_metadata=True, disk_only=True,
+                           reuse_ext=True, quiesce=False)
         except libvirt.libvirtError:
             LOG.exception(_LE('Unable to create VM snapshot, '
                               'failing volume_snapshot operation.'),
@@ -1747,8 +1801,8 @@ class LibvirtDriver(driver.ComputeDriver):
             raise
 
     def _volume_refresh_connection_info(self, context, instance, volume_id):
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(context,
-                                                          volume_id)
+        bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+                  context, volume_id, instance.uuid)
 
         driver_bdm = driver_block_device.convert_volume(bdm)
         if driver_bdm:
@@ -1774,11 +1828,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         try:
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove virt_dom at the end.
-            virt_dom = guest._domain
         except exception.InstanceNotFound:
             raise exception.InstanceNotRunning(instance_id=instance.uuid)
 
@@ -1792,7 +1841,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                             'in create_info'))
 
         try:
-            self._volume_snapshot_create(context, instance, virt_dom,
+            self._volume_snapshot_create(context, instance, guest,
                                          volume_id, create_info['new_file'])
         except Exception:
             with excutils.save_and_reraise_exception():
@@ -1855,7 +1904,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # explicitly set the backing file format to avoid any security
             # concerns related to file format auto detection.
             backing_file = rebase_base
-            b_file_fmt = libvirt_utils.get_disk_type(backing_file)
+            b_file_fmt = images.qemu_img_info(backing_file).file_format
             qemu_img_extra_arg = ['-F', b_file_fmt]
 
         qemu_img_extra_arg.append(active_disk_object.source_path)
@@ -2140,16 +2189,12 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         guest = self._host.get_guest(instance)
 
-        # TODO(sahid): We are converting all calls from a
-        # virDomain object to use nova.virt.libvirt.Guest.
-        # We should be able to remove dom at the end.
-        dom = guest._domain
         state = guest.get_power_state(self._host)
-        old_domid = dom.ID()
+        old_domid = guest.id
         # NOTE(vish): This check allows us to reboot an instance that
         #             is already shutdown.
         if state == power_state.RUNNING:
-            dom.shutdown()
+            guest.shutdown()
         # NOTE(vish): This actually could take slightly longer than the
         #             FLAG defines depending on how long the get_info
         #             call takes to return.
@@ -2158,12 +2203,8 @@ class LibvirtDriver(driver.ComputeDriver):
         for x in xrange(CONF.libvirt.wait_soft_reboot_seconds):
             guest = self._host.get_guest(instance)
 
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove dom at the end.
-            dom = guest._domain
             state = guest.get_power_state(self._host)
-            new_domid = dom.ID()
+            new_domid = guest.id
 
             # NOTE(ivoks): By checking domain IDs, we make sure we are
             #              not recreating domain that's already running.
@@ -2172,7 +2213,7 @@ class LibvirtDriver(driver.ComputeDriver):
                              power_state.CRASHED]:
                     LOG.info(_LI("Instance shutdown successfully."),
                              instance=instance)
-                    self._create_domain(domain=dom)
+                    self._create_domain(domain=guest._domain)
                     timer = loopingcall.FixedIntervalLoopingCall(
                         self._wait_for_running, instance)
                     timer.start(interval=0.5).wait()
@@ -2250,13 +2291,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def pause(self, instance):
         """Pause VM instance."""
-        guest = self._host.get_guest(instance)
-
-        # TODO(sahid): We are converting all calls from a
-        # virDomain object to use nova.virt.libvirt.Guest.
-        # We should be able to remove dom at the end.
-        dom = guest._domain
-        dom.suspend()
+        self._host.get_guest(instance).pause()
 
     def unpause(self, instance):
         """Unpause paused VM instance."""
@@ -2280,11 +2315,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         try:
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove dom at the end.
-            dom = guest._domain
         except exception.InstanceNotFound:
             # If the instance has gone then we don't need to
             # wait for it to shutdown
@@ -2298,18 +2328,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
         LOG.debug("Shutting down instance from state %s", state,
                   instance=instance)
-        dom.shutdown()
+        guest.shutdown()
         retry_countdown = retry_interval
 
         for sec in six.moves.range(timeout):
 
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove dom at the end.
-            dom = guest._domain
-
             state = guest.get_power_state(self._host)
 
             if state in SHUTDOWN_STATES:
@@ -2330,7 +2354,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     LOG.debug("Instance in state %s after %d seconds - "
                               "resending shutdown", state, sec,
                               instance=instance)
-                    dom.shutdown()
+                    guest.shutdown()
                 except libvirt.libvirtError:
                     # Assume this is because its now shutdown, so loop
                     # one more time to clean up.
@@ -2367,12 +2391,18 @@ class LibvirtDriver(driver.ComputeDriver):
             self._host.get_guest(instance).inject_nmi()
         except libvirt.libvirtError as ex:
             error_code = ex.get_error_code()
-            msg = (_('Error from libvirt while injecting an NMI to '
-                     '%(instance_uuid)s: '
-                     '[Error Code %(error_code)s] %(ex)s')
-                   % {'instance_uuid': instance.uuid,
-                      'error_code': error_code, 'ex': ex})
-            raise exception.NovaException(msg)
+
+            if error_code == libvirt.VIR_ERR_NO_SUPPORT:
+                raise exception.NMINotSupported()
+            elif error_code == libvirt.VIR_ERR_OPERATION_INVALID:
+                raise exception.InstanceNotRunning(instance_id=instance.uuid)
+
+            LOG.exception(_LE('Error from libvirt while injecting an NMI to '
+                              '%(instance_uuid)s: '
+                              '[Error Code %(error_code)s] %(ex)s'),
+                          {'instance_uuid': instance.uuid,
+                           'error_code': error_code, 'ex': ex})
+            raise
 
     def suspend(self, context, instance):
         """Suspend the specified instance."""
@@ -2442,7 +2472,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         rescue_image_id = None
         if image_meta is not None:
-            image_meta = objects.ImageMeta.from_dict(image_meta)
             if image_meta.obj_attr_is_set("id"):
                 rescue_image_id = image_meta.id
 
@@ -2497,7 +2526,6 @@ class LibvirtDriver(driver.ComputeDriver):
     # for xenapi(tr3buchet)
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
                                             image_meta,
@@ -3576,19 +3604,29 @@ class LibvirtDriver(driver.ComputeDriver):
         return id_maps
 
     def _update_guest_cputune(self, guest, flavor, virt_type):
-        if virt_type in ('lxc', 'kvm', 'qemu'):
-            if guest.cputune is None:
-                guest.cputune = vconfig.LibvirtConfigGuestCPUTune()
+        is_able = self._host.is_cpu_control_policy_capable()
+
+        cputuning = ['shares', 'period', 'quota']
+        wants_cputune = any([k for k in cputuning
+            if "quota:cpu_" + k in flavor.extra_specs.keys()])
+
+        if wants_cputune and not is_able:
+            raise exception.UnsupportedHostCPUControlPolicy()
+
+        if not is_able or virt_type not in ('lxc', 'kvm', 'qemu'):
+            return
+
+        if guest.cputune is None:
+            guest.cputune = vconfig.LibvirtConfigGuestCPUTune()
             # Setting the default cpu.shares value to be a value
             # dependent on the number of vcpus
-            guest.cputune.shares = 1024 * guest.vcpus
+        guest.cputune.shares = 1024 * guest.vcpus
 
-            cputuning = ['shares', 'period', 'quota']
-            for name in cputuning:
-                key = "quota:cpu_" + name
-                if key in flavor.extra_specs:
-                    setattr(guest.cputune, name,
-                            int(flavor.extra_specs[key]))
+        for name in cputuning:
+            key = "quota:cpu_" + name
+            if key in flavor.extra_specs:
+                setattr(guest.cputune, name,
+                        int(flavor.extra_specs[key]))
 
     def _get_cpu_numa_config_from_instance(self, instance_numa_topology,
                                            wants_hugepages):
@@ -3647,7 +3685,7 @@ class LibvirtDriver(driver.ComputeDriver):
         return False
 
     def _get_guest_numa_config(self, instance_numa_topology, flavor, pci_devs,
-                               allowed_cpus=None):
+                               allowed_cpus=None, image_meta=None):
         """Returns the config objects for the guest NUMA specs.
 
         Determines the CPUs that the guest can be pinned to if the guest
@@ -3762,6 +3800,23 @@ class LibvirtDriver(driver.ComputeDriver):
                 guest_cpu_tune.emulatorpin = emulatorpin
                 # Sort the vcpupin list per vCPU id for human-friendlier XML
                 guest_cpu_tune.vcpupin.sort(key=operator.attrgetter("id"))
+
+                if hardware.is_realtime_enabled(flavor):
+                    if not self._host.has_min_version(
+                            MIN_LIBVIRT_REALTIME_VERSION):
+                        raise exception.RealtimePolicyNotSupported()
+
+                    vcpus_rt, vcpus_em = hardware.vcpus_realtime_topology(
+                        set(cpu.id for cpu in guest_cpu_tune.vcpupin),
+                        flavor, image_meta)
+
+                    vcpusched = vconfig.LibvirtConfigGuestCPUTuneVCPUSched()
+                    vcpusched.vcpus = vcpus_rt
+                    vcpusched.scheduler = "fifo"
+                    vcpusched.priority = (
+                        CONF.libvirt.realtime_scheduler_priority)
+                    guest_cpu_tune.vcpusched.append(vcpusched)
+                    guest_cpu_tune.emulatorpin.cpuset = vcpus_em
 
                 guest_numa_tune.memory = numa_mem
                 guest_numa_tune.memnodes = numa_memnodes
@@ -4003,13 +4058,16 @@ class LibvirtDriver(driver.ComputeDriver):
         if rng_is_virtio and rng_allowed:
             self._add_rng_device(guest, flavor)
 
-    def _get_guest_memory_backing_config(self, inst_topology, numatune):
+    def _get_guest_memory_backing_config(
+            self, inst_topology, numatune, flavor):
         wantsmempages = False
         if inst_topology:
             for cell in inst_topology.cells:
                 if cell.pagesize:
                     wantsmempages = True
                     break
+
+        wantsrealtime = hardware.is_realtime_enabled(flavor)
 
         membacking = None
         if wantsmempages:
@@ -4018,6 +4076,11 @@ class LibvirtDriver(driver.ComputeDriver):
             if pages:
                 membacking = vconfig.LibvirtConfigGuestMemoryBacking()
                 membacking.hugepages = pages
+        if wantsrealtime:
+            if not membacking:
+                membacking = vconfig.LibvirtConfigGuestMemoryBacking()
+            membacking.locked = True
+            membacking.sharedpages = False
 
         return membacking
 
@@ -4061,6 +4124,14 @@ class LibvirtDriver(driver.ComputeDriver):
             return flavor
         return instance.flavor
 
+    def _has_uefi_support(self):
+        # This means that the host can support uefi booting for guests
+        supported_archs = [arch.X86_64, arch.AARCH64]
+        caps = self._host.get_capabilities()
+        return ((caps.host.cpu.arch in supported_archs) and
+                self._host.has_min_version(MIN_LIBVIRT_UEFI_VERSION) and
+                os.path.exists(DEFAULT_UEFI_LOADER_PATH[caps.host.cpu.arch]))
+
     def _configure_guest_by_virt_type(self, guest, virt_type, caps, instance,
                                       image_meta, flavor, root_device_name):
         if virt_type == "xen":
@@ -4070,6 +4141,20 @@ class LibvirtDriver(driver.ComputeDriver):
             if caps.host.cpu.arch in (arch.I686, arch.X86_64):
                 guest.sysinfo = self._get_guest_config_sysinfo(instance)
                 guest.os_smbios = vconfig.LibvirtConfigGuestSMBIOS()
+            hw_firmware_type = image_meta.properties.get('hw_firmware_type')
+            if hw_firmware_type == fields.FirmwareType.UEFI:
+                if self._has_uefi_support():
+                    global uefi_logged
+                    if not uefi_logged:
+                        LOG.warn(_LW("uefi support is without some kind of "
+                                     "functional testing and therefore "
+                                     "considered experimental."))
+                        uefi_logged = True
+                    guest.os_loader = DEFAULT_UEFI_LOADER_PATH[
+                        caps.host.cpu.arch]
+                    guest.os_loader_type = "pflash"
+                else:
+                    raise exception.UEFINotSupported()
             guest.os_mach_type = self._get_machine_type(image_meta, caps)
             if image_meta.properties.get('hw_boot_menu') is None:
                 guest.os_bootmenu = strutils.bool_from_string(
@@ -4204,7 +4289,7 @@ class LibvirtDriver(driver.ComputeDriver):
         pci_devs = pci_manager.get_instance_pci_devs(instance, 'all')
 
         guest_numa_config = self._get_guest_numa_config(
-                instance.numa_topology, flavor, pci_devs, allowed_cpus)
+            instance.numa_topology, flavor, pci_devs, allowed_cpus, image_meta)
 
         guest.cpuset = guest_numa_config.cpuset
         guest.cputune = guest_numa_config.cputune
@@ -4212,7 +4297,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         guest.membacking = self._get_guest_memory_backing_config(
             instance.numa_topology,
-            guest_numa_config.numatune)
+            guest_numa_config.numatune,
+            flavor)
 
         guest.metadata.append(self._get_guest_config_meta(context,
                                                           instance))
@@ -4624,12 +4710,8 @@ class LibvirtDriver(driver.ComputeDriver):
     def _get_all_block_devices(self):
         """Return all block devices in use on this node."""
         devices = []
-        for dom in self._host.list_instance_domains():
+        for guest in self._host.list_guests():
             try:
-                # TODO(sahid): list_instance_domain should
-                # be renamed as list_guest and so returning
-                # Guest objects.
-                guest = libvirt_guest.Guest(dom)
                 doc = etree.fromstring(guest.get_xml_desc())
             except libvirt.libvirtError as e:
                 LOG.warn(_LW("couldn't obtain the XML from domain:"
@@ -4737,17 +4819,15 @@ class LibvirtDriver(driver.ComputeDriver):
         if CONF.libvirt.virt_type == 'lxc':
             return total + 1
 
-        for dom in self._host.list_instance_domains():
+        for guest in self._host.list_guests():
             try:
-                # TODO(sahid): list_instance_domains should
-                # return Guest objects.
-                vcpus = libvirt_guest.Guest(dom).get_vcpus_info()
+                vcpus = guest.get_vcpus_info()
                 if vcpus is not None:
                     total += len(list(vcpus))
             except libvirt.libvirtError as e:
                 LOG.warn(_LW("couldn't obtain the vcpu count from domain id:"
                              " %(uuid)s, exception: %(ex)s"),
-                         {"uuid": dom.UUIDString(), "ex": e})
+                         {"uuid": guest.uuid, "ex": e})
             # NOTE(gtt116): give other tasks a chance.
             greenthread.sleep(0)
         return total
@@ -4805,7 +4885,7 @@ class LibvirtDriver(driver.ComputeDriver):
     def _get_pcidev_info(self, devname):
         """Returns a dict of PCI device."""
 
-        def _get_device_type(cfgdev):
+        def _get_device_type(cfgdev, pci_address):
             """Get a PCI device's device type.
 
             An assignable PCI device can be a normal PCI device,
@@ -4813,26 +4893,35 @@ class LibvirtDriver(driver.ComputeDriver):
             Function (VF). Only normal PCI devices or SR-IOV VFs
             are assignable, while SR-IOV PFs are always owned by
             hypervisor.
-
-            Please notice that a PCI device with SR-IOV
-            capability but not enabled is reported as normal PCI device.
             """
             for fun_cap in cfgdev.pci_capability.fun_capability:
-                if len(fun_cap.device_addrs) != 0:
-                    if fun_cap.type == 'virt_functions':
-                        return {
-                            'dev_type': fields.PciDeviceType.SRIOV_PF,
-                        }
-                    if fun_cap.type == 'phys_function':
-                        phys_address = "%04x:%02x:%02x.%01x" % (
-                            fun_cap.device_addrs[0][0],
-                            fun_cap.device_addrs[0][1],
-                            fun_cap.device_addrs[0][2],
-                            fun_cap.device_addrs[0][3])
-                        return {
-                            'dev_type': fields.PciDeviceType.SRIOV_VF,
-                            'phys_function': phys_address,
-                        }
+                if fun_cap.type == 'virt_functions':
+                    return {
+                        'dev_type': fields.PciDeviceType.SRIOV_PF,
+                    }
+                if (fun_cap.type == 'phys_function' and
+                    len(fun_cap.device_addrs) != 0):
+                    phys_address = "%04x:%02x:%02x.%01x" % (
+                        fun_cap.device_addrs[0][0],
+                        fun_cap.device_addrs[0][1],
+                        fun_cap.device_addrs[0][2],
+                        fun_cap.device_addrs[0][3])
+                    return {
+                        'dev_type': fields.PciDeviceType.SRIOV_VF,
+                        'parent_addr': phys_address,
+                    }
+
+            # Note(moshele): libvirt < 1.3 reported virt_functions capability
+            # only when VFs are enabled. The check below is a workaround
+            # to get the correct report regardless of whether or not any
+            # VFs are enabled for the device.
+            if not self._host.has_min_version(
+                MIN_LIBVIRT_PF_WITH_NO_VFS_CAP_VERSION):
+                is_physical_function = pci_utils.is_physical_function(
+                    *pci_utils.get_pci_address_fields(pci_address))
+                if is_physical_function:
+                    return {'dev_type': fields.PciDeviceType.SRIOV_PF}
+
             return {'dev_type': fields.PciDeviceType.STANDARD}
 
         virtdev = self._host.device_lookup_by_name(devname)
@@ -4857,7 +4946,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         # requirement by DataBase Model
         device['label'] = 'label_%(vendor_id)s_%(product_id)s' % device
-        device.update(_get_device_type(cfgdev))
+        device.update(_get_device_type(cfgdev, address))
         return device
 
     def _get_pci_passthrough_devices(self):
@@ -5072,11 +5161,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # an initialization issue with some versions of Libvirt (1.0.5.5).
         # See: https://bugzilla.redhat.com/show_bug.cgi?id=1000116
         # See: https://bugs.launchpad.net/nova/+bug/1215593
-
-        # Temporary convert supported_instances into a string, while keeping
-        # the RPC version as JSON. Can be changed when RPC broadcast is removed
-        data["supported_instances"] = jsonutils.dumps(
-            self._get_instance_capabilities())
+        data["supported_instances"] = self._get_instance_capabilities()
 
         data["vcpus"] = self._get_vcpu_total()
         data["memory_mb"] = self._host.get_memory_mb_total()
@@ -5187,11 +5272,13 @@ class LibvirtDriver(driver.ComputeDriver):
         # Create file on storage, to be checked on source host
         filename = self._create_shared_storage_test_file()
 
-        return {"filename": filename,
-                "image_type": CONF.libvirt.images_type,
-                "block_migration": block_migration,
-                "disk_over_commit": disk_over_commit,
-                "disk_available_mb": disk_available_mb}
+        data = objects.LibvirtLiveMigrateData()
+        data.filename = filename
+        data.image_type = CONF.libvirt.images_type
+        data.block_migration = block_migration
+        data.disk_over_commit = disk_over_commit
+        data.disk_available_mb = disk_available_mb
+        return data
 
     def check_can_live_migrate_destination_cleanup(self, context,
                                                    dest_check_data):
@@ -5220,13 +5307,18 @@ class LibvirtDriver(driver.ComputeDriver):
         # if block migration, instances_paths should not be on shared storage.
         source = CONF.host
 
-        dest_check_data.update({'is_shared_instance_path':
-                self._check_shared_storage_test_file(
-                    dest_check_data['filename'])})
+        if not isinstance(dest_check_data, migrate_data_obj.LiveMigrateData):
+            md_obj = migrate_data_obj.LibvirtLiveMigrateData()
+            md_obj.from_legacy_dict(dest_check_data)
+            dest_check_data = md_obj
 
-        dest_check_data.update({'is_shared_block_storage':
-                self._is_shared_block_storage(instance, dest_check_data,
-                                              block_device_info)})
+        dest_check_data.is_shared_instance_path = (
+            self._check_shared_storage_test_file(
+                dest_check_data.filename))
+
+        dest_check_data.is_shared_block_storage = (
+            self._is_shared_block_storage(instance, dest_check_data,
+                                          block_device_info))
 
         disk_info_text = self.get_instance_disk_info(
             instance, block_device_info=block_device_info)
@@ -5234,15 +5326,15 @@ class LibvirtDriver(driver.ComputeDriver):
                                                          disk_info_text)
         has_local_disk = self._has_local_disk(instance, disk_info_text)
 
-        if dest_check_data['block_migration']:
-            if (dest_check_data['is_shared_block_storage'] or
-                    dest_check_data['is_shared_instance_path']):
+        if dest_check_data.block_migration:
+            if (dest_check_data.is_shared_block_storage or
+                    dest_check_data.is_shared_instance_path):
                 reason = _("Block migration can not be used "
                            "with shared storage.")
                 raise exception.InvalidLocalStorage(reason=reason, path=source)
             self._assert_dest_node_has_enough_disk(context, instance,
-                                    dest_check_data['disk_available_mb'],
-                                    dest_check_data['disk_over_commit'],
+                                    dest_check_data.disk_available_mb,
+                                    dest_check_data.disk_over_commit,
                                     block_device_info)
             if block_device_info:
                 bdm = block_device_info.get('block_device_mapping')
@@ -5258,8 +5350,8 @@ class LibvirtDriver(driver.ComputeDriver):
                              'volumes') % instance.uuid)
                     raise exception.MigrationPreCheckError(reason=msg)
 
-        elif not (dest_check_data['is_shared_block_storage'] or
-                  dest_check_data['is_shared_instance_path'] or
+        elif not (dest_check_data.is_shared_block_storage or
+                  dest_check_data.is_shared_instance_path or
                   (booted_from_volume and not has_local_disk)):
             reason = _("Live migration can not be used "
                        "without shared storage except "
@@ -5272,13 +5364,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # same name to be used
         instance_path = libvirt_utils.get_instance_path(instance,
                                                         relative=True)
-        dest_check_data['instance_relative_path'] = instance_path
-
-        # NOTE(danms): Emulate this old flag in case we're talking to
-        # an older client (<= Juno). We can remove this when we bump the
-        # compute RPC API to 4.0.
-        dest_check_data['is_shared_storage'] = (
-            dest_check_data['is_shared_instance_path'])
+        dest_check_data.instance_relative_path = instance_path
 
         return dest_check_data
 
@@ -5295,18 +5381,19 @@ class LibvirtDriver(driver.ComputeDriver):
         :param dest_check_data: dict with boolean fields image_type,
                                 is_shared_instance_path, and is_volume_backed
         """
-        if (CONF.libvirt.images_type == dest_check_data.get('image_type') and
+        if (dest_check_data.obj_attr_is_set('image_type') and
+                CONF.libvirt.images_type == dest_check_data.image_type and
                 self.image_backend.backend().is_shared_block_storage()):
             # NOTE(dgenin): currently true only for RBD image backend
             return True
 
-        if (dest_check_data.get('is_shared_instance_path') and
+        if (dest_check_data.is_shared_instance_path and
                 self.image_backend.backend().is_file_in_instance_path()):
             # NOTE(angdraug): file based image backends (Raw, Qcow2)
             # place block device files under the instance path
             return True
 
-        if (dest_check_data.get('is_volume_backed') and
+        if (dest_check_data.is_volume_backed and
                 not bool(jsonutils.loads(
                     self.get_instance_disk_info(instance,
                                                 block_device_info)))):
@@ -5503,11 +5590,12 @@ class LibvirtDriver(driver.ComputeDriver):
                              post_method, recover_method, block_migration,
                              migrate_data)
 
-    def _update_xml(self, xml_str, volume, listen_addrs, serial_listen_addr):
+    def _update_xml(self, xml_str, migrate_bdm_info, listen_addrs,
+                    serial_listen_addr):
         xml_doc = etree.fromstring(xml_str)
 
-        if volume:
-            xml_doc = self._update_volume_xml(xml_doc, volume)
+        if migrate_bdm_info:
+            xml_doc = self._update_volume_xml(xml_doc, migrate_bdm_info)
         if listen_addrs:
             xml_doc = self._update_graphics_xml(xml_doc, listen_addrs)
         else:
@@ -5533,24 +5621,23 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return xml_doc
 
-    def _update_volume_xml(self, xml_doc, volume):
+    def _update_volume_xml(self, xml_doc, migrate_bdm_info):
         """Update XML using device information of destination host."""
 
         # Update volume xml
         parser = etree.XMLParser(remove_blank_text=True)
         disk_nodes = xml_doc.findall('./devices/disk')
+
+        bdm_info_by_serial = {x.serial: x for x in migrate_bdm_info}
         for pos, disk_dev in enumerate(disk_nodes):
             serial_source = disk_dev.findtext('serial')
-            if serial_source is None or volume.get(serial_source) is None:
+            bdm_info = bdm_info_by_serial.get(serial_source)
+            if (serial_source is None or
+                    not bdm_info or not bdm_info.connection_info or
+                    serial_source not in bdm_info_by_serial):
                 continue
-
-            if ('connection_info' not in volume[serial_source] or
-                    'disk_info' not in volume[serial_source]):
-                continue
-
             conf = self._get_volume_config(
-                volume[serial_source]['connection_info'],
-                volume[serial_source]['disk_info'])
+                bdm_info.connection_info, bdm_info.as_disk_info())
             xml_doc2 = etree.XML(conf.to_xml(), parser)
             serial_dest = xml_doc2.findtext('serial')
 
@@ -5607,9 +5694,9 @@ class LibvirtDriver(driver.ComputeDriver):
                     ' the local address (127.0.0.1 or ::1).')
             raise exception.MigrationError(reason=msg)
 
-        if listen_addrs is not None:
-            dest_local_vnc = listen_addrs['vnc'] in LOCAL_ADDRS
-            dest_local_spice = listen_addrs['spice'] in LOCAL_ADDRS
+        if listen_addrs:
+            dest_local_vnc = listen_addrs.get('vnc') in LOCAL_ADDRS
+            dest_local_spice = listen_addrs.get('spice') in LOCAL_ADDRS
 
             if ((CONF.vnc.enabled and not dest_local_vnc) or
                 (CONF.spice.enabled and not dest_local_spice)):
@@ -5663,21 +5750,31 @@ class LibvirtDriver(driver.ComputeDriver):
                 flaglist = CONF.libvirt.block_migration_flag.split(',')
             else:
                 flaglist = CONF.libvirt.live_migration_flag.split(',')
-            flagvals = [getattr(libvirt, x.strip()) for x in flaglist]
+
+            def getflag(s):
+                try:
+                    return getattr(libvirt, s)
+                except AttributeError:
+                    msg = _("Unknown libvirt live migration flag '%s'") % s
+                    raise exception.Invalid(msg)
+
+            flagvals = [getflag(x.strip()) for x in flaglist]
             logical_sum = six.moves.reduce(lambda x, y: x | y, flagvals)
 
-            pre_live_migrate_data = (migrate_data or {}).get(
-                                        'pre_live_migration_result', {})
-            listen_addrs = pre_live_migrate_data.get('graphics_listen_addrs')
-            volume = pre_live_migrate_data.get('volume')
-            serial_listen_addr = pre_live_migrate_data.get(
-                                     'serial_listen_addr')
+            listen_addrs = {}
+            if 'graphics_listen_addr_vnc' in migrate_data:
+                listen_addrs['vnc'] = str(
+                    migrate_data.graphics_listen_addr_vnc)
+            if 'graphics_listen_addr_spice' in migrate_data:
+                listen_addrs['spice'] = str(
+                    migrate_data.graphics_listen_addr_spice)
+            serial_listen_addr = migrate_data.serial_listen_addr
 
             migratable_flag = getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
                                       None)
 
-            if (migratable_flag is None or
-                    (listen_addrs is None and not volume)):
+            if (migratable_flag is None or (
+                    not listen_addrs and not migrate_data.bdms)):
                 # TODO(alexs-h): These checks could be moved to the
                 # check_can_live_migrate_destination/source phase
                 self._check_graphics_addresses_can_live_migrate(listen_addrs)
@@ -5689,7 +5786,7 @@ class LibvirtDriver(driver.ComputeDriver):
             else:
                 old_xml_str = guest.get_xml_desc(dump_migratable=True)
                 new_xml_str = self._update_xml(old_xml_str,
-                                               volume,
+                                               migrate_data.bdms,
                                                listen_addrs,
                                                serial_listen_addr)
                 try:
@@ -5855,12 +5952,12 @@ class LibvirtDriver(driver.ComputeDriver):
             disks.append(dev.source_path)
         return disks
 
-    def _live_migration_data_gb(self, instance, guest, block_migration):
+    def _live_migration_data_gb(self, instance, disk_paths):
         '''Calculate total amount of data to be transferred
 
         :param instance: the nova.objects.Instance being migrated
-        :param guest: the Guest being migrated
-        :param block_migration: true if block migration is requested
+        :param disk_paths: list of disk paths that are being migrated
+        with instance
 
         Calculates the total amount of data that needs to be
         transferred during the live migration. The actual
@@ -5876,12 +5973,8 @@ class LibvirtDriver(driver.ComputeDriver):
         if ram_gb < 2:
             ram_gb = 2
 
-        if not block_migration:
-            return ram_gb
-
-        paths = self._live_migration_copy_disk_paths(guest)
         disk_gb = 0
-        for path in paths:
+        for path in disk_paths:
             try:
                 size = os.stat(path).st_size
                 size_gb = (size / units.Gi)
@@ -5899,9 +5992,9 @@ class LibvirtDriver(driver.ComputeDriver):
     def _live_migration_monitor(self, context, instance, guest,
                                 dest, post_method,
                                 recover_method, block_migration,
-                                migrate_data, dom, finish_event):
-        data_gb = self._live_migration_data_gb(instance, guest,
-                                               block_migration)
+                                migrate_data, dom, finish_event,
+                                disk_paths):
+        data_gb = self._live_migration_data_gb(instance, disk_paths)
         downtime_steps = list(self._migration_downtime_steps(data_gb))
         completion_timeout = int(
             CONF.libvirt.live_migration_completion_timeout * data_gb)
@@ -6114,6 +6207,10 @@ class LibvirtDriver(driver.ComputeDriver):
 
         guest = self._host.get_guest(instance)
 
+        disk_paths = []
+        if block_migration:
+            disk_paths = self._live_migration_copy_disk_paths(guest)
+
         # TODO(sahid): We are converting all calls from a
         # virDomain object to use nova.virt.libvirt.Guest.
         # We should be able to remove dom at the end.
@@ -6141,7 +6238,7 @@ class LibvirtDriver(driver.ComputeDriver):
             self._live_migration_monitor(context, instance, guest, dest,
                                          post_method, recover_method,
                                          block_migration, migrate_data,
-                                         dom, finish_event)
+                                         dom, finish_event, disk_paths)
         except Exception as ex:
             LOG.warn(_LW("Error monitoring migration: %(ex)s"),
                      {"ex": ex}, instance=instance, exc_info=True)
@@ -6207,11 +6304,10 @@ class LibvirtDriver(driver.ComputeDriver):
             # directory at destination node, ensure it is always deleted.
             is_shared_instance_path = True
             if migrate_data:
-                is_shared_instance_path = migrate_data.get(
-                        'is_shared_instance_path', True)
+                is_shared_instance_path = migrate_data.is_shared_instance_path
             if not is_shared_instance_path:
                 instance_dir = libvirt_utils.get_instance_path_at_destination(
-                                instance, migrate_data)
+                    instance, migrate_data)
                 if os.path.exists(instance_dir):
                         shutil.rmtree(instance_dir)
 
@@ -6226,13 +6322,15 @@ class LibvirtDriver(driver.ComputeDriver):
         is_shared_instance_path = True
         is_block_migration = True
         if migrate_data:
+            if not isinstance(migrate_data, migrate_data_obj.LiveMigrateData):
+                obj = objects.LibvirtLiveMigrateData()
+                obj.from_legacy_dict(migrate_data)
+                migrate_data = obj
             LOG.debug('migrate_data in pre_live_migration: %s', migrate_data,
                       instance=instance)
-            is_shared_block_storage = migrate_data.get(
-                    'is_shared_block_storage', True)
-            is_shared_instance_path = migrate_data.get(
-                    'is_shared_instance_path', True)
-            is_block_migration = migrate_data.get('block_migration', True)
+            is_shared_block_storage = migrate_data.is_shared_block_storage
+            is_shared_instance_path = migrate_data.is_shared_instance_path
+            is_block_migration = migrate_data.block_migration
 
         image_meta = objects.ImageMeta.from_instance(instance)
 
@@ -6322,25 +6420,32 @@ class LibvirtDriver(driver.ComputeDriver):
                     greenthread.sleep(1)
 
         # Store vncserver_listen and latest disk device info
-        res_data = {'graphics_listen_addrs': {}, 'volume': {},
-                    'serial_listen_addr': {}}
-        res_data['graphics_listen_addrs']['vnc'] = CONF.vnc.vncserver_listen
-        res_data['graphics_listen_addrs']['spice'] = CONF.spice.server_listen
-        res_data['serial_listen_addr'] = \
-                CONF.serial_console.proxyclient_address
+        if not migrate_data:
+            migrate_data = objects.LibvirtLiveMigrateData(bdms=[])
+        else:
+            migrate_data.bdms = []
+        migrate_data.graphics_listen_addr_vnc = CONF.vnc.vncserver_listen
+        migrate_data.graphics_listen_addr_spice = CONF.spice.server_listen
+        migrate_data.serial_listen_addr = \
+            CONF.serial_console.proxyclient_address
+
         for vol in block_device_mapping:
             connection_info = vol['connection_info']
             if connection_info.get('serial'):
-                serial = connection_info['serial']
-                res_data['volume'][serial] = {'connection_info': {},
-                                              'disk_info': {}}
-                res_data['volume'][serial]['connection_info'] = \
-                    connection_info
                 disk_info = blockinfo.get_info_from_bdm(
                     instance, CONF.libvirt.virt_type, image_meta, vol)
-                res_data['volume'][serial]['disk_info'] = disk_info
 
-        return res_data
+                bdmi = objects.LibvirtLiveMigrateBDMInfo()
+                bdmi.serial = connection_info['serial']
+                bdmi.connection_info = connection_info
+                bdmi.bus = disk_info['bus']
+                bdmi.dev = disk_info['dev']
+                bdmi.type = disk_info['type']
+                bdmi.format = disk_info.get('format')
+                bdmi.boot_index = disk_info.get('boot_index')
+                migrate_data.bdms.append(bdmi)
+
+        return migrate_data
 
     def _try_fetch_image_cache(self, image, fetch_func, context, filename,
                                image_id, instance, size,
@@ -6605,12 +6710,8 @@ class LibvirtDriver(driver.ComputeDriver):
         """Return total over committed disk size for all instances."""
         # Disk size that all instance uses : virtual_size - disk_size
         disk_over_committed_size = 0
-        for dom in self._host.list_instance_domains():
+        for guest in self._host.list_guests():
             try:
-                # TODO(sahid): list_instance_domain should
-                # be renamed as list_guest and so returning
-                # Guest objects.
-                guest = libvirt_guest.Guest(dom)
                 xml = guest.get_xml_desc()
 
                 disk_infos = self._get_instance_disk_info(guest.name, xml)
@@ -6896,8 +6997,6 @@ class LibvirtDriver(driver.ComputeDriver):
                          network_info, image_meta, resize_instance,
                          block_device_info=None, power_on=True):
         LOG.debug("Starting finish_migration", instance=instance)
-
-        image_meta = objects.ImageMeta.from_dict(image_meta)
 
         # resize disks. only "disk" and "disk.local" are necessary.
         disk_info = jsonutils.loads(disk_info)
@@ -7227,7 +7326,6 @@ class LibvirtDriver(driver.ComputeDriver):
         return False
 
     def default_root_device_name(self, instance, image_meta, root_bdm):
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         disk_bus = blockinfo.get_disk_bus_for_device_type(
             instance, CONF.libvirt.virt_type, image_meta, "disk")
         cdrom_bus = blockinfo.get_disk_bus_for_device_type(

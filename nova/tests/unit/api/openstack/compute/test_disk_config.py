@@ -47,7 +47,7 @@ class DiskConfigTestCaseV21(test.TestCase):
         self._set_up_app()
         self._setup_fake_image_service()
 
-        fakes.stub_out_nw_api(self.stubs)
+        fakes.stub_out_nw_api(self)
 
         FAKE_INSTANCES = [
             fakes.stub_instance(1,
@@ -140,7 +140,7 @@ class DiskConfigTestCaseV21(test.TestCase):
 
     def _setup_fake_image_service(self):
         self.image_service = nova.tests.unit.image.fake.stub_out_image_service(
-                self.stubs)
+                self)
         timestamp = datetime.datetime(2011, 1, 1, 1, 2, 3)
         image = {'id': '88580842-f50a-11e2-8d3a-f23c91aec05e',
                  'name': 'fakeimage7',
@@ -222,7 +222,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   API_DISK_CONFIG: 'AUTO'
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
@@ -238,7 +238,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   API_DISK_CONFIG: 'MANUAL'
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
@@ -256,7 +256,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   'flavorRef': '1',
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
@@ -270,7 +270,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   'flavorRef': '1',
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
@@ -285,7 +285,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   'flavorRef': '1',
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
@@ -301,7 +301,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   API_DISK_CONFIG: 'AUTO'
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 400)
 
@@ -316,7 +316,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   API_DISK_CONFIG: 'MANUAL'
                }}
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'MANUAL')
@@ -327,7 +327,7 @@ class DiskConfigTestCaseV21(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {API_DISK_CONFIG: disk_config}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, disk_config)
@@ -345,7 +345,7 @@ class DiskConfigTestCaseV21(test.TestCase):
         req.method = 'PUT'
         req.content_type = 'application/json'
         body = {'server': {API_DISK_CONFIG: 'server_test'}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         self.assertEqual(res.status_int, 400)
         expected_msg = self._get_expected_msg_for_invalid_disk_config()
@@ -363,7 +363,7 @@ class DiskConfigTestCaseV21(test.TestCase):
                   'imageRef': 'cedef40a-ed67-4d10-800e-17455edce175',
                   API_DISK_CONFIG: disk_config
                }}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, disk_config)
@@ -388,12 +388,12 @@ class DiskConfigTestCaseV21(test.TestCase):
 
         def create(*args, **kwargs):
             self.assertIn('auto_disk_config', kwargs)
-            self.assertEqual(True, kwargs['auto_disk_config'])
+            self.assertTrue(kwargs['auto_disk_config'])
             return old_create(*args, **kwargs)
 
         self.stubs.Set(compute_api.API, 'create', create)
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
@@ -410,11 +410,11 @@ class DiskConfigTestCaseV21(test.TestCase):
 
         def rebuild(*args, **kwargs):
             self.assertIn('auto_disk_config', kwargs)
-            self.assertEqual(True, kwargs['auto_disk_config'])
+            self.assertTrue(kwargs['auto_disk_config'])
 
         self.stubs.Set(compute_api.API, 'rebuild', rebuild)
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         res = req.get_response(self.app)
         server_dict = jsonutils.loads(res.body)['server']
         self.assertDiskConfig(server_dict, 'AUTO')
@@ -431,11 +431,11 @@ class DiskConfigTestCaseV21(test.TestCase):
 
         def resize(*args, **kwargs):
             self.assertIn('auto_disk_config', kwargs)
-            self.assertEqual(True, kwargs['auto_disk_config'])
+            self.assertTrue(kwargs['auto_disk_config'])
 
         self.stubs.Set(compute_api.API, 'resize', resize)
 
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.get_response(self.app)
 
 

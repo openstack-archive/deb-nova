@@ -46,6 +46,7 @@ import testtools
 from nova import context
 from nova import db
 from nova.network import manager as network_manager
+from nova.network.security_group import openstack_driver
 from nova.objects import base as objects_base
 from nova.tests import fixtures as nova_fixtures
 from nova.tests.unit import conf_fixture
@@ -236,6 +237,8 @@ class TestCase(testtools.TestCase):
 
         self.useFixture(nova_fixtures.PoisonFunctions())
 
+        openstack_driver.DRIVER_CACHE = {}
+
     def _restore_obj_registry(self):
         objects_base.NovaObjectRegistry._registry._obj_classes = \
                 self._base_test_obj_backup
@@ -252,6 +255,18 @@ class TestCase(testtools.TestCase):
             # newly generated tests by testscenarios.
             if key != 'id':
                 del self.__dict__[key]
+
+    def stub_out(self, old, new):
+        """Replace a function for the duration of the test.
+
+        Use the monkey patch fixture to replace a function for the
+        duration of a test. Useful when you want to provide fake
+        methods instead of mocks during testing.
+
+        This should be used instead of self.stubs.Set (which is based
+        on mox) going forward.
+        """
+        self.useFixture(fixtures.MonkeyPatch(old, new))
 
     def flags(self, **kw):
         """Override flag variables for a test."""

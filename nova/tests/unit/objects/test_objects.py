@@ -1113,7 +1113,7 @@ object_data = {
     'AggregateList': '1.2-fb6e19f3c3a3186b04eceb98b5dadbfa',
     'BandwidthUsage': '1.2-c6e4c779c7f40f2407e3d70022e3cd1c',
     'BandwidthUsageList': '1.2-5fe7475ada6fe62413cbfcc06ec70746',
-    'BlockDeviceMapping': '1.15-d44d8d694619e79c172a99b3c1d6261d',
+    'BlockDeviceMapping': '1.16-12319f6f47f740a67a88a23f7c7ee6ef',
     'BlockDeviceMappingList': '1.17-1e568eecb91d06d4112db9fd656de235',
     'CellMapping': '1.0-7f1a7e85a22bbb7559fc730ab658b9bd',
     'ComputeNode': '1.14-a396975707b66281c5f404a68fccd395',
@@ -1133,8 +1133,8 @@ object_data = {
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
     'HVSpec': '1.2-db672e73304da86139086d003f3977e7',
     'ImageMeta': '1.8-642d1b2eb3e880a367f37d72dd76162d',
-    'ImageMetaProps': '1.8-a07a00bb829668f3bdccf8de03c128bb',
-    'Instance': '2.0-ff56804dce87d81d9a04834d4bd1e3d2',
+    'ImageMetaProps': '1.11-96aa14a8ba226701bbd22e63557a63ea',
+    'Instance': '2.1-416fdd0dfc33dfa12ff2cfdd8cc32e17',
     'InstanceAction': '1.1-f9f293e526b66fca0d05c3b3a2d13914',
     'InstanceActionEvent': '1.1-e56a64fa4710e43ef7af2ad9d6028b33',
     'InstanceActionEventList': '1.1-13d92fb953030cdbfee56481756e02be',
@@ -1148,10 +1148,12 @@ object_data = {
     'InstanceList': '2.0-6c8ba6147cca3082b1e4643f795068bf',
     'InstanceMapping': '1.0-47ef26034dfcbea78427565d9177fe50',
     'InstanceMappingList': '1.0-9e982e3de1613b9ada85e35f69b23d47',
-    'InstanceNUMACell': '1.2-535ef30e0de2d6a0d26a71bd58ecafc4',
+    'InstanceNUMACell': '1.3-6991a20992c5faa57fae71a45b40241b',
     'InstanceNUMATopology': '1.2-d944a7d6c21e1c773ffdf09c6d025954',
     'InstancePCIRequest': '1.1-b1d75ebc716cb12906d9d513890092bf',
     'InstancePCIRequests': '1.1-65e38083177726d806684cb1cc0136d2',
+    'LibvirtLiveMigrateBDMInfo': '1.0-252aabb723ca79d5469fa56f64b57811',
+    'LibvirtLiveMigrateData': '1.0-eb8b5f6c49ae3858213a7012558a2f3d',
     'KeyPair': '1.3-bfaa2a8b148cdf11e0c72435d9dd097a',
     'KeyPairList': '1.2-58b94f96e776bedaf1e192ddb2a24c4e',
     'Migration': '1.2-8784125bedcea0a9227318511904e853',
@@ -1167,20 +1169,20 @@ object_data = {
     'NetworkList': '1.2-69eca910d8fa035dfecd8ba10877ee59',
     'NetworkRequest': '1.1-7a3e4ca2ce1e7b62d8400488f2f2b756',
     'NetworkRequestList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
-    'PciDevice': '1.3-d92e0b17bbed61815b919af6b8d8998e',
-    'PciDeviceList': '1.2-3757458c45591cbc92c72ee99e757c98',
+    'PciDevice': '1.4-4f54e80054bbb6414e17eb9babc97a44',
+    'PciDeviceList': '1.3-52ff14355491c8c580bdc0ba34c26210',
     'PciDevicePool': '1.1-3f5ddc3ff7bfa14da7f6c7e9904cc000',
     'PciDevicePoolList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
     'Quotas': '1.2-1fe4cd50593aaf5d36a6dc5ab3f98fb3',
     'QuotasNoOp': '1.2-e041ddeb7dc8188ca71706f78aad41c1',
-    'RequestSpec': '1.4-6922fe208b5d1186bdd825513f677921',
+    'RequestSpec': '1.5-576a249869c161e17b7cd6d55f9d85f3',
     'S3ImageMapping': '1.0-7dd7366a890d82660ed121de9092276e',
     'SchedulerLimits': '1.0-249c4bd8e62a9b327b7026b7f19cc641',
     'SchedulerRetries': '1.1-3c9c8b16143ebbb6ad7030e999d14cc0',
     'SecurityGroup': '1.1-0e1b9ba42fe85c13c1437f8b74bdb976',
     'SecurityGroupList': '1.0-dc8bbea01ba09a2edb6e5233eae85cbc',
     'SecurityGroupRule': '1.1-ae1da17b79970012e8536f88cb3c6b29',
-    'SecurityGroupRuleList': '1.1-674b323c9ccea02e93b1b40e7fd2091a',
+    'SecurityGroupRuleList': '1.2-0005c47fcd0fb78dd6d7fd32a1409f5b',
     'Service': '1.19-8914320cbeb4ec29f252d72ce55d07e1',
     'ServiceList': '1.17-b767102cba7cbed290e396114c3f86b3',
     'TaskLog': '1.0-78b0534366f29aa3eebb01860fbe18fe',
@@ -1193,52 +1195,11 @@ object_data = {
     'VirtualInterface': '1.0-19921e38cba320f355d56ecbf8f29587',
     'VirtualInterfaceList': '1.0-9750e2074437b3077e46359102779fc6',
     'VolumeUsage': '1.0-6c8190c46ce1469bb3286a1f21c2e475',
+    'XenapiLiveMigrateData': '1.0-5f982bec68f066e194cd9ce53a24ac4c',
 }
 
 
 class TestObjectVersions(test.NoDBTestCase):
-    @staticmethod
-    def _is_method(thing):
-        # NOTE(dims): In Python3, The concept of 'unbound methods' has
-        # been removed from the language. When referencing a method
-        # as a class attribute, you now get a plain function object.
-        # so let's check for both
-        return inspect.isfunction(thing) or inspect.ismethod(thing)
-
-    def _find_remotable_method(self, cls, thing, parent_was_remotable=False):
-        """Follow a chain of remotable things down to the original function."""
-        if isinstance(thing, classmethod):
-            return self._find_remotable_method(cls, thing.__get__(None, cls))
-        elif self._is_method(thing) and hasattr(thing, 'remotable'):
-            return self._find_remotable_method(cls, thing.original_fn,
-                                               parent_was_remotable=True)
-        elif parent_was_remotable:
-            # We must be the first non-remotable thing underneath a stack of
-            # remotable things (i.e. the actual implementation method)
-            return thing
-        else:
-            # This means the top-level thing never hit a remotable layer
-            return None
-
-    def _un_unicodify_enum_valid_values(self, _fields):
-        for name, field in _fields:
-            if not isinstance(field, (fields.BaseEnumField,
-                                      fields.EnumField)):
-                continue
-            orig_type = type(field._type._valid_values)
-            field._type._valid_values = orig_type(
-                [x.encode('utf-8') for x in
-                 field._type._valid_values])
-
-    def test_find_remotable_method(self):
-        class MyObject(object):
-            @base.remotable
-            def my_method(self):
-                return 'Hello World!'
-        thing = self._find_remotable_method(MyObject,
-                                            getattr(MyObject, 'my_method'))
-        self.assertIsNotNone(thing)
-
     def test_versions(self):
         checker = fixture.ObjectVersionChecker(
                         base.NovaObjectRegistry.obj_classes())

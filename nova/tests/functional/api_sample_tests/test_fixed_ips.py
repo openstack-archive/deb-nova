@@ -14,7 +14,6 @@
 
 from oslo_config import cfg
 
-from nova import db
 from nova import exception
 from nova.tests.functional.api_sample_tests import test_servers
 from nova.tests.unit.objects import test_network
@@ -28,7 +27,7 @@ CONF.import_opt('osapi_compute_extension',
 class FixedIpTest(test_servers.ServersSampleBase):
     extension_name = "os-fixed-ips"
 
-    request_api_version = None
+    microversion = None
 
     def _get_flags(self):
         f = super(FixedIpTest, self)._get_flags()
@@ -89,22 +88,22 @@ class FixedIpTest(test_servers.ServersSampleBase):
                 for key in values:
                     fixed_ip[key] = values[key]
 
-        self.stubs.Set(db, "fixed_ip_get_by_address",
-                       fake_fixed_ip_get_by_address)
-        self.stubs.Set(db, "fixed_ip_update", fake_fixed_ip_update)
+        self.stub_out("nova.db.fixed_ip_get_by_address",
+                      fake_fixed_ip_get_by_address)
+        self.stub_out("nova.db.fixed_ip_update", fake_fixed_ip_update)
 
     def test_fixed_ip_reserve(self):
         # Reserve a Fixed IP.
         response = self._do_post('os-fixed-ips/192.168.1.1/action',
                                  'fixedip-post-req', {},
-                                 api_version=self.request_api_version)
+                                 api_version=self.microversion)
         self.assertEqual(202, response.status_code)
         self.assertEqual("", response.content)
 
     def _test_get_fixed_ip(self, **kwargs):
         # Return data about the given fixed ip.
         response = self._do_get('os-fixed-ips/192.168.1.1',
-                                api_version=self.request_api_version)
+                                api_version=self.microversion)
         project = {'cidr': '192.168.1.0/24',
                    'hostname': 'openstack',
                    'host': 'host',
@@ -117,11 +116,11 @@ class FixedIpTest(test_servers.ServersSampleBase):
 
 
 class FixedIpV24Test(FixedIpTest):
-    request_api_version = '2.4'
+    microversion = '2.4'
     # NOTE(gmann): microversion tests do not need to run for v2 API
     # so defining scenarios only for v2.4 which will run the original tests
     # by appending '(v2_4)' in test_id.
-    scenarios = [('v2_4', {})]
+    scenarios = [('v2_4', {'api_major_version': 'v2.1'})]
 
     def test_get_fixed_ip(self):
         self._test_get_fixed_ip(reserved=False)

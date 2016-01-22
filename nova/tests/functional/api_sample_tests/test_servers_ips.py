@@ -23,19 +23,16 @@ CONF.import_opt('osapi_compute_extension',
 
 
 class ServersIpsJsonTest(test_servers.ServersSampleBase):
-    extends_name = 'core_only'
     sample_dir = 'server-ips'
 
     def test_get(self):
         # Test getting a server's IP information.
         uuid = self._post_server()
         response = self._do_get('servers/%s/ips' % uuid)
-        subs = self._get_regexes()
-        self._verify_response('server-ips-resp', subs, response, 200)
+        self._verify_response('server-ips-resp', {}, response, 200)
 
     def test_get_by_network(self):
         # Test getting a server's IP information by network id.
         uuid = self._post_server()
         response = self._do_get('servers/%s/ips/private' % uuid)
-        subs = self._get_regexes()
-        self._verify_response('server-ips-network-resp', subs, response, 200)
+        self._verify_response('server-ips-network-resp', {}, response, 200)

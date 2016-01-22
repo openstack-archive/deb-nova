@@ -81,10 +81,9 @@ CONF.import_opt('my_ip', 'nova.netconf')
 
 LOG = logging.getLogger(__name__)
 
-VMWARE_POWER_STATES = {
-                   'poweredOff': power_state.SHUTDOWN,
-                    'poweredOn': power_state.RUNNING,
-                    'suspended': power_state.SUSPENDED}
+VMWARE_POWER_STATES = {'poweredOff': power_state.SHUTDOWN,
+                       'poweredOn': power_state.RUNNING,
+                       'suspended': power_state.SUSPENDED}
 
 RESIZE_TOTAL_STEPS = 6
 
@@ -274,6 +273,27 @@ class VMwareVMOps(object):
                                    instance.image_ref,
                                    version.version_string_with_package())
 
+    def _create_folders(self, parent_folder, folder_path):
+        folders = folder_path.split('/')
+        path_list = []
+        for folder in folders:
+            path_list.append(folder)
+            folder_path = '/'.join(path_list)
+            folder_ref = vm_util.folder_ref_cache_get(folder_path)
+            if not folder_ref:
+                folder_ref = vm_util.create_folder(self._session,
+                                                   parent_folder,
+                                                   folder)
+                vm_util.folder_ref_cache_update(folder_path, folder_ref)
+            parent_folder = folder_ref
+        return folder_ref
+
+    def _get_folder_name(self, name, id):
+        # Maximum folder length must be less than 80 characters.
+        # The 'id' length is 36. The maximum prefix for name is 40.
+        # We cannot truncate the 'id' as this is unique across OpenStack.
+        return '%s (%s)' % (name[:40], id[:36])
+
     def build_virtual_machine(self, instance, image_info,
                               dc_info, datastore, network_info, extra_specs,
                               metadata):
@@ -298,15 +318,21 @@ class VMwareVMOps(object):
                                                  image_info.os_type,
                                                  profile_spec=profile_spec,
                                                  metadata=metadata)
+
+        folder_name = self._get_folder_name('Project',
+                                            instance.project_id)
+        folder_path = 'OpenStack/%s/Instances' % folder_name
+        folder = self._create_folders(dc_info.vmFolder, folder_path)
+
         # Create the VM
-        vm_ref = vm_util.create_vm(self._session, instance, dc_info.vmFolder,
+        vm_ref = vm_util.create_vm(self._session, instance, folder,
                                    config_spec, self._root_resource_pool)
         return vm_ref
 
     def _get_extra_specs(self, flavor, image_meta=None):
         image_meta = image_meta or objects.ImageMeta.from_dict({})
         extra_specs = vm_util.ExtraSpecs()
-        for resource in ['cpu', 'memory', 'disk_io']:
+        for resource in ['cpu', 'memory', 'disk_io', 'vif']:
             for (key, type) in (('limit', int),
                                 ('reservation', int),
                                 ('shares_level', str),
@@ -318,6 +344,7 @@ class VMwareVMOps(object):
         extra_specs.cpu_limits.validate()
         extra_specs.memory_limits.validate()
         extra_specs.disk_io_limits.validate()
+        extra_specs.vif_limits.validate()
         hw_version = flavor.extra_specs.get('vmware:hw_version')
         extra_specs.hw_version = hw_version
         if CONF.vmware.pbm_enabled:
@@ -613,7 +640,7 @@ class VMwareVMOps(object):
                                                   size, at, path)
 
         # There may be block devices defined but no ephemerals. In this case
-        # we need to allocate a ephemeral disk if required
+        # we need to allocate an ephemeral disk if required
         if not ephemerals and instance.ephemeral_gb:
             size = instance.ephemeral_gb * units.Mi
             filename = vm_util.get_ephemeral_name(0)

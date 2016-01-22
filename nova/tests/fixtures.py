@@ -19,7 +19,6 @@ from __future__ import absolute_import
 
 import logging as std_logging
 import os
-import uuid
 import warnings
 
 import fixtures
@@ -47,7 +46,10 @@ class ServiceFixture(fixtures.Fixture):
 
     def __init__(self, name, host=None, **kwargs):
         name = name
-        host = host or uuid.uuid4().hex
+        # If not otherwise specified, the host will default to the
+        # name of the service. Some things like aggregates care that
+        # this is stable.
+        host = host or name
         kwargs.setdefault('host', host)
         kwargs.setdefault('binary', 'nova-%s' % name)
         self.kwargs = kwargs
@@ -340,10 +342,8 @@ class OSAPIFixture(fixtures.Fixture):
         # in order to run these in tests we need to bind only to local
         # host, and dynamically allocate ports
         conf_overrides = {
-            'ec2_listen': '127.0.0.1',
             'osapi_compute_listen': '127.0.0.1',
             'metadata_listen': '127.0.0.1',
-            'ec2_listen_port': 0,
             'osapi_compute_listen_port': 0,
             'metadata_listen_port': 0,
             'verbose': True,

@@ -13,6 +13,7 @@
 import mock
 from mox3 import mox
 from oslo_config import cfg
+from oslo_utils import fixture as utils_fixture
 from oslo_utils import timeutils
 
 from nova.compute import claims
@@ -48,8 +49,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         instance = self._create_fake_instance_obj(params={'host': host})
         image_id = 'fake_image_id'
         host = 'fake-mini'
-        cur_time = timeutils.utcnow()
-        timeutils.set_time_override(cur_time)
+        self.useFixture(utils_fixture.TimeFixture())
         instance.task_state = task_states.SHELVING
         instance.save()
 
@@ -141,8 +141,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         instance = self._create_fake_instance_obj(params={'host': host})
         instance.task_state = task_states.SHELVING
         instance.save()
-        cur_time = timeutils.utcnow()
-        timeutils.set_time_override(cur_time)
+        self.useFixture(utils_fixture.TimeFixture())
 
         self.mox.StubOutWithMock(self.compute, '_notify_about_instance_usage')
         self.mox.StubOutWithMock(self.compute.driver, 'power_off')
@@ -233,7 +232,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
             else:
                 self.fail('Unexpected save!')
 
-        fake_image.stub_out_image_service(self.stubs)
+        fake_image.stub_out_image_service(self)
         self.stubs.Set(fake_image._FakeImageService, 'delete', fake_delete)
 
         self.compute._notify_about_instance_usage(self.context, instance,
@@ -242,7 +241,8 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                 mox.IgnoreArg(), do_check_attach=False).AndReturn('fake_bdm')
         self.compute.network_api.setup_instance_network_on_host(
                 self.context, instance, self.compute.host)
-        self.compute.driver.spawn(self.context, instance, image,
+        self.compute.driver.spawn(self.context, instance,
+                mox.IsA(objects.ImageMeta),
                 injected_files=[], admin_password=None,
                 network_info=[],
                 block_device_info='fake_bdm')
@@ -318,7 +318,8 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.rt.instance_claim(self.context, instance, limits).AndReturn(
                 claims.Claim(self.context, instance, self.rt,
                              _fake_resources()))
-        self.compute.driver.spawn(self.context, instance, image_meta,
+        self.compute.driver.spawn(self.context, instance,
+                mox.IsA(objects.ImageMeta),
                 injected_files=[], admin_password=None,
                 network_info=[],
                 block_device_info='fake_bdm')
@@ -353,8 +354,8 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         mock_older.return_value = False
         self.flags(shelved_offload_time=1)
         shelved_time = timeutils.utcnow()
-        timeutils.set_time_override(shelved_time)
-        timeutils.advance_time_seconds(CONF.shelved_offload_time - 1)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(shelved_time))
+        time_fixture.advance_time_seconds(CONF.shelved_offload_time - 1)
         instance = self._create_fake_instance_obj()
         instance.vm_state = vm_states.SHELVED
         instance.task_state = None
@@ -371,8 +372,8 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
     def test_shelved_poll_timedout(self):
         self.flags(shelved_offload_time=1)
         shelved_time = timeutils.utcnow()
-        timeutils.set_time_override(shelved_time)
-        timeutils.advance_time_seconds(CONF.shelved_offload_time + 10)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(shelved_time))
+        time_fixture.advance_time_seconds(CONF.shelved_offload_time + 1)
         instance = self._create_fake_instance_obj()
         instance.vm_state = vm_states.SHELVED
         instance.task_state = None
@@ -465,7 +466,7 @@ class ShelveComputeAPITestCase(test_compute.BaseTestCase):
             metadata['id'] = '8b24ed3f-ee57-43bc-bc2e-fb2e9482bc42'
             return metadata
 
-        fake_image.stub_out_image_service(self.stubs)
+        fake_image.stub_out_image_service(self)
         self.stubs.Set(fake_image._FakeImageService, '__init__', fake_init)
         self.stubs.Set(fake_image._FakeImageService, 'create', fake_create)
 

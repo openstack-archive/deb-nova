@@ -38,15 +38,22 @@ CONF = cfg.CONF
 CONF.register_opts(rpcapi_opts)
 
 rpcapi_cap_opt = cfg.StrOpt('compute',
-        help='Set a version cap for messages sent to compute services. If you '
-             'plan to do a live upgrade from an old version to a newer '
-             'version, you should set this option to the old version before '
-             'beginning the live upgrade procedure. Only upgrading to the '
-             'next version is supported, so you cannot skip a release for '
-             'the live upgrade procedure.')
+        help='Set a version cap for messages sent to compute services. '
+             'Set this option to "auto" if you want to let the compute RPC '
+             'module automatically determine what version to use based on '
+             'the service versions in the deployment. '
+             'Otherwise, you can set this to a specific version to pin this '
+             'service to messages at a particular level. '
+             'All services of a single type (i.e. compute) should be '
+             'configured to use the same version, and it should be set '
+             'to the minimum commonly-supported version of all those '
+             'services in the deployment.')
+
+
 CONF.register_opt(rpcapi_cap_opt, 'upgrade_levels')
 
 LOG = logging.getLogger(__name__)
+LAST_VERSION = None
 
 
 def _compute_host(host, instance):
@@ -311,6 +318,7 @@ class ComputeAPI(object):
 
         * ...  - Remove refresh_security_group_members()
         * ...  - Remove refresh_security_group_rules()
+        * 4.6  - Add trigger_crash_dump()
     '''
 
     VERSION_ALIASES = {
@@ -333,7 +341,9 @@ class ComputeAPI(object):
         self.client = self.get_client(target, version_cap, serializer)
 
     def _determine_version_cap(self, target):
-        # FIXME(danms): We should reload this on SIGHUP, or by timer
+        global LAST_VERSION
+        if LAST_VERSION:
+            return LAST_VERSION
         service_version = objects.Service.get_minimum_version(
             context.get_admin_context(), 'nova-compute')
         history = service_obj.SERVICE_VERSION_HISTORY
@@ -351,6 +361,7 @@ class ComputeAPI(object):
                           'service history for version %(version)i'),
                       {'version': service_version})
             return target.version
+        LAST_VERSION = version_cap
         LOG.info(_LI('Automatically selected compute RPC version %(rpc)s '
                      'from minimum service version %(service)i'),
                  {'rpc': version_cap,
@@ -801,8 +812,8 @@ class ComputeAPI(object):
                 version=version)
         volume_bdm = cctxt.call(ctxt, 'reserve_block_device_name', **kw)
         if not isinstance(volume_bdm, objects.BlockDeviceMapping):
-            volume_bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                ctxt, volume_id)
+            volume_bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+                ctxt, volume_id, instance.uuid)
         return volume_bdm
 
     def backup_instance(self, ctxt, instance, image_id, backup_type,
@@ -974,3 +985,13 @@ class ComputeAPI(object):
                 version=version)
         cctxt.cast(ctxt, 'refresh_instance_security_rules',
                    instance=instance)
+
+    def trigger_crash_dump(self, ctxt, instance):
+        version = '4.6'
+
+        if not self.client.can_send_version(version):
+            raise exception.NMINotSupported()
+
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        return cctxt.cast(ctxt, "trigger_crash_dump", instance=instance)

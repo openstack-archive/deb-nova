@@ -96,7 +96,7 @@ class ExtendedVolumesTestV21(test.TestCase):
 
     def setUp(self):
         super(ExtendedVolumesTestV21, self).setUp()
-        fakes.stub_out_nw_api(self.stubs)
+        fakes.stub_out_nw_api(self)
         self.stubs.Set(compute.api.API, 'get', fake_compute_get)
         self.stubs.Set(compute.api.API, 'get_all', fake_compute_get_all)
         self.stubs.Set(db, 'block_device_mapping_get_all_by_instance_uuids',
@@ -120,7 +120,7 @@ class ExtendedVolumesTestV21(test.TestCase):
         req.headers = {os_wsgi.API_VERSION_REQUEST_HEADER:
                        self.wsgi_api_version}
         if body:
-            req.body = jsonutils.dumps(body)
+            req.body = jsonutils.dump_as_bytes(body)
             req.method = 'POST'
         req.content_type = self.content_type
         res = req.get_response(self.app)

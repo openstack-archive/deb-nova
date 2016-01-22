@@ -233,7 +233,7 @@ def create_vm(session, instance, name_label, kernel, ramdisk,
         3. Using hardware virtualization
     """
     flavor = instance.get_flavor()
-    mem = str(long(flavor.memory_mb) * units.Mi)
+    mem = str(int(flavor.memory_mb) * units.Mi)
     vcpus = str(flavor.vcpus)
 
     vcpu_weight = flavor.vcpu_weight
@@ -363,9 +363,9 @@ def is_vm_shutdown(session, vm_ref):
 
 def is_enough_free_mem(session, instance):
     flavor = instance.get_flavor()
-    mem = long(flavor.memory_mb) * units.Mi
-    host_free_mem = long(session.call_xenapi("host.compute_free_memory",
-                                             session.host_ref))
+    mem = int(flavor.memory_mb) * units.Mi
+    host_free_mem = int(session.call_xenapi("host.compute_free_memory",
+                                            session.host_ref))
     return host_free_mem >= mem
 
 
@@ -758,7 +758,7 @@ def get_sr_path(session, sr_ref=None):
 
     # NOTE(bobball): There can only be one PBD for a host/SR pair, but path is
     # not always present - older versions of XS do not set it.
-    pbd_ref = pbd_rec.keys()[0]
+    pbd_ref = list(pbd_rec.keys())[0]
     device_config = pbd_rec[pbd_ref]['device_config']
     if 'path' in device_config:
         return device_config['path']
@@ -847,7 +847,7 @@ def _find_cached_image(session, image_id, sr_ref):
     if number_found > 0:
         if number_found > 1:
             LOG.warning(_LW("Multiple base images for image: %s"), image_id)
-        return recs.keys()[0]
+        return list(recs.keys())[0]
 
 
 def _get_resize_func_name(session):
@@ -1752,8 +1752,8 @@ def compile_info(session, vm_ref):
     num_cpu = session.call_xenapi("VM.get_VCPUs_max", vm_ref)
 
     return hardware.InstanceInfo(state=power_state,
-                                 max_mem_kb=long(max_mem) >> 10,
-                                 mem_kb=long(mem) >> 10,
+                                 max_mem_kb=int(max_mem) >> 10,
+                                 mem_kb=int(mem) >> 10,
                                  num_cpu=num_cpu)
 
 
@@ -1766,7 +1766,7 @@ def compile_instance_diagnostics(instance, vm_rec):
                                     driver='xenapi',
                                     config_drive=config_drive)
 
-    for cpu_num in range(0, long(vm_rec['VCPUs_max'])):
+    for cpu_num in range(0, int(vm_rec['VCPUs_max'])):
         diags.add_cpu()
 
     for vif in vm_rec['VIFs']:
@@ -1775,7 +1775,7 @@ def compile_instance_diagnostics(instance, vm_rec):
     for vbd in vm_rec['VBDs']:
         diags.add_disk()
 
-    max_mem_bytes = long(vm_rec['memory_dynamic_max'])
+    max_mem_bytes = int(vm_rec['memory_dynamic_max'])
     diags.memory_details.maximum = max_mem_bytes / units.Mi
 
     return diags
@@ -2222,7 +2222,7 @@ def get_this_vm_uuid(session):
                                   'field "is_control_domain"="true" and '
                                   'field "resident_on"="%s"' %
                                   session.host_ref)
-        return vms[vms.keys()[0]]['uuid']
+        return vms[list(vms.keys())[0]]['uuid']
     try:
         return _get_sys_hypervisor_uuid()
     except IOError:

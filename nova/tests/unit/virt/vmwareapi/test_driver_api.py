@@ -26,7 +26,7 @@ from eventlet import greenthread
 import mock
 from mox3 import mox
 from oslo_config import cfg
-from oslo_utils import timeutils
+from oslo_utils import fixture as utils_fixture
 from oslo_utils import units
 from oslo_utils import uuidutils
 from oslo_vmware import exceptions as vexc
@@ -170,9 +170,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
-        stubs.set_stubs(self.stubs)
+        stubs.set_stubs(self)
         vmwareapi_fake.reset()
-        nova.tests.unit.image.fake.stub_out_image_service(self.stubs)
+        nova.tests.unit.image.fake.stub_out_image_service(self)
         self.conn = driver.VMwareVCDriver(None, False)
         self._set_exception_vars()
         self.node_name = self.conn._nodename
@@ -193,32 +193,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             'size': int(metadata['size']),
         }
         self.fake_image_uuid = self.image['id']
-        nova.tests.unit.image.fake.stub_out_image_service(self.stubs)
+        nova.tests.unit.image.fake.stub_out_image_service(self)
         self.vnc_host = 'ha-host'
-        self.instance_without_compute = fake_instance.fake_instance_obj(None,
-                                        **{'node': None,
-                                         'vm_state': 'building',
-                                         'project_id': 'fake',
-                                         'user_id': 'fake',
-                                         'name': '1',
-                                         'display_description': '1',
-                                         'kernel_id': '1',
-                                         'ramdisk_id': '1',
-                                         'mac_addresses': [
-                                            {'address': 'de:ad:be:ef:be:ef'}
-                                         ],
-                                         'memory_mb': 8192,
-                                         'instance_type_id': 2,
-                                         'vcpus': 4,
-                                         'root_gb': 80,
-                                         'image_ref': self.image['id'],
-                                         'host': 'fake_host',
-                                         'task_state':
-                                         'scheduling',
-                                         'reservation_id': 'r-3t8muvr0',
-                                         'id': 1,
-                                         'uuid': 'fake-uuid',
-                                         'metadata': []})
 
     def tearDown(self):
         super(VMwareAPIVMTestCase, self).tearDown()
@@ -399,7 +375,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         vm = self._get_vm_record()
 
         # Check that m1.large above turned into the right thing.
-        mem_kib = long(self.type_data['memory_mb']) << 10
+        mem_kib = int(self.type_data['memory_mb']) << 10
         vcpus = self.type_data['vcpus']
         self.assertEqual(vm_info.max_mem_kb, mem_kib)
         self.assertEqual(vm_info.mem_kb, mem_kib)
@@ -439,7 +415,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         """Check if the get_info returned values correspond to the instance
         object in the db.
         """
-        mem_kib = long(self.type_data['memory_mb']) << 10
+        mem_kib = int(self.type_data['memory_mb']) << 10
         self.assertEqual(info.state, pwr_state)
         self.assertEqual(info.max_mem_kb, mem_kib)
         self.assertEqual(info.mem_kb, mem_kib)
@@ -1513,10 +1489,11 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                                                  self.destroy_disks)
 
     def test_destroy_instance_without_compute(self):
+        instance = fake_instance.fake_instance_obj(None)
         self.destroy_disks = True
         with mock.patch.object(self.conn._vmops,
                                "destroy") as mock_destroy:
-            self.conn.destroy(self.context, self.instance_without_compute,
+            self.conn.destroy(self.context, instance,
                               self.network_info,
                               None, self.destroy_disks)
             self.assertFalse(mock_destroy.called)
@@ -1974,7 +1951,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.flags(remove_unused_original_minimum_age_seconds=aging_time)
         self._image_aging_image_marked_for_deletion()
         all_instances = []
-        timeutils.set_time_override(cur_time)
+        self.useFixture(utils_fixture.TimeFixture(cur_time))
         self.conn.manage_image_cache(self.context, all_instances)
 
     def test_image_aging_aged(self):
@@ -2060,7 +2037,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(self.node_name, stats['hypervisor_hostname'])
         self.assertIsNone(stats['cpu_info'])
         self.assertEqual(
-                '[["i686", "vmware", "hvm"], ["x86_64", "vmware", "hvm"]]',
+                [("i686", "vmware", "hvm"), ("x86_64", "vmware", "hvm")],
                 stats['supported_instances'])
 
     def test_invalid_datastore_regex(self):

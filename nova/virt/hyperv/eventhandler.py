@@ -20,15 +20,15 @@ import sys
 if sys.platform == 'win32':
     import wmi
 
+from os_win import exceptions as os_win_exc
+from os_win import utilsfactory
 from oslo_config import cfg
 from oslo_log import log as logging
 
-from nova import exception
 from nova.i18n import _LW
 from nova import utils
 from nova.virt import event as virtevent
 from nova.virt.hyperv import constants
-from nova.virt.hyperv import utilsfactory
 
 LOG = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class InstanceEventHandler(object):
         self._vmutils = utilsfactory.get_vmutils()
         self._listener = self._vmutils.get_vm_power_state_change_listener(
             timeframe=CONF.hyperv.power_state_check_timeframe,
-            filtered_states=self._TRANSITION_MAP.keys())
+            filtered_states=list(self._TRANSITION_MAP.keys()))
 
         self._polling_interval = CONF.hyperv.power_state_event_polling_interval
         self._state_change_callback = state_change_callback
@@ -117,7 +117,7 @@ class InstanceEventHandler(object):
                              "will be ignored."),
                          instance_name)
             return instance_uuid
-        except exception.InstanceNotFound:
+        except os_win_exc.HyperVVMNotFoundException:
             # The instance has been deleted.
             pass
 

@@ -12,19 +12,18 @@
 
 import itertools
 
-import nova.compute.api
 import nova.compute.flavors
 import nova.compute.manager
 import nova.compute.monitors
 import nova.compute.resource_tracker
 import nova.compute.rpcapi
+import nova.conf
 
 
 def list_opts():
     return [
         ('DEFAULT',
          itertools.chain(
-             nova.compute.api.compute_opts,
              nova.compute.flavors.flavor_opts,
              nova.compute.manager.compute_opts,
              nova.compute.manager.instance_cleaning_opts,
@@ -36,8 +35,6 @@ def list_opts():
              nova.compute.resource_tracker.allocation_ratio_opts,
              nova.compute.rpcapi.rpcapi_opts,
          )),
-        ('ephemeral_storage_encryption',
-         nova.compute.api.ephemeral_storage_encryption_opts),
         ('upgrade_levels',
          itertools.chain(
              [nova.compute.rpcapi.rpcapi_cap_opt],

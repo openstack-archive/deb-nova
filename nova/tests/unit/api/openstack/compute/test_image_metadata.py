@@ -82,7 +82,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata')
         req.method = 'POST'
         body = {"metadata": {"key7": "value7"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, '123', body=body)
         get_mocked.assert_called_once_with(mock.ANY, '123')
@@ -107,7 +107,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/100/metadata')
         req.method = 'POST'
         body = {"metadata": {"key7": "value7"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPNotFound,
@@ -122,7 +122,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata')
         req.method = 'PUT'
         body = {"metadata": {"key9": "value9"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.update_all(req, '123', body=body)
         get_mocked.assert_called_once_with(mock.ANY, '123')
@@ -144,7 +144,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/100/metadata')
         req.method = 'PUT'
         body = {"metadata": {"key9": "value9"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPNotFound,
@@ -158,7 +158,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/key1')
         req.method = 'PUT'
         body = {"meta": {"key1": "zz"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.update(req, '123', 'key1', body=body)
         expected = copy.deepcopy(get_image_123())
@@ -179,7 +179,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/100/metadata/key1')
         req.method = 'PUT'
         body = {"meta": {"key1": "zz"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPNotFound,
@@ -195,7 +195,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/key1')
         req.method = 'PUT'
         body = {"key1": "zz"}
-        req.body = ''
+        req.body = b''
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(self.invalid_request,
@@ -206,8 +206,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         self.assertFalse(update_mocked.called)
 
     @mock.patch(CHK_QUOTA_STR,
-                side_effect=webob.exc.HTTPRequestEntityTooLarge(
-                        explanation='', headers={'Retry-After': 0}))
+                side_effect=webob.exc.HTTPBadRequest())
     @mock.patch('nova.image.api.API.update')
     @mock.patch('nova.image.api.API.get')
     def test_update_item_too_many_keys(self, get_mocked, update_mocked,
@@ -215,7 +214,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/key1')
         req.method = 'PUT'
         body = {"meta": {"foo": "bar"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -232,7 +231,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/bad')
         req.method = 'PUT'
         body = {"meta": {"key1": "value1"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -280,7 +279,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         body = {"metadata": {"foo": "bar"}}
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata')
         req.method = 'POST'
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPForbidden,
@@ -296,7 +295,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/blah')
         req.method = 'PUT'
         body = {"meta": {"blah": "blah", "blah1": "blah1"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(self.invalid_request,
@@ -310,7 +309,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
         req = fakes.HTTPRequest.blank('/v2/fake/images/123/metadata/key1')
         req.method = 'PUT'
         body = {"meta": {"key1": "value1"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPForbidden,
@@ -327,7 +326,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
                                       % image_id)
         req.method = 'PUT'
         body = {"metadata": {"key1": "value1"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPForbidden,
@@ -344,7 +343,7 @@ class ImageMetaDataTestV21(test.NoDBTestCase):
                                       % image_id)
         req.method = 'POST'
         body = {"metadata": {"key1": "value1"}}
-        req.body = jsonutils.dumps(body)
+        req.body = jsonutils.dump_as_bytes(body)
         req.headers["content-type"] = "application/json"
 
         self.assertRaises(webob.exc.HTTPForbidden,

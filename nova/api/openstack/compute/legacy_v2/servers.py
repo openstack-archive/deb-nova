@@ -15,7 +15,6 @@
 #    under the License.
 
 import base64
-import os
 import re
 import sys
 
@@ -106,8 +105,7 @@ class Controller(wsgi.Controller):
         if 'server' not in robj.obj:
             return robj
 
-        link = filter(lambda l: l['rel'] == 'self',
-                      robj.obj['server']['links'])
+        link = [l for l in robj.obj['server']['links'] if l['rel'] == 'self']
         if link:
             robj['Location'] = utils.utf8(link[0]['href'])
 
@@ -366,6 +364,11 @@ class Controller(wsgi.Controller):
                            '|[A-Za-z0-9+\/]{3}=)?$')
 
     def _decode_base64(self, data):
+        if isinstance(data, six.binary_type) and hasattr(data, "decode"):
+            try:
+                data = data.decode("utf-8")
+            except UnicodeDecodeError:
+                return None
         data = re.sub(r'\s', '', data)
         if not self.B64_REGEX.match(data):
             return None
@@ -605,6 +608,8 @@ class Controller(wsgi.Controller):
         scheduler_hints = {}
         if self.ext_mgr.is_loaded('OS-SCH-HNT'):
             scheduler_hints = server_dict.get('scheduler_hints', {})
+        parse_az = self.compute_api.parse_availability_zone
+        availability_zone, host, node = parse_az(context, availability_zone)
 
         check_server_group_quota = self.ext_mgr.is_loaded(
                 'os-server-group-quotas')
@@ -630,6 +635,7 @@ class Controller(wsgi.Controller):
                         security_group=sg_names,
                         user_data=user_data,
                         availability_zone=availability_zone,
+                        forced_host=host, forced_node=node,
                         config_drive=config_drive,
                         block_device_mapping=block_device_mapping,
                         auto_disk_config=auto_disk_config,
@@ -1113,10 +1119,10 @@ class Controller(wsgi.Controller):
         image_id = str(image['id'])
         url_prefix = self._view_builder._update_glance_link_prefix(
                 req.application_url)
-        image_ref = os.path.join(url_prefix,
-                                 context.project_id,
-                                 'images',
-                                 image_id)
+        image_ref = common.url_join(url_prefix,
+                                    context.project_id,
+                                    'images',
+                                    image_id)
 
         resp = webob.Response(status_int=202)
         resp.headers['Location'] = image_ref

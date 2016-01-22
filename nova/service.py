@@ -58,22 +58,11 @@ service_opts = [
                     ' periodic task scheduler to reduce stampeding.'
                     ' (Disable by setting to 0)'),
     cfg.ListOpt('enabled_apis',
-                default=['ec2', 'osapi_compute', 'metadata'],
+                default=['osapi_compute', 'metadata'],
                 help='A list of APIs to enable by default'),
     cfg.ListOpt('enabled_ssl_apis',
                 default=[],
                 help='A list of APIs with enabled SSL'),
-    cfg.StrOpt('ec2_listen',
-               default="0.0.0.0",
-               help='The IP address on which the EC2 API will listen.'),
-    cfg.IntOpt('ec2_listen_port',
-               default=8773,
-               min=1,
-               max=65535,
-               help='The port on which the EC2 API will listen.'),
-    cfg.IntOpt('ec2_workers',
-               help='Number of workers for EC2 API service. The default will '
-                    'be equal to the number of CPUs available.'),
     cfg.StrOpt('osapi_compute_listen',
                default="0.0.0.0",
                help='The IP address on which the OpenStack API will listen.'),
@@ -330,6 +319,9 @@ class Service(service.Service):
         except Exception as e:
             LOG.error(_LE('Temporary directory is invalid: %s'), e)
             sys.exit(1)
+
+    def reset(self):
+        self.manager.reset()
 
 
 class WSGIService(service.Service):

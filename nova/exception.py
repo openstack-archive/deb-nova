@@ -23,6 +23,7 @@ SHOULD include dedicated exception logging.
 """
 
 import functools
+import inspect
 import sys
 
 from oslo_config import cfg
@@ -90,8 +91,12 @@ def wrap_exception(notifier=None, get_notifier=None):
                 with excutils.save_and_reraise_exception():
                     if notifier or get_notifier:
                         payload = dict(exception=e)
-                        call_dict = safe_utils.getcallargs(f, context,
-                                                           *args, **kw)
+                        wrapped_func = safe_utils.get_wrapped_function(f)
+                        call_dict = inspect.getcallargs(wrapped_func, self,
+                                                        context, *args, **kw)
+                        # self can't be serialized and shouldn't be in the
+                        # payload
+                        call_dict.pop('self', None)
                         cleansed = _cleanse_dict(call_dict)
                         payload.update({'args': cleansed})
 
@@ -183,7 +188,7 @@ class VirtualInterfacePlugException(NovaException):
 
 
 class GlanceConnectionFailed(NovaException):
-    msg_fmt = _("Connection to glance host %(host)s:%(port)s failed: "
+    msg_fmt = _("Connection to glance host %(server)s failed: "
         "%(reason)s")
 
 
@@ -239,6 +244,11 @@ class InvalidBDMVolume(InvalidBDM):
                 "failed to get volume %(id)s.")
 
 
+class UnsupportedBDMVolumeAuthMethod(InvalidBDM):
+    msg_fmt = _("Block Device Mapping is Invalid: "
+                "%(auth_method)s is unsupported.")
+
+
 class InvalidBDMImage(InvalidBDM):
     msg_fmt = _("Block Device Mapping is Invalid: "
                 "failed to get image %(id)s.")
@@ -286,6 +296,11 @@ class InvalidAttribute(Invalid):
 
 class ValidationError(Invalid):
     msg_fmt = "%(detail)s"
+
+
+class VolumeAttachFailed(Invalid):
+    msg_fmt = _("Volume %(volume_id)s could not be attached. "
+                "Reason: %(reason)s")
 
 
 class VolumeUnattached(Invalid):
@@ -491,6 +506,11 @@ class InvalidHypervisorType(Invalid):
     msg_fmt = _("The supplied hypervisor type of is invalid.")
 
 
+class HypervisorTooOld(Invalid):
+    msg_fmt = _("This compute node's hypervisor is older than the minimum "
+                "supported version: %(version)s.")
+
+
 class DestinationHypervisorTooOld(Invalid):
     msg_fmt = _("The instance requires a newer hypervisor version than "
                 "has been provided.")
@@ -615,8 +635,21 @@ class VolumeBDMNotFound(NotFound):
     msg_fmt = _("No volume Block Device Mapping with id %(volume_id)s.")
 
 
+class VolumeBDMIsMultiAttach(Invalid):
+    msg_fmt = _("Block Device Mapping %(volume_id)s is a multi-attach volume"
+                " and is not valid for this operation.")
+
+
 class VolumeBDMPathNotFound(VolumeBDMNotFound):
     msg_fmt = _("No volume Block Device Mapping at path: %(path)s")
+
+
+class DeviceDetachFailed(NovaException):
+    msg_fmt = _("Device detach failed for %(device)s: %(reason)s)")
+
+
+class DeviceNotFound(NotFound):
+    msg_fmt = _("Device '%(device)s' not found.")
 
 
 class SnapshotNotFound(NotFound):
@@ -699,11 +732,11 @@ class InvalidIntValue(Invalid):
 
 
 class InvalidCidr(Invalid):
-    msg_fmt = _("%(cidr)s is not a valid ip network.")
+    msg_fmt = _("%(cidr)s is not a valid IP network.")
 
 
 class InvalidAddress(Invalid):
-    msg_fmt = _("%(address)s is not a valid ip address.")
+    msg_fmt = _("%(address)s is not a valid IP address.")
 
 
 class AddressOutOfRange(Invalid):
@@ -820,7 +853,7 @@ class PortBindingFailed(Invalid):
 
 
 class FixedIpExists(NovaException):
-    msg_fmt = _("Fixed ip %(address)s already exists.")
+    msg_fmt = _("Fixed IP %(address)s already exists.")
 
 
 class FixedIpNotFound(NotFound):
@@ -828,20 +861,20 @@ class FixedIpNotFound(NotFound):
 
 
 class FixedIpNotFoundForAddress(FixedIpNotFound):
-    msg_fmt = _("Fixed ip not found for address %(address)s.")
+    msg_fmt = _("Fixed IP not found for address %(address)s.")
 
 
 class FixedIpNotFoundForInstance(FixedIpNotFound):
-    msg_fmt = _("Instance %(instance_uuid)s has zero fixed ips.")
+    msg_fmt = _("Instance %(instance_uuid)s has zero fixed IPs.")
 
 
 class FixedIpNotFoundForNetworkHost(FixedIpNotFound):
-    msg_fmt = _("Network host %(host)s has zero fixed ips "
+    msg_fmt = _("Network host %(host)s has zero fixed IPs "
                 "in network %(network_id)s.")
 
 
 class FixedIpNotFoundForSpecificInstance(FixedIpNotFound):
-    msg_fmt = _("Instance %(instance_uuid)s doesn't have fixed ip '%(ip)s'.")
+    msg_fmt = _("Instance %(instance_uuid)s doesn't have fixed IP '%(ip)s'.")
 
 
 class FixedIpNotFoundForNetwork(FixedIpNotFound):
@@ -859,7 +892,7 @@ class FixedIpAlreadyInUse(NovaException):
 
 
 class FixedIpAssociatedWithMultipleInstances(NovaException):
-    msg_fmt = _("More than one instance is associated with fixed ip address "
+    msg_fmt = _("More than one instance is associated with fixed IP address "
                 "'%(address)s'.")
 
 
@@ -873,16 +906,16 @@ class NoMoreFixedIps(NovaException):
 
 
 class NoFixedIpsDefined(NotFound):
-    msg_fmt = _("Zero fixed ips could be found.")
+    msg_fmt = _("Zero fixed IPs could be found.")
 
 
 class FloatingIpExists(NovaException):
-    msg_fmt = _("Floating ip %(address)s already exists.")
+    msg_fmt = _("Floating IP %(address)s already exists.")
 
 
 class FloatingIpNotFound(NotFound):
     ec2_code = "UnsupportedOperation"
-    msg_fmt = _("Floating ip not found for id %(id)s.")
+    msg_fmt = _("Floating IP not found for ID %(id)s.")
 
 
 class FloatingIpDNSExists(Invalid):
@@ -890,38 +923,38 @@ class FloatingIpDNSExists(Invalid):
 
 
 class FloatingIpNotFoundForAddress(FloatingIpNotFound):
-    msg_fmt = _("Floating ip not found for address %(address)s.")
+    msg_fmt = _("Floating IP not found for address %(address)s.")
 
 
 class FloatingIpNotFoundForHost(FloatingIpNotFound):
-    msg_fmt = _("Floating ip not found for host %(host)s.")
+    msg_fmt = _("Floating IP not found for host %(host)s.")
 
 
 class FloatingIpMultipleFoundForAddress(NovaException):
-    msg_fmt = _("Multiple floating ips are found for address %(address)s.")
+    msg_fmt = _("Multiple floating IPs are found for address %(address)s.")
 
 
 class FloatingIpPoolNotFound(NotFound):
-    msg_fmt = _("Floating ip pool not found.")
+    msg_fmt = _("Floating IP pool not found.")
     safe = True
 
 
 class NoMoreFloatingIps(FloatingIpNotFound):
-    msg_fmt = _("Zero floating ips available.")
+    msg_fmt = _("Zero floating IPs available.")
     safe = True
 
 
 class FloatingIpAssociated(NovaException):
     ec2_code = "UnsupportedOperation"
-    msg_fmt = _("Floating ip %(address)s is associated.")
+    msg_fmt = _("Floating IP %(address)s is associated.")
 
 
 class FloatingIpNotAssociated(NovaException):
-    msg_fmt = _("Floating ip %(address)s is not associated.")
+    msg_fmt = _("Floating IP %(address)s is not associated.")
 
 
 class NoFloatingIpsDefined(NotFound):
-    msg_fmt = _("Zero floating ips exist.")
+    msg_fmt = _("Zero floating IPs exist.")
 
 
 class NoFloatingIpInterface(NotFound):
@@ -944,7 +977,7 @@ class FloatingIpBadRequest(Invalid):
 
 class CannotDisassociateAutoAssignedFloatingIP(NovaException):
     ec2_code = "UnsupportedOperation"
-    msg_fmt = _("Cannot disassociate auto assigned floating ip")
+    msg_fmt = _("Cannot disassociate auto assigned floating IP")
 
 
 class KeypairNotFound(NotFound):
@@ -1087,6 +1120,11 @@ class MigrationNotFound(NotFound):
 class MigrationNotFoundByStatus(MigrationNotFound):
     msg_fmt = _("Migration not found for instance %(instance_id)s "
                 "with status %(status)s.")
+
+
+class ConsoleLogOutputException(NovaException):
+    msg_fmt = _("Console log output could not be retrieved for instance "
+                "%(instance_id)s. Reason: %(reason)s")
 
 
 class ConsolePoolNotFound(NotFound):
@@ -1345,11 +1383,11 @@ class TooManyInstances(QuotaError):
 
 
 class FloatingIpLimitExceeded(QuotaError):
-    msg_fmt = _("Maximum number of floating ips exceeded")
+    msg_fmt = _("Maximum number of floating IPs exceeded")
 
 
 class FixedIpLimitExceeded(QuotaError):
-    msg_fmt = _("Maximum number of fixed ips exceeded")
+    msg_fmt = _("Maximum number of fixed IPs exceeded")
 
 
 class MetadataLimitExceeded(QuotaError):
@@ -1470,6 +1508,10 @@ class ConfigDriveInvalidValue(Invalid):
     msg_fmt = _("Invalid value for Config Drive option: %(option)s")
 
 
+class ConfigDriveUnsupportedFormat(Invalid):
+    msg_fmt = _("Config drive format '%(format)s' is not supported.")
+
+
 class ConfigDriveMountFailed(NovaException):
     msg_fmt = _("Could not mount vfat config drive. %(operation)s failed. "
                 "Error: %(error)s")
@@ -1478,6 +1520,11 @@ class ConfigDriveMountFailed(NovaException):
 class ConfigDriveUnknownFormat(NovaException):
     msg_fmt = _("Unknown config drive format %(format)s. Select one of "
                 "iso9660 or vfat.")
+
+
+class ConfigDriveNotFound(NotFound):
+    msg_fmt = _("Instance %(instance_uuid)s requires config drive, but it "
+                "does not exist.")
 
 
 class InterfaceAttachFailed(Invalid):
@@ -1651,6 +1698,11 @@ class ImageDownloadModuleConfigurationError(ImageDownloadModuleError):
     msg_fmt = _("The module %(module)s is misconfigured: %(reason)s.")
 
 
+class SignatureVerificationError(NovaException):
+    msg_fmt = _("Signature verification for the image "
+                "failed: %(reason)s.")
+
+
 class ResourceMonitorError(NovaException):
     msg_fmt = _("Error when creating resource monitor: %(monitor)s")
 
@@ -1692,7 +1744,7 @@ class PciDeviceInvalidOwner(Invalid):
 
 class PciDeviceRequestFailed(NovaException):
     msg_fmt = _(
-        "PCI device request (%requests)s failed")
+        "PCI device request %(requests)s failed")
 
 
 class PciDevicePoolEmpty(NovaException):
@@ -1927,6 +1979,11 @@ class ImageCPUPinningForbidden(Forbidden):
                 "CPU pinning policy set against the flavor")
 
 
+class ImageCPUThreadPolicyForbidden(Forbidden):
+    msg_fmt = _("Image property 'hw_cpu_thread_policy' is not permitted to "
+                "override CPU thread pinning policy set against the flavor")
+
+
 class UnsupportedPolicyException(Invalid):
     msg_fmt = _("ServerGroup policy is not supported: %(reason)s")
 
@@ -1966,3 +2023,34 @@ class HostMappingNotFound(Invalid):
 class RealtimeConfigurationInvalid(Invalid):
     msg_fmt = _("Cannot set realtime policy in a non dedicated "
                 "cpu pinning policy")
+
+
+class CPUThreadPolicyConfigurationInvalid(Invalid):
+    msg_fmt = _("Cannot set cpu thread pinning policy in a non dedicated "
+                "cpu pinning policy")
+
+
+class RequestSpecNotFound(NotFound):
+    msg_fmt = _("RequestSpec not found for instance %(instance_uuid)s")
+
+
+class UEFINotSupported(Invalid):
+    msg_fmt = _("UEFI is not supported")
+
+
+class NMINotSupported(Invalid):
+    msg_fmt = _("Injecting NMI is not supported")
+
+
+class UnsupportedHostCPUControlPolicy(Invalid):
+    msg_fmt = _("Requested CPU control policy not supported by host")
+
+
+class RealtimePolicyNotSupported(Invalid):
+    msg_fmt = _("Realtime policy not supported by hypervisor")
+
+
+class RealtimeMaskNotFoundOrInvalid(Invalid):
+    msg_fmt = _("Realtime policy needs vCPU(s) mask configured with at least "
+                "1 RT vCPU and 1 ordinary vCPU. See hw:cpu_realtime_mask "
+                "or hw_cpu_realtime_mask")

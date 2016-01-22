@@ -19,7 +19,9 @@ import datetime
 import iso8601
 import mock
 from mox3 import mox
+from oslo_policy import policy as oslo_policy
 from oslo_serialization import jsonutils
+from oslo_utils import fixture as utils_fixture
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
 
@@ -39,8 +41,8 @@ from nova import db
 from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
+from nova.objects import fields as fields_obj
 from nova.objects import quotas as quotas_obj
-from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import quota
 from nova import test
@@ -51,6 +53,7 @@ from nova.tests.unit import matchers
 from nova.tests.unit.objects import test_flavor
 from nova.tests.unit.objects import test_migration
 from nova.tests.unit.objects import test_service
+from nova.tests import uuidsentinel as uuids
 from nova import utils
 from nova.volume import cinder
 
@@ -68,6 +71,7 @@ class _ComputeAPIUnitTestMixIn(object):
         super(_ComputeAPIUnitTestMixIn, self).setUp()
         self.user_id = 'fake'
         self.project_id = 'fake'
+        self.compute_api = compute_api.API()
         self.context = context.RequestContext(self.user_id,
                                               self.project_id)
 
@@ -152,6 +156,13 @@ class _ComputeAPIUnitTestMixIn(object):
             instance.update(params)
         instance.obj_reset_changes()
         return instance
+
+    def _obj_to_list_obj(self, list_obj, obj):
+        list_obj.objects = []
+        list_obj.objects.append(obj)
+        list_obj._context = self.context
+        list_obj.obj_reset_changes()
+        return list_obj
 
     def test_create_quota_exceeded_messages(self):
         image_href = "image_href"
@@ -428,6 +439,47 @@ class _ComputeAPIUnitTestMixIn(object):
                           self.compute_api.stop,
                           self.context, instance)
 
+    @mock.patch('nova.compute.api.API._record_action_start')
+    @mock.patch('nova.compute.rpcapi.ComputeAPI.trigger_crash_dump')
+    def test_trigger_crash_dump(self,
+                                trigger_crash_dump,
+                                _record_action_start):
+        instance = self._create_instance_obj()
+
+        self.compute_api.trigger_crash_dump(self.context, instance)
+
+        _record_action_start.assert_called_once_with(self.context, instance,
+            instance_actions.TRIGGER_CRASH_DUMP)
+
+        if self.cell_type == 'api':
+            # cell api has not been implemented.
+            pass
+        else:
+            trigger_crash_dump.assert_called_once_with(self.context, instance)
+
+        self.assertIsNone(instance.task_state)
+
+    def test_trigger_crash_dump_invalid_state(self):
+        params = dict(vm_state=vm_states.STOPPED)
+        instance = self._create_instance_obj(params)
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.compute_api.trigger_crash_dump,
+                          self.context, instance)
+
+    def test_trigger_crash_dump_no_host(self):
+        params = dict(host='')
+        instance = self._create_instance_obj(params=params)
+        self.assertRaises(exception.InstanceNotReady,
+                          self.compute_api.trigger_crash_dump,
+                          self.context, instance)
+
+    def test_trigger_crash_dump_locked(self):
+        params = dict(locked=True)
+        instance = self._create_instance_obj(params=params)
+        self.assertRaises(exception.InstanceIsLocked,
+                          self.compute_api.trigger_crash_dump,
+                          self.context, instance)
+
     def _test_shelve(self, vm_state=vm_states.ACTIVE,
                      boot_from_volume=False, clean_shutdown=True):
         params = dict(task_state=None, vm_state=vm_state,
@@ -677,26 +729,9 @@ class _ComputeAPIUnitTestMixIn(object):
         self._test_reboot_type_fails('SOFT', task_state=task_states.SUSPENDING)
 
     def _test_delete_resizing_part(self, inst, deltas):
-        fake_db_migration = test_migration.fake_db_migration()
-        migration = objects.Migration._from_db_object(
-                self.context, objects.Migration(),
-                fake_db_migration)
-        inst.instance_type_id = migration.new_instance_type_id
-        old_flavor = self._create_flavor(vcpus=1, memory_mb=512)
+        old_flavor = inst.old_flavor
         deltas['cores'] = -old_flavor.vcpus
         deltas['ram'] = -old_flavor.memory_mb
-
-        self.mox.StubOutWithMock(objects.Migration,
-                                 'get_by_instance_and_status')
-        self.mox.StubOutWithMock(compute_utils,
-                                 'get_inst_attrs_from_migration')
-
-        self.context.elevated().AndReturn(self.context)
-        objects.Migration.get_by_instance_and_status(
-            self.context, inst.uuid, 'post-migrating').AndReturn(migration)
-        compute_utils.get_inst_attrs_from_migration(
-            migration, inst).AndReturn((old_flavor.vcpus,
-                                        old_flavor.memory_mb))
 
     def _test_delete_resized_part(self, inst):
         migration = objects.Migration._from_db_object(
@@ -772,7 +807,7 @@ class _ComputeAPIUnitTestMixIn(object):
                   'ram': -inst.memory_mb}
         delete_time = datetime.datetime(1955, 11, 5, 9, 30,
                                         tzinfo=iso8601.iso8601.Utc())
-        timeutils.set_time_override(delete_time)
+        self.useFixture(utils_fixture.TimeFixture(delete_time))
         task_state = (delete_type == 'soft_delete' and
                       task_states.SOFT_DELETING or task_states.DELETING)
         updates = {'progress': 0, 'task_state': task_state}
@@ -898,8 +933,10 @@ class _ComputeAPIUnitTestMixIn(object):
         self._test_delete('delete', launched_at=None)
 
     def test_delete_in_resizing(self):
+        old_flavor = objects.Flavor(vcpus=1, memory_mb=512, extra_specs={})
         self._test_delete('delete',
-                          task_state=task_states.RESIZE_FINISH)
+                          task_state=task_states.RESIZE_FINISH,
+                          old_flavor=old_flavor)
 
     def test_delete_in_resized(self):
         self._test_delete('delete', vm_state=vm_states.RESIZED)
@@ -1107,7 +1144,7 @@ class _ComputeAPIUnitTestMixIn(object):
         self.mox.StubOutWithMock(inst, 'save')
 
         delete_time = datetime.datetime(1955, 11, 5)
-        timeutils.set_time_override(delete_time)
+        self.useFixture(utils_fixture.TimeFixture(delete_time))
 
         db.block_device_mapping_get_all_by_instance(
             self.context, inst.uuid, use_slave=False).AndReturn([])
@@ -1753,13 +1790,13 @@ class _ComputeAPIUnitTestMixIn(object):
                     'launched_at': timeutils.utcnow(),
                     'locked': False,
                     'availability_zone': 'fake_az',
-                    'uuid': 'fake'})
+                    'uuid': uuids.vol_instance})
         volumes = {}
         old_volume_id = uuidutils.generate_uuid()
         volumes[old_volume_id] = {'id': old_volume_id,
                                   'display_name': 'old_volume',
                                   'attach_status': 'attached',
-                                  'instance_uuid': 'fake',
+                                  'instance_uuid': uuids.vol_instance,
                                   'size': 5,
                                   'status': 'in-use'}
         new_volume_id = uuidutils.generate_uuid()
@@ -1785,13 +1822,13 @@ class _ComputeAPIUnitTestMixIn(object):
         volumes[old_volume_id]['attach_status'] = 'attached'
 
         # Should fail if old volume's instance_uuid is not that of the instance
-        volumes[old_volume_id]['instance_uuid'] = 'fake2'
+        volumes[old_volume_id]['instance_uuid'] = uuids.vol_instance_2
         self.assertRaises(exception.InvalidVolume,
                           self.compute_api.swap_volume, self.context, instance,
                           volumes[old_volume_id], volumes[new_volume_id])
         self.assertEqual(volumes[old_volume_id]['status'], 'in-use')
         self.assertEqual(volumes[new_volume_id]['status'], 'available')
-        volumes[old_volume_id]['instance_uuid'] = 'fake'
+        volumes[old_volume_id]['instance_uuid'] = uuids.vol_instance
 
         # Should fail if new volume is attached
         volumes[new_volume_id]['attach_status'] = 'attached'
@@ -2197,11 +2234,11 @@ class _ComputeAPIUnitTestMixIn(object):
                 fake_bdm, expected_attrs=['instance'])
 
         self.mox.StubOutWithMock(objects.BlockDeviceMapping,
-                                 'get_by_volume_id')
+                                 'get_by_volume')
         self.mox.StubOutWithMock(self.compute_api.compute_rpcapi,
                 'volume_snapshot_create')
 
-        objects.BlockDeviceMapping.get_by_volume_id(
+        objects.BlockDeviceMapping.get_by_volume(
                 self.context, volume_id,
                 expected_attrs=['instance']).AndReturn(fake_bdm)
         self.compute_api.compute_rpcapi.volume_snapshot_create(self.context,
@@ -2238,11 +2275,11 @@ class _ComputeAPIUnitTestMixIn(object):
                 fake_bdm, expected_attrs=['instance'])
 
         self.mox.StubOutWithMock(objects.BlockDeviceMapping,
-                                 'get_by_volume_id')
+                                 'get_by_volume')
         self.mox.StubOutWithMock(self.compute_api.compute_rpcapi,
                 'volume_snapshot_delete')
 
-        objects.BlockDeviceMapping.get_by_volume_id(
+        objects.BlockDeviceMapping.get_by_volume(
                 self.context, volume_id,
                 expected_attrs=['instance']).AndReturn(fake_bdm)
         self.compute_api.compute_rpcapi.volume_snapshot_delete(self.context,
@@ -2355,7 +2392,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         def fake_show(obj, context, image_id, **kwargs):
             return self.fake_image
-        fake_image.stub_out_image_service(self.stubs)
+        fake_image.stub_out_image_service(self)
         self.stubs.Set(fake_image._FakeImageService, 'show', fake_show)
         return self.fake_image['id']
 
@@ -2573,14 +2610,17 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def test_external_instance_event(self):
         instances = [
-            objects.Instance(uuid='uuid1', host='host1'),
-            objects.Instance(uuid='uuid2', host='host1'),
-            objects.Instance(uuid='uuid3', host='host2'),
+            objects.Instance(uuid=uuids.instance_1, host='host1'),
+            objects.Instance(uuid=uuids.instance_2, host='host1'),
+            objects.Instance(uuid=uuids.instance_3, host='host2'),
             ]
         events = [
-            objects.InstanceExternalEvent(instance_uuid='uuid1'),
-            objects.InstanceExternalEvent(instance_uuid='uuid2'),
-            objects.InstanceExternalEvent(instance_uuid='uuid3'),
+            objects.InstanceExternalEvent(
+                instance_uuid=uuids.instance_1),
+            objects.InstanceExternalEvent(
+                instance_uuid=uuids.instance_2),
+            objects.InstanceExternalEvent(
+                instance_uuid=uuids.instance_3),
             ]
         self.compute_api.compute_rpcapi = mock.MagicMock()
         self.compute_api.external_instance_event(self.context,
@@ -2892,7 +2932,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def test_check_and_transform_bdm(self):
         instance_type = self._create_flavor()
-        base_options = {'uuid': 'fake_uuid',
+        base_options = {'uuid': uuids.bdm_instance,
                         'image_ref': 'fake_image_ref',
                         'metadata': {}}
         image_meta = {'status': 'active',
@@ -2924,11 +2964,11 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_skip_policy_check(self, mock_create, mock_get_ins_by_filters,
                                mock_get, mock_pause, mock_action, mock_save):
         policy.reset()
-        rules = {'compute:pause': common_policy.parse_rule('!'),
-                 'compute:get': common_policy.parse_rule('!'),
-                 'compute:get_all': common_policy.parse_rule('!'),
-                 'compute:create': common_policy.parse_rule('!')}
-        policy.set_rules(common_policy.Rules(rules))
+        rules = {'compute:pause': '!',
+                 'compute:get': '!',
+                 'compute:get_all': '!',
+                 'compute:create': '!'}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         instance = self._create_instance_obj()
         mock_get.return_value = instance
 
@@ -2987,6 +3027,61 @@ class _ComputeAPIUnitTestMixIn(object):
             self.compute_api._apply_instance_name_template(self.context,
                                                            instance, 1)
             self.assertEqual('Server-%s' % instance.uuid, instance.hostname)
+
+    def test_host_statuses(self):
+        # NOTE(tojuvone) Some test cases break utcnow() by calling
+        # timeutils.set_time_override() with some own time. Have to issue a
+        # bug to fix those cases to reset time back like line below so next
+        # test cases will work.
+        timeutils.clear_time_override()
+        instances = [
+            objects.Instance(uuid='uuid1', host='host1', services=
+                             self._obj_to_list_obj(objects.ServiceList(
+                             self.context), objects.Service(id=0, host='host1',
+                             disabled=True, forced_down=True,
+                             binary='nova-compute'))),
+            objects.Instance(uuid='uuid2', host='host2', services=
+                             self._obj_to_list_obj(objects.ServiceList(
+                             self.context), objects.Service(id=0, host='host2',
+                             disabled=True, forced_down=False,
+                             binary='nova-compute'))),
+            objects.Instance(uuid='uuid3', host='host3', services=
+                             self._obj_to_list_obj(objects.ServiceList(
+                             self.context), objects.Service(id=0, host='host3',
+                             disabled=False, last_seen_up=timeutils.utcnow()
+                             - datetime.timedelta(minutes=5),
+                             forced_down=False, binary='nova-compute'))),
+            objects.Instance(uuid='uuid4', host='host4', services=
+                             self._obj_to_list_obj(objects.ServiceList(
+                             self.context), objects.Service(id=0, host='host4',
+                             disabled=False, last_seen_up=timeutils.utcnow(),
+                             forced_down=False, binary='nova-compute'))),
+            objects.Instance(uuid='uuid5', host='host5', services=
+                             objects.ServiceList()),
+            objects.Instance(uuid='uuid6', host=None, services=
+                             self._obj_to_list_obj(objects.ServiceList(
+                             self.context), objects.Service(id=0, host='host6',
+                             disabled=True, forced_down=False,
+                             binary='nova-compute'))),
+            objects.Instance(uuid='uuid7', host='host2', services=
+                             self._obj_to_list_obj(objects.ServiceList(
+                             self.context), objects.Service(id=0, host='host2',
+                             disabled=True, forced_down=False,
+                             binary='nova-compute')))
+            ]
+
+        host_statuses = self.compute_api.get_instances_host_statuses(
+                        instances)
+        expect_statuses = {'uuid1': fields_obj.HostStatus.DOWN,
+                           'uuid2': fields_obj.HostStatus.MAINTENANCE,
+                           'uuid3': fields_obj.HostStatus.UNKNOWN,
+                           'uuid4': fields_obj.HostStatus.UP,
+                           'uuid5': fields_obj.HostStatus.NONE,
+                           'uuid6': fields_obj.HostStatus.NONE,
+                           'uuid7': fields_obj.HostStatus.MAINTENANCE}
+        for instance in instances:
+            self.assertEqual(expect_statuses[instance.uuid],
+                             host_statuses[instance.uuid])
 
 
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
@@ -3074,7 +3169,7 @@ class SecurityGroupAPITest(test.NoDBTestCase):
                           objects.SecurityGroup(name='bar')]
         mock_get.return_value = groups
         names = self.secgroup_api.get_instance_security_groups(self.context,
-                                                               'fake-uuid')
+                    uuids.instance)
         self.assertEqual([{'name': 'bar'}, {'name': 'foo'}], sorted(names))
         self.assertEqual(1, mock_get.call_count)
-        self.assertEqual('fake-uuid', mock_get.call_args_list[0][0][1].uuid)
+        self.assertEqual(uuids.instance, mock_get.call_args_list[0][0][1].uuid)

@@ -15,7 +15,6 @@
 """Handles database requests from other nova services."""
 
 import copy
-import itertools
 
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -32,9 +31,10 @@ from nova.conductor.tasks import live_migrate
 from nova.conductor.tasks import migrate
 from nova.db import base
 from nova import exception
-from nova.i18n import _, _LE, _LW
+from nova.i18n import _, _LE, _LI, _LW
 from nova import image
 from nova import manager
+from nova import network
 from nova import objects
 from nova.objects import base as nova_object
 from nova import rpc
@@ -131,6 +131,9 @@ class ConductorManager(manager.Manager):
         return objinst.obj_to_primitive(target_version=target,
                                         version_manifest=object_versions)
 
+    def reset(self):
+        objects.Service.clear_min_version_cache()
+
 
 class ComputeTaskManager(base.Base):
     """Namespace for compute methods.
@@ -147,9 +150,15 @@ class ComputeTaskManager(base.Base):
         super(ComputeTaskManager, self).__init__()
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
         self.image_api = image.API()
+        self.network_api = network.API()
         self.servicegroup_api = servicegroup.API()
         self.scheduler_client = scheduler_client.SchedulerClient()
         self.notifier = rpc.get_notifier('compute', CONF.host)
+
+    def reset(self):
+        LOG.info(_LI('Reloading compute RPC API'))
+        compute_rpcapi.LAST_VERSION = None
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
     @messaging.expected_exceptions(exception.NoValidHost,
                                    exception.ComputeServiceUnavailable,
@@ -243,6 +252,11 @@ class ComputeTaskManager(base.Base):
                 context, instance_uuid, 'compute_task', method, updates,
                 ex, request_spec, self.db)
 
+    def _cleanup_allocated_networks(
+            self, context, instance, requested_networks):
+        self.network_api.deallocate_for_instance(
+            context, instance, requested_networks=requested_networks)
+
     def _live_migrate(self, context, instance, scheduler_hint,
                       block_migration, disk_over_commit):
         destination = scheduler_hint.get("host")
@@ -262,7 +276,7 @@ class ComputeTaskManager(base.Base):
 
         migration = objects.Migration(context=context.elevated())
         migration.dest_compute = destination
-        migration.status = 'pre-migrating'
+        migration.status = 'accepted'
         migration.instance_uuid = instance.uuid
         migration.source_compute = instance.host
         migration.migration_type = 'live-migration'
@@ -345,6 +359,7 @@ class ComputeTaskManager(base.Base):
             flavor = objects.Flavor.get_by_id(context, flavor['id'])
             filter_properties = dict(filter_properties, instance_type=flavor)
 
+        request_spec = {}
         try:
             # check retry policy. Rather ugly use of instances[0]...
             # but if we've exceeded max retries... then we really only
@@ -361,9 +376,11 @@ class ComputeTaskManager(base.Base):
                 self._set_vm_state_and_notify(
                     context, instance.uuid, 'build_instances', updates,
                     exc, request_spec)
+                self._cleanup_allocated_networks(
+                    context, instance, requested_networks)
             return
 
-        for (instance, host) in itertools.izip(instances, hosts):
+        for (instance, host) in six.moves.zip(instances, hosts):
             try:
                 instance.refresh()
             except (exception.InstanceNotFound,
@@ -392,8 +409,11 @@ class ComputeTaskManager(base.Base):
     def _schedule_instances(self, context, request_spec, filter_properties):
         scheduler_utils.setup_instance_group(context, request_spec,
                                              filter_properties)
-        hosts = self.scheduler_client.select_destinations(context,
-                request_spec, filter_properties)
+        # TODO(sbauza): Hydrate here the object until we modify the
+        # scheduler.utils methods to directly use the RequestSpec object
+        spec_obj = objects.RequestSpec.from_primitives(
+            context, request_spec, filter_properties)
+        hosts = self.scheduler_client.select_destinations(context, spec_obj)
         return hosts
 
     def unshelve_instance(self, context, instance):

@@ -40,19 +40,19 @@ class ContextTestCase(test.NoDBTestCase):
         ctxt = context.RequestContext('111',
                                       '222',
                                       roles=['admin', 'weasel'])
-        self.assertEqual(True, ctxt.is_admin)
+        self.assertTrue(ctxt.is_admin)
 
     def test_request_context_sets_is_admin_by_role(self):
         ctxt = context.RequestContext('111',
                                       '222',
                                       roles=['administrator'])
-        self.assertEqual(True, ctxt.is_admin)
+        self.assertTrue(ctxt.is_admin)
 
     def test_request_context_sets_is_admin_upcase(self):
         ctxt = context.RequestContext('111',
                                       '222',
                                       roles=['Admin', 'weasel'])
-        self.assertEqual(True, ctxt.is_admin)
+        self.assertTrue(ctxt.is_admin)
 
     def test_request_context_read_deleted(self):
         ctxt = context.RequestContext('111',
@@ -83,7 +83,7 @@ class ContextTestCase(test.NoDBTestCase):
         def fake_warn(log_msg):
             info['log_msg'] = log_msg
 
-        self.stubs.Set(context.LOG, 'warning', fake_warn)
+        self.stub_out('nova.context.LOG.warning', fake_warn)
 
         c = context.RequestContext('user', 'project',
                 extra_arg1='meow', extra_arg2='wuff')
@@ -128,7 +128,7 @@ class ContextTestCase(test.NoDBTestCase):
                 a = a[0]
             warns.append(str(msg) % a)
 
-        self.stubs.Set(context.LOG, 'warn', stub_warn)
+        self.stub_out('nova.context.LOG.warn', stub_warn)
 
         ctxt = context.RequestContext('111',
                                       '222',

@@ -57,6 +57,7 @@ ObjectField = fields.ObjectField
 ListOfObjectsField = fields.ListOfObjectsField
 VersionPredicateField = fields.VersionPredicateField
 FlexibleBooleanField = fields.FlexibleBooleanField
+DictOfListOfStringsField = fields.DictOfListOfStringsField
 
 
 # NOTE(danms): These are things we need to import for some of our
@@ -155,6 +156,30 @@ class CPUAllocationPolicy(Enum):
             valid_values=CPUAllocationPolicy.ALL)
 
 
+class CPUThreadAllocationPolicy(Enum):
+
+    # prefer (default): The host may or may not have hyperthreads. This
+    #  retains the legacy behavior, whereby siblings are prefered when
+    #  available. This is the default if no policy is specified.
+    PREFER = "prefer"
+    # isolate: The host may or many not have hyperthreads. If hyperthreads are
+    #  present, each vCPU will be placed on a different core and no vCPUs from
+    #  other guests will be able to be placed on the same core, i.e. one
+    #  thread sibling is guaranteed to always be unused. If hyperthreads are
+    #  not present, each vCPU will still be placed on a different core and
+    #  there are no thread siblings to be concerned with.
+    ISOLATE = "isolate"
+    # require: The host must have hyperthreads. Each vCPU will be allocated on
+    #   thread siblings.
+    REQUIRE = "require"
+
+    ALL = (PREFER, ISOLATE, REQUIRE)
+
+    def __init__(self):
+        super(CPUThreadAllocationPolicy, self).__init__(
+            valid_values=CPUThreadAllocationPolicy.ALL)
+
+
 class CPUMode(Enum):
     # TODO(berrange): move all constants out of 'nova.compute.cpumodel'
     # into fields on this class
@@ -196,6 +221,18 @@ class DiskBus(Enum):
     def __init__(self):
         super(DiskBus, self).__init__(
             valid_values=DiskBus.ALL)
+
+
+class FirmwareType(Enum):
+
+    UEFI = "uefi"
+    BIOS = "bios"
+
+    ALL = (UEFI, BIOS)
+
+    def __init__(self):
+        super(FirmwareType, self).__init__(
+            valid_values=FirmwareType.ALL)
 
 
 class HVType(Enum):
@@ -383,6 +420,21 @@ class MonitorMetricType(Enum):
             valid_values=MonitorMetricType.ALL)
 
 
+class HostStatus(Enum):
+
+    UP = "UP"  # The nova-compute is up.
+    DOWN = "DOWN"  # The nova-compute is forced_down.
+    MAINTENANCE = "MAINTENANCE"  # The nova-compute is disabled.
+    UNKNOWN = "UNKNOWN"  # The nova-compute has not reported.
+    NONE = ""  # No host or nova-compute.
+
+    ALL = (UP, DOWN, MAINTENANCE, UNKNOWN, NONE)
+
+    def __init__(self):
+        super(HostStatus, self).__init__(
+            valid_values=HostStatus.ALL)
+
+
 class PciDeviceStatus(Enum):
 
     AVAILABLE = "available"
@@ -411,6 +463,24 @@ class PciDeviceType(Enum):
     def __init__(self):
         super(PciDeviceType, self).__init__(
             valid_values=PciDeviceType.ALL)
+
+
+class DiskFormat(Enum):
+    RBD = "rbd"
+    LVM = "lvm"
+    QCOW2 = "qcow2"
+    RAW = "raw"
+    PLOOP = "ploop"
+    VHD = "vhd"
+    VMDK = "vmdk"
+    VDI = "vdi"
+    ISO = "iso"
+
+    ALL = (RBD, LVM, QCOW2, RAW, PLOOP, VHD, VMDK, VDI, ISO)
+
+    def __init__(self):
+        super(DiskFormat, self).__init__(
+            valid_values=DiskFormat.ALL)
 
 
 class IPAddress(FieldType):
@@ -595,6 +665,10 @@ class CPUAllocationPolicyField(BaseEnumField):
     AUTO_TYPE = CPUAllocationPolicy()
 
 
+class CPUThreadAllocationPolicyField(BaseEnumField):
+    AUTO_TYPE = CPUThreadAllocationPolicy()
+
+
 class CPUModeField(BaseEnumField):
     AUTO_TYPE = CPUMode()
 
@@ -609,6 +683,10 @@ class CPUFeaturePolicyField(BaseEnumField):
 
 class DiskBusField(BaseEnumField):
     AUTO_TYPE = DiskBus()
+
+
+class FirmwareTypeField(BaseEnumField):
+    AUTO_TYPE = FirmwareType()
 
 
 class HVTypeField(BaseEnumField):
@@ -655,6 +733,10 @@ class PciDeviceTypeField(BaseEnumField):
     AUTO_TYPE = PciDeviceType()
 
 
+class DiskFormatField(BaseEnumField):
+    AUTO_TYPE = DiskFormat()
+
+
 class IPAddressField(AutoTypedField):
     AUTO_TYPE = IPAddress()
 
@@ -685,11 +767,6 @@ class IPV6NetworkField(AutoTypedField):
 
 class ListOfIntegersField(AutoTypedField):
     AUTO_TYPE = List(fields.Integer())
-
-
-# FIXME(sbauza): Remove this after oslo.versionedobjects releases it
-class DictOfListOfStringsField(AutoTypedField):
-    AUTO_TYPE = Dict(List(fields.String()))
 
 
 class NonNegativeFloatField(AutoTypedField):

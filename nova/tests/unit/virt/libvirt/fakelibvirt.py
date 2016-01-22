@@ -150,7 +150,7 @@ VIR_SECRET_USAGE_TYPE_CEPH = 2
 VIR_SECRET_USAGE_TYPE_ISCSI = 3
 
 # Libvirt version
-FAKE_LIBVIRT_VERSION = 9011
+FAKE_LIBVIRT_VERSION = 10002
 
 
 class HostInfo(object):
@@ -572,8 +572,8 @@ class Domain(object):
 
     def info(self):
         return [self._state,
-                long(self._def['memory']),
-                long(self._def['memory']),
+                int(self._def['memory']),
+                int(self._def['memory']),
                 self._def['vcpu'],
                 123456789]
 
@@ -773,6 +773,12 @@ class Domain(object):
     def abortJob(self):
         pass
 
+    def fsFreeze(self):
+        pass
+
+    def fsThaw(self):
+        pass
+
 
 class DomainSnapshot(object):
     def __init__(self, name, domain):
@@ -784,7 +790,7 @@ class DomainSnapshot(object):
 
 
 class Connection(object):
-    def __init__(self, uri=None, readonly=False, version=9011,
+    def __init__(self, uri=None, readonly=False, version=FAKE_LIBVIRT_VERSION,
                  hv_version=1001000, host_info=None):
         if not uri or uri == '':
             if allow_default_uri_connection:
@@ -868,7 +874,7 @@ class Connection(object):
         return len(self._running_vms)
 
     def listDomainsID(self):
-        return self._running_vms.keys()
+        return list(self._running_vms.keys())
 
     def lookupByID(self, id):
         if id in self._running_vms:

@@ -17,6 +17,8 @@ import mock
 from oslo_serialization import jsonutils
 import webob
 
+from oslo_policy import policy as oslo_policy
+
 from nova.api.openstack.compute import keypairs as keypairs_v21
 from nova.api.openstack.compute.legacy_v2.contrib import keypairs \
         as keypairs_v2
@@ -25,7 +27,6 @@ from nova.compute import api as compute_api
 from nova import db
 from nova import exception
 from nova import objects
-from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import quota
 from nova import test
@@ -78,7 +79,7 @@ class KeypairsTestV21(test.TestCase):
 
     def setUp(self):
         super(KeypairsTestV21, self).setUp()
-        fakes.stub_out_networking(self.stubs)
+        fakes.stub_out_networking(self)
         fakes.stub_out_rate_limiting(self.stubs)
 
         self.stubs.Set(db, "key_pair_get_all_by_user",
@@ -318,7 +319,7 @@ class KeypairsTestV21(test.TestCase):
         req = fakes.HTTPRequest.blank(self.base_url + '/servers')
         req.method = 'POST'
         req.headers["content-type"] = "application/json"
-        req.body = jsonutils.dumps({'server': {'name': 'test',
+        req.body = jsonutils.dump_as_bytes({'server': {'name': 'test',
                                                'flavorRef': 1,
                                                'keypair_name': '  abc  ',
                                                'imageRef': FAKE_UUID}})
@@ -336,7 +337,7 @@ class KeypairsTestV21(test.TestCase):
         req = fakes.HTTPRequest.blank(self.base_url + '/servers')
         req.method = 'POST'
         req.headers["content-type"] = "application/json"
-        req.body = jsonutils.dumps({'server': {'name': 'test',
+        req.body = jsonutils.dump_as_bytes({'server': {'name': 'test',
                                                'flavorRef': 1,
                                                'keypair_name': '  abc  ',
                                                'imageRef': FAKE_UUID}})
@@ -345,7 +346,7 @@ class KeypairsTestV21(test.TestCase):
         self.assertEqual(202, res.status_code)
 
 
-class KeypairPolicyTestV21(test.TestCase):
+class KeypairPolicyTestV21(test.NoDBTestCase):
     KeyPairController = keypairs_v21.KeypairController()
     policy_path = 'os_compute_api:os-keypairs'
 
@@ -361,72 +362,72 @@ class KeypairPolicyTestV21(test.TestCase):
                        _db_key_pair_get)
         self.stubs.Set(db, "key_pair_get_all_by_user",
                        db_key_pair_get_all_by_user)
-        self.stubs.Set(db, "key_pair_create",
-                       db_key_pair_create)
         self.stubs.Set(db, "key_pair_destroy",
                        db_key_pair_destroy)
 
         self.req = fakes.HTTPRequest.blank('')
 
     def test_keypair_list_fail_policy(self):
-        rules = {self.policy_path + ':index':
-                     common_policy.parse_rule('role:admin')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':index': 'role:admin'}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         self.assertRaises(exception.Forbidden,
                           self.KeyPairController.index,
                           self.req)
 
     def test_keypair_list_pass_policy(self):
-        rules = {self.policy_path + ':index':
-                     common_policy.parse_rule('')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':index': ''}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         res = self.KeyPairController.index(self.req)
         self.assertIn('keypairs', res)
 
     def test_keypair_show_fail_policy(self):
-        rules = {self.policy_path + ':show':
-                     common_policy.parse_rule('role:admin')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':show': 'role:admin'}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         self.assertRaises(exception.Forbidden,
                           self.KeyPairController.show,
                           self.req, 'FAKE')
 
     def test_keypair_show_pass_policy(self):
-        rules = {self.policy_path + ':show':
-                     common_policy.parse_rule('')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':show': ''}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         res = self.KeyPairController.show(self.req, 'FAKE')
         self.assertIn('keypair', res)
 
     def test_keypair_create_fail_policy(self):
         body = {'keypair': {'name': 'create_test'}}
-        rules = {self.policy_path + ':create':
-                     common_policy.parse_rule('role:admin')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':create': 'role:admin'}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         self.assertRaises(exception.Forbidden,
                           self.KeyPairController.create,
                           self.req, body=body)
 
-    def test_keypair_create_pass_policy(self):
+    def _assert_keypair_create(self, mock_create, req):
+        mock_create.assert_called_with(req, 'fake_user', 'create_test', 'ssh')
+
+    @mock.patch.object(compute_api.KeypairAPI, 'create_key_pair')
+    def test_keypair_create_pass_policy(self, mock_create):
+        keypair_obj = objects.KeyPair(name='', public_key='',
+                                      fingerprint='', user_id='')
+
+        mock_create.return_value = (keypair_obj, 'dummy')
         body = {'keypair': {'name': 'create_test'}}
-        rules = {self.policy_path + ':create':
-                     common_policy.parse_rule('')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':create': ''}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         res = self.KeyPairController.create(self.req, body=body)
         self.assertIn('keypair', res)
+        req = self.req.environ['nova.context']
+        self._assert_keypair_create(mock_create, req)
 
     def test_keypair_delete_fail_policy(self):
-        rules = {self.policy_path + ':delete':
-                     common_policy.parse_rule('role:admin')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':delete': 'role:admin'}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         self.assertRaises(exception.Forbidden,
                           self.KeyPairController.delete,
                           self.req, 'FAKE')
 
     def test_keypair_delete_pass_policy(self):
-        rules = {self.policy_path + ':delete':
-                     common_policy.parse_rule('')}
-        policy.set_rules(rules)
+        rules = {self.policy_path + ':delete': ''}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         self.KeyPairController.delete(self.req, 'FAKE')
 
 
@@ -461,7 +462,7 @@ class KeypairsTestV2(KeypairsTestV21):
         req = fakes.HTTPRequest.blank(self.base_url + '/servers')
         req.method = 'POST'
         req.headers["content-type"] = "application/json"
-        req.body = jsonutils.dumps({'server': {'name': 'test',
+        req.body = jsonutils.dump_as_bytes({'server': {'name': 'test',
                                                'flavorRef': 1,
                                                'keypair_name': '  abc  ',
                                                'imageRef': FAKE_UUID}})
@@ -600,3 +601,6 @@ class KeypairsTestV210(KeypairsTestV22):
 class KeypairPolicyTestV2(KeypairPolicyTestV21):
     KeyPairController = keypairs_v2.KeypairController()
     policy_path = 'compute_extension:keypairs'
+
+    def _assert_keypair_create(self, mock_create, req):
+        mock_create.assert_called_with(req, 'fake_user', 'create_test')

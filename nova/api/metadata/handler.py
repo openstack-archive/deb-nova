@@ -160,7 +160,7 @@ class MetadataRequestHandler(wsgi.Application):
         try:
             meta_data = self.get_metadata_by_remote_address(remote_address)
         except Exception:
-            LOG.exception(_LE('Failed to get metadata for ip: %s'),
+            LOG.exception(_LE('Failed to get metadata for IP: %s'),
                           remote_address)
             msg = _('An unknown error has occurred. '
                     'Please try your request again.')
@@ -168,7 +168,7 @@ class MetadataRequestHandler(wsgi.Application):
                                                explanation=six.text_type(msg))
 
         if meta_data is None:
-            LOG.error(_LE('Failed to get metadata for ip: %s'),
+            LOG.error(_LE('Failed to get metadata for IP: %s'),
                       remote_address)
 
         return meta_data
@@ -256,7 +256,7 @@ class MetadataRequestHandler(wsgi.Application):
 
         # instance_data is unicode-encoded, while memorycache doesn't like
         # that. Therefore we convert to str
-        if isinstance(instance_id, unicode):
+        if isinstance(instance_id, six.text_type):
             instance_id = instance_id.encode('utf-8')
         return instance_id, tenant_id
 

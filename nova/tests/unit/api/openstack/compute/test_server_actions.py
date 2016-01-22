@@ -19,6 +19,7 @@ import uuid
 import mock
 from mox3 import mox
 from oslo_config import cfg
+from oslo_policy import policy as oslo_policy
 from oslo_utils import uuidutils
 import webob
 
@@ -32,7 +33,6 @@ from nova import db
 from nova import exception
 from nova.image import glance
 from nova import objects
-from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import test
 from nova.tests.unit.api.openstack import fakes
@@ -92,9 +92,9 @@ class ServerActionsControllerTestV21(test.TestCase):
         self.stubs.Set(db, 'instance_update_and_get_original',
                        instance_update_and_get_original)
 
-        fakes.stub_out_nw_api(self.stubs)
+        fakes.stub_out_nw_api(self)
         fakes.stub_out_compute_api_snapshot(self.stubs)
-        fake.stub_out_image_service(self.stubs)
+        fake.stub_out_image_service(self)
         self.flags(allow_instance_snapshots=True,
                    enable_instance_password=True)
         self._image_href = '155d900f-4e14-4e4c-a73d-069cbf4541e6'
@@ -264,6 +264,15 @@ class ServerActionsControllerTestV21(test.TestCase):
                        fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
                                         task_state=task_states.REBOOTING_HARD))
         self.controller._action_reboot(self.req, FAKE_UUID, body=body)
+
+    def test_reboot_soft_with_hard_in_progress_raises_conflict(self):
+        body = dict(reboot=dict(type="SOFT"))
+        self.stubs.Set(db, 'instance_get_by_uuid',
+                       fakes.fake_instance_get(vm_state=vm_states.ACTIVE,
+                                        task_state=task_states.REBOOTING_HARD))
+        self.assertRaises(webob.exc.HTTPConflict,
+                          self.controller._action_reboot,
+                          self.req, FAKE_UUID, body=body)
 
     def _test_rebuild_preserve_ephemeral(self, value=None):
         self._set_fake_extension()
@@ -658,7 +667,7 @@ class ServerActionsControllerTestV21(test.TestCase):
 
         self.controller._action_resize(self.req, FAKE_UUID, body=body)
 
-        self.assertEqual(self.resize_called, True)
+        self.assertTrue(self.resize_called)
 
     def test_resize_server_no_flavor(self):
         body = dict(resize=dict())
@@ -813,7 +822,7 @@ class ServerActionsControllerTestV21(test.TestCase):
 
         self.controller._action_confirm_resize(self.req, FAKE_UUID, body=body)
 
-        self.assertEqual(self.confirm_resize_called, True)
+        self.assertTrue(self.confirm_resize_called)
 
     def test_confirm_resize_migration_not_found(self):
         body = dict(confirmResize=None)
@@ -880,7 +889,7 @@ class ServerActionsControllerTestV21(test.TestCase):
         body = self.controller._action_revert_resize(self.req, FAKE_UUID,
                                                      body=body)
 
-        self.assertEqual(self.revert_resize_called, True)
+        self.assertTrue(self.revert_resize_called)
 
     def test_revert_resize_raises_conflict_on_invalid_state(self):
         body = dict(revertResize=None)
@@ -1001,7 +1010,7 @@ class ServerActionsControllerTestV21(test.TestCase):
         self.assertEqual(properties['kernel_id'], _fake_id('b'))
         self.assertEqual(properties['ramdisk_id'], _fake_id('c'))
         self.assertEqual(properties['root_device_name'], '/dev/vda')
-        self.assertEqual(properties['bdm_v2'], True)
+        self.assertTrue(properties['bdm_v2'])
         bdms = properties['block_device_mapping']
         self.assertEqual(len(bdms), 1)
         self.assertEqual(bdms[0]['boot_index'], 0)
@@ -1316,12 +1325,10 @@ class ServerActionsControllerTestV2(ServerActionsControllerTestV21):
         }
         rule_name = "compute:snapshot_volume_backed"
         rules = {
-                rule_name:
-                common_policy.parse_rule("project_id:no_id"),
-                "compute:get":
-                common_policy.parse_rule("")
+                rule_name: "project_id:no_id",
+                "compute:get": ""
         }
-        policy.set_rules(rules)
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         with mock.patch.object(compute_api.API, 'is_volume_backed_instance',
                                return_value=True):
             exc = self.assertRaises(exception.PolicyNotAuthorized,
@@ -1342,12 +1349,10 @@ class ServerActionsControllerTestV2(ServerActionsControllerTestV21):
         }
         rule_name = "compute:snapshot_volume_backed"
         rules = {
-                rule_name:
-                common_policy.parse_rule("role:no_role"),
-                "compute:get":
-                common_policy.parse_rule("")
+                rule_name: "role:no_role",
+                "compute:get": ""
         }
-        policy.set_rules(rules)
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         with mock.patch.object(compute_api.API, 'is_volume_backed_instance',
                                return_value=True):
             exc = self.assertRaises(exception.PolicyNotAuthorized,

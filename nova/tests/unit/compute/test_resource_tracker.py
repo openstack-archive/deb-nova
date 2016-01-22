@@ -105,7 +105,8 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'vendor_id': '8086',
                 'status': 'available',
                 'extra_k1': 'v1',
-                'numa_node': 1
+                'numa_node': 1,
+                'parent_addr': '0000:00:01.0',
             },
             {
                 'label': 'label_8086_0443',
@@ -116,7 +117,8 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'vendor_id': '8086',
                 'status': 'available',
                 'extra_k1': 'v1',
-                'numa_node': 1
+                'numa_node': 1,
+                'parent_addr': '0000:00:01.0',
             },
             {
                 'label': 'label_8086_0443',
@@ -127,7 +129,7 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'vendor_id': '8086',
                 'status': 'available',
                 'extra_k1': 'v1',
-                'numa_node': 1
+                'numa_node': 1,
             },
             {
                 'label': 'label_8086_0123',
@@ -138,7 +140,7 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'vendor_id': '8086',
                 'status': 'available',
                 'extra_k1': 'v1',
-                'numa_node': 1
+                'numa_node': 1,
             },
             {
                 'label': 'label_8086_7891',
@@ -149,7 +151,8 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'vendor_id': '8086',
                 'status': 'available',
                 'extra_k1': 'v1',
-                'numa_node': None
+                'numa_node': None,
+                'parent_addr': '0000:08:01.0',
             },
         ] if self.pci_support else []
         self.pci_stats = [
@@ -157,13 +160,22 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'count': 2,
                 'vendor_id': '8086',
                 'product_id': '0443',
-                'numa_node': 1
+                'numa_node': 1,
+                'dev_type': fields.PciDeviceType.SRIOV_VF
+            },
+            {
+                'count': 1,
+                'vendor_id': '8086',
+                'product_id': '0443',
+                'numa_node': 1,
+                'dev_type': fields.PciDeviceType.SRIOV_PF
             },
             {
                 'count': 1,
                 'vendor_id': '8086',
                 'product_id': '7891',
-                'numa_node': None
+                'numa_node': None,
+                'dev_type': fields.PciDeviceType.SRIOV_VF
             },
         ] if self.pci_support else []
         if stats is not None:
@@ -212,9 +224,7 @@ class BaseTestCase(test.TestCase):
 
         self.context = context.get_admin_context()
 
-        self.flags(pci_passthrough_whitelist=[
-            '{"vendor_id": "8086", "product_id": "0443"}',
-            '{"vendor_id": "8086", "product_id": "7891"}'])
+        self._set_pci_passthrough_whitelist()
         self.flags(use_local=True, group='conductor')
         self.conductor = self.start_service('conductor',
                                             manager=CONF.conductor.manager)
@@ -232,6 +242,11 @@ class BaseTestCase(test.TestCase):
         self.updated = False
         self.deleted = False
         self.update_call_count = 0
+
+    def _set_pci_passthrough_whitelist(self):
+        self.flags(pci_passthrough_whitelist=[
+            '{"vendor_id": "8086", "product_id": "0443"}',
+            '{"vendor_id": "8086", "product_id": "7891"}'])
 
     def _create_compute_node(self, values=None):
         # This creates a db representation of a compute_node.
@@ -606,7 +621,7 @@ class BaseTrackerTestCase(BaseTestCase):
 
     def _fake_migration_update(self, ctxt, migration_id, values):
         # cheat and assume there's only 1 migration present
-        migration = self._migrations.values()[0]
+        migration = list(self._migrations.values())[0]
         migration.update(values)
         return migration
 
@@ -1277,55 +1292,6 @@ class StatsDictTestCase(BaseTrackerTestCase):
 
         stats = self.tracker.compute_node.stats
         self.assertEqual(FAKE_VIRT_STATS_COERCED, stats)
-
-
-class StatsJsonTestCase(BaseTrackerTestCase):
-    """Test stats handling for a virt driver that provides
-    stats as a json string.
-    """
-    def _driver(self):
-        return FakeVirtDriver(stats=FAKE_VIRT_STATS_JSON)
-
-    def test_virt_stats(self):
-        # start with virt driver stats
-        stats = self.tracker.compute_node.stats
-        self.assertEqual(FAKE_VIRT_STATS_COERCED, stats)
-
-        # adding an instance should keep virt driver stats
-        # and add rt stats
-        self._fake_instance_obj(vm_state=vm_states.ACTIVE, host=self.host)
-        self.tracker.update_available_resource(self.context)
-
-        stats = self.tracker.compute_node.stats
-        # compute node stats are coerced to strings
-        expected_stats = copy.deepcopy(FAKE_VIRT_STATS_COERCED)
-        for k, v in self.tracker.stats.items():
-            expected_stats[k] = six.text_type(v)
-        self.assertEqual(expected_stats, stats)
-
-        # removing the instances should keep only virt driver stats
-        self._instances = {}
-        self.tracker.update_available_resource(self.context)
-        stats = self.tracker.compute_node.stats
-        self.assertEqual(FAKE_VIRT_STATS_COERCED, stats)
-
-
-class StatsInvalidJsonTestCase(BaseTrackerTestCase):
-    """Test stats handling for a virt driver that provides
-    an invalid type for stats.
-    """
-    def _driver(self):
-        return FakeVirtDriver(stats='this is not json')
-
-    def _init_tracker(self):
-        # do not do initial update in setup
-        pass
-
-    def test_virt_stats(self):
-        # should throw exception for string that does not parse as json
-        self.assertRaises(ValueError,
-                          self.tracker.update_available_resource,
-                          context=self.context)
 
 
 class StatsInvalidTypeTestCase(BaseTrackerTestCase):

@@ -16,6 +16,7 @@
 import datetime
 
 import mock
+from oslo_policy import policy as oslo_policy
 from oslo_utils import timeutils
 from six.moves import range
 import webob
@@ -29,7 +30,6 @@ from nova import context
 from nova import db
 from nova import exception
 from nova import objects
-from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import test
 from nova.tests.unit.api.openstack import fakes
@@ -202,7 +202,8 @@ class SimpleTenantUsageTestV21(test.TestCase):
                     x for x in range(SERVERS)]
         for j in range(SERVERS):
             delta = STOP - START
-            uptime = delta.days * 24 * 3600 + delta.seconds
+            # NOTE(javeme): cast seconds from float to int for clarity
+            uptime = int(delta.total_seconds())
             self.assertEqual(uptime, int(servers[j]['uptime']))
             self.assertEqual(HOURS, int(servers[j]['hours']))
             self.assertIn(servers[j]['instance_id'], uuids)
@@ -213,12 +214,10 @@ class SimpleTenantUsageTestV21(test.TestCase):
         req.environ['nova.context'] = self.alt_user_context
 
         rules = {
-            self.policy_rule_prefix + ":show":
-                common_policy.parse_rule([
-                    ["role:admin"], ["project_id:%(project_id)s"]
-                    ])
+            self.policy_rule_prefix + ":show": [
+                ["role:admin"], ["project_id:%(project_id)s"]]
         }
-        policy.set_rules(rules)
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
 
         try:
             self.assertRaises(exception.PolicyNotAuthorized,

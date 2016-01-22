@@ -17,7 +17,6 @@ import platform
 import socket
 import sys
 
-import mock
 from oslo_config import cfg
 from six.moves import range
 
@@ -39,14 +38,15 @@ def get_test_admin_context():
     return nova.context.get_admin_context()
 
 
-def get_test_image_info(context, instance_ref):
+def get_test_image_object(context, instance_ref):
     if not context:
         context = get_test_admin_context()
 
     image_ref = instance_ref['image_ref']
     image_service, image_id = glance.get_remote_image_service(context,
                                                               image_ref)
-    return image_service.show(context, image_id)
+    return objects.ImageMeta.from_dict(
+        image_service.show(context, image_id))
 
 
 def get_test_flavor(context=None, options=None):
@@ -94,9 +94,7 @@ def get_test_instance(context=None, flavor=None, obj=False):
 
     if obj:
         instance = objects.Instance(context, **test_instance)
-        with mock.patch.object(instance, 'save'):
-            instance.set_flavor(objects.Flavor.get_by_id(context,
-                                                         flavor['id']))
+        instance.flavor = objects.Flavor.get_by_id(context, flavor['id'])
         instance.create()
     else:
         flavors.save_flavor_info(test_instance['system_metadata'], flavor, '')

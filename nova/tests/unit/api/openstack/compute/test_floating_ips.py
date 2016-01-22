@@ -100,9 +100,9 @@ def fake_instance_get(context, instance_id):
         "project_id": '123'})
 
 
-def stub_nw_info(stubs):
+def stub_nw_info(test):
     def get_nw_info_for_instance(instance):
-        return fake_network.fake_get_instance_nw_info(stubs)
+        return fake_network.fake_get_instance_nw_info(test)
     return get_nw_info_for_instance
 
 
@@ -178,14 +178,14 @@ class FloatingIpTestV21(test.TestCase):
     validation_error = exception.ValidationError
 
     def _create_floating_ips(self, floating_ips=None):
-        """Create a floating ip object."""
+        """Create a floating IP object."""
         if floating_ips is None:
             floating_ips = [self.floating_ip]
         elif not isinstance(floating_ips, (list, tuple)):
             floating_ips = [floating_ips]
 
         def make_ip_dict(ip):
-            """Shortcut for creating floating ip dict."""
+            """Shortcut for creating floating IP dict."""
             return
 
         dict_ = {'pool': 'nova', 'host': 'fake_host'}
@@ -213,9 +213,9 @@ class FloatingIpTestV21(test.TestCase):
         self.stubs.Set(network.api.API, "get_instance_id_by_floating_address",
                        get_instance_by_floating_ip_addr)
         self.stubs.Set(compute_utils, "get_nw_info_for_instance",
-                       stub_nw_info(self.stubs))
+                       stub_nw_info(self))
 
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs)
+        fake_network.stub_out_nw_api_get_instance_nw_info(self)
         self.stubs.Set(db, 'instance_get',
                        fake_instance_get)
 
@@ -313,7 +313,7 @@ class FloatingIpTestV21(test.TestCase):
 
         ex = self.assertRaises(webob.exc.HTTPNotFound,
                                self.controller.delete, self.fake_req, '9876')
-        self.assertIn("Floating ip not found for id 9876", ex.explanation)
+        self.assertIn("Floating IP not found for ID 9876", ex.explanation)
 
     def test_floating_ip_release_race_cond(self):
         def fake_get_floating_ip(*args, **kwargs):
@@ -358,7 +358,7 @@ class FloatingIpTestV21(test.TestCase):
 
         ex = self.assertRaises(webob.exc.HTTPNotFound,
                                self.controller.show, self.fake_req, '9876')
-        self.assertIn("Floating ip not found for id 9876", ex.explanation)
+        self.assertIn("Floating IP not found for ID 9876", ex.explanation)
 
     def test_show_associated_floating_ip(self):
         def get_floating_ip(self, context, id):
@@ -407,7 +407,7 @@ class FloatingIpTestV21(test.TestCase):
         ex = self.assertRaises(webob.exc.HTTPNotFound,
                                self.controller.create, self.fake_req)
 
-        self.assertIn('No more floating ips', ex.explanation)
+        self.assertIn('No more floating IPs', ex.explanation)
 
     def test_floating_ip_allocate_no_free_ips_pool(self):
         def fake_allocate(*args, **kwargs):
@@ -419,7 +419,7 @@ class FloatingIpTestV21(test.TestCase):
                                self.controller.create, self.fake_req,
                                {'pool': 'non_existent_pool'})
 
-        self.assertIn('No more floating ips in pool non_existent_pool',
+        self.assertIn('No more floating IPs in pool non_existent_pool',
                       ex.explanation)
 
     @mock.patch.object(network.api.API, 'allocate_floating_ip',
@@ -459,7 +459,7 @@ class FloatingIpTestV21(test.TestCase):
                                self.controller.create, self.fake_req,
                                {'pool': 'non_existent_pool'})
 
-        self.assertIn('Floating ip pool not found.', ex.explanation)
+        self.assertIn('Floating IP pool not found.', ex.explanation)
 
     def test_floating_ip_allocate(self):
         def fake1(*args, **kwargs):
@@ -546,7 +546,7 @@ class FloatingIpTestV21(test.TestCase):
                                self.manager._add_floating_ip,
                                self.fake_req, TEST_INST, body=body)
 
-        self.assertIn("floating ip not found", ex.explanation)
+        self.assertIn("floating IP not found", ex.explanation)
 
     @mock.patch.object(network.api.API, 'associate_floating_ip',
                        side_effect=exception.Forbidden)
@@ -757,7 +757,7 @@ class ExtendedFloatingIpTestV21(test.TestCase):
     floating_ips = fips_v21
 
     def _create_floating_ips(self, floating_ips=None):
-        """Create a floating ip object."""
+        """Create a floating IP object."""
         if floating_ips is None:
             floating_ips = [self.floating_ip]
         elif not isinstance(floating_ips, (list, tuple)):
@@ -788,9 +788,9 @@ class ExtendedFloatingIpTestV21(test.TestCase):
         self.stubs.Set(network.api.API, "get_instance_id_by_floating_address",
                        get_instance_by_floating_ip_addr)
         self.stubs.Set(compute_utils, "get_nw_info_for_instance",
-                       stub_nw_info(self.stubs))
+                       stub_nw_info(self))
 
-        fake_network.stub_out_nw_api_get_instance_nw_info(self.stubs)
+        fake_network.stub_out_nw_api_get_instance_nw_info(self)
         self.stubs.Set(db, 'instance_get',
                        fake_instance_get)
 

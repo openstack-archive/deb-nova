@@ -103,6 +103,15 @@ class Service(BASE, NovaBase, models.SoftDeleteMixin):
     forced_down = Column(Boolean, default=False)
     version = Column(Integer, default=0)
 
+    instance = orm.relationship(
+        "Instance",
+        backref='services',
+        primaryjoin='and_(Service.host == Instance.host,'
+                    'Service.binary == "nova-compute",'
+                    'Instance.deleted == 0)',
+        foreign_keys=host,
+    )
+
 
 class ComputeNode(BASE, NovaBase, models.SoftDeleteMixin):
     """Represents a running compute service on a host."""
@@ -827,7 +836,7 @@ class VirtualInterface(BASE, NovaBase, models.SoftDeleteMixin):
 
 # TODO(vish): can these both come from the same baseclass?
 class FixedIp(BASE, NovaBase, models.SoftDeleteMixin):
-    """Represents a fixed ip for an instance."""
+    """Represents a fixed IP for an instance."""
     __tablename__ = 'fixed_ips'
     __table_args__ = (
         schema.UniqueConstraint(
@@ -885,7 +894,7 @@ class FixedIp(BASE, NovaBase, models.SoftDeleteMixin):
 
 
 class FloatingIp(BASE, NovaBase, models.SoftDeleteMixin):
-    """Represents a floating ip that dynamically forwards to a fixed ip."""
+    """Represents a floating IP that dynamically forwards to a fixed IP."""
     __tablename__ = 'floating_ips'
     __table_args__ = (
         schema.UniqueConstraint("address", "deleted",
@@ -1371,6 +1380,8 @@ class PciDevice(BASE, NovaBase, models.SoftDeleteMixin):
               'compute_node_id', 'deleted'),
         Index('ix_pci_devices_instance_uuid_deleted',
               'instance_uuid', 'deleted'),
+        Index('ix_pci_devices_compute_node_id_parent_addr_deleted',
+              'compute_node_id', 'parent_addr', 'deleted'),
         schema.UniqueConstraint(
             "compute_node_id", "address", "deleted",
             name="uniq_pci_devices0compute_node_id0address0deleted")
@@ -1403,6 +1414,7 @@ class PciDevice(BASE, NovaBase, models.SoftDeleteMixin):
 
     numa_node = Column(Integer, nullable=True)
 
+    parent_addr = Column(String(12), nullable=True)
     instance = orm.relationship(Instance, backref="pci_devices",
                             foreign_keys=instance_uuid,
                             primaryjoin='and_('

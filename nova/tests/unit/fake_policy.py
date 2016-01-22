@@ -39,7 +39,6 @@ policy_data = """
     "compute:get_diagnostics": "",
     "compute:get_instance_diagnostics": "",
 
-    "compute:get_lock": "",
     "compute:lock": "",
     "compute:unlock": "",
     "compute:unlock_override": "is_admin:True",
@@ -119,6 +118,7 @@ policy_data = """
     "os_compute_api:servers:resize": "",
     "os_compute_api:servers:revert_resize": "",
     "os_compute_api:servers:show": "",
+    "os_compute_api:servers:show:host_status": "",
     "os_compute_api:servers:create_image": "",
     "os_compute_api:servers:create_image:allow_volume_backed": "",
     "os_compute_api:servers:update": "",

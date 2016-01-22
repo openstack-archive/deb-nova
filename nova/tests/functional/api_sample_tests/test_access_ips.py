@@ -40,13 +40,12 @@ class AccessIPsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
 
     def _servers_post(self, subs):
         response = self._do_post('servers', 'server-post-req', subs)
-        subs.update(self._get_regexes())
         return self._verify_response('server-post-resp', subs, response, 202)
 
     def test_servers_post(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'access_ip_v4': '1.2.3.4',
             'access_ip_v6': 'fe80::'
         }
@@ -55,7 +54,7 @@ class AccessIPsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
     def test_servers_get(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'access_ip_v4': '1.2.3.4',
             'access_ip_v6': 'fe80::'
         }
@@ -68,7 +67,7 @@ class AccessIPsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
     def test_servers_details(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'access_ip_v4': '1.2.3.4',
             'access_ip_v6': 'fe80::'
         }
@@ -81,7 +80,7 @@ class AccessIPsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
     def test_servers_rebuild(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'access_ip_v4': '1.2.3.4',
             'access_ip_v6': 'fe80::'
         }
@@ -98,7 +97,7 @@ class AccessIPsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
     def test_servers_update(self):
         subs = {
             'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
+            'compute_endpoint': self._get_compute_endpoint(),
             'access_ip_v4': '1.2.3.4',
             'access_ip_v6': 'fe80::'
         }

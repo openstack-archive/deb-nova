@@ -34,14 +34,14 @@ CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 class ChanceScheduler(driver.Scheduler):
     """Implements Scheduler as a random node selector."""
 
-    def _filter_hosts(self, request_spec, hosts, filter_properties):
-        """Filter a list of hosts based on request_spec."""
+    def _filter_hosts(self, hosts, spec_obj):
+        """Filter a list of hosts based on RequestSpec."""
 
-        ignore_hosts = filter_properties.get('ignore_hosts', [])
+        ignore_hosts = spec_obj.ignore_hosts or []
         hosts = [host for host in hosts if host not in ignore_hosts]
         return hosts
 
-    def _schedule(self, context, topic, request_spec, filter_properties):
+    def _schedule(self, context, topic, spec_obj):
         """Picks a host that is up at random."""
 
         elevated = context.elevated()
@@ -50,22 +50,21 @@ class ChanceScheduler(driver.Scheduler):
             msg = _("Is the appropriate service running?")
             raise exception.NoValidHost(reason=msg)
 
-        hosts = self._filter_hosts(request_spec, hosts, filter_properties)
+        hosts = self._filter_hosts(hosts, spec_obj)
         if not hosts:
             msg = _("Could not find another compute")
             raise exception.NoValidHost(reason=msg)
 
         return random.choice(hosts)
 
-    def select_destinations(self, context, request_spec, filter_properties):
+    def select_destinations(self, context, spec_obj):
         """Selects random destinations."""
-        num_instances = request_spec['num_instances']
+        num_instances = spec_obj.num_instances
         # NOTE(timello): Returns a list of dicts with 'host', 'nodename' and
         # 'limits' as keys for compatibility with filter_scheduler.
         dests = []
         for i in range(num_instances):
-            host = self._schedule(context, CONF.compute_topic,
-                    request_spec, filter_properties)
+            host = self._schedule(context, CONF.compute_topic, spec_obj)
             host_state = dict(host=host, nodename=None, limits=None)
             dests.append(host_state)
 

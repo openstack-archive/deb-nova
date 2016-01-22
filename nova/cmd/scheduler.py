@@ -18,16 +18,17 @@
 
 import sys
 
-from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_reports import guru_meditation_report as gmr
 
+import nova.conf
 from nova import config
 from nova import objects
 from nova import service
 from nova import utils
+from nova import version
 
-CONF = cfg.CONF
-CONF.import_opt('scheduler_topic', 'nova.scheduler.rpcapi')
+CONF = nova.conf.CONF
 
 
 def main():
@@ -35,6 +36,8 @@ def main():
     logging.setup(CONF, "nova")
     utils.monkey_patch()
     objects.register_all()
+
+    gmr.TextGuruMeditation.setup_autorun(version)
 
     server = service.Service.create(binary='nova-scheduler',
                                     topic=CONF.scheduler_topic)

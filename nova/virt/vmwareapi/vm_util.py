@@ -62,6 +62,10 @@ ALL_SUPPORTED_NETWORK_DEVICES = ['VirtualE1000', 'VirtualE1000e',
                                  'VirtualPCNet32', 'VirtualSriovEthernetCard',
                                  'VirtualVmxnet', 'VirtualVmxnet3']
 
+# A simple cache for storing inventory folder references.
+# Format: {inventory_path: folder_ref}
+_FOLDER_PATH_REF_MAPPING = {}
+
 # A cache for VM references. The key will be the VM name
 # and the value is the VM reference. The VM name is unique. This
 # is either the UUID of the instance or UUID-rescue in the case
@@ -103,17 +107,13 @@ class ExtraSpecs(object):
 
     def __init__(self, cpu_limits=None, hw_version=None,
                  storage_policy=None, cores_per_socket=None,
-                 memory_limits=None, disk_io_limits=None):
+                 memory_limits=None, disk_io_limits=None,
+                 vif_limits=None):
         """ExtraSpecs object holds extra_specs for the instance."""
-        if cpu_limits is None:
-            cpu_limits = Limits()
-        self.cpu_limits = cpu_limits
-        if memory_limits is None:
-            memory_limits = Limits()
-        self.memory_limits = memory_limits
-        if disk_io_limits is None:
-            disk_io_limits = Limits()
-        self.disk_io_limits = disk_io_limits
+        self.cpu_limits = cpu_limits or Limits()
+        self.memory_limits = memory_limits or Limits()
+        self.disk_io_limits = disk_io_limits or Limits()
+        self.vif_limits = vif_limits or Limits()
         self.hw_version = hw_version
         self.storage_policy = storage_policy
         self.cores_per_socket = cores_per_socket
@@ -197,7 +197,12 @@ def _get_allocation_info(client_factory, limits, allocation_type):
     else:
         shares.level = 'normal'
         shares.shares = 0
-    allocation.shares = shares
+    # The VirtualEthernetCardResourceAllocation has 'share' instead of
+    # 'shares'.
+    if hasattr(allocation, 'share'):
+        allocation.share = shares
+    else:
+        allocation.shares = shares
     return allocation
 
 
@@ -255,7 +260,8 @@ def get_vm_create_spec(client_factory, instance, data_store_name,
 
     devices = []
     for vif_info in vif_infos:
-        vif_spec = _create_vif_spec(client_factory, vif_info)
+        vif_spec = _create_vif_spec(client_factory, vif_info,
+                                    extra_specs.vif_limits)
         devices.append(vif_spec)
 
     serial_port_spec = create_serial_port_spec(client_factory)
@@ -403,7 +409,7 @@ def convert_vif_model(name):
     return name
 
 
-def _create_vif_spec(client_factory, vif_info):
+def _create_vif_spec(client_factory, vif_info, vif_limits=None):
     """Builds a config spec for the addition of a new network
     adapter to the VM.
     """
@@ -467,6 +473,16 @@ def _create_vif_spec(client_factory, vif_info):
     net_device.addressType = "manual"
     net_device.macAddress = mac_address
     net_device.wakeOnLanEnabled = True
+
+    # vnic limits are only supported from version 6.0
+    if vif_limits and vif_limits.has_limits():
+        if hasattr(net_device, 'resourceAllocation'):
+            net_device.resourceAllocation = _get_allocation_info(
+                client_factory, vif_limits,
+                'ns0:VirtualEthernetCardResourceAllocation')
+        else:
+            msg = _('Limits only supported from vCenter 6.0 and above')
+            raise exception.Invalid(msg)
 
     network_spec.device = net_device
     return network_spec
@@ -1542,3 +1558,53 @@ def get_swap(session, vm_ref):
                     "VirtualDiskFlatVer2BackingInfo" and
                 'swap' in device.backing.fileName):
             return device
+
+
+def _get_folder(session, parent_folder_ref, name):
+    # Get list of child entities for the parent folder
+    prop_val = session._call_method(vutil, 'get_object_property',
+                                    parent_folder_ref,
+                                    'childEntity')
+    if prop_val:
+        child_entities = prop_val.ManagedObjectReference
+
+        # Return if the child folder with input name is already present
+        for child_entity in child_entities:
+            if child_entity._type != 'Folder':
+                continue
+            child_entity_name = vim_util.get_entity_name(session, child_entity)
+            if child_entity_name == name:
+                return child_entity
+
+
+def create_folder(session, parent_folder_ref, name):
+    """Creates a folder in vCenter
+
+    A folder of 'name' will be created under the parent folder.
+    The moref of the folder is returned.
+    """
+
+    folder = _get_folder(session, parent_folder_ref, name)
+    if folder:
+        return folder
+    LOG.debug("Creating folder: %(name)s. Parent ref: %(parent)s.",
+              {'name': name, 'parent': parent_folder_ref.value})
+    try:
+        folder = session._call_method(session.vim, "CreateFolder",
+                                      parent_folder_ref, name=name)
+        LOG.info(_LI("Created folder: %(name)s in parent %(parent)s."),
+                 {'name': name, 'parent': parent_folder_ref.value})
+    except vexc.DuplicateName as e:
+        LOG.debug("Folder already exists: %(name)s. Parent ref: %(parent)s.",
+                  {'name': name, 'parent': parent_folder_ref.value})
+        val = e.details['object']
+        folder = vutil.get_moref(val, 'Folder')
+    return folder
+
+
+def folder_ref_cache_update(path, folder_ref):
+    _FOLDER_PATH_REF_MAPPING[path] = folder_ref
+
+
+def folder_ref_cache_get(path):
+    return _FOLDER_PATH_REF_MAPPING.get(path)

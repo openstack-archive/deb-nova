@@ -22,6 +22,9 @@ import os
 import time
 
 from eventlet import timeout as etimeout
+from os_win import exceptions as os_win_exc
+from os_win.utils.io import ioutils
+from os_win import utilsfactory
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -31,6 +34,7 @@ from oslo_utils import fileutils
 from oslo_utils import importutils
 from oslo_utils import units
 from oslo_utils import uuidutils
+import six
 
 from nova.api.metadata import base as instance_metadata
 from nova import exception
@@ -40,9 +44,7 @@ from nova.virt import configdrive
 from nova.virt import hardware
 from nova.virt.hyperv import constants
 from nova.virt.hyperv import imagecache
-from nova.virt.hyperv import ioutils
-from nova.virt.hyperv import utilsfactory
-from nova.virt.hyperv import vmutils
+from nova.virt.hyperv import pathutils
 from nova.virt.hyperv import volumeops
 
 LOG = logging.getLogger(__name__)
@@ -129,8 +131,8 @@ class VMOps(object):
     def __init__(self):
         self._vmutils = utilsfactory.get_vmutils()
         self._vhdutils = utilsfactory.get_vhdutils()
-        self._pathutils = utilsfactory.get_pathutils()
         self._hostutils = utilsfactory.get_hostutils()
+        self._pathutils = pathutils.PathUtils()
         self._volumeops = volumeops.VolumeOps()
         self._imagecache = imagecache.ImageCache()
         self._vif_driver = None
@@ -179,7 +181,7 @@ class VMOps(object):
     def _create_root_vhd(self, context, instance):
         base_vhd_path = self._imagecache.get_cached_image(context, instance)
         base_vhd_info = self._vhdutils.get_vhd_info(base_vhd_path)
-        base_vhd_size = base_vhd_info['MaxInternalSize']
+        base_vhd_size = base_vhd_info['VirtualSize']
         format_ext = base_vhd_path.split('.')[-1]
         root_vhd_path = self._pathutils.get_root_vhd_path(instance.name,
                                                           format_ext)
@@ -227,12 +229,8 @@ class VMOps(object):
 
     def _is_resize_needed(self, vhd_path, old_size, new_size, instance):
         if new_size < old_size:
-            error_msg = _("Cannot resize a VHD to a smaller size, the"
-                          " original size is %(old_size)s, the"
-                          " newer size is %(new_size)s"
-                          ) % {'old_size': old_size,
-                               'new_size': new_size}
-            raise vmutils.VHDResizeException(error_msg)
+            raise exception.FlavorDiskSmallerThanImage(
+                flavor_size=new_size, image_size=old_size)
         elif new_size > old_size:
             LOG.debug("Resizing VHD %(vhd_path)s to new "
                       "size %(new_size)s" %
@@ -249,8 +247,7 @@ class VMOps(object):
 
             eph_vhd_path = self._pathutils.get_ephemeral_vhd_path(
                 instance.name, vhd_format)
-            self._vhdutils.create_dynamic_vhd(eph_vhd_path, eph_vhd_size,
-                                              vhd_format)
+            self._vhdutils.create_dynamic_vhd(eph_vhd_path, eph_vhd_size)
             return eph_vhd_path
 
     @check_admin_permissions
@@ -272,7 +269,8 @@ class VMOps(object):
             root_vhd_path = self._create_root_vhd(context, instance)
 
         eph_vhd_path = self.create_ephemeral_vhd(instance)
-        vm_gen = self.get_image_vm_generation(root_vhd_path, image_meta)
+        vm_gen = self.get_image_vm_generation(
+            instance.uuid, root_vhd_path, image_meta)
 
         try:
             self.create_instance(instance, network_info, block_device_info,
@@ -345,36 +343,33 @@ class VMOps(object):
             self._vmutils.attach_ide_drive(instance_name, path, drive_addr,
                                            ctrl_disk_addr, drive_type)
 
-    def get_image_vm_generation(self, root_vhd_path, image_meta):
+    def get_image_vm_generation(self, instance_id, root_vhd_path, image_meta):
         default_vm_gen = self._hostutils.get_default_vm_generation()
         image_prop_vm = image_meta.properties.get(
             'hw_machine_type', default_vm_gen)
         if image_prop_vm not in self._hostutils.get_supported_vm_types():
-            LOG.error(_LE('Requested VM Generation %s is not supported on '
-                          'this OS.'), image_prop_vm)
-            raise vmutils.HyperVException(
-                _('Requested VM Generation %s is not supported on this '
-                  'OS.') % image_prop_vm)
+            reason = _LE('Requested VM Generation %s is not supported on '
+                         'this OS.') % image_prop_vm
+            raise exception.InstanceUnacceptable(instance_id=instance_id,
+                                                 reason=reason)
 
         vm_gen = VM_GENERATIONS[image_prop_vm]
 
         if (vm_gen != constants.VM_GEN_1 and root_vhd_path and
                 self._vhdutils.get_vhd_format(
                     root_vhd_path) == constants.DISK_FORMAT_VHD):
-            LOG.error(_LE('Requested VM Generation %s, but provided VHD '
-                          'instead of VHDX.'), vm_gen)
-            raise vmutils.HyperVException(
-                _('Requested VM Generation %s, but provided VHD instead of '
-                  'VHDX.') % vm_gen)
+            reason = _LE('Requested VM Generation %s, but provided VHD '
+                         'instead of VHDX.') % vm_gen
+            raise exception.InstanceUnacceptable(instance_id=instance_id,
+                                                 reason=reason)
 
         return vm_gen
 
     def _create_config_drive(self, instance, injected_files, admin_password,
                              network_info):
         if CONF.config_drive_format != 'iso9660':
-            raise vmutils.UnsupportedConfigDriveFormatException(
-                _('Invalid config_drive_format "%s"') %
-                CONF.config_drive_format)
+            raise exception.ConfigDriveUnsupportedFormat(
+                format=CONF.config_drive_format)
 
         LOG.info(_LI('Using config drive for instance'), instance=instance)
 
@@ -500,7 +495,7 @@ class VMOps(object):
                     LOG.info(_LI("Soft shutdown succeeded."),
                              instance=instance)
                     return True
-            except vmutils.HyperVException as e:
+            except os_win_exc.HyperVException as e:
                 # Exception is raised when trying to shutdown the instance
                 # while it is still booting.
                 LOG.debug("Soft shutdown failed: %s", e, instance=instance)
@@ -550,7 +545,7 @@ class VMOps(object):
 
             self._set_vm_state(instance,
                                constants.HYPERV_VM_STATE_DISABLED)
-        except exception.InstanceNotFound:
+        except os_win_exc.HyperVVMNotFoundException:
             # The manager can call the stop API after receiving instance
             # power off events. If this is triggered when the instance
             # is being deleted, it might attempt to power off an unexisting
@@ -667,8 +662,8 @@ class VMOps(object):
                         instance_log += fp.read()
             return instance_log
         except IOError as err:
-            msg = _("Could not get instance console log. Error: %s") % err
-            raise vmutils.HyperVException(msg, instance=instance)
+            raise exception.ConsoleLogOutputException(
+                instance_id=instance.uuid, reason=six.text_type(err))
 
     def _delete_vm_console_log(self, instance):
         console_log_files = self._pathutils.get_vm_console_log_paths(
@@ -766,7 +761,7 @@ class VMOps(object):
             LOG.debug('Detaching vif: %s', vif['id'], instance=instance)
             self._vif_driver.unplug(instance, vif)
             self._vmutils.destroy_nic(instance.name, vif['id'])
-        except exception.NotFound:
+        except os_win_exc.HyperVVMNotFoundException:
             # TODO(claudiub): add set log level to error after string freeze.
             LOG.debug("Instance not found during detach interface. It "
                       "might have been destroyed beforehand.",

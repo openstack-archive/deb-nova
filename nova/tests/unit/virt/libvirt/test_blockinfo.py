@@ -38,7 +38,7 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.get_admin_context()
-        nova.tests.unit.image.fake.stub_out_image_service(self.stubs)
+        nova.tests.unit.image.fake.stub_out_image_service(self)
         self.test_instance = {
             'uuid': '32dfcb37-5af1-552b-357c-be8c3aa38310',
             'memory_kb': '1024000',
@@ -131,6 +131,22 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
         dev = blockinfo.find_disk_dev_for_disk_bus(mapping, 'fdc')
         self.assertEqual('fda', dev)
 
+    @mock.patch('nova.virt.libvirt.blockinfo.has_disk_dev', return_value=True)
+    def test_find_disk_dev_for_disk_bus_no_free_error(self, has_disk_dev_mock):
+        # Tests that an exception is raised when all devices for a given prefix
+        # are already reserved.
+        mapping = {
+            'disk': {
+                'bus': 'ide',
+                'dev': 'hda',
+                'type': 'cdrom',
+                'boot_index': '1',
+            }
+        }
+        self.assertRaises(exception.NovaException,
+                          blockinfo.find_disk_dev_for_disk_bus,
+                          mapping, 'ide')
+
     def test_get_next_disk_dev(self):
         mapping = {}
         mapping['disk.local'] = blockinfo.get_next_disk_info(mapping,
@@ -165,9 +181,14 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
         instance_ref = objects.Instance(**self.test_instance)
         image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
 
-        mapping = blockinfo.get_disk_mapping("kvm", instance_ref,
-                                             "virtio", "ide",
-                                             image_meta)
+        with mock.patch.object(instance_ref, 'get_flavor',
+                               return_value=instance_ref.flavor) as get_flavor:
+            mapping = blockinfo.get_disk_mapping("kvm", instance_ref,
+                                                 "virtio", "ide",
+                                                 image_meta)
+        # Since there was no block_device_info passed to get_disk_mapping we
+        # expect to get the swap info from the flavor in the instance.
+        get_flavor.assert_called_once_with()
 
         expect = {
             'disk': {'bus': 'virtio', 'dev': 'vda',
@@ -657,10 +678,14 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
                         'disk_bus': 'virtio',
                         'delete_on_termination': True}
 
-        blockinfo.get_disk_mapping("kvm", instance_ref,
-                                   "virtio", "ide",
-                                   image_meta,
-                                   block_device_info)
+        with mock.patch.object(instance_ref, 'get_flavor') as get_flavor_mock:
+            blockinfo.get_disk_mapping("kvm", instance_ref,
+                                       "virtio", "ide",
+                                       image_meta,
+                                       block_device_info)
+        # we should have gotten the swap info from block_device_info rather
+        # than the flavor information on the instance
+        self.assertFalse(get_flavor_mock.called)
 
         self.assertEqual(expected_swap, block_device_info['swap'])
         self.assertEqual(expected_ephemeral,

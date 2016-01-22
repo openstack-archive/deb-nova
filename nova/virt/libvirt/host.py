@@ -385,7 +385,7 @@ class Host(object):
         """Emit events - possibly delayed."""
         def event_cleanup(gt, *args, **kwargs):
             """Callback function for greenthread. Called
-            to cleanup the _events_delayed dictionary when a event
+            to cleanup the _events_delayed dictionary when an event
             was called.
             """
             event = args[0]
@@ -599,7 +599,7 @@ class Host(object):
         corresponding to the Nova instance, based on
         its name. If not found it will raise an
         exception.InstanceNotFound exception. On other
-        errors, it will raise a exception.NovaException
+        errors, it will raise an exception.NovaException
         exception.
 
         :returns: a libvirt.Domain object
@@ -693,6 +693,19 @@ class Host(object):
                 continue
 
         return doms
+
+    def list_guests(self, only_running=True, only_guests=True):
+        """Get a list of Guest objects for nova instances
+
+        :param only_running: True to only return running instances
+        :param only_guests: True to filter out any host domain (eg Dom-0)
+
+        See method "list_instance_domains" for more informations.
+
+        :returns: list of Guest objects
+        """
+        return [libvirt_guest.Guest(dom) for dom in self.list_instance_domains(
+            only_running=only_running, only_guests=only_guests)]
 
     def list_instance_domains(self, only_running=True, only_guests=True):
         """Get a list of libvirt.Domain objects for nova instances
@@ -920,20 +933,17 @@ class Host(object):
         idx3 = m.index('Cached:')
         if CONF.libvirt.virt_type == 'xen':
             used = 0
-            for dom in self.list_instance_domains(only_guests=False):
+            for guest in self.list_guests(only_guests=False):
                 try:
-                    # TODO(sahid): we should have method list_guests()
-                    # which returns Guest's objects
-                    guest = libvirt_guest.Guest(dom)
                     # TODO(sahid): Use get_info...
                     dom_mem = int(guest._get_domain_info(self)[2])
                 except libvirt.libvirtError as e:
                     LOG.warn(_LW("couldn't obtain the memory from domain:"
                                  " %(uuid)s, exception: %(ex)s") %
-                             {"uuid": dom.UUIDString(), "ex": e})
+                             {"uuid": guest.uuid, "ex": e})
                     continue
                 # skip dom0
-                if dom.ID() != 0:
+                if guest.id != 0:
                     used += dom_mem
                 else:
                     # the mem reported by dom0 is be greater of what
@@ -943,11 +953,11 @@ class Host(object):
                               int(m[idx2 + 1]) +
                               int(m[idx3 + 1])))
             # Convert it to MB
-            return used / units.Ki
+            return used // units.Ki
         else:
             avail = (int(m[idx1 + 1]) + int(m[idx2 + 1]) + int(m[idx3 + 1]))
             # Convert it to MB
-            return self.get_memory_mb_total() - avail / units.Ki
+            return self.get_memory_mb_total() - avail // units.Ki
 
     def get_cpu_stats(self):
         """Returns the current CPU state of the host with frequency."""
@@ -985,3 +995,20 @@ class Host(object):
     def compare_cpu(self, xmlDesc, flags=0):
         """Compares the given CPU description with the host CPU."""
         return self.get_connection().compareCPU(xmlDesc, flags)
+
+    def is_cpu_control_policy_capable(self):
+        """Returns whether kernel configuration CGROUP_SCHED is enabled
+
+        CONFIG_CGROUP_SCHED may be disabled in some kernel configs to
+        improve scheduler latency.
+        """
+        try:
+            with open("/proc/self/mounts", "r") as fd:
+                for line in fd.readlines():
+                    # mount options and split options
+                    bits = line.split()[3].split(",")
+                    if "cpu" in bits:
+                        return True
+                return False
+        except IOError:
+            return False
