@@ -56,7 +56,6 @@ override_dh_install:
 
 	rm debian/tmp/usr/bin/nova-api-os-compute
 	rm debian/tmp/usr/bin/nova-api-metadata
-	rm debian/tmp/usr/bin/nova-api-ec2
 
 	dh_install --fail-missing -Xbin/nova-all -Xbin/nova-objectstore
 	mkdir -p $(CURDIR)/debian/nova-common/usr/share/nova-common
