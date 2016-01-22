@@ -5,8 +5,6 @@ include /usr/share/openstack-pkg-tools/pkgos.make
 export OSLO_PACKAGE_VERSION=$(shell dpkg-parsechangelog -S Version | sed -e 's/^[[:digit:]]*://' -e 's/[-].*//' -e 's/~/.0/')
 
 include /usr/share/python/python.mk
-debroot = debian/tmp
-site_packages_dir=$(debroot)$(call py_libdir,$(shell pyversions -d))
 
 %:
 	dh $@ --buildsystem=python_distutils --with python2,sphinxdoc,systemd
@@ -51,8 +49,7 @@ endif
 
 
 override_dh_install:
-	python setup.py install -f --install-layout=deb --root=$(debroot)
-	mkdir -p $(debroot)/usr/share
+	python setup.py install -f --install-layout=deb --root=debian/tmp
 
 	rm debian/tmp/usr/bin/nova-api-os-compute
 	rm debian/tmp/usr/bin/nova-api-metadata
@@ -88,8 +85,18 @@ override_dh_fixperms:
 
 override_dh_auto_test:
 ifeq (,$(findstring nocheck, $(DEB_BUILD_OPTIONS)))
-	./run_tests.sh -N -P || true
-	#python setup.py testr --slowest --testr-args='--subunit  ' || true
+	@echo "===> Running tests"
+	set -e ; set -x ; for i in 2.7 ; do \
+		PYMAJOR=`echo $$i | cut -d'.' -f1` ; \
+		echo "===> Testing with python$$i (python$$PYMAJOR)" ; \
+		rm -rf .testrepository ; \
+		testr-python$$PYMAJOR init ; \
+		TEMP_REZ=`mktemp -t` ; \
+		PYTHONPATH=$(CURDIR) PYTHON=python$$i testr-python$$PYMAJOR run --subunit 'nova\.tests\.unit.*' | tee $$TEMP_REZ | subunit2pyunit ; \
+		cat $$TEMP_REZ | subunit-filter -s --no-passthrough | subunit-stats ; \
+		rm -f $$TEMP_REZ ; \
+		testr-python$$PYMAJOR slowest ; \
+	done
 endif
 
 # We use override_dh_installmenu because it's done in the sequence with dh,
