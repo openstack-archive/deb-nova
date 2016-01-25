@@ -2,7 +2,7 @@
 
 include /usr/share/openstack-pkg-tools/pkgos.make
 
-export OSLO_PACKAGE_VERSION=$(shell dpkg-parsechangelog -S Version | sed -e 's/^[[:digit:]]*://' -e 's/[-].*//' -e 's/~/.0/')
+export OSLO_PACKAGE_VERSION=$(shell dpkg-parsechangelog | grep Version: | cut -d' ' -f2 | sed -e 's/^[[:digit:]]*://' -e 's/[-].*//' -e 's/~/.0/')
 
 include /usr/share/python/python.mk
 
