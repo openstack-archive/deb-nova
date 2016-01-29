@@ -25,6 +25,7 @@ override_dh_auto_clean:
 	rm -rf debian/bla
 
 override_dh_auto_build:
+	dh_auto_build
 
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.postinst
@@ -49,7 +50,8 @@ override_dh_auto_install:
 	echo "Please do nothing"
 
 override_dh_install:
-	python setup.py install -f --install-layout=deb --root=debian/tmp
+	rm -rf $(CURDIR)/debian/tmp
+	python setup.py install -f --install-layout=deb --root=$(CURDIR)/debian/tmp
 
 	mkdir -p $(CURDIR)/debian/nova-common/usr/share/nova-common
 	PYTHONPATH=$(CURDIR)/debian/tmp/usr/lib/python2.7/dist-packages oslo-config-generator \
