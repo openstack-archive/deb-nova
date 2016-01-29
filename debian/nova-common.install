@@ -1,5 +1,3 @@
-debian/nova.conf	usr/share/nova-common
-etc/nova/nova.conf.sample	usr/share/nova-common
 etc/nova/api-paste.ini	usr/share/nova-common
 etc/nova/policy.json	etc/nova
 etc/nova/policy.json	etc/nova

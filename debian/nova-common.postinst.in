@@ -80,7 +80,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	pkgos_write_new_conf nova logging.conf
 
 	# Tweak config files depending on debconf answers
-	pkgos_rabbit_write_conf /etc/nova/nova.conf DEFAULT nova
+	pkgos_rabbit_write_conf /etc/nova/nova.conf oslo_messaging_rabbit nova
 	manage_nova_api_field
 	manage_nova_my_ip_field
 	manage_keystone_auth_fields

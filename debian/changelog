@@ -1,11 +1,15 @@
 nova (2:13.0.0~b2-2) UNRELEASED; urgency=medium
 
+  [ Ivan Udovichenko ]
   * d/rules: Binary for nova-objectstore service is not generated anymore.
+
+  [ Thomas Goirand ]
   * Do not use -S flag of dpkg-parsechangelog: incompatible with Trusty.
   * Add build-depends-indep in Git to avoid crash during sphinx doc build.
   * Bump EPOCH to align with Ubuntu.
+  * Stop using hand-crafted config file, and use the generated one.
 
- -- Ivan Udovichenko <iudovichenko@mirantis.com>  Mon, 25 Jan 2016 10:14:18 +0200
+ -- Thomas Goirand <zigo@debian.org>  Fri, 29 Jan 2016 06:08:52 +0000
 
 nova (1:13.0.0~b2-1) experimental; urgency=medium
 

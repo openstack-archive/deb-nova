@@ -22,11 +22,9 @@ override_dh_auto_clean:
 	rm -f debian/*.init debian/*.service debian/*.upstart
 	rm -rf build etc/nova/nova.conf.sample
 	rm -rf .testrepository subunit.log instances keys
+	rm -rf debian/bla
 
 override_dh_auto_build:
-	dh_auto_build
-
-	oslo-config-generator --config-file=etc/nova/nova-config-generator.conf
 
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.config
 	/usr/share/openstack-pkg-tools/pkgos_insert_include pkgos_func nova-common.postinst
@@ -47,16 +45,70 @@ ifeq (,$(findstring nodocs, $(DEB_BUILD_OPTIONS)))
 	dh_installman -O--buildsystem=python_distutils
 endif
 
+override_dh_auto_install:
+	echo "Please do nothing"
 
 override_dh_install:
 	python setup.py install -f --install-layout=deb --root=debian/tmp
+
+	mkdir -p $(CURDIR)/debian/nova-common/usr/share/nova-common
+	PYTHONPATH=$(CURDIR)/debian/tmp/usr/lib/python2.7/dist-packages oslo-config-generator \
+		--output-file=$(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf \
+		--wrap-width 140 \
+		--namespace nova \
+		--namespace nova.conf \
+		--namespace nova.api \
+		--namespace nova.cells \
+		--namespace nova.compute \
+		--namespace nova.network \
+		--namespace nova.network.neutronv2 \
+		--namespace nova.virt \
+		--namespace nova.openstack.common.memorycache \
+		--namespace oslo.log \
+		--namespace oslo.messaging \
+		--namespace oslo.policy \
+		--namespace oslo.service.periodic_task \
+		--namespace oslo.service.service \
+		--namespace oslo.service.sslutils \
+		--namespace oslo.db \
+		--namespace oslo.middleware \
+		--namespace oslo.concurrency \
+		--namespace keystonemiddleware.auth_token
+	# Otherwise, this is set to the build dir
+	pkgos-fix-config-default $(CURDIR)debian/nova-common/usr/share/nova-common/nova.conf DEFAULT pybasedir /usr/lib/python2.7/dist-packages
+
+	# Let's use Neutron by default, and not stupid nova-network
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT security_group_api neutron
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT network_api_class nova.network.neutronv2.api.API
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT linuxnet_interface_driver nova.network.linux_net.LinuxOVSInterfaceDriver
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT firewall_driver nova.virt.firewall.NoopFirewallDriver
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT default_floating_pool ext-nat
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron auth_plugin password
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_domain_id default
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron user_domain_id default
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron username admin
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_name admin
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron auth_url http://127.0.0.1:5000/v2.0
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron service_metadata_proxy true
+
+	# Convenient default for the SQLite default db
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf database connection sqlite:////var/lib/nova/novadb
+
+	# Let's use SPICE byd default
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf VNC enabled false
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf VNC vncserver_listen 0.0.0.0
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice vncserver_listen 0.0.0.0
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice server_listen 0.0.0.0
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice server_proxyclient_address \$$my_ip
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice enabled true
+
+	# Works by default
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf keystone_authtoken auth_protocol http
 
 	rm debian/tmp/usr/bin/nova-api-os-compute
 	rm debian/tmp/usr/bin/nova-api-metadata
 
 	dh_install --fail-missing -Xbin/nova-all
-	mkdir -p $(CURDIR)/debian/nova-common/usr/share/nova-common
-	cp etc/nova/nova.conf.sample $(CURDIR)/debian/nova-common/usr/share/nova-common
 
 	install -D -m 0440 $(CURDIR)/debian/nova-common.sudoers $(CURDIR)/debian/nova-common/etc/sudoers.d/nova-common
 	install -D -m 0644 $(CURDIR)/etc/nova/logging_sample.conf $(CURDIR)/debian/nova-common/usr/share/nova-common/logging.conf
