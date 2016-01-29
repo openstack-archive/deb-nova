@@ -49,7 +49,7 @@ _Description: Set up a database for Nova?
 
 Template: nova/active-api
 Type: multiselect
-Choices: ec2, osapi_compute, metadata
+Choices: osapi_compute, metadata
 _Description: API to activate:
  Openstack Nova supports different API services, each of them binding on a
  different port. Select which one nova-api should support.
