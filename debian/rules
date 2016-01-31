@@ -89,13 +89,14 @@ override_dh_install:
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT linuxnet_interface_driver nova.network.linux_net.LinuxOVSInterfaceDriver
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT firewall_driver nova.virt.firewall.NoopFirewallDriver
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT default_floating_pool ext-nat
+
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron auth_plugin password
-	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_domain_id default
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron user_domain_id default
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron username admin
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_name admin
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_domain_name default
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron tenant_name admin
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron auth_url http://127.0.0.1:35357/v2.0
-	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron domain_id default
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron service_metadata_proxy true
 
 	# Convenient default for the SQLite default db
