@@ -55,12 +55,21 @@ read_neutron_config () {
 	# The keystone auth for talking to Neutron
 	db_get nova/neutron_url
 	pkgos_inifile set ${NOVA_CONF} neutron url ${RET}
+
 	db_get nova/neutron_admin_tenant_name
-	pkgos_inifile set ${NOVA_CONF} netron admin_tenant_name ${RET}
+	NEUTRON_IN_NOVA_TENANT=${RET}
+	pkgos_inifile set ${NOVA_CONF} netron project_name ${RET}
+	pkgos_inifile set ${NOVA_CONF} netron tenant_name ${RET}
+
 	db_get nova/neutron_admin_username
-	pkgos_inifile set ${NOVA_CONF} neutron admin_username ${RET}
+	pkgos_inifile set ${NOVA_CONF} neutron username ${RET}
+
 	db_get nova/neutron_admin_password
-	pkgos_inifile set ${NOVA_CONF} neutron admin_password ${RET}
+	pkgos_inifile set ${NOVA_CONF} neutron password ${RET}
+
+	db_get nova/auth-host
+	pkgos_inifile set ${NOVA_CONF} neutron auth_url http://${RET}:5000/v3
+
 	# The metadata_proxy_shared_secret
 	db_get nova/metadata_secret
 	pkgos_inifile set ${NOVA_CONF} neutron metadata_proxy_shared_secret ${RET}
