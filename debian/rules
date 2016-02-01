@@ -96,7 +96,7 @@ override_dh_install:
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_name admin
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron tenant_name admin
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron username admin
-	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron user_domain_name admin
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron user_domain_name default
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron project_domain_name default
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf neutron auth_url http://127.0.0.1:35357/v2.0
 
