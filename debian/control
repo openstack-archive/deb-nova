@@ -99,8 +99,8 @@ Build-Depends-Indep: alembic (>= 0.8.0),
                      websockify (>= 0.6.1),
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.6
-Vcs-Browser: http://anonscm.debian.org/gitweb/?p=openstack/nova.git;a=summary
-Vcs-Git: git://anonscm.debian.org/openstack/nova.git
+Vcs-Browser: https://anonscm.debian.org/cgit/openstack/nova.git/
+Vcs-Git: https://anonscm.debian.org/git/openstack/nova.git
 Homepage: http://www.openstack.org/software/openstack-compute/
 
 Package: python-nova

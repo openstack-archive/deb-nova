@@ -1,3 +1,9 @@
+nova (2:13.0.0~b2-3) UNRELEASED; urgency=medium
+
+  * Fixed VCS URLs (https).
+
+ -- Ondřej Nový <novy@ondrej.org>  Sun, 28 Feb 2016 15:30:48 +0100
+
 nova (2:13.0.0~b2-2) experimental; urgency=medium
 
   [ Ivan Udovichenko ]
