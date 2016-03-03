@@ -13,6 +13,7 @@
 #    under the License.
 
 import os
+
 from six.moves import StringIO
 
 from nova.virt.libvirt import utils as libvirt_utils
@@ -22,6 +23,8 @@ files = {'console.log': True}
 disk_sizes = {}
 disk_backing_files = {}
 disk_type = "qcow2"
+
+RESIZE_SNAPSHOT_NAME = libvirt_utils.RESIZE_SNAPSHOT_NAME
 
 
 def create_image(disk_format, path, size):
@@ -71,6 +74,10 @@ def write_to_file(path, contents, umask=None):
 
 
 def chown(path, owner):
+    pass
+
+
+def update_mtime(path):
     pass
 
 

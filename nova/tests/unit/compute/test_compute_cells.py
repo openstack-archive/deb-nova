@@ -20,7 +20,6 @@ import inspect
 
 import mock
 from mox3 import mox
-from oslo_config import cfg
 from oslo_utils import timeutils
 
 from nova import block_device
@@ -30,6 +29,7 @@ from nova.compute import cells_api as compute_cells_api
 from nova.compute import flavors
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+import nova.conf
 from nova import context
 from nova import db
 from nova import exception
@@ -43,7 +43,7 @@ from nova.tests import uuidsentinel as uuids
 
 
 ORIG_COMPUTE_API = None
-cfg.CONF.import_opt('enable', 'nova.cells.opts', group='cells')
+CONF = nova.conf.CONF
 
 
 def stub_call_to_cells(context, instance, method, *args, **kwargs):
@@ -131,7 +131,16 @@ class CellsComputeAPITestCase(test_compute.ComputeAPITestCase):
         self.skipTest("Test is incompatible with cells.")
 
     def test_evacuate(self):
-        self.skipTest("Test is incompatible with cells.")
+        @mock.patch.object(compute_api.API, 'evacuate')
+        def _test(mock_evacuate):
+            instance = objects.Instance(uuid=uuids.evacuate_instance,
+                                        cell_name='fake_cell_name')
+            dest_host = 'fake_cell_name@fakenode2'
+            self.compute_api.evacuate(self.context, instance, host=dest_host)
+            mock_evacuate.assert_called_once_with(
+                self.context, instance, 'fakenode2')
+
+        _test()
 
     def test_error_evacuate(self):
         self.skipTest("Test is incompatible with cells.")
@@ -370,9 +379,10 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
         self.compute_api.resize(self.context, instance)
         self.assertTrue(self.cells_rpcapi.resize_instance.called)
 
+    @mock.patch.object(objects.RequestSpec, 'get_by_instance_uuid')
     @mock.patch.object(compute_api.API, '_record_action_start')
     @mock.patch.object(objects.Instance, 'save')
-    def test_live_migrate_instance(self, instance_save, _record):
+    def test_live_migrate_instance(self, instance_save, _record, _get_spec):
         orig_system_metadata = {}
         instance = fake_instance.fake_instance_obj(self.context,
                 vm_state=vm_states.ACTIVE, cell_name='fake-cell',

@@ -271,17 +271,7 @@ class ActionDispatcher(object):
         raise NotImplementedError()
 
 
-class TextDeserializer(ActionDispatcher):
-    """Default request body deserialization."""
-
-    def deserialize(self, datastring, action='default'):
-        return self.dispatch(datastring, action=action)
-
-    def default(self, datastring):
-        return {}
-
-
-class JSONDeserializer(TextDeserializer):
+class JSONDeserializer(ActionDispatcher):
 
     def _from_json(self, datastring):
         try:
@@ -290,57 +280,21 @@ class JSONDeserializer(TextDeserializer):
             msg = _("cannot understand JSON")
             raise exception.MalformedRequestBody(reason=msg)
 
+    def deserialize(self, datastring, action='default'):
+        return self.dispatch(datastring, action=action)
+
     def default(self, datastring):
         return {'body': self._from_json(datastring)}
 
 
-class DictSerializer(ActionDispatcher):
-    """Default request body serialization."""
+class JSONDictSerializer(ActionDispatcher):
+    """Default JSON request body serialization."""
 
     def serialize(self, data, action='default'):
         return self.dispatch(data, action=action)
 
     def default(self, data):
-        return ""
-
-
-class JSONDictSerializer(DictSerializer):
-    """Default JSON request body serialization."""
-
-    def default(self, data):
         return six.text_type(jsonutils.dumps(data))
-
-
-def serializers(**serializers):
-    """Attaches serializers to a method.
-
-    This decorator associates a dictionary of serializers with a
-    method.  Note that the function attributes are directly
-    manipulated; the method is not wrapped.
-    """
-
-    def decorator(func):
-        if not hasattr(func, 'wsgi_serializers'):
-            func.wsgi_serializers = {}
-        func.wsgi_serializers.update(serializers)
-        return func
-    return decorator
-
-
-def deserializers(**deserializers):
-    """Attaches deserializers to a method.
-
-    This decorator associates a dictionary of deserializers with a
-    method.  Note that the function attributes are directly
-    manipulated; the method is not wrapped.
-    """
-
-    def decorator(func):
-        if not hasattr(func, 'wsgi_deserializers'):
-            func.wsgi_deserializers = {}
-        func.wsgi_deserializers.update(deserializers)
-        return func
-    return decorator
 
 
 def response(code):
@@ -358,29 +312,21 @@ def response(code):
 
 
 class ResponseObject(object):
-    """Bundles a response object with appropriate serializers.
+    """Bundles a response object
 
-    Object that app methods may return in order to bind alternate
-    serializers with a response object to be serialized.  Its use is
-    optional.
+    Object that app methods may return in order to allow its response
+    to be modified by extensions in the code. Its use is optional (and
+    should only be used if you really know what you are doing).
     """
 
-    def __init__(self, obj, code=None, headers=None, **serializers):
-        """Binds serializers with an object.
-
-        Takes keyword arguments akin to the @serializer() decorator
-        for specifying serializers.  Serializers specified will be
-        given preference over default serializers or method-specific
-        serializers on return.
-        """
+    def __init__(self, obj, code=None, headers=None):
+        """Builds a response object."""
 
         self.obj = obj
-        self.serializers = serializers
         self._default_code = 200
         self._code = code
         self._headers = headers or {}
-        self.serializer = None
-        self.media_type = None
+        self.serializer = JSONDictSerializer()
 
     def __getitem__(self, key):
         """Retrieves a header with the given name."""
@@ -397,76 +343,14 @@ class ResponseObject(object):
 
         del self._headers[key.lower()]
 
-    def _bind_method_serializers(self, meth_serializers):
-        """Binds method serializers with the response object.
-
-        Binds the method serializers with the response object.
-        Serializers specified to the constructor will take precedence
-        over serializers specified to this method.
-
-        :param meth_serializers: A dictionary with keys mapping to
-                                 response types and values containing
-                                 serializer objects.
-        """
-
-        # We can't use update because that would be the wrong
-        # precedence
-        for mtype, serializer in meth_serializers.items():
-            self.serializers.setdefault(mtype, serializer)
-
-    def get_serializer(self, content_type, default_serializers=None):
-        """Returns the serializer for the wrapped object.
-
-        Returns the serializer for the wrapped object subject to the
-        indicated content type.  If no serializer matching the content
-        type is attached, an appropriate serializer drawn from the
-        default serializers will be used.  If no appropriate
-        serializer is available, raises InvalidContentType.
-        """
-
-        default_serializers = default_serializers or {}
-
-        try:
-            mtype = get_media_map().get(content_type, content_type)
-            if mtype in self.serializers:
-                return mtype, self.serializers[mtype]
-            else:
-                return mtype, default_serializers[mtype]
-        except (KeyError, TypeError):
-            raise exception.InvalidContentType(content_type=content_type)
-
-    def preserialize(self, content_type, default_serializers=None):
-        """Prepares the serializer that will be used to serialize.
-
-        Determines the serializer that will be used and prepares an
-        instance of it for later call.  This allows the serializer to
-        be accessed by extensions for, e.g., template extension.
-        """
-
-        mtype, serializer = self.get_serializer(content_type,
-                                                default_serializers)
-        self.media_type = mtype
-        self.serializer = serializer()
-
-    def attach(self, **kwargs):
-        """Attach slave templates to serializers."""
-
-        if self.media_type in kwargs:
-            self.serializer.attach(kwargs[self.media_type])
-
-    def serialize(self, request, content_type, default_serializers=None):
+    def serialize(self, request, content_type):
         """Serializes the wrapped object.
 
         Utility method for serializing the wrapped object.  Returns a
         webob.Response object.
         """
 
-        if self.serializer:
-            serializer = self.serializer
-        else:
-            _mtype, _serializer = self.get_serializer(content_type,
-                                                      default_serializers)
-            serializer = _serializer()
+        serializer = self.serializer
 
         body = None
         if self.obj is not None:
@@ -497,8 +381,12 @@ class ResponseObject(object):
         return self._headers.copy()
 
 
-def action_peek_json(body):
-    """Determine action to invoke."""
+def action_peek(body):
+    """Determine action to invoke.
+
+    This looks inside the json body and fetches out the action method
+    name.
+    """
 
     try:
         decoded = jsonutils.loads(body)
@@ -511,7 +399,7 @@ def action_peek_json(body):
         msg = _("too many body keys")
         raise exception.MalformedRequestBody(reason=msg)
 
-    # Return the action and the decoded body...
+    # Return the action name
     return list(decoded.keys())[0]
 
 
@@ -572,13 +460,9 @@ class Resource(wsgi.Application):
     """
     support_api_request_version = False
 
-    def __init__(self, controller, action_peek=None, inherits=None,
-                 **deserializers):
+    def __init__(self, controller, inherits=None):
         """:param controller: object that implement methods created by routes
                               lib
-           :param action_peek: dictionary of routines for peeking into an
-                               action request body to determine the
-                               desired action
            :param inherits: another resource object that this resource should
                             inherit extensions from. Any action extensions that
                             are applied to the parent resource will also apply
@@ -587,14 +471,7 @@ class Resource(wsgi.Application):
 
         self.controller = controller
 
-        default_deserializers = dict(json=JSONDeserializer)
-        default_deserializers.update(deserializers)
-
-        self.default_deserializers = default_deserializers
         self.default_serializers = dict(json=JSONDictSerializer)
-
-        self.action_peek = dict(json=action_peek_json)
-        self.action_peek.update(action_peek or {})
 
         # Copy over the actions dictionary
         self.wsgi_actions = {}
@@ -658,31 +535,36 @@ class Resource(wsgi.Application):
         return args
 
     def get_body(self, request):
-        try:
-            content_type = request.get_content_type()
-        except exception.InvalidContentType:
-            LOG.debug("Unrecognized Content-Type provided in request")
-            return None, b''
+        content_type = request.get_content_type()
 
         return content_type, request.body
 
-    def deserialize(self, meth, content_type, body):
-        meth_deserializers = getattr(meth, 'wsgi_deserializers', {})
-        try:
-            mtype = get_media_map().get(content_type, content_type)
-            if mtype in meth_deserializers:
-                deserializer = meth_deserializers[mtype]
-            else:
-                deserializer = self.default_deserializers[mtype]
-        except (KeyError, TypeError):
-            raise exception.InvalidContentType(content_type=content_type)
+    def deserialize(self, body):
+        return JSONDeserializer().deserialize(body)
 
-        if (hasattr(deserializer, 'want_controller')
-                and deserializer.want_controller):
-            return deserializer(self.controller).deserialize(body)
-        else:
-            return deserializer().deserialize(body)
-
+    # NOTE(sdague): I didn't start the fire, however here is what all
+    # of this is about.
+    #
+    # In the legacy v2 code stack, extensions could extend actions
+    # with a generator that let 1 method be split into a top and
+    # bottom half. The top half gets executed before the main
+    # processing of the request (so effectively gets to modify the
+    # request before it gets to the main method).
+    #
+    # Returning a response triggers a shortcut to fail out. The
+    # response will nearly always be a failure condition, as it ends
+    # up skipping further processing one level up from here.
+    #
+    # This then passes on the list of extensions, in reverse order,
+    # on. post_process will run through all those, again with same
+    # basic logic.
+    #
+    # In tree this is only used in the legacy v2 stack, and only in
+    # the DiskConfig and SchedulerHints from what I can see.
+    #
+    # pre_process_extensions can be removed when the legacyv2 code
+    # goes away. post_process_extensions can be massively simplified
+    # at that point.
     def pre_process_extensions(self, extensions, request, action_args):
         # List of callables for post-processing extensions
         post = []
@@ -710,7 +592,8 @@ class Resource(wsgi.Application):
                 # Regular functions only perform post-processing
                 post.append(ext)
 
-        # Run post-processing in the reverse order
+        # None is response, it means we keep going. We reverse the
+        # extension list for post-processing.
         return None, reversed(post)
 
     def post_process_extensions(self, extensions, resp_obj, request,
@@ -770,8 +653,15 @@ class Resource(wsgi.Application):
         # content type
         action_args = self.get_action_args(request.environ)
         action = action_args.pop('action', None)
-        content_type, body = self.get_body(request)
-        accept = request.best_match_content_type()
+
+        # NOTE(sdague): we filter out InvalidContentTypes early so we
+        # know everything is good from here on out.
+        try:
+            content_type, body = self.get_body(request)
+            accept = request.best_match_content_type()
+        except exception.InvalidContentType:
+            msg = _("Unsupported Content-Type")
+            return Fault(webob.exc.HTTPBadRequest(explanation=msg))
 
         # NOTE(Vek): Splitting the function up this way allows for
         #            auditing by external tools that wrap the existing
@@ -816,10 +706,7 @@ class Resource(wsgi.Application):
                 if request.content_length == 0:
                     contents = {'body': None}
                 else:
-                    contents = self.deserialize(meth, content_type, body)
-        except exception.InvalidContentType:
-            msg = _("Unsupported Content-Type")
-            return Fault(webob.exc.HTTPBadRequest(explanation=msg))
+                    contents = self.deserialize(body)
         except exception.MalformedRequestBody:
             msg = _("Malformed request body")
             return Fault(webob.exc.HTTPBadRequest(explanation=msg))
@@ -862,19 +749,14 @@ class Resource(wsgi.Application):
             # Run post-processing extensions
             if resp_obj:
                 # Do a preserialize to set up the response object
-                serializers = getattr(meth, 'wsgi_serializers', {})
-                resp_obj._bind_method_serializers(serializers)
                 if hasattr(meth, 'wsgi_code'):
                     resp_obj._default_code = meth.wsgi_code
-                resp_obj.preserialize(accept, self.default_serializers)
-
                 # Process post-processing extensions
                 response = self.post_process_extensions(post, resp_obj,
                                                         request, action_args)
 
             if resp_obj and not response:
-                response = resp_obj.serialize(request, accept,
-                                              self.default_serializers)
+                response = resp_obj.serialize(request, accept)
 
         if hasattr(response, 'headers'):
             for hdr, val in list(response.headers.items()):
@@ -903,7 +785,6 @@ class Resource(wsgi.Application):
 
     def _get_method(self, request, action, content_type, body):
         """Look up the action-specific method and its extensions."""
-
         # Look up the method
         try:
             if not self.controller:
@@ -919,9 +800,7 @@ class Resource(wsgi.Application):
             return meth, self.wsgi_extensions.get(action, [])
 
         if action == 'action':
-            # OK, it's an action; figure out which action...
-            mtype = get_media_map().get(content_type)
-            action_name = self.action_peek[mtype](body)
+            action_name = action_peek(body)
         else:
             action_name = action
 
@@ -1206,14 +1085,9 @@ class Fault(webob.exc.HTTPException):
             self.wrapped_exc.headers['Vary'] = \
               API_VERSION_REQUEST_HEADER
 
-        content_type = req.best_match_content_type()
-        serializer = {
-            'application/json': JSONDictSerializer(),
-        }[content_type]
-
-        self.wrapped_exc.content_type = content_type
+        self.wrapped_exc.content_type = 'application/json'
         self.wrapped_exc.charset = 'UTF-8'
-        self.wrapped_exc.text = serializer.serialize(fault_data)
+        self.wrapped_exc.text = JSONDictSerializer().serialize(fault_data)
 
         return self.wrapped_exc
 
@@ -1250,20 +1124,15 @@ class RateLimitFault(webob.exc.HTTPException):
         to our error format.
         """
         user_locale = request.best_match_language()
-        content_type = request.best_match_content_type()
 
         self.content['overLimit']['message'] = \
             i18n.translate(self.content['overLimit']['message'], user_locale)
         self.content['overLimit']['details'] = \
             i18n.translate(self.content['overLimit']['details'], user_locale)
 
-        serializer = {
-            'application/json': JSONDictSerializer(),
-        }[content_type]
-
-        content = serializer.serialize(self.content)
+        content = JSONDictSerializer().serialize(self.content)
         self.wrapped_exc.charset = 'UTF-8'
-        self.wrapped_exc.content_type = content_type
+        self.wrapped_exc.content_type = "application/json"
         self.wrapped_exc.text = content
 
         return self.wrapped_exc

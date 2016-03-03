@@ -159,7 +159,7 @@ class CPUAllocationPolicy(Enum):
 class CPUThreadAllocationPolicy(Enum):
 
     # prefer (default): The host may or may not have hyperthreads. This
-    #  retains the legacy behavior, whereby siblings are prefered when
+    #  retains the legacy behavior, whereby siblings are preferred when
     #  available. This is the default if no policy is specified.
     PREFER = "prefer"
     # isolate: The host may or many not have hyperthreads. If hyperthreads are
@@ -251,6 +251,27 @@ class HVType(Enum):
         return super(HVType, self).coerce(obj, attr, value)
 
 
+class ImageSignatureHashType(Enum):
+    # Represents the possible hash methods used for image signing
+    def __init__(self):
+        self.hashes = ('SHA-224', 'SHA-256', 'SHA-384', 'SHA-512')
+        super(ImageSignatureHashType, self).__init__(
+            valid_values=self.hashes
+        )
+
+
+class ImageSignatureKeyType(Enum):
+    # Represents the possible keypair types used for image signing
+    def __init__(self):
+        self.key_types = (
+            'DSA', 'ECC_SECT571K1', 'ECC_SECT409K1', 'ECC_SECT571R1',
+            'ECC_SECT409R1', 'ECC_SECP521R1', 'ECC_SECP384R1', 'RSA-PSS'
+        )
+        super(ImageSignatureKeyType, self).__init__(
+            valid_values=self.key_types
+        )
+
+
 class OSType(Enum):
 
     LINUX = "linux"
@@ -267,6 +288,40 @@ class OSType(Enum):
         # so canonicalize to all lower case
         value = value.lower()
         return super(OSType, self).coerce(obj, attr, value)
+
+
+class ResourceClass(Enum):
+    """Classes of resources provided to consumers."""
+
+    VCPU = 'VCPU'
+    MEMORY_MB = 'MEMORY_MB'
+    DISK_GB = 'DISK_GB'
+    PCI_DEVICE = 'PCI_DEVICE'
+    SRIOV_NET_VF = 'SRIOV_NET_VF'
+    NUMA_SOCKET = 'NUMA_SOCKET'
+    NUMA_CORE = 'NUMA_CORE'
+    NUMA_THREAD = 'NUMA_THREAD'
+    NUMA_MEMORY_MB = 'NUMA_MEMORY_MB'
+    IPV4_ADDRESS = 'IPV4_ADDRESS'
+
+    # The ordering here is relevant. If you must add a value, only
+    # append.
+    ALL = (VCPU, MEMORY_MB, DISK_GB, PCI_DEVICE, SRIOV_NET_VF, NUMA_SOCKET,
+           NUMA_CORE, NUMA_THREAD, NUMA_MEMORY_MB, IPV4_ADDRESS)
+
+    def __init__(self):
+        super(ResourceClass, self).__init__(
+            valid_values=ResourceClass.ALL)
+
+    @classmethod
+    def index(cls, value):
+        """Return an index into the Enum given a value."""
+        return cls.ALL.index(value)
+
+    @classmethod
+    def from_index(cls, index):
+        """Return the Enum value at a given index."""
+        return cls.ALL[index]
 
 
 class RNGModel(Enum):
@@ -442,8 +497,11 @@ class PciDeviceStatus(Enum):
     ALLOCATED = "allocated"
     REMOVED = "removed"  # The device has been hot-removed and not yet deleted
     DELETED = "deleted"  # The device is marked not available/deleted.
+    UNCLAIMABLE = "unclaimable"
+    UNAVAILABLE = "unavailable"
 
-    ALL = (AVAILABLE, CLAIMED, ALLOCATED, REMOVED, DELETED)
+    ALL = (AVAILABLE, CLAIMED, ALLOCATED, REMOVED, DELETED, UNAVAILABLE,
+           UNCLAIMABLE)
 
     def __init__(self):
         super(PciDeviceStatus, self).__init__(
@@ -481,6 +539,44 @@ class DiskFormat(Enum):
     def __init__(self):
         super(DiskFormat, self).__init__(
             valid_values=DiskFormat.ALL)
+
+
+class NotificationPriority(Enum):
+    AUDIT = 'audit'
+    CRITICAL = 'critical'
+    DEBUG = 'debug'
+    INFO = 'info'
+    ERROR = 'error'
+    SAMPLE = 'sample'
+    WARN = 'warn'
+
+    ALL = (AUDIT, CRITICAL, DEBUG, INFO, ERROR, SAMPLE, WARN)
+
+    def __init__(self):
+        super(NotificationPriority, self).__init__(
+            valid_values=NotificationPriority.ALL)
+
+
+class NotificationPhase(Enum):
+    START = 'start'
+    END = 'end'
+    ERROR = 'error'
+
+    ALL = (START, END, ERROR)
+
+    def __init__(self):
+        super(NotificationPhase, self).__init__(
+            valid_values=NotificationPhase.ALL)
+
+
+class NotificationAction(Enum):
+    UPDATE = 'update'
+
+    ALL = (UPDATE,)
+
+    def __init__(self):
+        super(NotificationAction, self).__init__(
+            valid_values=NotificationAction.ALL)
 
 
 class IPAddress(FieldType):
@@ -693,8 +789,28 @@ class HVTypeField(BaseEnumField):
     AUTO_TYPE = HVType()
 
 
+class ImageSignatureHashTypeField(BaseEnumField):
+    AUTO_TYPE = ImageSignatureHashType()
+
+
+class ImageSignatureKeyTypeField(BaseEnumField):
+    AUTO_TYPE = ImageSignatureKeyType()
+
+
 class OSTypeField(BaseEnumField):
     AUTO_TYPE = OSType()
+
+
+class ResourceClassField(BaseEnumField):
+    AUTO_TYPE = ResourceClass()
+
+    def index(self, value):
+        """Return an index into the Enum given a value."""
+        return self._type.index(value)
+
+    def from_index(self, index):
+        """Return the Enum value at a given index."""
+        return self._type.from_index(index)
 
 
 class RNGModelField(BaseEnumField):
@@ -735,6 +851,18 @@ class PciDeviceTypeField(BaseEnumField):
 
 class DiskFormatField(BaseEnumField):
     AUTO_TYPE = DiskFormat()
+
+
+class NotificationPriorityField(BaseEnumField):
+    AUTO_TYPE = NotificationPriority()
+
+
+class NotificationPhaseField(BaseEnumField):
+    AUTO_TYPE = NotificationPhase()
+
+
+class NotificationActionField(BaseEnumField):
+    AUTO_TYPE = NotificationAction()
 
 
 class IPAddressField(AutoTypedField):

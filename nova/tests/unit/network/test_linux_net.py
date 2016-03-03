@@ -394,9 +394,10 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         def get_instance(_context, instance_id):
             return instances[instance_id]
 
-        self.stubs.Set(db, 'virtual_interface_get_by_instance', get_vifs)
-        self.stubs.Set(db, 'instance_get', get_instance)
-        self.stubs.Set(db, 'network_get_associated_fixed_ips', get_associated)
+        self.stub_out('nova.db.virtual_interface_get_by_instance', get_vifs)
+        self.stub_out('nova.db.instance_get', get_instance)
+        self.stub_out('nova.db.network_get_associated_fixed_ips',
+                      get_associated)
 
     def _test_add_snat_rule(self, expected, is_external):
 
@@ -575,7 +576,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             data = get_associated(self.context, 0, address=lease[2])[0]
             self.assertTrue(data['allocated'])
             self.assertTrue(data['leased'])
-            self.assertTrue(lease[0] > seconds_since_epoch)
+            self.assertTrue(int(lease[0]) > seconds_since_epoch)
             self.assertEqual(data['vif_address'], lease[1])
             self.assertEqual(data['address'], lease[2])
             self.assertEqual(data['instance_hostname'], lease[3])
@@ -592,7 +593,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
             lease = lease.split(' ')
             data = get_associated(self.context, 1, address=lease[2])[0]
             self.assertTrue(data['leased'])
-            self.assertTrue(lease[0] > seconds_since_epoch)
+            self.assertTrue(int(lease[0]) > seconds_since_epoch)
             self.assertEqual(data['vif_address'], lease[1])
             self.assertEqual(data['address'], lease[2])
             self.assertEqual(data['instance_hostname'], lease[3])
@@ -748,7 +749,7 @@ class LinuxNetworkTestCase(test.NoDBTestCase):
         self.stubs.Set(linux_net, '_add_dhcp_mangle_rule',
                        fake_add_dhcp_mangle_rule)
 
-        self.stubs.Set(os, 'chmod', lambda *a, **kw: None)
+        self.stub_out('os.chmod', lambda *a, **kw: None)
         self.stubs.Set(linux_net, 'write_to_file', lambda *a, **kw: None)
         self.stubs.Set(linux_net, '_dnsmasq_pid_for', lambda *a, **kw: None)
         dev = 'br100'

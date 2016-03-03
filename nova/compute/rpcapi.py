@@ -25,6 +25,7 @@ from nova import exception
 from nova.i18n import _, _LI, _LE
 from nova import objects
 from nova.objects import base as objects_base
+from nova.objects import migrate_data as migrate_data_obj
 from nova.objects import service as service_obj
 from nova import rpc
 
@@ -319,6 +320,14 @@ class ComputeAPI(object):
         * ...  - Remove refresh_security_group_members()
         * ...  - Remove refresh_security_group_rules()
         * 4.6  - Add trigger_crash_dump()
+        * 4.7  - Add attachment_id argument to detach_volume()
+        * 4.8  - Send migrate_data in object format for live_migration,
+                 rollback_live_migration_at_destination, and
+                 pre_live_migration.
+        * ...  - Remove refresh_provider_fw_rules()
+        * 4.9  - Add live_migration_force_complete()
+        * 4.10  - Add live_migration_abort()
+        * 4.11 - Allow block_migration and disk_over_commit be None
     '''
 
     VERSION_ALIASES = {
@@ -427,20 +436,50 @@ class ComputeAPI(object):
 
     def check_can_live_migrate_destination(self, ctxt, instance, destination,
                                            block_migration, disk_over_commit):
-        version = '4.0'
+        version = '4.11'
+        if not self.client.can_send_version(version):
+            # NOTE(eliqiao): This is a new feature that is only available
+            # once all compute nodes support at least version 4.11.
+            # This means the new REST API that supports this needs to handle
+            # this exception correctly. This can all be removed when we bump
+            # the major version of this RPC API.
+            if block_migration is None or disk_over_commit is None:
+                raise exception.LiveMigrationWithOldNovaNotSupported()
+            else:
+                version = '4.0'
+
         cctxt = self.client.prepare(server=destination, version=version)
-        return cctxt.call(ctxt, 'check_can_live_migrate_destination',
-                          instance=instance,
-                          block_migration=block_migration,
-                          disk_over_commit=disk_over_commit)
+        result = cctxt.call(ctxt, 'check_can_live_migrate_destination',
+                            instance=instance,
+                            block_migration=block_migration,
+                            disk_over_commit=disk_over_commit)
+        if isinstance(result, migrate_data_obj.LiveMigrateData):
+            return result
+        elif result:
+            return migrate_data_obj.LiveMigrateData.detect_implementation(
+                result)
+        else:
+            return result
 
     def check_can_live_migrate_source(self, ctxt, instance, dest_check_data):
-        version = '4.0'
+        dest_check_data_obj = dest_check_data
+        version = '4.8'
+        if not self.client.can_send_version(version):
+            version = '4.0'
+            if dest_check_data:
+                dest_check_data = dest_check_data.to_legacy_dict()
         source = _compute_host(None, instance)
         cctxt = self.client.prepare(server=source, version=version)
-        return cctxt.call(ctxt, 'check_can_live_migrate_source',
-                          instance=instance,
-                          dest_check_data=dest_check_data)
+        result = cctxt.call(ctxt, 'check_can_live_migrate_source',
+                            instance=instance,
+                            dest_check_data=dest_check_data)
+        if isinstance(result, migrate_data_obj.LiveMigrateData):
+            return result
+        elif dest_check_data_obj and result:
+            dest_check_data_obj.from_legacy_dict(result)
+            return dest_check_data_obj
+        else:
+            return result
 
     def check_instance_shared_storage(self, ctxt, instance, data, host=None):
         version = '4.0'
@@ -467,12 +506,16 @@ class ComputeAPI(object):
         cctxt.cast(ctxt, 'detach_interface',
                    instance=instance, port_id=port_id)
 
-    def detach_volume(self, ctxt, instance, volume_id):
-        version = '4.0'
+    def detach_volume(self, ctxt, instance, volume_id, attachment_id=None):
+        extra = {'attachment_id': attachment_id}
+        version = '4.7'
+        if not self.client.can_send_version(version):
+            version = '4.0'
+            extra.pop('attachment_id')
         cctxt = self.client.prepare(server=_compute_host(None, instance),
                 version=version)
         cctxt.cast(ctxt, 'detach_volume',
-                   instance=instance, volume_id=volume_id)
+                   instance=instance, volume_id=volume_id, **extra)
 
     def finish_resize(self, ctxt, instance, migration, image, disk_info,
             host, reservations=None):
@@ -594,13 +637,32 @@ class ComputeAPI(object):
     def live_migration(self, ctxt, instance, dest, block_migration, host,
                        migration, migrate_data=None):
         args = {'migration': migration}
-        version = '4.2'
+        version = '4.8'
+        if not self.client.can_send_version(version):
+            version = '4.2'
+            if migrate_data:
+                migrate_data = migrate_data.to_legacy_dict(
+                    pre_migration_result=True)
         if not self.client.can_send_version(version):
             version = '4.0'
         cctxt = self.client.prepare(server=host, version=version)
         cctxt.cast(ctxt, 'live_migration', instance=instance,
                    dest=dest, block_migration=block_migration,
                    migrate_data=migrate_data, **args)
+
+    def live_migration_force_complete(self, ctxt, instance, migration_id):
+        version = '4.9'
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        cctxt.cast(ctxt, 'live_migration_force_complete', instance=instance,
+                   migration_id=migration_id)
+
+    def live_migration_abort(self, ctxt, instance, migration_id):
+        version = '4.10'
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        cctxt.cast(ctxt, 'live_migration_abort', instance=instance,
+                migration_id=migration_id)
 
     def pause_instance(self, ctxt, instance):
         version = '4.0'
@@ -617,12 +679,24 @@ class ComputeAPI(object):
 
     def pre_live_migration(self, ctxt, instance, block_migration, disk,
             host, migrate_data=None):
-        version = '4.0'
+        migrate_data_orig = migrate_data
+        version = '4.8'
+        if not self.client.can_send_version(version):
+            version = '4.0'
+            if migrate_data:
+                migrate_data = migrate_data.to_legacy_dict()
         cctxt = self.client.prepare(server=host, version=version)
-        return cctxt.call(ctxt, 'pre_live_migration',
-                          instance=instance,
-                          block_migration=block_migration,
-                          disk=disk, migrate_data=migrate_data)
+        result = cctxt.call(ctxt, 'pre_live_migration',
+                            instance=instance,
+                            block_migration=block_migration,
+                            disk=disk, migrate_data=migrate_data)
+        if isinstance(result, migrate_data_obj.LiveMigrateData):
+            return result
+        elif migrate_data_orig and result:
+            migrate_data_orig.from_legacy_dict(result)
+            return migrate_data_orig
+        else:
+            return result
 
     def prep_resize(self, ctxt, image, instance, instance_type, host,
                     reservations=None, request_spec=None,
@@ -682,11 +756,6 @@ class ComputeAPI(object):
                    recreate=recreate, on_shared_storage=on_shared_storage,
                    **extra)
 
-    def refresh_provider_fw_rules(self, ctxt, host):
-        version = '4.0'
-        cctxt = self.client.prepare(server=host, version=version)
-        cctxt.cast(ctxt, 'refresh_provider_fw_rules')
-
     def remove_aggregate_host(self, ctxt, aggregate, host_param, host,
                               slave_info=None):
         '''Remove aggregate host.
@@ -710,7 +779,7 @@ class ComputeAPI(object):
         cctxt.cast(ctxt, 'remove_fixed_ip_from_instance',
                    instance=instance, address=address)
 
-    def remove_volume_connection(self, ctxt, instance, volume_id, host):
+    def remove_volume_connection(self, ctxt, volume_id, instance, host):
         version = '4.0'
         cctxt = self.client.prepare(server=host, version=version)
         return cctxt.call(ctxt, 'remove_volume_connection',
@@ -768,7 +837,11 @@ class ComputeAPI(object):
     def rollback_live_migration_at_destination(self, ctxt, instance, host,
                                                destroy_disks=True,
                                                migrate_data=None):
-        version = '4.0'
+        version = '4.8'
+        if not self.client.can_send_version(version):
+            version = '4.0'
+            if migrate_data:
+                migrate_data = migrate_data.to_legacy_dict()
         extra = {'destroy_disks': destroy_disks,
                  'migrate_data': migrate_data,
         }
@@ -810,11 +883,7 @@ class ComputeAPI(object):
 
         cctxt = self.client.prepare(server=_compute_host(None, instance),
                 version=version)
-        volume_bdm = cctxt.call(ctxt, 'reserve_block_device_name', **kw)
-        if not isinstance(volume_bdm, objects.BlockDeviceMapping):
-            volume_bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
-                ctxt, volume_id, instance.uuid)
-        return volume_bdm
+        return cctxt.call(ctxt, 'reserve_block_device_name', **kw)
 
     def backup_instance(self, ctxt, instance, image_id, backup_type,
                         rotation):
@@ -990,7 +1059,7 @@ class ComputeAPI(object):
         version = '4.6'
 
         if not self.client.can_send_version(version):
-            raise exception.NMINotSupported()
+            raise exception.TriggerCrashDumpNotSupported()
 
         cctxt = self.client.prepare(server=_compute_host(None, instance),
                 version=version)

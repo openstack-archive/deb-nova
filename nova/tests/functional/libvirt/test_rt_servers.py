@@ -16,7 +16,6 @@
 import mock
 
 import fixtures
-from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.tests.functional.api import client
@@ -26,7 +25,6 @@ from nova.tests.unit.virt.libvirt import fake_libvirt_utils
 from nova.tests.unit.virt.libvirt import fakelibvirt
 
 
-CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
@@ -85,6 +83,16 @@ class RealTimeServersTest(ServersTestBase):
             client.OpenStackApiException,
             self.api.post_server, {'server': server})
 
+    def test_no_realtime_mask(self):
+        flavor = self._create_flavor(extra_spec={
+            'hw:cpu_realtime': 'yes', 'hw:cpu_policy': 'dedicated'})
+        server = self._build_server(flavor)
+
+        # Cannot set realtime policy if not vcpus mask defined
+        self.assertRaises(
+            client.OpenStackApiException,
+            self.api.post_server, {'server': server})
+
     @mock.patch('nova.virt.libvirt.LibvirtDriver._create_image')
     def test_invalid_libvirt_version(self, img_mock):
         host_info = NumaHostInfo(cpu_nodes=2, cpu_sockets=1, cpu_cores=2,
@@ -99,7 +107,8 @@ class RealTimeServersTest(ServersTestBase):
             fake_network.set_stub_network_methods(self)
 
             flavor = self._create_flavor(extra_spec={
-                'hw:cpu_realtime': 'yes', 'hw:cpu_policy': 'dedicated'})
+                'hw:cpu_realtime': 'yes', 'hw:cpu_policy': 'dedicated',
+                'hw:cpu_realtime_mask': '^1'})
             server = self._build_server(flavor)
             created = self.api.post_server({'server': server})
 

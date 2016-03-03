@@ -40,7 +40,7 @@ import eventlet.event
 from eventlet import greenthread
 import eventlet.semaphore
 import eventlet.timeout
-from keystoneclient import exceptions as keystone_exception
+from keystoneauth1 import exceptions as keystone_exception
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
@@ -266,9 +266,7 @@ CONF.register_opts(running_deleted_opts)
 CONF.register_opts(instance_cleaning_opts)
 CONF.import_opt('console_topic', 'nova.console.rpcapi')
 CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('enabled', 'nova.vnc', group='vnc')
 CONF.import_opt('enabled', 'nova.spice', group='spice')
-CONF.import_opt('enable', 'nova.cells.opts', group='cells')
 CONF.import_opt('image_cache_manager_interval', 'nova.virt.imagecache')
 CONF.import_opt('enabled', 'nova.rdp', group='rdp')
 CONF.import_opt('html5_proxy_base_url', 'nova.rdp', group='rdp')
@@ -344,8 +342,12 @@ def reverts_task_state(function):
                 # have utils.expects_func_args('instance') decorating this
                 # method.
                 instance = keyed_args['instance']
+                original_task_state = instance.task_state
                 try:
                     self._instance_update(context, instance, task_state=None)
+                    LOG.info(_LI("Successfully reverted task state from %s on "
+                                 "failure for instance."), original_task_state,
+                                                           instance=instance)
                 except exception.InstanceNotFound:
                     # We might delete an instance that failed to build shortly
                     # after it errored out this is an expected case and we
@@ -579,6 +581,9 @@ class InstanceEvents(object):
         return _clear_events()
 
     def cancel_all_events(self):
+        if self._events is None:
+            LOG.debug('Unexpected attempt to cancel events during shutdown.')
+            return
         our_events = self._events
         # NOTE(danms): Block new events
         self._events = None
@@ -601,9 +606,6 @@ class ComputeVirtAPI(virtapi.VirtAPI):
     def __init__(self, compute):
         super(ComputeVirtAPI, self).__init__()
         self._compute = compute
-
-    def provider_fw_rule_get_all(self, context):
-        return self._compute.conductor_api.provider_fw_rule_get_all(context)
 
     def _default_error_callback(self, event_name, instance):
         raise exception.NovaException(_('Instance event failed'))
@@ -674,7 +676,7 @@ class ComputeVirtAPI(virtapi.VirtAPI):
 class ComputeManager(manager.Manager):
     """Manages the running instances from creation to destruction."""
 
-    target = messaging.Target(version='4.6')
+    target = messaging.Target(version='4.11')
 
     # How long to wait in seconds before re-issuing a shutdown
     # signal to an instance during power off.  The overall
@@ -1392,11 +1394,6 @@ class ComputeManager(manager.Manager):
 
         return _sync_refresh()
 
-    @wrap_exception()
-    def refresh_provider_fw_rules(self, context):
-        """This call passes straight through to the virtualization driver."""
-        return self.driver.refresh_provider_fw_rules()
-
     def _await_block_device_map_created(self, context, vol_id):
         # TODO(yamahata): creating volume simultaneously
         #                 reduces creation time?
@@ -1734,10 +1731,20 @@ class ComputeManager(manager.Manager):
                 'swap': swap,
                 'block_device_mapping': mapping})
 
+    def _check_dev_name(self, bdms, instance):
+        bdms_no_device_name = [x for x in bdms if x.device_name is None]
+        for bdm in bdms_no_device_name:
+            device_name = self._get_device_name_for_instance(instance,
+                                                             bdms,
+                                                             bdm)
+            values = {'device_name': device_name}
+            bdm.update(values)
+
     def _prep_block_device(self, context, instance, bdms,
                            do_check_attach=True):
         """Set up the block device for an instance with error logging."""
         try:
+            self._check_dev_name(bdms, instance)
             block_device_info = driver.get_block_device_info(instance, bdms)
             mapping = driver.block_device_info_get_mapping(block_device_info)
             driver_block_device.attach_block_devices(
@@ -2276,9 +2283,8 @@ class ComputeManager(manager.Manager):
                                         trying to teardown networking
         """
         context = context.elevated()
-        LOG.info(_LI('%(action_str)s instance') %
-                 {'action_str': 'Terminating'},
-                  context=context, instance=instance)
+        LOG.info(_LI('Terminating instance'),
+                 context=context, instance=instance)
 
         if notify:
             self._notify_about_instance_usage(context, instance,
@@ -2326,7 +2332,7 @@ class ComputeManager(manager.Manager):
                 self.volume_api.terminate_connection(context,
                                                      bdm.volume_id,
                                                      connector)
-                self.volume_api.detach(context, bdm.volume_id)
+                self.volume_api.detach(context, bdm.volume_id, instance.uuid)
             except exception.DiskNotFound as exc:
                 LOG.debug('Ignoring DiskNotFound: %s', exc,
                           instance=instance)
@@ -2583,20 +2589,20 @@ class ComputeManager(manager.Manager):
         self._notify_about_instance_usage(context, instance, "power_on.end")
 
     @messaging.expected_exceptions(NotImplementedError,
-                                   exception.NMINotSupported,
+                                   exception.TriggerCrashDumpNotSupported,
                                    exception.InstanceNotRunning)
     @wrap_exception()
     @wrap_instance_event
     @wrap_instance_fault
     def trigger_crash_dump(self, context, instance):
-        """Trigger crash dump in an instance by injecting NMI."""
+        """Trigger crash dump in an instance."""
 
         self._notify_about_instance_usage(context, instance,
                                           "trigger_crash_dump.start")
 
         # This method does not change task_state and power_state because the
-        # effect of an NMI depends on user's configuration.
-        self.driver.inject_nmi(instance)
+        # effect of a trigger depends on user's configuration.
+        self.driver.trigger_crash_dump(instance)
 
         self._notify_about_instance_usage(context, instance,
                                           "trigger_crash_dump.end")
@@ -2781,6 +2787,13 @@ class ComputeManager(manager.Manager):
                         'rebuild.error', fault=e)
                 raise exception.BuildAbortException(
                     instance_uuid=instance.uuid, reason=e.format_message())
+            except (exception.InstanceNotFound,
+                    exception.UnexpectedDeletingTaskStateError) as e:
+                LOG.debug('Instance was deleted while rebuilding',
+                          instance=instance)
+                self._set_migration_status(migration, 'failed')
+                self._notify_about_instance_usage(context, instance,
+                        'rebuild.error', fault=e)
             except Exception as e:
                 self._set_migration_status(migration, 'failed')
                 self._notify_about_instance_usage(context, instance,
@@ -4282,6 +4295,9 @@ class ComputeManager(manager.Manager):
         instance.task_state = None
         instance.save(expected_task_state=[task_states.SHELVING,
                                            task_states.SHELVING_OFFLOADING])
+        # NOTE(ndipanov): This frees the resources with the resource_tracker
+        self._update_resource_tracker(context, instance)
+
         self._delete_scheduler_instance_info(context, instance.uuid)
         self._notify_about_instance_usage(context, instance,
                 'shelve_offload.end')
@@ -4737,7 +4753,8 @@ class ComputeManager(manager.Manager):
                               context=context, instance=instance)
                 self.volume_api.roll_detaching(context, volume_id)
 
-    def _detach_volume(self, context, volume_id, instance, destroy_bdm=True):
+    def _detach_volume(self, context, volume_id, instance, destroy_bdm=True,
+                       attachment_id=None):
         """Detach a volume from an instance.
 
         :param context: security context
@@ -4790,14 +4807,16 @@ class ComputeManager(manager.Manager):
         info = dict(volume_id=volume_id)
         self._notify_about_instance_usage(
             context, instance, "volume.detach", extra_usage_info=info)
-        self.volume_api.detach(context.elevated(), volume_id)
+        self.volume_api.detach(context.elevated(), volume_id, instance.uuid,
+                               attachment_id)
 
     @wrap_exception()
     @wrap_instance_fault
-    def detach_volume(self, context, volume_id, instance):
+    def detach_volume(self, context, volume_id, instance, attachment_id=None):
         """Detach a volume from an instance."""
 
-        self._detach_volume(context, volume_id, instance)
+        self._detach_volume(context, volume_id, instance,
+                            attachment_id=attachment_id)
 
     def _init_volume_connection(self, context, new_volume_id,
                                 old_volume_id, connector, instance, bdm):
@@ -5034,7 +5053,9 @@ class ComputeManager(manager.Manager):
         :param context: security context
         :param instance: dict of instance data
         :param block_migration: if true, prepare for block migration
+                                if None, calculate it in driver
         :param disk_over_commit: if true, allow disk over commit
+                                 if None, ignore disk usage checking
         :returns: a dict containing migration info
         """
         return self._do_check_can_live_migrate_destination(ctxt, instance,
@@ -5051,9 +5072,7 @@ class ComputeManager(manager.Manager):
         dest_check_data = self.driver.check_can_live_migrate_destination(ctxt,
             instance, src_compute_info, dst_compute_info,
             block_migration, disk_over_commit)
-        if isinstance(dest_check_data, migrate_data_obj.LiveMigrateData):
-            dest_check_data = dest_check_data.to_legacy_dict()
-        migrate_data = {}
+        LOG.debug('destination check data is %s', dest_check_data)
         try:
             migrate_data = self.compute_rpcapi.\
                                 check_can_live_migrate_source(ctxt, instance,
@@ -5061,8 +5080,6 @@ class ComputeManager(manager.Manager):
         finally:
             self.driver.check_can_live_migrate_destination_cleanup(ctxt,
                     dest_check_data)
-        if 'migrate_data' in dest_check_data:
-            migrate_data.update(dest_check_data['migrate_data'])
         return migrate_data
 
     @wrap_exception()
@@ -5081,14 +5098,21 @@ class ComputeManager(manager.Manager):
         """
         is_volume_backed = self.compute_api.is_volume_backed_instance(ctxt,
                                                                       instance)
-        dest_check_data['is_volume_backed'] = is_volume_backed
+        got_migrate_data_object = isinstance(dest_check_data,
+                                             migrate_data_obj.LiveMigrateData)
+        if not got_migrate_data_object:
+            dest_check_data = \
+                migrate_data_obj.LiveMigrateData.detect_implementation(
+                    dest_check_data)
+        dest_check_data.is_volume_backed = is_volume_backed
         block_device_info = self._get_instance_block_device_info(
                             ctxt, instance, refresh_conn_info=True)
         result = self.driver.check_can_live_migrate_source(ctxt, instance,
                                                            dest_check_data,
                                                            block_device_info)
-        if isinstance(result, migrate_data_obj.LiveMigrateData):
+        if not got_migrate_data_object:
             result = result.to_legacy_dict()
+        LOG.debug('source check data is %s', result)
         return result
 
     @wrap_exception()
@@ -5106,6 +5130,13 @@ class ComputeManager(manager.Manager):
                              storage.
 
         """
+        LOG.debug('pre_live_migration data is %s', migrate_data)
+        got_migrate_data_object = isinstance(migrate_data,
+                                             migrate_data_obj.LiveMigrateData)
+        if not got_migrate_data_object:
+            migrate_data = \
+                migrate_data_obj.LiveMigrateData.detect_implementation(
+                    migrate_data)
         block_device_info = self._get_instance_block_device_info(
                             context, instance, refresh_conn_info=True)
 
@@ -5114,18 +5145,13 @@ class ComputeManager(manager.Manager):
                      context, instance, "live_migration.pre.start",
                      network_info=network_info)
 
-        pre_live_migration_data = self.driver.pre_live_migration(context,
+        migrate_data = self.driver.pre_live_migration(context,
                                        instance,
                                        block_device_info,
                                        network_info,
                                        disk,
                                        migrate_data)
-        if isinstance(pre_live_migration_data,
-                      migrate_data_obj.LiveMigrateData):
-            pre_live_migration_data = pre_live_migration_data.to_legacy_dict(
-                pre_migration_result=True)
-            pre_live_migration_data = pre_live_migration_data[
-                'pre_live_migration_result']
+        LOG.debug('driver pre_live_migration data is %s' % migrate_data)
 
         # NOTE(tr3buchet): setup networks on destination host
         self.network_api.setup_networks_on_host(context, instance,
@@ -5144,22 +5170,12 @@ class ComputeManager(manager.Manager):
                      context, instance, "live_migration.pre.end",
                      network_info=network_info)
 
-        return pre_live_migration_data
-
-    def _get_migrate_data_obj(self):
-        # FIXME(danms): A couple patches from now, we'll be able to
-        # avoid this failure _if_ we get a new-style call with the
-        # object.
-        if CONF.compute_driver.startswith('libvirt'):
-            return objects.LibvirtLiveMigrateData()
-        elif CONF.compute_driver.startswith('xenapi'):
-            return objects.XenapiLiveMigrateData()
-        else:
-            LOG.error(_('Older RPC caller and unsupported virt driver in '
-                        'use. Unable to handle this!'))
-            raise exception.MigrationError(
-                _('Unknown compute driver while providing compatibility '
-                  'with older RPC formats'))
+        if not got_migrate_data_object and migrate_data:
+            migrate_data = migrate_data.to_legacy_dict(
+                pre_migration_result=True)
+            migrate_data = migrate_data['pre_live_migration_result']
+        LOG.debug('pre_live_migration result data is %s', migrate_data)
+        return migrate_data
 
     def _do_live_migration(self, context, dest, instance, block_migration,
                            migration, migrate_data):
@@ -5169,8 +5185,13 @@ class ComputeManager(manager.Manager):
         # reporting
         self._set_migration_status(migration, 'preparing')
 
-        # Create a local copy since we'll be modifying the dictionary
-        migrate_data = dict(migrate_data or {})
+        got_migrate_data_object = isinstance(migrate_data,
+                                             migrate_data_obj.LiveMigrateData)
+        if not got_migrate_data_object:
+            migrate_data = \
+                migrate_data_obj.LiveMigrateData.detect_implementation(
+                    migrate_data)
+
         try:
             if block_migration:
                 block_device_info = self._get_instance_block_device_info(
@@ -5180,12 +5201,9 @@ class ComputeManager(manager.Manager):
             else:
                 disk = None
 
-            pre_migration_data = self.compute_rpcapi.pre_live_migration(
+            migrate_data = self.compute_rpcapi.pre_live_migration(
                 context, instance,
                 block_migration, disk, dest, migrate_data)
-            migrate_data['pre_live_migration_result'] = pre_migration_data
-            migrate_data_obj = self._get_migrate_data_obj()
-            migrate_data_obj.from_legacy_dict(migrate_data)
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.exception(_LE('Pre live migration failed at %s'),
@@ -5196,12 +5214,14 @@ class ComputeManager(manager.Manager):
 
         self._set_migration_status(migration, 'running')
 
-        migrate_data_obj.migration = migration
+        if migrate_data:
+            migrate_data.migration = migration
+        LOG.debug('live_migration data is %s', migrate_data)
         try:
             self.driver.live_migration(context, instance, dest,
                                        self._post_live_migration,
                                        self._rollback_live_migration,
-                                       block_migration, migrate_data_obj)
+                                       block_migration, migrate_data)
         except Exception:
             # Executing live migration
             # live_migration might raises exceptions, but
@@ -5239,6 +5259,53 @@ class ComputeManager(manager.Manager):
                       block_migration, migration,
                       migrate_data)
 
+    @wrap_exception()
+    @wrap_instance_fault
+    def live_migration_force_complete(self, context, instance, migration_id):
+        """Force live migration to complete.
+
+        :param context: Security context
+        :param instance: The instance that is being migrated
+        :param migration_id: ID of ongoing migration
+
+        """
+        migration = objects.Migration.get_by_id(context, migration_id)
+        if migration.status != 'running':
+            raise exception.InvalidMigrationState(migration_id=migration_id,
+                                                  instance_uuid=instance.uuid,
+                                                  state=migration.status,
+                                                  method='force complete')
+
+        self._notify_about_instance_usage(
+            context, instance, 'live.migration.force.complete.start')
+        self.driver.live_migration_force_complete(instance)
+        self._notify_about_instance_usage(
+            context, instance, 'live.migration.force.complete.end')
+
+    @wrap_exception()
+    @wrap_instance_event
+    @wrap_instance_fault
+    def live_migration_abort(self, context, instance, migration_id):
+        """Abort an in-progress live migration.
+
+        :param context: Security context
+        :param instance: The instance that is being migrated
+        :param migration_id: ID of in-progress live migration
+
+        """
+        migration = objects.Migration.get_by_id(context, migration_id)
+        if migration.status != 'running':
+            raise exception.InvalidMigrationState(migration_id=migration_id,
+                    instance_uuid=instance.uuid,
+                    state=migration.status,
+                    method='abort live migration')
+
+        self._notify_about_instance_usage(
+            context, instance, 'live.migration.abort.start')
+        self.driver.live_migration_abort(instance)
+        self._notify_about_instance_usage(
+            context, instance, 'live.migration.abort.end')
+
     def _live_migration_cleanup_flags(self, block_migration, migrate_data):
         """Determine whether disks or instance path need to be cleaned up after
         live migration (at source on success, at destination on rollback)
@@ -5258,7 +5325,7 @@ class ComputeManager(manager.Manager):
         #                 block storage or instance path were shared
         is_shared_block_storage = not block_migration
         is_shared_instance_path = not block_migration
-        if isinstance(migrate_data, objects.LibvirtLiveMigrateData):
+        if isinstance(migrate_data, migrate_data_obj.LibvirtLiveMigrateData):
             is_shared_block_storage = migrate_data.is_shared_block_storage
             is_shared_instance_path = migrate_data.is_shared_instance_path
 
@@ -5431,24 +5498,32 @@ class ComputeManager(manager.Manager):
         block_device_info = self._get_instance_block_device_info(context,
                                                                  instance)
 
-        self.driver.post_live_migration_at_destination(context, instance,
-                                            network_info,
-                                            block_migration, block_device_info)
-        # Restore instance state
-        current_power_state = self._get_power_state(context, instance)
-        node_name = None
-        prev_host = instance.host
         try:
-            compute_node = self._get_compute_info(context, self.host)
-            node_name = compute_node.hypervisor_hostname
-        except exception.ComputeHostNotFound:
-            LOG.exception(_LE('Failed to get compute_info for %s'), self.host)
+            self.driver.post_live_migration_at_destination(
+                context, instance, network_info, block_migration,
+                block_device_info)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                instance.vm_state = vm_states.ERROR
+                LOG.error(_LE('Unexpected error during post live migration at '
+                              'destination host.'), instance=instance)
         finally:
-            instance.host = self.host
-            instance.power_state = current_power_state
-            instance.task_state = None
-            instance.node = node_name
-            instance.save(expected_task_state=task_states.MIGRATING)
+            # Restore instance state and update host
+            current_power_state = self._get_power_state(context, instance)
+            node_name = None
+            prev_host = instance.host
+            try:
+                compute_node = self._get_compute_info(context, self.host)
+                node_name = compute_node.hypervisor_hostname
+            except exception.ComputeHostNotFound:
+                LOG.exception(_LE('Failed to get compute_info for %s'),
+                              self.host)
+            finally:
+                instance.host = self.host
+                instance.power_state = current_power_state
+                instance.task_state = None
+                instance.node = node_name
+                instance.save(expected_task_state=task_states.MIGRATING)
 
         # NOTE(tr3buchet): tear down networks on source host
         self.network_api.setup_networks_on_host(context, instance,
@@ -5462,7 +5537,8 @@ class ComputeManager(manager.Manager):
     @wrap_exception()
     @wrap_instance_fault
     def _rollback_live_migration(self, context, instance,
-                                 dest, block_migration, migrate_data=None):
+                                 dest, block_migration, migrate_data=None,
+                                 migration_status='error'):
         """Recovers Instance/volume state from migrating -> running.
 
         :param context: security context
@@ -5473,16 +5549,20 @@ class ComputeManager(manager.Manager):
         :param block_migration: if true, prepare for block migration
         :param migrate_data:
             if not none, contains implementation specific data.
+        :param migration_status:
+            Contains the status we want to set for the migration object
 
         """
         instance.task_state = None
         instance.save(expected_task_state=[task_states.MIGRATING])
 
-        # NOTE(danms): Pop out the migration object so we don't pass
-        # it over RPC unintentionally below
         if isinstance(migrate_data, dict):
             migration = migrate_data.pop('migration', None)
-        elif isinstance(migrate_data, migrate_data_obj.LiveMigrateData):
+            migrate_data = \
+                migrate_data_obj.LiveMigrateData.detect_implementation(
+                    migrate_data)
+        elif (isinstance(migrate_data, migrate_data_obj.LiveMigrateData) and
+              migrate_data.obj_attr_is_set('migration')):
             migration = migrate_data.migration
         else:
             migration = None
@@ -5495,7 +5575,7 @@ class ComputeManager(manager.Manager):
         for bdm in bdms:
             if bdm.is_volume:
                 self.compute_rpcapi.remove_volume_connection(
-                        context, instance, bdm.volume_id, dest)
+                        context, bdm.volume_id, instance, dest)
 
         self._notify_about_instance_usage(context, instance,
                                           "live_migration._rollback.start")
@@ -5504,15 +5584,14 @@ class ComputeManager(manager.Manager):
                 block_migration, migrate_data)
 
         if do_cleanup:
-            if isinstance(migrate_data, migrate_data_obj.LiveMigrateData):
-                migrate_data = migrate_data.to_legacy_dict()
             self.compute_rpcapi.rollback_live_migration_at_destination(
                     context, instance, dest, destroy_disks=destroy_disks,
                     migrate_data=migrate_data)
 
         self._notify_about_instance_usage(context, instance,
                                           "live_migration._rollback.end")
-        self._set_migration_status(migration, 'error')
+
+        self._set_migration_status(migration, migration_status)
 
     @wrap_exception()
     @wrap_instance_event
@@ -5546,6 +5625,10 @@ class ComputeManager(manager.Manager):
             #             from remote volumes if necessary
             block_device_info = self._get_instance_block_device_info(context,
                                                                      instance)
+            if isinstance(migrate_data, dict):
+                migrate_data = \
+                    migrate_data_obj.LiveMigrateData.detect_implementation(
+                        migrate_data)
             self.driver.rollback_live_migration_at_destination(
                 context, instance, network_info, block_device_info,
                 destroy_disks=destroy_disks, migrate_data=migrate_data)
@@ -5609,7 +5692,8 @@ class ComputeManager(manager.Manager):
                 try:
                     inst = objects.Instance.get_by_uuid(
                             context, instance_uuids.pop(0),
-                            expected_attrs=['system_metadata', 'info_cache'],
+                            expected_attrs=['system_metadata', 'info_cache',
+                                            'flavor'],
                             use_slave=True)
                 except exception.InstanceNotFound:
                     # Instance is gone.  Try to grab another.
@@ -5817,7 +5901,8 @@ class ComputeManager(manager.Manager):
 
         instances = objects.InstanceList.get_active_by_window_joined(
             context, begin, end, host=self.host,
-            expected_attrs=['system_metadata', 'info_cache', 'metadata'],
+            expected_attrs=['system_metadata', 'info_cache', 'metadata',
+                            'flavor'],
             use_slave=True)
         num_instances = len(instances)
         errors = 0

@@ -51,6 +51,7 @@ VIF_TYPE_BINDING_FAILED = 'binding_failed'
 VIF_DETAILS_PORT_FILTER = 'port_filter'
 VIF_DETAILS_OVS_HYBRID_PLUG = 'ovs_hybrid_plug'
 VIF_DETAILS_PHYSICAL_NETWORK = 'physical_network'
+VIF_DETAILS_BRIDGE_NAME = 'bridge_name'
 
 # The following constant defines an SR-IOV related parameter in the
 # 'vif_details'. 'profileid' should be used for VIF_TYPE_802_QBH
@@ -76,6 +77,9 @@ VIF_DETAILS_VHOSTUSER_SOCKET = 'vhostuser_socket'
 # Specifies whether vhost-user socket should be plugged
 # into ovs bridge. Valid values are True and False
 VIF_DETAILS_VHOSTUSER_OVS_PLUG = 'vhostuser_ovs_plug'
+# Specifies whether vhost-user socket should be used to
+# create a fp netdevice interface.
+VIF_DETAILS_VHOSTUSER_FP_PLUG = 'vhostuser_fp_plug'
 
 # Constants for dictionary keys in the 'vif_details' field that are
 # valid for VIF_TYPE_TAP.
@@ -317,6 +321,8 @@ class VIF8021QbgParams(Model):
     """Represents the parameters for a 802.1qbg VIF."""
 
     def __init__(self, managerid, typeid, typeidversion, instanceid):
+        super(VIF8021QbgParams, self).__init__()
+
         self['managerid'] = managerid
         self['typeid'] = typeid
         self['typeidversion'] = typeidversion
@@ -327,6 +333,8 @@ class VIF8021QbhParams(Model):
     """Represents the parameters for a 802.1qbh VIF."""
 
     def __init__(self, profileid):
+        super(VIF8021QbhParams, self).__init__()
+
         self['profileid'] = profileid
 
 
@@ -457,12 +465,15 @@ class NetworkInfo(list):
         return jsonutils.dumps(self)
 
     def wait(self, do_raise=True):
-        """A no-op method.
+        """Return this NetworkInfo
 
-        This is useful to avoid type checking when NetworkInfo might be
-        subclassed with NetworkInfoAsyncWrapper.
+        This is useful to avoid type checking when it's not clear if you have a
+        NetworkInfo or NetworkInfoAsyncWrapper. It's also useful when
+        utils.spawn in NetworkInfoAsyncWrapper is patched to return a
+        NetworkInfo rather than a GreenThread and wait() should return the same
+        thing for both cases.
         """
-        pass
+        return self
 
 
 class NetworkInfoAsyncWrapper(NetworkInfo):
@@ -487,6 +498,8 @@ class NetworkInfoAsyncWrapper(NetworkInfo):
     """
 
     def __init__(self, async_method, *args, **kwargs):
+        super(NetworkInfoAsyncWrapper, self).__init__()
+
         self._gt = utils.spawn(async_method, *args, **kwargs)
         methods = ['json', 'fixed_ips', 'floating_ips']
         for method in methods:

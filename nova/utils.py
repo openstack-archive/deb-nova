@@ -23,7 +23,6 @@ import datetime
 import errno
 import functools
 import hashlib
-import hmac
 import inspect
 import logging as std_logging
 import os
@@ -722,12 +721,12 @@ def monkey_patch():
     # If CONF.monkey_patch is not True, this function do nothing.
     if not CONF.monkey_patch:
         return
-    if six.PY3:
+    if six.PY2:
+        is_method = inspect.ismethod
+    else:
         def is_method(obj):
             # Unbound methods became regular functions on Python 3
             return inspect.ismethod(obj) or inspect.isfunction(obj)
-    else:
-        is_method = inspect.ismethod
     # Get list of modules and decorators
     for module_and_decorator in CONF.monkey_patch_modules:
         module, decorator_name = module_and_decorator.split(':')
@@ -802,6 +801,7 @@ def sanitize_hostname(hostname, default_name=None):
         if six.PY3:
             hostname = hostname.decode('latin-1')
 
+    hostname = truncate_hostname(hostname)
     hostname = re.sub('[ _]', '-', hostname)
     hostname = re.sub('[^\w.-]+', '', hostname)
     hostname = hostname.lower()
@@ -810,8 +810,7 @@ def sanitize_hostname(hostname, default_name=None):
     # empty hostname
     if hostname == "" and default_name is not None:
         return truncate_hostname(default_name)
-
-    return truncate_hostname(hostname)
+    return hostname
 
 
 @contextlib.contextmanager
@@ -1201,11 +1200,7 @@ def is_neutron():
         return _IS_NEUTRON
 
     try:
-        # compatibility with Folsom/Grizzly configs
         cls_name = CONF.network_api_class
-        if cls_name == 'nova.network.quantumv2.api.API':
-            cls_name = 'nova.network.neutronv2.api.API'
-
         from nova.network.neutronv2 import api as neutron_api
         _IS_NEUTRON = issubclass(importutils.import_class(cls_name),
                                  neutron_api.API)
@@ -1324,23 +1319,6 @@ def get_hash_str(base_str):
     if isinstance(base_str, six.text_type):
         base_str = base_str.encode('utf-8')
     return hashlib.md5(base_str).hexdigest()
-
-if hasattr(hmac, 'compare_digest'):
-    constant_time_compare = hmac.compare_digest
-else:
-    def constant_time_compare(first, second):
-        """Returns True if both string inputs are equal, otherwise False.
-
-        This function should take a constant amount of time regardless of
-        how many characters in the strings match.
-
-        """
-        if len(first) != len(second):
-            return False
-        result = 0
-        for x, y in zip(first, second):
-            result |= ord(x) ^ ord(y)
-        return result == 0
 
 
 def filter_and_format_resource_metadata(resource_type, resource_list,

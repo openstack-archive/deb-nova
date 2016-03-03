@@ -25,6 +25,9 @@ from nova.tests.unit import fake_network
 from nova.tests.unit import fake_utils
 
 CONF = cfg.CONF
+CONF.import_opt('osapi_compute_link_prefix', 'nova.api.openstack.common')
+CONF.import_opt('osapi_compute_extension',
+                'nova.api.openstack.compute.legacy_v2.extensions')
 
 # API samples heavily uses testscenarios. This allows us to use the
 # same tests, with slight variations in configuration to ensure our
@@ -58,7 +61,7 @@ CONF = cfg.CONF
 # microversions, then replace the ``scenarios`` class variable in that
 # test class with something like:
 #
-# [("v2_11", {'api_major_version': 'v2.1', 'microversion', '2.11'})]
+# [("v2_11", {'api_major_version': 'v2.1', 'microversion': '2.11'})]
 
 
 class ApiSampleTestBaseV21(testscenarios.WithScenarios,
@@ -69,6 +72,7 @@ class ApiSampleTestBaseV21(testscenarios.WithScenarios,
     sample_dir = None
     extra_extensions_to_load = None
     _legacy_v2_code = False
+    _project_id = True
 
     scenarios = [
         # test v2 with the v2.1 compatibility stack
@@ -82,7 +86,13 @@ class ApiSampleTestBaseV21(testscenarios.WithScenarios,
             'api_major_version': 'v2',
             '_legacy_v2_code': True,
             '_additional_fixtures': [
-                api_paste_fixture.ApiPasteLegacyV2Fixture]})
+                api_paste_fixture.ApiPasteLegacyV2Fixture]}),
+        # test v2.18 code without project id
+        ('v2_1_noproject_id', {
+            'api_major_version': 'v2.1',
+            '_project_id': False,
+            '_additional_fixtures': [
+                api_paste_fixture.ApiPasteNoProjectId]})
     ]
 
     def setUp(self):

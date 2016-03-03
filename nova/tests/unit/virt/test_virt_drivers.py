@@ -27,6 +27,7 @@ import six
 
 from nova.compute import manager
 from nova.console import type as ctype
+from nova import context
 from nova import exception
 from nova import objects
 from nova import test
@@ -121,6 +122,7 @@ class _FakeDriverBackendTestCase(object):
                    rescue_kernel_id="3",
                    rescue_ramdisk_id=None,
                    snapshots_directory='./',
+                   sysinfo_serial='none',
                    group='libvirt')
 
         def fake_extend(image, size):
@@ -393,9 +395,9 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.connection.power_on(self.ctxt, instance_ref, network_info, None)
 
     @catch_notimplementederror
-    def test_inject_nmi(self):
+    def test_trigger_crash_dump(self):
         instance_ref, network_info = self._get_running_instance()
-        self.connection.inject_nmi(instance_ref)
+        self.connection.trigger_crash_dump(instance_ref)
 
     @catch_notimplementederror
     def test_soft_delete(self):
@@ -643,11 +645,6 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.connection.refresh_instance_security_rules(instance_ref)
 
     @catch_notimplementederror
-    def test_refresh_provider_fw_rules(self):
-        instance_ref, network_info = self._get_running_instance()
-        self.connection.refresh_provider_fw_rules()
-
-    @catch_notimplementederror
     def test_ensure_filtering_for_instance(self):
         instance = test_utils.get_test_instance(obj=True)
         network_info = test_utils.get_test_network_info()
@@ -663,8 +660,23 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_live_migration(self):
         instance_ref, network_info = self._get_running_instance()
+        fake_context = context.RequestContext('fake', 'fake')
+        migration = objects.Migration(context=fake_context, id=1)
+        migrate_data = objects.LibvirtLiveMigrateData(
+            migration=migration)
         self.connection.live_migration(self.ctxt, instance_ref, 'otherhost',
-                                       lambda *a: None, lambda *a: None)
+                                       lambda *a: None, lambda *a: None,
+                                       migrate_data=migrate_data)
+
+    @catch_notimplementederror
+    def test_live_migration_force_complete(self):
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.live_migration_force_complete(instance_ref)
+
+    @catch_notimplementederror
+    def test_live_migration_abort(self):
+        instance_ref, network_info = self._get_running_instance()
+        self.connection.live_migration_abort(instance_ref)
 
     @catch_notimplementederror
     def _check_available_resource_fields(self, host_status):

@@ -17,13 +17,13 @@
 
 import copy
 import datetime
-import six
 import uuid
 
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
+import six
 
 from nova.compute.monitors import base as monitor_base
 from nova.compute import resource_tracker
@@ -31,7 +31,6 @@ from nova.compute import resources
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import context
-from nova import db
 from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
@@ -40,6 +39,7 @@ from nova.objects import pci_device_pool
 from nova import rpc
 from nova import test
 from nova.tests.unit.pci import fakes as pci_fakes
+from nova.tests import uuidsentinel
 from nova.virt import driver
 
 
@@ -252,6 +252,7 @@ class BaseTestCase(test.TestCase):
         # This creates a db representation of a compute_node.
         compute = {
             "id": 1,
+            "uuid": uuidsentinel.fake_compute_node,
             "service_id": 1,
             "host": "fakehost",
             "vcpus": 1,
@@ -279,6 +280,7 @@ class BaseTestCase(test.TestCase):
             'deleted': False,
             'cpu_allocation_ratio': None,
             'ram_allocation_ratio': None,
+            'disk_allocation_ratio': None,
         }
         if values:
             compute.update(values)
@@ -522,11 +524,11 @@ class MissingComputeNodeTestCase(BaseTestCase):
         super(MissingComputeNodeTestCase, self).setUp()
         self.tracker = self._tracker()
 
-        self.stubs.Set(db, 'service_get_by_compute_host',
+        self.stub_out('nova.db.service_get_by_compute_host',
                 self._fake_service_get_by_compute_host)
-        self.stubs.Set(db, 'compute_node_get_by_host_and_nodename',
+        self.stub_out('nova.db.compute_node_get_by_host_and_nodename',
                 self._fake_compute_node_get_by_host_and_nodename)
-        self.stubs.Set(db, 'compute_node_create',
+        self.stub_out('nova.db.compute_node_create',
                 self._fake_create_compute_node)
         self.tracker.scheduler_client.update_resource_stats = mock.Mock()
 
@@ -563,17 +565,17 @@ class BaseTrackerTestCase(BaseTestCase):
         self.tracker = self._tracker()
         self._migrations = {}
 
-        self.stubs.Set(db, 'service_get_by_compute_host',
+        self.stub_out('nova.db.service_get_by_compute_host',
                 self._fake_service_get_by_compute_host)
-        self.stubs.Set(db, 'compute_node_get_by_host_and_nodename',
+        self.stub_out('nova.db.compute_node_get_by_host_and_nodename',
                 self._fake_compute_node_get_by_host_and_nodename)
-        self.stubs.Set(db, 'compute_node_update',
+        self.stub_out('nova.db.compute_node_update',
                 self._fake_compute_node_update)
-        self.stubs.Set(db, 'compute_node_delete',
+        self.stub_out('nova.db.compute_node_delete',
                 self._fake_compute_node_delete)
-        self.stubs.Set(db, 'migration_update',
+        self.stub_out('nova.db.migration_update',
                 self._fake_migration_update)
-        self.stubs.Set(db, 'migration_get_in_progress_by_host_and_node',
+        self.stub_out('nova.db.migration_get_in_progress_by_host_and_node',
                 self._fake_migration_get_in_progress_by_host_and_node)
 
         # Note that this must be called before the call to _init_tracker()
@@ -1006,18 +1008,45 @@ class InstanceClaimTestCase(BaseTrackerTestCase):
                                                     "fakenode")
 
     @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
-    def test_instances_with_live_migrations(self, mock_migration_list):
+    @mock.patch('nova.objects.InstanceList.get_by_host_and_node')
+    def test_instances_with_live_migrations(self, mock_instance_list,
+                                            mock_migration_list):
         instance = self._fake_instance_obj()
         migration = objects.Migration(context=self.context,
                                       migration_type='live-migration',
                                       instance_uuid=instance.uuid)
         mock_migration_list.return_value = [migration]
-        self.tracker.update_available_resource(self.context)
-        self.assertEqual(0, self.tracker.compute_node['memory_mb_used'])
-        self.assertEqual(0, self.tracker.compute_node['local_gb_used'])
+        mock_instance_list.return_value = [instance]
+        with mock.patch.object(self.tracker, '_pair_instances_to_migrations'
+                           ) as mock_pair:
+            self.tracker.update_available_resource(self.context)
+            self.assertTrue(mock_pair.called)
+            self.assertEqual(
+                instance.uuid,
+                mock_pair.call_args_list[0][0][0][0].instance_uuid)
+            self.assertEqual(instance.uuid,
+                             mock_pair.call_args_list[0][0][1][0].uuid)
+            self.assertEqual(
+                ['system_metadata', 'numa_topology', 'flavor',
+                 'migration_context'],
+                mock_instance_list.call_args_list[0][1]['expected_attrs'])
+        self.assertEqual(FAKE_VIRT_MEMORY_MB + FAKE_VIRT_MEMORY_OVERHEAD,
+                         self.tracker.compute_node['memory_mb_used'])
+        self.assertEqual(ROOT_GB + EPHEMERAL_GB,
+                         self.tracker.compute_node['local_gb_used'])
         mock_migration_list.assert_called_once_with(self.context,
                                                     "fakehost",
                                                     "fakenode")
+
+    def test_pair_instances_to_migrations(self):
+        migrations = [objects.Migration(instance_uuid=uuidsentinel.instance1),
+                      objects.Migration(instance_uuid=uuidsentinel.instance2)]
+        instances = [objects.Instance(uuid=uuidsentinel.instance2),
+                     objects.Instance(uuid=uuidsentinel.instance1)]
+        self.tracker._pair_instances_to_migrations(migrations, instances)
+        order = [uuidsentinel.instance1, uuidsentinel.instance2]
+        for i, migration in enumerate(migrations):
+            self.assertEqual(order[i], migration.instance.uuid)
 
     @mock.patch('nova.compute.claims.Claim')
     @mock.patch('nova.objects.Instance.save')

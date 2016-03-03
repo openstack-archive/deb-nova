@@ -84,6 +84,7 @@ CREATE_EXCEPTIONS = {
     exception.InstanceExists: exc.HTTPConflict,
     exception.NoUniqueMatch: exc.HTTPConflict,
     exception.Invalid: exc.HTTPBadRequest,
+    exception.InstanceGroupNotFound: exc.HTTPBadRequest,
 }
 
 CREATE_EXCEPTIONS_MSGS = {
@@ -233,6 +234,7 @@ class Controller(wsgi.Controller):
             instance_list = objects.InstanceList()
 
         if is_detail:
+            instance_list._context = context
             instance_list.fill_faults()
             response = self._view_builder.detail(req, instance_list)
         else:

@@ -25,7 +25,6 @@ from nova import objects
 from nova.objects import fields
 from nova.pci import manager
 from nova import test
-from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit.pci import fakes as pci_fakes
 
 
@@ -275,7 +274,7 @@ class PciDevTrackerTestCase(test.NoDBTestCase):
                               dev in self.tracker.pci_devs]),
                          set(['v', 'v1']))
 
-    @mock.patch.object(objects.PciDevice, '_migrate_parent_addr',
+    @mock.patch.object(objects.PciDevice, 'should_migrate_data',
                        return_value=False)
     def test_save(self, migrate_mock):
         self.stub_out(
@@ -370,29 +369,33 @@ class PciDevTrackerTestCase(test.NoDBTestCase):
             set([dev.address for dev in free_devs]),
             set(['0000:00:00.1', '0000:00:00.2', '0000:00:00.3']))
 
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance')
+    def test_free_devices(self, mock_get):
+        self._create_pci_requests_object(mock_get,
+            [{'count': 1, 'spec': [{'vendor_id': 'v'}]}])
+        self.tracker.claim_instance(None, self.inst)
+        self.tracker.update_pci_for_instance(None, self.inst, sign=1)
 
-class PciGetInstanceDevs(test.TestCase):
-    def setUp(self):
-        super(PciGetInstanceDevs, self).setUp()
-        self.fake_context = context.get_admin_context()
+        free_devs = self.tracker.pci_stats.get_free_devs()
+        self.assertEqual(len(free_devs), 2)
 
-    @mock.patch('nova.db.instance_get')
-    def test_get_devs_object(self, mock_instance_get):
+        self.tracker.free_instance(None, self.inst)
+        free_devs = self.tracker.pci_stats.get_free_devs()
+        self.assertEqual(len(free_devs), 3)
+
+
+class PciGetInstanceDevs(test.NoDBTestCase):
+
+    def test_get_devs_object(self):
         def _fake_obj_load_attr(foo, attrname):
             if attrname == 'pci_devices':
                 self.load_attr_called = True
                 foo.pci_devices = objects.PciDeviceList()
 
-        inst = fakes.stub_instance(id='1')
-        mock_instance_get.return_value = inst
-        inst = objects.Instance.get_by_id(self.fake_context, '1',
-                                          expected_attrs=[])
         self.stub_out(
                 'nova.objects.Instance.obj_load_attr',
                 _fake_obj_load_attr)
 
         self.load_attr_called = False
-        manager.get_instance_pci_devs(inst)
+        manager.get_instance_pci_devs(objects.Instance())
         self.assertTrue(self.load_attr_called)
-        mock_instance_get.assert_called_with(self.fake_context, '1',
-                columns_to_join=[])

@@ -22,26 +22,19 @@ Handling of VM disk images.
 import os
 
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import fileutils
+from oslo_utils import imageutils
 
+import nova.conf
 from nova import exception
 from nova.i18n import _, _LE
 from nova import image
-from nova.openstack.common import imageutils
 from nova import utils
 
 LOG = logging.getLogger(__name__)
 
-image_opts = [
-    cfg.BoolOpt('force_raw_images',
-                default=True,
-                help='Force backing images to raw format'),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(image_opts)
+CONF = nova.conf.CONF
 IMAGE_API = image.API()
 
 
@@ -54,8 +47,7 @@ def qemu_img_info(path, format=None):
     CONF.import_opt('images_type', 'nova.virt.libvirt.imagebackend',
                     group='libvirt')
     if not os.path.exists(path) and CONF.libvirt.images_type != 'rbd':
-        msg = (_("Path does not exist %(path)s") % {'path': path})
-        raise exception.InvalidDiskInfo(reason=msg)
+        raise exception.DiskNotFound(location=path)
 
     try:
         cmd = ('env', 'LC_ALL=C', 'LANG=C', 'qemu-img', 'info', path)

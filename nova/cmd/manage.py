@@ -234,7 +234,7 @@ def _db_error(caught_exception):
     print(_("The above error may show that the database has not "
             "been created.\nPlease create a database using "
             "'nova-manage db sync' before running this command."))
-    exit(1)
+    sys.exit(1)
 
 
 class ProjectCommands(object):
@@ -923,6 +923,8 @@ class HostCommands(object):
 class DbCommands(object):
     """Class for managing the main database."""
 
+    online_migrations = ()
+
     def __init__(self):
         pass
 
@@ -947,6 +949,10 @@ class DbCommands(object):
             max_rows = int(max_rows)
             if max_rows < 0:
                 print(_("Must supply a positive value for max_rows"))
+                return(1)
+            if max_rows > db.MAX_INT:
+                print(_('max rows must be <= %(max_value)d') %
+                      {'max_value': db.MAX_INT})
                 return(1)
         table_to_rows_archived = db.archive_deleted_rows(max_rows)
         if verbose:
@@ -984,6 +990,49 @@ class DbCommands(object):
         if not records_found:
             print(_('There were no records found where '
                     'instance_uuid was NULL.'))
+
+    def _run_migration(self, ctxt, max_count):
+        ran = 0
+        for migration_meth in self.online_migrations:
+            count = max_count - ran
+            try:
+                found, done = migration_meth(ctxt, count)
+            except Exception:
+                print(_("Error attempting to run %(method)s") % dict(
+                      method=migration_meth))
+                found = done = 0
+
+            if found:
+                print(_('%(total)i rows matched query %(meth)s, %(done)i '
+                        'migrated') % {'total': found,
+                                       'meth': migration_meth.__name__,
+                                       'done': done})
+            if max_count is not None:
+                ran += done
+                if ran >= max_count:
+                    break
+        return ran
+
+    @args('--max-count', metavar='<number>', dest='max_count',
+          help='Maximum number of objects to consider')
+    def online_data_migrations(self, max_count=None):
+        ctxt = context.get_admin_context()
+        if max_count is not None:
+            max_count = int(max_count)
+            unlimited = False
+            if max_count < 0:
+                print(_('Must supply a positive value for max_number'))
+                return(1)
+        else:
+            unlimited = True
+            max_count = 50
+            print(_('Running batches of %i until complete') % max_count)
+
+        ran = None
+        while ran is None or ran != 0:
+            ran = self._run_migration(ctxt, max_count)
+            if not unlimited:
+                break
 
 
 class ApiDbCommands(object):
@@ -1277,7 +1326,7 @@ class CellV2Commands(object):
         if cell_uuid is None:
             raise Exception(_("cell_uuid must be set"))
         else:
-            # Validate the the cell exists
+            # Validate the cell exists
             cell_mapping = objects.CellMapping.get_by_uuid(ctxt, cell_uuid)
         filters = {}
         instances = objects.InstanceList.get_by_filters(
@@ -1399,7 +1448,7 @@ def main():
             print(_("Could not read %s. Re-running with sudo") % cfgfile)
             try:
                 os.execvp('sudo', ['sudo', '-u', '#%s' % st.st_uid] + sys.argv)
-            except Exception:
+            except OSError:
                 print(_('sudo failed, continuing as if nothing happened'))
 
         print(_('Please re-run nova-manage as root.'))

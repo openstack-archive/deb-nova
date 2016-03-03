@@ -19,7 +19,6 @@ import copy
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
-from oslo_serialization import jsonutils
 from oslo_utils import excutils
 import six
 
@@ -68,9 +67,10 @@ class ConductorManager(manager.Manager):
         self.compute_task_mgr = ComputeTaskManager()
         self.additional_endpoints.append(self.compute_task_mgr)
 
+    # NOTE(hanlind): This can be removed in version 4.0 of the RPC API
     def provider_fw_rule_get_all(self, context):
-        rules = self.db.provider_fw_rule_get_all(context)
-        return jsonutils.to_primitive(rules)
+        # NOTE(hanlind): Simulate an empty db result for compat reasons.
+        return []
 
     def _object_dispatch(self, target, method, args, kwargs):
         """Dispatch a call to an object method.
@@ -144,7 +144,7 @@ class ComputeTaskManager(base.Base):
     may involve coordinating activities on multiple compute nodes.
     """
 
-    target = messaging.Target(namespace='compute_task', version='1.11')
+    target = messaging.Target(namespace='compute_task', version='1.14')
 
     def __init__(self):
         super(ComputeTaskManager, self).__init__()
@@ -160,22 +160,24 @@ class ComputeTaskManager(base.Base):
         compute_rpcapi.LAST_VERSION = None
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
-    @messaging.expected_exceptions(exception.NoValidHost,
-                                   exception.ComputeServiceUnavailable,
-                                   exception.InvalidHypervisorType,
-                                   exception.InvalidCPUInfo,
-                                   exception.UnableToMigrateToSelf,
-                                   exception.DestinationHypervisorTooOld,
-                                   exception.InvalidLocalStorage,
-                                   exception.InvalidSharedStorage,
-                                   exception.HypervisorUnavailable,
-                                   exception.InstanceInvalidState,
-                                   exception.MigrationPreCheckError,
-                                   exception.LiveMigrationWithOldNovaNotSafe,
-                                   exception.UnsupportedPolicyException)
+    @messaging.expected_exceptions(
+        exception.NoValidHost,
+        exception.ComputeServiceUnavailable,
+        exception.InvalidHypervisorType,
+        exception.InvalidCPUInfo,
+        exception.UnableToMigrateToSelf,
+        exception.DestinationHypervisorTooOld,
+        exception.InvalidLocalStorage,
+        exception.InvalidSharedStorage,
+        exception.HypervisorUnavailable,
+        exception.InstanceInvalidState,
+        exception.MigrationPreCheckError,
+        exception.LiveMigrationWithOldNovaNotSafe,
+        exception.LiveMigrationWithOldNovaNotSupported,
+        exception.UnsupportedPolicyException)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
             flavor, block_migration, disk_over_commit, reservations=None,
-            clean_shutdown=True):
+            clean_shutdown=True, request_spec=None):
         if instance and not isinstance(instance, nova_object.NovaObject):
             # NOTE(danms): Until v2 of the RPC API, we need to tolerate
             # old-world instance objects here
@@ -191,7 +193,7 @@ class ComputeTaskManager(base.Base):
             flavor = objects.Flavor.get_by_id(context, flavor['id'])
         if live and not rebuild and not flavor:
             self._live_migrate(context, instance, scheduler_hint,
-                               block_migration, disk_over_commit)
+                               block_migration, disk_over_commit, request_spec)
         elif not live and not rebuild and flavor:
             instance_uuid = instance.uuid
             with compute_utils.EventReporter(context, 'cold_migrate',
@@ -250,15 +252,29 @@ class ComputeTaskManager(base.Base):
                                  ex, request_spec):
         scheduler_utils.set_vm_state_and_notify(
                 context, instance_uuid, 'compute_task', method, updates,
-                ex, request_spec, self.db)
+                ex, request_spec)
 
     def _cleanup_allocated_networks(
             self, context, instance, requested_networks):
-        self.network_api.deallocate_for_instance(
-            context, instance, requested_networks=requested_networks)
+        try:
+            self.network_api.deallocate_for_instance(
+                context, instance, requested_networks=requested_networks)
+        except Exception:
+            msg = _LE('Failed to deallocate networks')
+            LOG.exception(msg, instance=instance)
+            return
+
+        instance.system_metadata['network_allocated'] = 'False'
+        try:
+            instance.save()
+        except exception.InstanceNotFound:
+            # NOTE: It's possible that we're cleaning up the networks
+            # because the instance was deleted.  If that's the case then this
+            # exception will be raised by instance.save()
+            pass
 
     def _live_migrate(self, context, instance, scheduler_hint,
-                      block_migration, disk_over_commit):
+                      block_migration, disk_over_commit, request_spec):
         destination = scheduler_hint.get("host")
 
         def _set_vm_state(context, instance, ex, vm_state=None,
@@ -272,7 +288,7 @@ class ComputeTaskManager(base.Base):
                 dict(vm_state=vm_state,
                      task_state=task_state,
                      expected_task_state=task_states.MIGRATING,),
-                ex, request_spec, self.db)
+                ex, request_spec)
 
         migration = objects.Migration(context=context.elevated())
         migration.dest_compute = destination
@@ -290,7 +306,7 @@ class ComputeTaskManager(base.Base):
 
         task = self._build_live_migrate_task(context, instance, destination,
                                              block_migration, disk_over_commit,
-                                             migration)
+                                             migration, request_spec)
         try:
             task.execute()
         except (exception.NoValidHost,
@@ -304,7 +320,9 @@ class ComputeTaskManager(base.Base):
                 exception.HypervisorUnavailable,
                 exception.InstanceInvalidState,
                 exception.MigrationPreCheckError,
-                exception.LiveMigrationWithOldNovaNotSafe) as ex:
+                exception.LiveMigrationWithOldNovaNotSafe,
+                exception.LiveMigrationWithOldNovaNotSupported,
+                exception.MigrationSchedulerRPCError) as ex:
             with excutils.save_and_reraise_exception():
                 # TODO(johngarbutt) - eventually need instance actions here
                 _set_vm_state(context, instance, ex, instance.vm_state)
@@ -322,13 +340,15 @@ class ComputeTaskManager(base.Base):
             raise exception.MigrationError(reason=six.text_type(ex))
 
     def _build_live_migrate_task(self, context, instance, destination,
-                                 block_migration, disk_over_commit, migration):
+                                 block_migration, disk_over_commit, migration,
+                                 request_spec=None):
         return live_migrate.LiveMigrationTask(context, instance,
                                               destination, block_migration,
                                               disk_over_commit, migration,
                                               self.compute_rpcapi,
                                               self.servicegroup_api,
-                                              self.scheduler_client)
+                                              self.scheduler_client,
+                                              request_spec)
 
     def _build_cold_migrate_task(self, context, instance, flavor,
                                  filter_properties, request_spec, reservations,
@@ -416,7 +436,7 @@ class ComputeTaskManager(base.Base):
         hosts = self.scheduler_client.select_destinations(context, spec_obj)
         return hosts
 
-    def unshelve_instance(self, context, instance):
+    def unshelve_instance(self, context, instance, request_spec=None):
         sys_meta = instance.system_metadata
 
         def safe_image_show(ctx, image_id):
@@ -454,11 +474,24 @@ class ComputeTaskManager(base.Base):
             try:
                 with compute_utils.EventReporter(context, 'schedule_instances',
                                                  instance.uuid):
-                    filter_properties = {}
+                    if not request_spec:
+                        # NOTE(sbauza): We were unable to find an original
+                        # RequestSpec object - probably because the instance is
+                        # old. We need to mock that the old way
+                        filter_properties = {}
+                        request_spec = scheduler_utils.build_request_spec(
+                            context, image, [instance])
+                    else:
+                        # TODO(sbauza): Provide directly the RequestSpec object
+                        # when _schedule_instances(),
+                        # populate_filter_properties and populate_retry()
+                        # accept it
+                        filter_properties = request_spec.\
+                            to_legacy_filter_properties_dict()
+                        request_spec = request_spec.\
+                            to_legacy_request_spec_dict()
                     scheduler_utils.populate_retry(filter_properties,
                                                    instance.uuid)
-                    request_spec = scheduler_utils.build_request_spec(
-                            context, image, [instance])
                     hosts = self._schedule_instances(
                             context, request_spec, filter_properties)
                     host_state = hosts[0]
@@ -491,18 +524,32 @@ class ComputeTaskManager(base.Base):
     def rebuild_instance(self, context, instance, orig_image_ref, image_ref,
                          injected_files, new_pass, orig_sys_metadata,
                          bdms, recreate, on_shared_storage,
-                         preserve_ephemeral=False, host=None):
+                         preserve_ephemeral=False, host=None,
+                         request_spec=None):
 
         with compute_utils.EventReporter(context, 'rebuild_server',
                                           instance.uuid):
             node = limits = None
             if not host:
-                # NOTE(lcostantino): Retrieve scheduler filters for the
-                # instance when the feature is available
-                filter_properties = {'ignore_hosts': [instance.host]}
-                try:
+                if not request_spec:
+                    # NOTE(sbauza): We were unable to find an original
+                    # RequestSpec object - probably because the instance is old
+                    # We need to mock that the old way
+                    filter_properties = {'ignore_hosts': [instance.host]}
                     request_spec = scheduler_utils.build_request_spec(
                             context, image_ref, [instance])
+                else:
+                    # NOTE(sbauza): Augment the RequestSpec object by excluding
+                    # the source host for avoiding the scheduler to pick it
+                    request_spec.ignore_hosts = request_spec.ignore_hosts or []
+                    request_spec.ignore_hosts.append(instance.host)
+                    # TODO(sbauza): Provide directly the RequestSpec object
+                    # when _schedule_instances() and _set_vm_state_and_notify()
+                    # accept it
+                    filter_properties = request_spec.\
+                        to_legacy_filter_properties_dict()
+                    request_spec = request_spec.to_legacy_request_spec_dict()
+                try:
                     hosts = self._schedule_instances(
                             context, request_spec, filter_properties)
                     host_dict = hosts.pop(0)

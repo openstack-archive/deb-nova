@@ -1137,7 +1137,18 @@ class NUMATopologyTest(test.NoDBTestCase):
                 },
                 "expect": exception.CPUThreadPolicyConfigurationInvalid,
             },
-
+            {
+                # Invalid vCPUs mask with realtime
+                "flavor": objects.Flavor(vcpus=4, memory_mb=2048,
+                                         extra_specs={
+                                             "hw:cpu_policy": "dedicated",
+                                             "hw:cpu_realtime": "yes",
+                                         }),
+                "image": {
+                    "properties": {}
+                },
+                "expect": exception.RealtimeMaskNotFoundOrInvalid,
+            },
         ]
 
         for testitem in testdata:
@@ -1913,6 +1924,33 @@ class VirtMemoryPagesTestCase(test.NoDBTestCase):
             2048,
             hw._numa_cell_supports_pagesize_request(host_cell, inst_cell))
 
+    def test_cell_accepts_request_remainder_memory(self):
+        # Test memory can't be divided with no rem by mempage's size_kb
+        inst_cell = objects.InstanceNUMACell(
+            id=0, cpuset=set([0]), memory=1024 + 1, pagesize=2048)
+        host_cell = objects.NUMACell(
+            id=0, cpuset=set([0]), memory=1024, mempages=[
+                objects.NUMAPagesTopology(size_kb=4, total=256, used=0),
+                objects.NUMAPagesTopology(size_kb=2048, total=512, used=0)
+            ],
+            siblings=[], pinned_cpus=set([]))
+        self.assertIsNone(hw._numa_cell_supports_pagesize_request(
+            host_cell, inst_cell))
+
+    def test_cell_accepts_request_host_mempages(self):
+        # Test pagesize not in host's mempages
+        inst_cell = objects.InstanceNUMACell(
+            id=0, cpuset=set([0]), memory=1024, pagesize=4096)
+        host_cell = objects.NUMACell(
+            id=0, cpuset=set([0]), memory=1024, mempages=[
+                objects.NUMAPagesTopology(size_kb=4, total=256, used=0),
+                objects.NUMAPagesTopology(size_kb=2048, total=512, used=0)
+            ],
+            siblings=[], pinned_cpus=set([]))
+        self.assertRaises(exception.MemoryPageSizeNotSupported,
+                          hw._numa_cell_supports_pagesize_request,
+                          host_cell, inst_cell)
+
 
 class _CPUPinningTestCaseBase(object):
     def assertEqualTopology(self, expected, got):
@@ -1948,7 +1986,7 @@ class _CPUPinningTestCaseBase(object):
             for inst_p, host_p in instance_cell.cpu_pinning.items():
                 pins_per_sib[cpu_to_sib[host_p]] += 1
             self.assertTrue(max(pins_per_sib.values()) > 1,
-                            "Seems threads were not prefered by the pinning "
+                            "Seems threads were not preferred by the pinning "
                             "logic.")
 
 

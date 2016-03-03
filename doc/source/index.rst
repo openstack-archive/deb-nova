@@ -153,10 +153,10 @@ Open Development.
    i18n
    filter_scheduler
    rpc
-   hooks
    block_device_mapping
    addmethod.openstackapi
    conductor
+   notifications
 
 Architecture Evolution Plans
 -----------------------------

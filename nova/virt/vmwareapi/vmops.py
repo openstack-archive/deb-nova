@@ -40,6 +40,7 @@ from nova.api.metadata import base as instance_metadata
 from nova import compute
 from nova.compute import power_state
 from nova.compute import task_states
+import nova.conf
 from nova.console import type as ctype
 from nova import context as nova_context
 from nova import exception
@@ -71,12 +72,11 @@ vmops_opts = [
                     'system.'),
     ]
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.register_opts(vmops_opts, 'vmware')
 
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
 CONF.import_opt('remove_unused_base_images', 'nova.virt.imagecache')
-CONF.import_opt('enabled', 'nova.vnc', group='vnc')
 CONF.import_opt('my_ip', 'nova.netconf')
 
 LOG = logging.getLogger(__name__)
@@ -419,7 +419,7 @@ class VMwareVMOps(object):
                    'datastore_name': vi.datastore.name},
                   instance=vi.instance)
 
-        images.fetch_image_stream_optimized(
+        image_size = images.fetch_image_stream_optimized(
             context,
             vi.instance,
             self._session,
@@ -427,6 +427,10 @@ class VMwareVMOps(object):
             vi.datastore.name,
             vi.dc_info.vmFolder,
             self._root_resource_pool)
+        # The size of the image is different from the size of the virtual disk.
+        # We want to use the latter. On vSAN this is the only way to get this
+        # size because there is no VMDK descriptor.
+        vi.ii.file_size = image_size
 
     def _fetch_image_as_ova(self, context, vi, image_ds_loc):
         """Download root disk of an OVA image as streamOptimized."""
@@ -435,13 +439,17 @@ class VMwareVMOps(object):
         # of the VM use to import it with.
         vm_name = image_ds_loc.parent.basename
 
-        images.fetch_image_ova(context,
+        image_size = images.fetch_image_ova(context,
                                vi.instance,
                                self._session,
                                vm_name,
                                vi.datastore.name,
                                vi.dc_info.vmFolder,
                                self._root_resource_pool)
+        # The size of the image is different from the size of the virtual disk.
+        # We want to use the latter. On vSAN this is the only way to get this
+        # size because there is no VMDK descriptor.
+        vi.ii.file_size = image_size
 
     def _prepare_sparse_image(self, vi):
         tmp_dir_loc = vi.datastore.build_path(
@@ -784,6 +792,11 @@ class VMwareVMOps(object):
             self._configure_config_drive(
                     instance, vm_ref, vi.dc_info, vi.datastore,
                     injected_files, admin_password, network_info)
+
+        # Rename the VM. This is done after the spec is created to ensure
+        # that all of the files for the instance are under the directory
+        # 'uuid' of the instance
+        vm_util.rename_vm(self._session, vm_ref, instance)
 
         vm_util.power_on_instance(self._session, instance, vm_ref=vm_ref)
 
@@ -1338,8 +1351,7 @@ class VMwareVMOps(object):
                                        total_steps=RESIZE_TOTAL_STEPS)
 
         # 2. Reconfigure the VM properties
-        image_meta = objects.ImageMeta.from_instance(instance)
-        self._resize_vm(context, instance, vm_ref, flavor, image_meta)
+        self._resize_vm(context, instance, vm_ref, flavor, instance.image_meta)
 
         self._update_instance_progress(context, instance,
                                        step=2,
@@ -1383,8 +1395,8 @@ class VMwareVMOps(object):
         vm_util.power_off_instance(self._session, instance, vm_ref)
         client_factory = self._session.vim.client.factory
         # Reconfigure the VM properties
-        image_meta = objects.ImageMeta.from_instance(instance)
-        extra_specs = self._get_extra_specs(instance.flavor, image_meta)
+        extra_specs = self._get_extra_specs(instance.flavor,
+                                            instance.image_meta)
         metadata = self._get_instance_metadata(context, instance)
         vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
                                                     int(instance.vcpus),
@@ -1674,17 +1686,19 @@ class VMwareVMOps(object):
 
         while retrieve_result:
             for vm in retrieve_result.objects:
-                vm_name = None
+                vm_uuid = None
                 conn_state = None
                 for prop in vm.propSet:
-                    if prop.name == "name":
-                        vm_name = prop.val
-                    elif prop.name == "runtime.connectionState":
+                    if prop.name == "runtime.connectionState":
                         conn_state = prop.val
+                    elif prop.name == 'config.extraConfig["nvp.vm-uuid"]':
+                        vm_uuid = prop.val.value
+                # Ignore VM's that do not have nvp.vm-uuid defined
+                if not vm_uuid:
+                    continue
                 # Ignoring the orphaned or inaccessible VMs
-                if (conn_state not in ["orphaned", "inaccessible"] and
-                    uuidutils.is_uuid_like(vm_name)):
-                    lst_vm_names.append(vm_name)
+                if conn_state not in ["orphaned", "inaccessible"]:
+                    lst_vm_names.append(vm_uuid)
             retrieve_result = self._session._call_method(vutil,
                                                          'continue_retrieval',
                                                          retrieve_result)
@@ -1911,7 +1925,8 @@ class VMwareVMOps(object):
 
     def list_instances(self):
         """Lists the VM instances that are registered with vCenter cluster."""
-        properties = ['name', 'runtime.connectionState']
+        properties = ['runtime.connectionState',
+                      'config.extraConfig["nvp.vm-uuid"]']
         LOG.debug("Getting list of instances from cluster %s",
                   self._cluster)
         vms = []

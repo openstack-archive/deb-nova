@@ -18,13 +18,10 @@ Tests For Scheduler Utils
 import uuid
 
 import mock
-from mox3 import mox
-from oslo_config import cfg
 import six
 
 from nova.compute import flavors
 from nova.compute import utils as compute_utils
-from nova import db
 from nova import exception
 from nova import objects
 from nova import rpc
@@ -33,8 +30,6 @@ from nova import test
 from nova.tests.unit import fake_instance
 from nova.tests.unit.objects import test_flavor
 
-CONF = cfg.CONF
-
 
 class SchedulerUtilsTestCase(test.NoDBTestCase):
     """Test case for scheduler utils methods."""
@@ -42,20 +37,16 @@ class SchedulerUtilsTestCase(test.NoDBTestCase):
         super(SchedulerUtilsTestCase, self).setUp()
         self.context = 'fake-context'
 
-    @mock.patch('nova.objects.Flavor.get_by_flavor_id')
-    def test_build_request_spec_without_image(self, mock_get):
-        image = None
+    def test_build_request_spec_without_image(self):
         instance = {'uuid': 'fake-uuid'}
         instance_type = objects.Flavor(**test_flavor.fake_flavor)
 
-        mock_get.return_value = objects.Flavor(extra_specs={})
-
-        self.mox.StubOutWithMock(flavors, 'extract_flavor')
-        flavors.extract_flavor(mox.IgnoreArg()).AndReturn(instance_type)
-        self.mox.ReplayAll()
-
-        request_spec = scheduler_utils.build_request_spec(self.context, image,
-                                                          [instance])
+        with mock.patch.object(flavors, 'extract_flavor') as mock_extract:
+            mock_extract.return_value = instance_type
+            request_spec = scheduler_utils.build_request_spec(self.context,
+                                                              None,
+                                                              [instance])
+            mock_extract.assert_called_once_with({'uuid': 'fake-uuid'})
         self.assertEqual({}, request_spec['image'])
 
     def test_build_request_spec_with_object(self):
@@ -96,8 +87,7 @@ class SchedulerUtilsTestCase(test.NoDBTestCase):
                                                 method,
                                                 updates,
                                                 exc_info,
-                                                request_spec,
-                                                db)
+                                                request_spec)
         mock_save.assert_called_once_with()
         mock_add.assert_called_once_with(self.context, mock.ANY,
                                          exc_info, mock.ANY)
@@ -106,6 +96,30 @@ class SchedulerUtilsTestCase(test.NoDBTestCase):
         mock_get.return_value.error.assert_called_once_with(self.context,
                                                             event_type,
                                                             payload)
+
+    def test_build_filter_properties(self):
+        sched_hints = {'hint': ['over-there']}
+        forced_host = 'forced-host1'
+        forced_node = 'forced-node1'
+        instance_type = objects.Flavor()
+        filt_props = scheduler_utils.build_filter_properties(sched_hints,
+                forced_host, forced_node, instance_type)
+        self.assertEqual(sched_hints, filt_props['scheduler_hints'])
+        self.assertEqual([forced_host], filt_props['force_hosts'])
+        self.assertEqual([forced_node], filt_props['force_nodes'])
+        self.assertEqual(instance_type, filt_props['instance_type'])
+
+    def test_build_filter_properties_no_forced_host_no_force_node(self):
+        sched_hints = {'hint': ['over-there']}
+        forced_host = None
+        forced_node = None
+        instance_type = objects.Flavor()
+        filt_props = scheduler_utils.build_filter_properties(sched_hints,
+                forced_host, forced_node, instance_type)
+        self.assertEqual(sched_hints, filt_props['scheduler_hints'])
+        self.assertEqual(instance_type, filt_props['instance_type'])
+        self.assertNotIn('forced_host', filt_props)
+        self.assertNotIn('forced_node', filt_props)
 
     def _test_populate_filter_props(self, host_state_obj=True,
                                     with_retry=True,

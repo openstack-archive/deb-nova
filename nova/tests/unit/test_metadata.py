@@ -208,7 +208,6 @@ class MetadataTestCase(test.TestCase):
 
     def test_format_instance_mapping(self):
         # Make sure that _format_instance_mappings works.
-        ctxt = None
         instance_ref0 = objects.Instance(**{'id': 0,
                          'uuid': 'e5fe5518-0288-4fa3-b0c4-c79764101b85',
                          'root_device_name': None,
@@ -220,7 +219,7 @@ class MetadataTestCase(test.TestCase):
                          'default_ephemeral_device': None,
                          'default_swap_device': None})
 
-        def fake_bdm_get(ctxt, uuid, use_slave=False):
+        def fake_bdm_get(ctxt, uuid):
             return [fake_block_device.FakeDbBlockDeviceDict(
                     {'volume_id': 87654321,
                      'snapshot_id': None,
@@ -249,7 +248,7 @@ class MetadataTestCase(test.TestCase):
                      'device_name': '/dev/sdb'})]
 
         self.stub_out('nova.db.block_device_mapping_get_all_by_instance',
-                       fake_bdm_get)
+                      fake_bdm_get)
 
         expected = {'ami': 'sda1',
                     'root': '/dev/sda1',
@@ -259,9 +258,9 @@ class MetadataTestCase(test.TestCase):
 
         conductor_api.LocalAPI()
 
-        self.assertEqual(base._format_instance_mapping(ctxt,
+        self.assertEqual(base._format_instance_mapping(self.context,
                          instance_ref0), block_device._DEFAULT_MAPPINGS)
-        self.assertEqual(base._format_instance_mapping(ctxt,
+        self.assertEqual(base._format_instance_mapping(self.context,
                          instance_ref1), expected)
 
     def test_pubkey(self):
@@ -332,8 +331,32 @@ class MetadataTestCase(test.TestCase):
         fakes.stub_out_key_pair_funcs(self.stubs)
         inst = self.instance.obj_clone()
         inst_md = base.InstanceMetadata(inst)
+        expected_paths = [
+            'ec2/2009-04-04/user-data',
+            'ec2/2009-04-04/meta-data.json',
+            'ec2/latest/user-data',
+            'ec2/latest/meta-data.json',
+            'openstack/2012-08-10/meta_data.json',
+            'openstack/2012-08-10/user_data',
+            'openstack/2013-04-04/meta_data.json',
+            'openstack/2013-04-04/user_data',
+            'openstack/2013-10-17/meta_data.json',
+            'openstack/2013-10-17/user_data',
+            'openstack/2013-10-17/vendor_data.json',
+            'openstack/2015-10-15/meta_data.json',
+            'openstack/2015-10-15/user_data',
+            'openstack/2015-10-15/vendor_data.json',
+            'openstack/2015-10-15/network_data.json',
+            'openstack/latest/meta_data.json',
+            'openstack/latest/user_data',
+            'openstack/latest/vendor_data.json',
+            'openstack/latest/network_data.json',
+        ]
+        actual_paths = []
         for (path, value) in inst_md.metadata_for_config_drive():
+            actual_paths.append(path)
             self.assertIsNotNone(path)
+        self.assertEqual(expected_paths, actual_paths)
 
     @mock.patch('nova.virt.netutils.get_injected_network_template')
     def test_InstanceMetadata_queries_network_API_when_needed(self, mock_get):
@@ -819,7 +842,7 @@ class MetadataHandlerTestCase(test.TestCase):
                                 headers=None)
         self.assertEqual(response.status_int, 500)
 
-    @mock.patch('nova.utils.constant_time_compare')
+    @mock.patch('oslo_utils.secretutils.constant_time_compare')
     def test_by_instance_id_uses_constant_time_compare(self, mock_compare):
         mock_compare.side_effect = test.TestingException
 
@@ -1206,7 +1229,8 @@ class MetadataHandlerTestCase(test.TestCase):
         self.assertFalse(mock_context.called, "get_admin_context() should not"
                          "have been called, the context was given")
         mock_uuid.assert_called_once_with('CONTEXT', 'foo',
-            expected_attrs=['ec2_ids', 'flavor', 'info_cache'])
+            expected_attrs=['ec2_ids', 'flavor', 'info_cache',
+                            'metadata', 'system_metadata'])
         imd.assert_called_once_with(inst, 'bar')
 
     @mock.patch.object(context, 'get_admin_context')
@@ -1222,7 +1246,8 @@ class MetadataHandlerTestCase(test.TestCase):
 
         mock_context.assert_called_once_with()
         mock_uuid.assert_called_once_with('CONTEXT', 'foo',
-            expected_attrs=['ec2_ids', 'flavor', 'info_cache'])
+            expected_attrs=['ec2_ids', 'flavor', 'info_cache',
+                            'metadata', 'system_metadata'])
         imd.assert_called_once_with(inst, 'bar')
 
 

@@ -14,17 +14,12 @@ import itertools
 
 import nova.conf
 import nova.virt.configdrive
-import nova.virt.disk.api
-import nova.virt.disk.mount.nbd
 import nova.virt.disk.vfs.guestfs
-import nova.virt.driver
-import nova.virt.firewall
 import nova.virt.hyperv.pathutils
 import nova.virt.hyperv.vif
 import nova.virt.hyperv.vmops
 import nova.virt.hyperv.volumeops
 import nova.virt.imagecache
-import nova.virt.images
 import nova.virt.libvirt.driver
 import nova.virt.libvirt.imagebackend
 import nova.virt.libvirt.imagecache
@@ -32,7 +27,6 @@ import nova.virt.libvirt.storage.lvm
 import nova.virt.libvirt.utils
 import nova.virt.libvirt.vif
 import nova.virt.libvirt.volume.volume
-import nova.virt.netutils
 import nova.virt.vmwareapi.driver
 import nova.virt.vmwareapi.images
 import nova.virt.vmwareapi.vif
@@ -55,16 +49,9 @@ def list_opts():
         ('DEFAULT',
          itertools.chain(
              nova.virt.configdrive.configdrive_opts,
-             nova.virt.disk.api.disk_opts,
-             nova.virt.disk.mount.nbd.nbd_opts,
-             nova.virt.driver.driver_opts,
-             nova.virt.firewall.firewall_opts,
              nova.virt.imagecache.imagecache_opts,
-             nova.virt.images.image_opts,
-             nova.virt.netutils.netutils_opts,
          )),
         ('guestfs', nova.virt.disk.vfs.guestfs.guestfs_opts),
-        nova.conf.virt.list_opts(),
         ('hyperv',
          itertools.chain(
              nova.virt.hyperv.pathutils.hyperv_opts,

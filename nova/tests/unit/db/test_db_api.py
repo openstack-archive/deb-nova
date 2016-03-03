@@ -65,6 +65,7 @@ from nova.objects import fields
 from nova import quota
 from nova import test
 from nova.tests.unit import matchers
+from nova.tests import uuidsentinel
 from nova import utils
 
 CONF = cfg.CONF
@@ -72,12 +73,13 @@ CONF.import_opt('reserved_host_memory_mb', 'nova.compute.resource_tracker')
 CONF.import_opt('reserved_host_disk_mb', 'nova.compute.resource_tracker')
 
 get_engine = sqlalchemy_api.get_engine
-get_session = sqlalchemy_api.get_session
 
 
 def _reservation_get(context, uuid):
-    result = sqlalchemy_api.model_query(context, models.Reservation,
-            read_deleted="no").filter_by(uuid=uuid).first()
+    with sqlalchemy_api.main_context_manager.reader.using(context):
+        result = sqlalchemy_api.model_query(
+            context, models.Reservation, read_deleted="no").filter_by(
+            uuid=uuid).first()
 
     if not result:
         raise exception.ReservationNotFound(uuid=uuid)
@@ -95,7 +97,7 @@ def _quota_reserve(context, project_id, user_id):
 
     """
     def get_sync(resource, usage):
-        def sync(elevated, project_id, user_id, session):
+        def sync(elevated, project_id, user_id):
             return {resource: usage}
         return sync
     quotas = {}
@@ -519,46 +521,21 @@ class UnsupportedDbRegexpTestCase(DbTestCase):
 
 class ModelQueryTestCase(DbTestCase):
     def test_model_query_invalid_arguments(self):
-        # read_deleted shouldn't accept invalid values
-        self.assertRaises(ValueError, sqlalchemy_api.model_query,
-                          self.context, models.Instance, read_deleted=False)
-        self.assertRaises(ValueError, sqlalchemy_api.model_query,
-                          self.context, models.Instance, read_deleted="foo")
+        with sqlalchemy_api.main_context_manager.reader.using(self.context):
+            # read_deleted shouldn't accept invalid values
+            self.assertRaises(ValueError, sqlalchemy_api.model_query,
+                              self.context, models.Instance,
+                              read_deleted=False)
+            self.assertRaises(ValueError, sqlalchemy_api.model_query,
+                              self.context, models.Instance,
+                              read_deleted="foo")
 
-        # Check model is a valid model
-        self.assertRaises(TypeError, sqlalchemy_api.model_query,
-                          self.context, "")
+            # Check model is a valid model
+            self.assertRaises(TypeError, sqlalchemy_api.model_query,
+                              self.context, "")
 
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_use_slave_false(self, mock_get_session):
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   use_slave=False)
-        mock_get_session.assert_called_once_with(use_slave=False)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_use_slave_no_slave_connection(self, mock_get_session):
-        self.flags(slave_connection='', group='database')
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   use_slave=True)
-        mock_get_session.assert_called_once_with(use_slave=False)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_use_slave_true(self, mock_get_session):
-        self.flags(slave_connection='foo://bar', group='database')
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   use_slave=True)
-        mock_get_session.assert_called_once_with(use_slave=True)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_lazy_session_default(self, mock_get_session):
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   session=mock.MagicMock())
-        self.assertFalse(mock_get_session.called)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
     @mock.patch.object(sqlalchemyutils, 'model_query')
-    def test_model_query_use_context_session(self, mock_model_query,
-                                             mock_get_session):
+    def test_model_query_use_context_session(self, mock_model_query):
         @sqlalchemy_api.main_context_manager.reader
         def fake_method(context):
             session = context.session
@@ -566,14 +543,12 @@ class ModelQueryTestCase(DbTestCase):
             return session
 
         session = fake_method(self.context)
-        self.assertFalse(mock_get_session.called)
         mock_model_query.assert_called_once_with(models.Instance, session,
                                                  None, deleted=False)
 
 
 class EngineFacadeTestCase(DbTestCase):
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_use_single_context_session_writer(self, mock_get_session):
+    def test_use_single_context_session_writer(self):
         # Checks that session in context would not be overwritten by
         # annotation @sqlalchemy_api.main_context_manager.writer if annotation
         # is used twice.
@@ -590,11 +565,9 @@ class EngineFacadeTestCase(DbTestCase):
             return session
 
         parent_session, child_session = fake_parent_method(self.context)
-        self.assertFalse(mock_get_session.called)
         self.assertEqual(parent_session, child_session)
 
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_use_single_context_session_reader(self, mock_get_session):
+    def test_use_single_context_session_reader(self):
         # Checks that session in context would not be overwritten by
         # annotation @sqlalchemy_api.main_context_manager.reader if annotation
         # is used twice.
@@ -611,7 +584,6 @@ class EngineFacadeTestCase(DbTestCase):
             return session
 
         parent_session, child_session = fake_parent_method(self.context)
-        self.assertFalse(mock_get_session.called)
         self.assertEqual(parent_session, child_session)
 
 
@@ -904,7 +876,7 @@ class AggregateDBApiTestCase(test.TestCase):
         result = _create_aggregate(context=ctxt, metadata=None)
 
         def counted():
-            def get_query(context, id, session, read_deleted):
+            def get_query(context, id, read_deleted):
                 get_query.counter += 1
                 raise db_exc.DBDuplicateEntry
             get_query.counter = 0
@@ -1099,6 +1071,13 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         mock_create_facade.assert_called_once_with()
         mock_facade.get_engine.assert_called_once_with(use_slave=False)
 
+    def test_get_db_conf_with_connection(self):
+        mock_conf_group = mock.MagicMock()
+        mock_conf_group.connection = 'fakemain://'
+        db_conf = sqlalchemy_api._get_db_conf(mock_conf_group,
+                                              connection='fake://')
+        self.assertEqual('fake://', db_conf['connection'])
+
     @mock.patch.object(sqlalchemy_api.api_context_manager._factory,
                        'get_legacy_facade')
     def test_get_api_engine(self, mock_create_facade):
@@ -1109,26 +1088,6 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         mock_create_facade.assert_called_once_with()
         mock_facade.get_engine.assert_called_once_with()
 
-    @mock.patch.object(sqlalchemy_api.main_context_manager._factory,
-                       'get_legacy_facade')
-    def test_get_session(self, mock_create_facade):
-        mock_facade = mock.MagicMock()
-        mock_create_facade.return_value = mock_facade
-
-        sqlalchemy_api.get_session()
-        mock_create_facade.assert_called_once_with()
-        mock_facade.get_session.assert_called_once_with(use_slave=False)
-
-    @mock.patch.object(sqlalchemy_api.api_context_manager._factory,
-                       'get_legacy_facade')
-    def test_get_api_session(self, mock_create_facade):
-        mock_facade = mock.MagicMock()
-        mock_create_facade.return_value = mock_facade
-
-        sqlalchemy_api.get_api_session()
-        mock_create_facade.assert_called_once_with()
-        mock_facade.get_session.assert_called_once_with()
-
     @mock.patch.object(sqlalchemy_api, '_instance_get_by_uuid')
     @mock.patch.object(sqlalchemy_api, '_instances_fill_metadata')
     @mock.patch('oslo_db.sqlalchemy.utils.paginate_query')
@@ -1137,8 +1096,7 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         ctxt = mock.MagicMock()
         ctxt.elevated.return_value = mock.sentinel.elevated
         sqlalchemy_api.instance_get_all_by_filters_sort(ctxt, {}, marker='foo')
-        mock_get.assert_called_once_with(mock.sentinel.elevated,
-                                         'foo', session=mock.ANY)
+        mock_get.assert_called_once_with(mock.sentinel.elevated, 'foo')
         ctxt.elevated.assert_called_once_with(read_deleted='yes')
 
 
@@ -1149,7 +1107,9 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         self.create_instance_with_args()
         self.create_instance_with_args()
         self.create_instance_with_args(host='host2')
-        result = sqlalchemy_api._instance_get_all_uuids_by_host(ctxt, 'host1')
+        with sqlalchemy_api.main_context_manager.reader.using(ctxt):
+            result = sqlalchemy_api._instance_get_all_uuids_by_host(
+                ctxt, 'host1')
         self.assertEqual(2, len(result))
 
     def test_instance_get_all_uuids_by_host(self):
@@ -1157,7 +1117,9 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         self.create_instance_with_args()
         self.create_instance_with_args()
         self.create_instance_with_args(host='host2')
-        result = sqlalchemy_api._instance_get_all_uuids_by_host(ctxt, 'host1')
+        with sqlalchemy_api.main_context_manager.reader.using(ctxt):
+            result = sqlalchemy_api._instance_get_all_uuids_by_host(
+                ctxt, 'host1')
         self.assertEqual(2, len(result))
         self.assertEqual(six.text_type, type(result[0]))
 
@@ -1237,10 +1199,10 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         ctxt = context.get_admin_context()
         sqlalchemy_api.instance_get_all_by_filters(ctxt, {'foo': 'bar'},
             'sort_key', 'sort_dir', limit=100, marker='uuid',
-            columns_to_join='columns', use_slave=True)
+            columns_to_join='columns')
         mock_get_all_filters_sort.assert_called_once_with(ctxt, {'foo': 'bar'},
             limit=100, marker='uuid', columns_to_join='columns',
-            use_slave=True, sort_keys=['sort_key'], sort_dirs=['sort_dir'])
+            sort_keys=['sort_key'], sort_dirs=['sort_dir'])
 
     def test_instance_get_all_by_filters_sort_key_invalid(self):
         '''InvalidSortKey raised if an invalid key is given.'''
@@ -1371,6 +1333,7 @@ class MigrationTestCase(test.TestCase):
         self._create(status='reverted')
         self._create(status='confirmed')
         self._create(status='error')
+        self._create(status='failed')
         self._create(status='accepted')
         self._create(source_compute='host2', source_node='b',
                 dest_compute='host1', dest_node='a')
@@ -1392,12 +1355,14 @@ class MigrationTestCase(test.TestCase):
                   'dest_node': dest_node, 'instance_uuid': instance['uuid'],
                   'migration_type': migration_type}
         db.migration_create(self.ctxt, values)
+        return values
 
     def _assert_in_progress(self, migrations):
         for migration in migrations:
             self.assertNotEqual('confirmed', migration['status'])
             self.assertNotEqual('reverted', migration['status'])
             self.assertNotEqual('error', migration['status'])
+            self.assertNotEqual('failed', migration['status'])
             self.assertNotEqual('accepted', migration['status'])
 
     def test_migration_get_in_progress_joins(self):
@@ -1511,20 +1476,62 @@ class MigrationTestCase(test.TestCase):
         db.migration_update(self.ctxt, migration['id'],
                             {"status": "CONFIRMED"})
 
+    def test_migration_get_in_progress_by_instance(self):
+        values = self._create(status='running',
+                              migration_type="live-migration")
+        results = db.migration_get_in_progress_by_instance(
+                self.ctxt, values["instance_uuid"], "live-migration")
+
+        self.assertEqual(1, len(results))
+
+        for key in values:
+            self.assertEqual(values[key], results[0][key])
+
+        self.assertEqual("running", results[0]["status"])
+
+    def test_migration_get_in_progress_by_instance_not_in_progress(self):
+        values = self._create(migration_type="live-migration")
+        results = db.migration_get_in_progress_by_instance(
+                self.ctxt, values["instance_uuid"], "live-migration")
+
+        self.assertEqual(0, len(results))
+
+    def test_migration_get_in_progress_by_instance_not_live_migration(self):
+        values = self._create(migration_type="resize")
+
+        results = db.migration_get_in_progress_by_instance(
+                self.ctxt, values["instance_uuid"], "live-migration")
+        self.assertEqual(0, len(results))
+
+        results = db.migration_get_in_progress_by_instance(
+                self.ctxt, values["instance_uuid"])
+        self.assertEqual(0, len(results))
+
     def test_migration_update_not_found(self):
         self.assertRaises(exception.MigrationNotFound,
                           db.migration_update, self.ctxt, 42, {})
+
+    def test_get_migration_for_instance(self):
+        migrations = db.migration_get_all_by_filters(self.ctxt, [])
+        migration_id = migrations[0].id
+        instance_uuid = migrations[0].instance_uuid
+        instance_migration = db.migration_get_by_id_and_instance(
+            self.ctxt, migration_id, instance_uuid)
+        self.assertEqual(migration_id, instance_migration.id)
+        self.assertEqual(instance_uuid, instance_migration.instance_uuid)
+
+    def test_get_migration_for_instance_not_found(self):
+        self.assertRaises(exception.MigrationNotFoundForInstance,
+                          db.migration_get_by_id_and_instance, self.ctxt,
+                          '500', '501')
 
 
 class ModelsObjectComparatorMixin(object):
     def _dict_from_object(self, obj, ignored_keys):
         if ignored_keys is None:
             ignored_keys = []
-        if isinstance(obj, dict):
-            obj_items = obj.items()
-        else:
-            obj_items = obj.iteritems()
-        return {k: v for k, v in obj_items
+
+        return {k: v for k, v in obj.items()
                 if k not in ignored_keys}
 
     def _assertEqualObjects(self, obj1, obj2, ignored_keys=None):
@@ -2263,18 +2270,22 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_instance_metadata_get_multi(self):
         uuids = [self.create_instance_with_args()['uuid'] for i in range(3)]
-        meta = sqlalchemy_api._instance_metadata_get_multi(self.ctxt, uuids)
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            meta = sqlalchemy_api._instance_metadata_get_multi(
+                self.ctxt, uuids)
         for row in meta:
             self.assertIn(row['instance_uuid'], uuids)
 
     def test_instance_metadata_get_multi_no_uuids(self):
         self.mox.StubOutWithMock(query.Query, 'filter')
         self.mox.ReplayAll()
-        sqlalchemy_api._instance_metadata_get_multi(self.ctxt, [])
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            sqlalchemy_api._instance_metadata_get_multi(self.ctxt, [])
 
     def test_instance_system_system_metadata_get_multi(self):
         uuids = [self.create_instance_with_args()['uuid'] for i in range(3)]
-        sys_meta = sqlalchemy_api._instance_system_metadata_get_multi(
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            sys_meta = sqlalchemy_api._instance_system_metadata_get_multi(
                 self.ctxt, uuids)
         for row in sys_meta:
             self.assertIn(row['instance_uuid'], uuids)
@@ -2826,35 +2837,32 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(meta, {'mk1': 'mv3'})
 
     def test_instance_update_and_get_original_no_conflict_on_session(self):
-        session = get_session()
-        # patch get_session so that we may inspect it outside of the
-        # method; once enginefacade is implemented, this can be simplified
-        with mock.patch("nova.db.sqlalchemy.api.get_session", lambda: session):
+        with sqlalchemy_api.main_context_manager.writer.using(self.ctxt):
             instance = self.create_instance_with_args()
             (old_ref, new_ref) = db.instance_update_and_get_original(
                 self.ctxt, instance['uuid'], {'metadata': {'mk1': 'mv3'}})
 
-        # test some regular persisted fields
-        self.assertEqual(old_ref.uuid, new_ref.uuid)
-        self.assertEqual(old_ref.project_id, new_ref.project_id)
+            # test some regular persisted fields
+            self.assertEqual(old_ref.uuid, new_ref.uuid)
+            self.assertEqual(old_ref.project_id, new_ref.project_id)
 
-        # after a copy operation, we can assert:
+            # after a copy operation, we can assert:
 
-        # 1. the two states have their own InstanceState
-        old_insp = inspect(old_ref)
-        new_insp = inspect(new_ref)
-        self.assertNotEqual(old_insp, new_insp)
+            # 1. the two states have their own InstanceState
+            old_insp = inspect(old_ref)
+            new_insp = inspect(new_ref)
+            self.assertNotEqual(old_insp, new_insp)
 
-        # 2. only one of the objects is still in our Session
-        self.assertIs(new_insp.session, session)
-        self.assertIsNone(old_insp.session)
+            # 2. only one of the objects is still in our Session
+            self.assertIs(new_insp.session, self.ctxt.session)
+            self.assertIsNone(old_insp.session)
 
-        # 3. The "new" object remains persistent and ready
-        # for updates
-        self.assertTrue(new_insp.persistent)
+            # 3. The "new" object remains persistent and ready
+            # for updates
+            self.assertTrue(new_insp.persistent)
 
-        # 4. the "old" object is detached from this Session.
-        self.assertTrue(old_insp.detached)
+            # 4. the "old" object is detached from this Session.
+            self.assertTrue(old_insp.detached)
 
     def test_instance_update_and_get_original_conflict_race(self):
         # Ensure that we retry if update_on_match fails for no discernable
@@ -3170,36 +3178,38 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           db.instance_destroy, ctxt, instance['uuid'])
 
     def test_check_instance_exists(self):
-        session = get_session()
         instance = self.create_instance_with_args()
-        self.assertIsNone(sqlalchemy_api._check_instance_exists_in_project(
-            self.ctxt, session, instance['uuid']))
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            self.assertIsNone(sqlalchemy_api._check_instance_exists_in_project(
+                self.ctxt, instance['uuid']))
 
     def test_check_instance_exists_non_existing_instance(self):
-        session = get_session()
-        self.assertRaises(exception.InstanceNotFound,
-                          sqlalchemy_api._check_instance_exists_in_project,
-                          self.ctxt, session, '123')
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            self.assertRaises(exception.InstanceNotFound,
+                              sqlalchemy_api._check_instance_exists_in_project,
+                              self.ctxt, '123')
 
     def test_check_instance_exists_from_different_tenant(self):
         context1 = context.RequestContext('user1', 'project1')
         context2 = context.RequestContext('user2', 'project2')
-        session = get_session()
         instance = self.create_instance_with_args(context=context1)
-        self.assertIsNone(sqlalchemy_api._check_instance_exists_in_project(
-            context1, session, instance['uuid']))
-        self.assertRaises(exception.InstanceNotFound,
-                          sqlalchemy_api._check_instance_exists_in_project,
-                          context2, session, instance['uuid'])
+        with sqlalchemy_api.main_context_manager.reader.using(context1):
+            self.assertIsNone(sqlalchemy_api._check_instance_exists_in_project(
+            context1, instance['uuid']))
+
+        with sqlalchemy_api.main_context_manager.reader.using(context2):
+            self.assertRaises(exception.InstanceNotFound,
+                              sqlalchemy_api._check_instance_exists_in_project,
+                              context2, instance['uuid'])
 
     def test_check_instance_exists_admin_context(self):
-        session = get_session()
         some_context = context.RequestContext('some_user', 'some_project')
         instance = self.create_instance_with_args(context=some_context)
 
-        # Check that method works correctly with admin context
-        self.assertIsNone(sqlalchemy_api._check_instance_exists_in_project(
-            self.ctxt, session, instance['uuid']))
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            # Check that method works correctly with admin context
+            self.assertIsNone(sqlalchemy_api._check_instance_exists_in_project(
+                self.ctxt, instance['uuid']))
 
 
 class InstanceMetadataTestCase(test.TestCase):
@@ -3260,7 +3270,8 @@ class InstanceExtraTestCase(test.TestCase):
         self.assertEqual('changed', inst_extra.numa_topology)
 
     def test_instance_extra_update_by_uuid_and_create(self):
-        sqlalchemy_api.model_query(self.ctxt, models.InstanceExtra).\
+        with sqlalchemy_api.main_context_manager.writer.using(self.ctxt):
+            sqlalchemy_api.model_query(self.ctxt, models.InstanceExtra).\
                     filter_by(instance_uuid=self.instance['uuid']).\
                     delete()
         inst_extra = db.instance_extra_get_by_instance_uuid(
@@ -4012,6 +4023,16 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
                                  ignored_keys)
         self._assertEqualObjects(extra_specs, flavor['extra_specs'])
 
+    @mock.patch('sqlalchemy.orm.query.Query.all', return_value=[])
+    def test_flavor_create_with_extra_specs_duplicate(self, mock_all):
+        extra_specs = dict(key='value')
+        flavorid = 'flavorid'
+        self._create_flavor({'flavorid': flavorid, 'extra_specs': extra_specs})
+
+        self.assertRaises(exception.FlavorExtraSpecUpdateCreateFailed,
+                          db.flavor_extra_specs_update_or_create,
+                          self.ctxt, flavorid, extra_specs)
+
     def test_flavor_get_all(self):
         # NOTE(boris-42): Remove base instance types
         for it in db.flavor_get_all(self.ctxt):
@@ -4294,7 +4315,7 @@ class InstanceTypeExtraSpecsTestCase(BaseInstanceTypeTestCase):
     def test_flavor_extra_specs_update_or_create_retry(self):
 
         def counted():
-            def get_id(context, flavorid, session):
+            def get_id(context, flavorid):
                 get_id.counter += 1
                 raise db_exc.DBDuplicateEntry
             get_id.counter = 0
@@ -4793,6 +4814,27 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
         network = db.network_create_safe(self.ctxt, {})
 
         address = self.create_fixed_ip(network_id=network['id'])
+        db.fixed_ip_associate_pool(self.ctxt, network['id'], instance_uuid)
+        fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
+        self.assertEqual(fixed_ip['instance_uuid'], instance_uuid)
+
+    def test_fixed_ip_associate_pool_order(self):
+        """Test that fixed_ip always uses oldest fixed_ip.
+
+        We should always be using the fixed ip with the oldest
+        updated_at.
+        """
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+        self.addCleanup(timeutils.clear_time_override)
+        start = timeutils.utcnow()
+        for i in range(1, 4):
+            now = start - datetime.timedelta(hours=i)
+            timeutils.set_time_override(now)
+            address = self.create_fixed_ip(
+                updated_at=now,
+                address='10.1.0.%d' % i,
+                network_id=network['id'])
         db.fixed_ip_associate_pool(self.ctxt, network['id'], instance_uuid)
         fixed_ip = db.fixed_ip_get_by_address(self.ctxt, address)
         self.assertEqual(fixed_ip['instance_uuid'], instance_uuid)
@@ -7032,9 +7074,10 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_get_project_user_quota_usages_in_order(self):
         _quota_reserve(self.ctxt, 'p1', 'u1')
-        with mock.patch.object(query.Query, 'order_by') as order_mock:
-            sqlalchemy_api._get_project_user_quota_usages(
-                self.ctxt, None, 'p1', 'u1')
+        with sqlalchemy_api.main_context_manager.reader.using(self.ctxt):
+            with mock.patch.object(query.Query, 'order_by') as order_mock:
+                sqlalchemy_api._get_project_user_quota_usages(
+                    self.ctxt, 'p1', 'u1')
         self.assertTrue(order_mock.called)
 
     def test_quota_usage_update_nonexistent(self):
@@ -7094,10 +7137,10 @@ class QuotaReserveNoDbTestCase(test.NoDBTestCase):
         # Now test if the QuotaUsage was created with a user_id or not.
         if per_project_quotas:
             quc.assert_called_once_with(
-                project_id, None, resource, 0, 0, None, session=session)
+                project_id, None, resource, 0, 0, None, session)
         else:
             quc.assert_called_once_with(
-                project_id, user_id, resource, 0, 0, None, session=session)
+                project_id, user_id, resource, 0, 0, None, session)
 
     def test_create_quota_usage_if_missing_created_per_project_quotas(self):
         self._test_create_quota_usage_if_missing_created(True)
@@ -7295,6 +7338,22 @@ class S3ImageTestCase(test.TestCase):
 class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     _ignored_keys = ['id', 'deleted', 'deleted_at', 'created_at', 'updated_at']
+    # TODO(jaypipes): Remove once the compute node inventory migration has
+    # been completed and the scheduler uses the inventories and allocations
+    # tables directly.
+    _ignored_temp_resource_providers_keys = [
+        'inv_memory_mb',
+        'inv_memory_mb_reserved',
+        'inv_ram_allocation_ratio',
+        'inv_memory_mb_used',
+        'inv_vcpus',
+        'inv_cpu_allocation_ratio',
+        'inv_vcpus_used',
+        'inv_local_gb',
+        'inv_local_gb_reserved',
+        'inv_disk_allocation_ratio',
+        'inv_local_gb_used',
+    ]
 
     def setUp(self):
         super(ComputeNodeTestCase, self).setUp()
@@ -7304,6 +7363,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                             disabled=False)
         self.service = db.service_create(self.ctxt, self.service_dict)
         self.compute_node_dict = dict(vcpus=2, memory_mb=1024, local_gb=2048,
+                                 uuid=uuidsentinel.fake_compute_node,
                                  vcpus_used=0, memory_mb_used=0,
                                  local_gb_used=0, free_ram_mb=1024,
                                  free_disk_gb=2048, hypervisor_type="xen",
@@ -7320,6 +7380,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  extra_resources='',
                                  cpu_allocation_ratio=16.0,
                                  ram_allocation_ratio=1.5,
+                                 disk_allocation_ratio=1.0,
                                  stats='', numa_topology='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
@@ -7340,10 +7401,112 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(1, len(nodes))
         node = nodes[0]
         self._assertEqualObjects(self.compute_node_dict, node,
-                                 ignored_keys=self._ignored_keys +
-                                              ['stats', 'service'])
+                    ignored_keys=self._ignored_keys +
+                                 self._ignored_temp_resource_providers_keys +
+                                 ['stats', 'service'])
         new_stats = jsonutils.loads(node['stats'])
         self.assertEqual(self.stats, new_stats)
+
+    def test_compute_node_select_schema(self):
+        # We here test that compute nodes that have inventory and allocation
+        # entries under the new resource-providers schema return non-None
+        # values for the inv_* fields in the returned list of dicts from
+        # _compute_node_select().
+        nodes = sqlalchemy_api._compute_node_select(self.ctxt)
+        self.assertEqual(1, len(nodes))
+        node = nodes[0]
+        self.assertIsNone(node['inv_memory_mb'])
+        self.assertIsNone(node['inv_memory_mb_used'])
+
+        RAM_MB = fields.ResourceClass.index(fields.ResourceClass.MEMORY_MB)
+        VCPU = fields.ResourceClass.index(fields.ResourceClass.VCPU)
+        DISK_GB = fields.ResourceClass.index(fields.ResourceClass.DISK_GB)
+
+        @sqlalchemy_api.main_context_manager.writer
+        def create_resource_provider(context):
+            rp = models.ResourceProvider()
+            rp.uuid = node['uuid']
+            rp.save(context.session)
+            return rp.id
+
+        @sqlalchemy_api.main_context_manager.writer
+        def create_inventory(context, provider_id, resource_class, total):
+            inv = models.Inventory()
+            inv.resource_provider_id = provider_id
+            inv.resource_class_id = resource_class
+            inv.total = total
+            inv.reserved = 0
+            inv.allocation_ratio = 1.0
+            inv.min_unit = 1
+            inv.max_unit = 1
+            inv.step_size = 1
+            inv.save(context.session)
+
+        @sqlalchemy_api.main_context_manager.writer
+        def create_allocation(context, provider_id, resource_class, used):
+            alloc = models.Allocation()
+            alloc.resource_provider_id = provider_id
+            alloc.resource_class_id = resource_class
+            alloc.consumer_id = 'xyz'
+            alloc.used = used
+            alloc.save(context.session)
+
+        # Now add an inventory record for memory and check there is a non-None
+        # value for the inv_memory_mb field. Don't yet add an allocation record
+        # for RAM_MB yet so ensure inv_memory_mb_used remains None.
+        rp_id = create_resource_provider(self.ctxt)
+        create_inventory(self.ctxt, rp_id, RAM_MB, 4096)
+        nodes = db.compute_node_get_all(self.ctxt)
+        self.assertEqual(1, len(nodes))
+        node = nodes[0]
+        self.assertEqual(4096, node['inv_memory_mb'])
+        self.assertIsNone(node['inv_memory_mb_used'])
+
+        # Now add an allocation record for an instance consuming some memory
+        # and check there is a non-None value for the inv_memory_mb_used field.
+        create_allocation(self.ctxt, rp_id, RAM_MB, 64)
+        nodes = db.compute_node_get_all(self.ctxt)
+        self.assertEqual(1, len(nodes))
+        node = nodes[0]
+        self.assertEqual(4096, node['inv_memory_mb'])
+        self.assertEqual(64, node['inv_memory_mb_used'])
+
+        # Because of the complex join conditions, it's best to also test the
+        # other two resource classes and ensure that the joins are correct.
+        self.assertIsNone(node['inv_vcpus'])
+        self.assertIsNone(node['inv_vcpus_used'])
+        self.assertIsNone(node['inv_local_gb'])
+        self.assertIsNone(node['inv_local_gb_used'])
+
+        create_inventory(self.ctxt, rp_id, VCPU, 16)
+        create_allocation(self.ctxt, rp_id, VCPU, 2)
+        nodes = db.compute_node_get_all(self.ctxt)
+        self.assertEqual(1, len(nodes))
+        node = nodes[0]
+        self.assertEqual(16, node['inv_vcpus'])
+        self.assertEqual(2, node['inv_vcpus_used'])
+        # Check to make sure the other resources stayed the same...
+        self.assertEqual(4096, node['inv_memory_mb'])
+        self.assertEqual(64, node['inv_memory_mb_used'])
+
+        create_inventory(self.ctxt, rp_id, DISK_GB, 100)
+        create_allocation(self.ctxt, rp_id, DISK_GB, 20)
+        nodes = db.compute_node_get_all(self.ctxt)
+        self.assertEqual(1, len(nodes))
+        node = nodes[0]
+        self.assertEqual(100, node['inv_local_gb'])
+        self.assertEqual(20, node['inv_local_gb_used'])
+        # Check to make sure the other resources stayed the same...
+        self.assertEqual(4096, node['inv_memory_mb'])
+        self.assertEqual(64, node['inv_memory_mb_used'])
+        self.assertEqual(16, node['inv_vcpus'])
+        self.assertEqual(2, node['inv_vcpus_used'])
+
+    def test_compute_node_exec(self):
+        results = sqlalchemy_api._compute_node_select(self.ctxt)
+        self.assertIsInstance(results, list)
+        self.assertEqual(1, len(results))
+        self.assertIsInstance(results[0], dict)
 
     def test_compute_node_get_all_deleted_compute_node(self):
         # Create a service and compute node and ensure we can find its stats;
@@ -7385,7 +7548,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         service_data['host'] = 'host2'
         service = db.service_create(self.ctxt, service_data)
 
-        existing_node = dict(self.item.iteritems())
+        existing_node = dict(self.item.items())
         expected = [existing_node]
 
         for name in ['bm_node1', 'bm_node2']:
@@ -7403,7 +7566,8 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                         key=lambda n: n['hypervisor_hostname'])
 
         self._assertEqualListsOfObjects(expected, result,
-                                        ignored_keys=['stats'])
+                    ignored_keys=self._ignored_temp_resource_providers_keys +
+                                 ['stats'])
 
     def test_compute_node_get_all_by_host_with_distinct_hosts(self):
         # Create another service with another node
@@ -7417,10 +7581,12 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         node = db.compute_node_create(self.ctxt, compute_node_another_host)
 
-        result = db.compute_node_get_all_by_host(self.ctxt, 'host1', False)
-        self._assertEqualListsOfObjects([self.item], result)
-        result = db.compute_node_get_all_by_host(self.ctxt, 'host2', False)
-        self._assertEqualListsOfObjects([node], result)
+        result = db.compute_node_get_all_by_host(self.ctxt, 'host1')
+        self._assertEqualListsOfObjects([self.item], result,
+                ignored_keys=self._ignored_temp_resource_providers_keys)
+        result = db.compute_node_get_all_by_host(self.ctxt, 'host2')
+        self._assertEqualListsOfObjects([node], result,
+                ignored_keys=self._ignored_temp_resource_providers_keys)
 
     def test_compute_node_get_all_by_host_with_same_host(self):
         # Create another node on top of the same service
@@ -7432,11 +7598,12 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         expected = [self.item, node]
         result = sorted(db.compute_node_get_all_by_host(
-                        self.ctxt, 'host1', False),
+                        self.ctxt, 'host1'),
                         key=lambda n: n['hypervisor_hostname'])
 
+        ignored = ['stats'] + self._ignored_temp_resource_providers_keys
         self._assertEqualListsOfObjects(expected, result,
-                                        ignored_keys=['stats'])
+                                        ignored_keys=ignored)
 
     def test_compute_node_get_all_by_host_not_found(self):
         self.assertRaises(exception.ComputeHostNotFound,
@@ -7447,8 +7614,9 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         result = db.compute_nodes_get_by_service_id(
             self.ctxt, self.service['id'])
 
+        ignored = ['stats'] + self._ignored_temp_resource_providers_keys
         self._assertEqualListsOfObjects(expected, result,
-                                        ignored_keys=['stats'])
+                                        ignored_keys=ignored)
 
     def test_compute_nodes_get_by_service_id_multiple_results(self):
         # Create another node on top of the same service
@@ -7463,8 +7631,9 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                         self.ctxt, self.service['id']),
                         key=lambda n: n['hypervisor_hostname'])
 
+        ignored = ['stats'] + self._ignored_temp_resource_providers_keys
         self._assertEqualListsOfObjects(expected, result,
-                                        ignored_keys=['stats'])
+                                        ignored_keys=ignored)
 
     def test_compute_nodes_get_by_service_id_not_found(self):
         self.assertRaises(exception.ServiceNotFound,
@@ -7483,7 +7652,10 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         result = db.compute_node_get_by_host_and_nodename(
             self.ctxt, 'host1', 'node_2')
 
-        self._assertEqualObjects(expected, result)
+        self._assertEqualObjects(expected, result,
+                    ignored_keys=self._ignored_keys +
+                                 self._ignored_temp_resource_providers_keys +
+                                 ['stats', 'service'])
 
     def test_compute_node_get_by_host_and_nodename_not_found(self):
         self.assertRaises(exception.ComputeHostNotFound,
@@ -7494,7 +7666,9 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         compute_node_id = self.item['id']
         node = db.compute_node_get(self.ctxt, compute_node_id)
         self._assertEqualObjects(self.compute_node_dict, node,
-                        ignored_keys=self._ignored_keys + ['stats', 'service'])
+                ignored_keys=self._ignored_keys +
+                             ['stats', 'service'] +
+                             self._ignored_temp_resource_providers_keys)
         new_stats = jsonutils.loads(node['stats'])
         self.assertEqual(self.stats, new_stats)
 
@@ -7617,7 +7791,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
     def test_service_destroy_with_compute_node(self):
         db.service_destroy(self.ctxt, self.service['id'])
         self.assertRaises(exception.ComputeHostNotFound,
-                          db.compute_node_get, self.ctxt,
+                          db.compute_node_get_model, self.ctxt,
                           self.item['id'])
 
     def test_service_destroy_with_old_compute_node(self):
@@ -7632,8 +7806,33 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
         db.service_destroy(self.ctxt, self.service['id'])
         self.assertRaises(exception.ComputeHostNotFound,
-                          db.compute_node_get, self.ctxt,
+                          db.compute_node_get_model, self.ctxt,
                           item_old['id'])
+
+    @mock.patch("nova.db.sqlalchemy.api.compute_node_get_model")
+    def test_dbapi_compute_node_get_model(self, mock_get_model):
+        cid = self.item["id"]
+        db.api.compute_node_get_model(self.ctxt, cid)
+        mock_get_model.assert_called_once_with(self.ctxt, cid)
+
+    @mock.patch("nova.db.sqlalchemy.api.model_query")
+    def test_compute_node_get_model(self, mock_model_query):
+
+        class FakeFiltered(object):
+            def first(self):
+                return mock.sentinel.first
+
+        fake_filtered_cn = FakeFiltered()
+
+        class FakeModelQuery(object):
+            def filter_by(self, id):
+                return fake_filtered_cn
+
+        mock_model_query.return_value = FakeModelQuery()
+        result = sqlalchemy_api.compute_node_get_model(self.ctxt,
+                                                       self.item["id"])
+        self.assertEqual(result, mock.sentinel.first)
+        mock_model_query.assert_called_once_with(self.ctxt, models.ComputeNode)
 
 
 class ProviderFwRuleTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -8343,7 +8542,12 @@ class ArchiveTestCase(test.TestCase, ModelsObjectComparatorMixin):
             # NOTE(snikitin): migration 266 introduced a new table 'tags',
             #                 which have no shadow table and it's
             #                 completely OK, so we should skip it here
-            if table_name == 'tags':
+            # NOTE(cdent): migration 314 introduced three new
+            # ('resource_providers', 'allocations' and 'inventories')
+            # with no shadow table and it's OK, so skip.
+            # 318 adds one more: 'resource_provider_aggregates'.
+            if table_name in ['tags', 'resource_providers', 'allocations',
+                              'inventories', 'resource_provider_aggregates']:
                 continue
 
             if table_name.startswith("shadow_"):
@@ -8420,6 +8624,11 @@ class ArchiveTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def _test_archive_deleted_rows_for_one_uuid_table(self, tablename):
         """:returns: 0 on success, 1 if no uuid column, 2 if insert failed."""
+        # NOTE(cdent): migration 314 adds the resource_providers
+        # table with a uuid column that does not archive, so skip.
+        skip_tables = ['resource_providers']
+        if tablename in skip_tables:
+            return 1
         main_table = sqlalchemyutils.get_table(self.engine, tablename)
         if not hasattr(main_table.c, "uuid"):
             # Not a uuid table, so skip it.
@@ -9364,3 +9573,67 @@ class TestDBInstanceTags(test.TestCase):
         self.assertRaises(exception.InstanceNotFound,
                           db.instance_tag_exists,
                           self.context, 'fake_uuid', 'tag')
+
+
+class TestInstanceInfoCache(test.TestCase):
+    def setUp(self):
+        super(TestInstanceInfoCache, self).setUp()
+        user_id = 'fake'
+        project_id = 'fake'
+        self.context = context.RequestContext(user_id, project_id)
+
+    def test_instance_info_cache_get(self):
+        instance = db.instance_create(self.context, {})
+        network_info = 'net'
+        db.instance_info_cache_update(self.context, instance.uuid,
+                                      {'network_info': network_info})
+        info_cache = db.instance_info_cache_get(self.context, instance.uuid)
+        self.assertEqual(network_info, info_cache.network_info)
+
+    def test_instance_info_cache_update(self):
+        instance = db.instance_create(self.context, {})
+
+        network_info1 = 'net1'
+        db.instance_info_cache_update(self.context, instance.uuid,
+                                      {'network_info': network_info1})
+        info_cache = db.instance_info_cache_get(self.context, instance.uuid)
+        self.assertEqual(network_info1, info_cache.network_info)
+
+        network_info2 = 'net2'
+        db.instance_info_cache_update(self.context, instance.uuid,
+                                      {'network_info': network_info2})
+        info_cache = db.instance_info_cache_get(self.context, instance.uuid)
+        self.assertEqual(network_info2, info_cache.network_info)
+
+    def test_instance_info_cache_delete(self):
+        instance = db.instance_create(self.context, {})
+        network_info = 'net'
+        db.instance_info_cache_update(self.context, instance.uuid,
+                                      {'network_info': network_info})
+        info_cache = db.instance_info_cache_get(self.context, instance.uuid)
+        self.assertEqual(network_info, info_cache.network_info)
+        db.instance_info_cache_delete(self.context, instance.uuid)
+        info_cache = db.instance_info_cache_get(self.context, instance.uuid)
+        self.assertIsNone(info_cache)
+
+    def test_instance_info_cache_update_duplicate(self):
+        instance1 = db.instance_create(self.context, {})
+        instance2 = db.instance_create(self.context, {})
+
+        network_info1 = 'net1'
+        db.instance_info_cache_update(self.context, instance1.uuid,
+                                      {'network_info': network_info1})
+        network_info2 = 'net2'
+        db.instance_info_cache_update(self.context, instance2.uuid,
+                                      {'network_info': network_info2})
+
+        # updating of instance_uuid causes unique constraint failure,
+        # using of savepoint helps to continue working with existing session
+        # after DB errors, so exception was successfully handled
+        db.instance_info_cache_update(self.context, instance2.uuid,
+                                      {'instance_uuid': instance1.uuid})
+
+        info_cache1 = db.instance_info_cache_get(self.context, instance1.uuid)
+        self.assertEqual(network_info1, info_cache1.network_info)
+        info_cache2 = db.instance_info_cache_get(self.context, instance2.uuid)
+        self.assertEqual(network_info2, info_cache2.network_info)

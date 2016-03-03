@@ -138,7 +138,7 @@ class ApiTestCase(test.TestCase):
         self.assertEqual(123, vifs[0].network_id)
         self.assertEqual(str(mock.sentinel.network_uuid), vifs[0].net_uuid)
         mock_get_by_instance.assert_called_once_with(
-            self.context, str(mock.sentinel.inst_uuid), use_slave=False)
+            self.context, str(mock.sentinel.inst_uuid))
         mock_get_by_id.assert_called_once_with(self.context, 123,
                                                project_only='allow_none')
 
@@ -196,6 +196,8 @@ class ApiTestCase(test.TestCase):
         def fake_instance_get_by_uuid(context, instance_uuid,
                                       columns_to_join=None,
                                       use_slave=None):
+            if instance_uuid == orig_instance_uuid:
+                self.assertIn('extra.flavor', columns_to_join)
             return fake_instance.fake_db_instance(uuid=instance_uuid)
 
         self.stubs.Set(self.network_api.db, 'instance_get_by_uuid',

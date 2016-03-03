@@ -79,8 +79,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 vmFolder='fake_vm_folder')
         cluster = vmwareapi_fake.create_cluster('fake_cluster', fake_ds_ref)
         self._instance_values = {
-            'display_name': 'fake_display_name',
             'name': 'fake_name',
+            'display_name': 'fake_display_name',
             'uuid': 'fake_uuid',
             'vcpus': 1,
             'memory_mb': 512,
@@ -203,12 +203,12 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     def test_get_valid_vms_from_retrieve_result(self, _mock_cont):
         ops = vmops.VMwareVMOps(self._session, mock.Mock(), mock.Mock())
         fake_objects = vmwareapi_fake.FakeRetrieveResult()
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
-            name=uuidutils.generate_uuid()))
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
-            name=uuidutils.generate_uuid()))
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
-            name=uuidutils.generate_uuid()))
+        for x in range(0, 3):
+            vm = vmwareapi_fake.VirtualMachine()
+            vm.set('config.extraConfig["nvp.vm-uuid"]',
+                   vmwareapi_fake.OptionValue(
+                       value=uuidutils.generate_uuid()))
+            fake_objects.add_object(vm)
         vms = ops._get_valid_vms_from_retrieve_result(fake_objects)
         self.assertEqual(3, len(vms))
 
@@ -217,14 +217,21 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                                              _mock_cont):
         ops = vmops.VMwareVMOps(self._session, mock.Mock(), mock.Mock())
         fake_objects = vmwareapi_fake.FakeRetrieveResult()
-        fake_objects.add_object(vmwareapi_fake.VirtualMachine(
-            name=uuidutils.generate_uuid()))
-        invalid_vm1 = vmwareapi_fake.VirtualMachine(
-            name=uuidutils.generate_uuid())
+        valid_vm = vmwareapi_fake.VirtualMachine()
+        valid_vm.set('config.extraConfig["nvp.vm-uuid"]',
+                     vmwareapi_fake.OptionValue(
+                         value=uuidutils.generate_uuid()))
+        fake_objects.add_object(valid_vm)
+        invalid_vm1 = vmwareapi_fake.VirtualMachine()
         invalid_vm1.set('runtime.connectionState', 'orphaned')
-        invalid_vm2 = vmwareapi_fake.VirtualMachine(
-            name=uuidutils.generate_uuid())
+        invalid_vm1.set('config.extraConfig["nvp.vm-uuid"]',
+                        vmwareapi_fake.OptionValue(
+                            value=uuidutils.generate_uuid()))
+        invalid_vm2 = vmwareapi_fake.VirtualMachine()
         invalid_vm2.set('runtime.connectionState', 'inaccessible')
+        invalid_vm2.set('config.extraConfig["nvp.vm-uuid"]',
+                        vmwareapi_fake.OptionValue(
+                            value=uuidutils.generate_uuid()))
         fake_objects.add_object(invalid_vm1)
         fake_objects.add_object(invalid_vm2)
         vms = ops._get_valid_vms_from_retrieve_result(fake_objects)
@@ -944,6 +951,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                     'image_id': image_id,
                     'version': version.version_string_with_package()})
 
+    @mock.patch.object(vm_util, 'rename_vm')
     @mock.patch.object(vmops.VMwareVMOps, '_create_folders',
                        return_value='fake_vm_folder')
     @mock.patch('nova.virt.vmwareapi.vm_util.power_on_instance')
@@ -963,7 +971,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                          enlist_image, fetch_image,
                                          use_disk_image,
                                          power_on_instance,
-                                         create_folders):
+                                         create_folders,
+                                         rename_vm):
         self._instance.flavor = self._flavor
         extra_specs = get_extra_specs.return_value
         connection_info1 = {'data': 'fake-data1', 'serial': 'volume-fake-id1'}
@@ -1007,6 +1016,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 connection_info2, self._instance,
                 constants.DEFAULT_ADAPTER_TYPE)
 
+    @mock.patch.object(vm_util, 'rename_vm')
     @mock.patch.object(vmops.VMwareVMOps, '_create_folders',
                        return_value='fake_vm_folder')
     @mock.patch('nova.virt.vmwareapi.vm_util.power_on_instance')
@@ -1020,7 +1030,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                                    get_vm_config_info,
                                                    build_virtual_machine,
                                                    power_on_instance,
-                                                   create_folders):
+                                                   create_folders,
+                                                   rename_vm):
         self._instance.image_ref = None
         self._instance.flavor = self._flavor
         extra_specs = get_extra_specs.return_value
@@ -1294,6 +1305,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         if extras:
             expected_methods.extend(extras)
 
+        # Last call should be renaming the instance
+        expected_methods.append('Rename_Task')
         recorded_methods = [c[1][1] for c in mock_call_method.mock_calls]
         self.assertEqual(expected_methods, recorded_methods)
 
@@ -1570,6 +1583,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                       'device_name': '/dev/sdb'}}
         self._test_spawn(block_device_info=block_device_info)
 
+    @mock.patch.object(vm_util, 'rename_vm')
     @mock.patch('nova.virt.vmwareapi.vm_util.power_on_instance')
     @mock.patch.object(vmops.VMwareVMOps, '_create_and_attach_thin_disk')
     @mock.patch.object(vmops.VMwareVMOps, '_use_disk_image_as_linked_clone')
@@ -1589,7 +1603,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                             fetch_image,
                                             use_disk_image,
                                             create_and_attach_thin_disk,
-                                            power_on_instance):
+                                            power_on_instance,
+                                            rename_vm):
         self._instance.flavor = objects.Flavor(vcpus=1, memory_mb=512,
                                                name="m1.tiny", root_gb=1,
                                                ephemeral_gb=1, swap=512,
@@ -2094,7 +2109,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 image_ds_loc.rel_path,
                 cookies='Fake-CookieJar')
 
-    @mock.patch.object(images, 'fetch_image_stream_optimized')
+    @mock.patch.object(images, 'fetch_image_stream_optimized',
+                       return_value=123)
     def test_fetch_image_as_vapp(self, mock_fetch_image):
         vi = self._make_vm_config_info()
         image_ds_loc = mock.Mock()
@@ -2108,6 +2124,23 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 self._ds.name,
                 vi.dc_info.vmFolder,
                 self._vmops._root_resource_pool)
+        self.assertEqual(vi.ii.file_size, 123)
+
+    @mock.patch.object(images, 'fetch_image_ova', return_value=123)
+    def test_fetch_image_as_ova(self, mock_fetch_image):
+        vi = self._make_vm_config_info()
+        image_ds_loc = mock.Mock()
+        image_ds_loc.parent.basename = 'fake-name'
+        self._vmops._fetch_image_as_ova(self._context, vi, image_ds_loc)
+        mock_fetch_image.assert_called_once_with(
+                self._context,
+                vi.instance,
+                self._session,
+                'fake-name',
+                self._ds.name,
+                vi.dc_info.vmFolder,
+                self._vmops._root_resource_pool)
+        self.assertEqual(vi.ii.file_size, 123)
 
     @mock.patch.object(uuidutils, 'generate_uuid', return_value='tmp-uuid')
     def test_prepare_iso_image(self, mock_generate_uuid):

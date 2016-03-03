@@ -21,6 +21,7 @@ import six
 
 from nova.network import model as network_model
 from nova.objects import fields
+from nova import signature_utils
 from nova import test
 from nova import utils
 
@@ -422,6 +423,25 @@ class TestHVType(TestField):
         self.assertRaises(ValueError, self.field.stringify, 'acme')
 
 
+class TestImageSignatureTypes(TestField):
+    # Ensure that the object definition is updated
+    # in step with the signature_utils module
+    def setUp(self):
+        super(TestImageSignatureTypes, self).setUp()
+        self.hash_field = fields.ImageSignatureHashType()
+        self.key_type_field = fields.ImageSignatureKeyType()
+
+    def test_hashes(self):
+        for hash_name in list(signature_utils.HASH_METHODS.keys()):
+            self.assertIn(hash_name, self.hash_field.hashes)
+
+    def test_key_types(self):
+        key_type_dict = signature_utils.SignatureKeyType._REGISTERED_TYPES
+        key_types = list(key_type_dict.keys())
+        for key_type in key_types:
+            self.assertIn(key_type, self.key_type_field.key_types)
+
+
 class TestOSType(TestField):
     def setUp(self):
         super(TestOSType, self).setUp()
@@ -438,6 +458,60 @@ class TestOSType(TestField):
 
     def test_stringify_invalid(self):
         self.assertRaises(ValueError, self.field.stringify, 'acme')
+
+
+class TestResourceClass(TestField):
+    def setUp(self):
+        super(TestResourceClass, self).setUp()
+        self.field = fields.ResourceClassField()
+        self.coerce_good_values = [
+            ('VCPU', 'VCPU'),
+            ('MEMORY_MB', 'MEMORY_MB'),
+            ('DISK_GB', 'DISK_GB'),
+            ('PCI_DEVICE', 'PCI_DEVICE'),
+            ('SRIOV_NET_VF', 'SRIOV_NET_VF'),
+            ('NUMA_SOCKET', 'NUMA_SOCKET'),
+            ('NUMA_CORE', 'NUMA_CORE'),
+            ('NUMA_THREAD', 'NUMA_THREAD'),
+            ('NUMA_MEMORY_MB', 'NUMA_MEMORY_MB'),
+            ('IPV4_ADDRESS', 'IPV4_ADDRESS'),
+        ]
+        self.expected_indexes = [
+            ('VCPU', 0),
+            ('MEMORY_MB', 1),
+            ('DISK_GB', 2),
+            ('PCI_DEVICE', 3),
+            ('SRIOV_NET_VF', 4),
+            ('NUMA_SOCKET', 5),
+            ('NUMA_CORE', 6),
+            ('NUMA_THREAD', 7),
+            ('NUMA_MEMORY_MB', 8),
+            ('IPV4_ADDRESS', 9),
+        ]
+        self.coerce_bad_values = ['acme']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'VCPU'", self.field.stringify(
+            fields.ResourceClass.VCPU))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'cow')
+
+    def test_index(self):
+        for name, index in self.expected_indexes:
+            self.assertEqual(index, self.field.index(name))
+
+    def test_index_invalid(self):
+        self.assertRaises(ValueError, self.field.index, 'cow')
+
+    def test_from_index(self):
+        for name, index in self.expected_indexes:
+            self.assertEqual(name, self.field.from_index(index))
+
+    def test_from_index_invalid(self):
+        self.assertRaises(IndexError, self.field.from_index, 999)
 
 
 class TestRNGModel(TestField):
@@ -941,3 +1015,58 @@ class TestIPV6Network(TestField):
                                     for x in good]
         self.from_primitive_values = [(x, netaddr.IPNetwork(x))
                                       for x in good]
+
+
+class TestNotificationPriority(TestField):
+    def setUp(self):
+        super(TestNotificationPriority, self).setUp()
+        self.field = fields.NotificationPriorityField()
+        self.coerce_good_values = [('audit', 'audit'),
+                                   ('critical', 'critical'),
+                                   ('debug', 'debug'),
+                                   ('error', 'error'),
+                                   ('sample', 'sample'),
+                                   ('warn', 'warn')]
+        self.coerce_bad_values = ['warning']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'warn'", self.field.stringify('warn'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'warning')
+
+
+class TestNotificationPhase(TestField):
+    def setUp(self):
+        super(TestNotificationPhase, self).setUp()
+        self.field = fields.NotificationPhaseField()
+        self.coerce_good_values = [('start', 'start'),
+                                   ('end', 'end'),
+                                   ('error', 'error')]
+        self.coerce_bad_values = ['begin']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'error'", self.field.stringify('error'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'begin')
+
+
+class TestNotificationAction(TestField):
+    def setUp(self):
+        super(TestNotificationAction, self).setUp()
+        self.field = fields.NotificationActionField()
+        self.coerce_good_values = [('update', 'update')]
+        self.coerce_bad_values = ['magic']
+        self.to_primitive_values = self.coerce_good_values[0:1]
+        self.from_primitive_values = self.coerce_good_values[0:1]
+
+    def test_stringify(self):
+        self.assertEqual("'update'", self.field.stringify('update'))
+
+    def test_stringify_invalid(self):
+        self.assertRaises(ValueError, self.field.stringify, 'magic')

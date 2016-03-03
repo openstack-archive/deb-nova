@@ -16,17 +16,16 @@
 Tests For Cells RPCAPI
 """
 
-from oslo_config import cfg
 import six
 
 from nova.cells import rpcapi as cells_rpcapi
+import nova.conf
 from nova import exception
 from nova import objects
 from nova import test
 from nova.tests.unit import fake_instance
 
-CONF = cfg.CONF
-CONF.import_opt('topic', 'nova.cells.opts', group='cells')
+CONF = nova.conf.CONF
 
 
 class CellsAPITestCase(test.NoDBTestCase):
@@ -681,6 +680,48 @@ class CellsAPITestCase(test.NoDBTestCase):
                          'host_name': 'fake-host'}
         self._check_result(call_info, 'live_migrate_instance',
                            expected_args, version='1.20')
+
+    def test_live_migrate_instance_not_passing_request_spec(self):
+        call_info = self._stub_rpc_method('cast', None)
+
+        self.cells_rpcapi.live_migrate_instance(self.fake_context,
+                                                'fake-instance',
+                                                'fake-host',
+                                                'fake-block',
+                                                'fake-commit',
+                                                'fake-spec')
+        expected_args = {'instance': 'fake-instance',
+                         'block_migration': 'fake-block',
+                         'disk_over_commit': 'fake-commit',
+                         'host_name': 'fake-host'}
+        self._check_result(call_info, 'live_migrate_instance',
+                           expected_args, version='1.20')
+
+    def test_rebuild_instance_not_passing_request_spec(self):
+        call_info = self._stub_rpc_method('cast', None)
+
+        self.cells_rpcapi.rebuild_instance(self.fake_context,
+                                           'fake-instance',
+                                           'fake-pass',
+                                           'fake-files',
+                                           'fake-image_ref',
+                                           'fake-orig_image_ref',
+                                           'fake-orig_sys_metadata',
+                                           'fake-bdms',
+                                           recreate=False,
+                                           on_shared_storage=False,
+                                           host=None,
+                                           preserve_ephemeral=False,
+                                           request_spec='fake-spec',
+                                           kwargs=None)
+        expected_args = {'instance': 'fake-instance',
+                         'image_href': 'fake-image_ref',
+                         'admin_password': 'fake-pass',
+                         'files_to_inject': 'fake-files',
+                         'preserve_ephemeral': False,
+                         'kwargs': None}
+        self._check_result(call_info, 'rebuild_instance',
+                           expected_args, version='1.25')
 
     def test_revert_resize(self):
         call_info = self._stub_rpc_method('cast', None)

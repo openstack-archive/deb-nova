@@ -29,6 +29,7 @@ from nova.objects import hv_spec
 from nova.objects import service
 from nova.tests.unit import fake_pci_device_pools
 from nova.tests.unit.objects import test_objects
+from nova.tests import uuidsentinel
 
 NOW = timeutils.utcnow().replace(microsecond=0)
 fake_stats = {'num_foo': '10'}
@@ -61,6 +62,7 @@ fake_compute_node = {
     'deleted_at': None,
     'deleted': False,
     'id': 123,
+    'uuid': uuidsentinel.fake_compute_node,
     'service_id': None,
     'host': 'fake',
     'vcpus': 4,
@@ -86,6 +88,7 @@ fake_compute_node = {
     'pci_stats': fake_pci,
     'cpu_allocation_ratio': 16.0,
     'ram_allocation_ratio': 1.5,
+    'disk_allocation_ratio': 1.0,
     }
 # FIXME(sbauza) : For compatibility checking, to be removed once we are sure
 # that all computes are running latest DB version with host field in it.
@@ -154,6 +157,7 @@ class _TestComputeNodeObject(object):
         self.compare_obj(compute, fake_compute_node,
                          subs=self.subs(),
                          comparators=self.comparators())
+        self.assertNotIn('uuid', compute.obj_what_changed())
 
     @mock.patch.object(objects.Service, 'get_by_id')
     @mock.patch.object(db, 'compute_node_get')
@@ -194,77 +198,6 @@ class _TestComputeNodeObject(object):
                          subs=self.subs(),
                          comparators=self.comparators())
 
-    @mock.patch('nova.objects.Service.get_by_id')
-    @mock.patch('nova.db.compute_nodes_get_by_service_id')
-    @mock.patch('nova.objects.Service.get_by_compute_host')
-    @mock.patch.object(db, 'compute_node_get_by_host_and_nodename')
-    def test_get_by_host_and_nodename_with_old_compute(self, cn_get_by_h_and_n,
-                                                       svc_get_by_ch,
-                                                       cn_get_by_svc_id,
-                                                       svc_get_by_id):
-        cn_get_by_h_and_n.side_effect = exception.ComputeHostNotFound(
-            host='fake')
-        fake_service = service.Service(id=123)
-        fake_service.host = 'fake'
-        svc_get_by_ch.return_value = fake_service
-        cn_get_by_svc_id.return_value = [fake_old_compute_node]
-        svc_get_by_id.return_value = fake_service
-
-        compute = compute_node.ComputeNode.get_by_host_and_nodename(
-            self.context, 'fake', 'vm.danplanet.com')
-        # NOTE(sbauza): Result is still converted to new style Compute
-        self.compare_obj(compute, fake_compute_node,
-                         subs=self.subs(),
-                         comparators=self.comparators())
-
-    @mock.patch('nova.objects.Service.get_by_id')
-    @mock.patch('nova.db.compute_nodes_get_by_service_id')
-    @mock.patch('nova.objects.Service.get_by_compute_host')
-    @mock.patch.object(db, 'compute_node_get_by_host_and_nodename')
-    def test_get_by_host_and_nodename_not_found(self, cn_get_by_h_and_n,
-                                                svc_get_by_ch,
-                                                cn_get_by_svc_id,
-                                                svc_get_by_id):
-        cn_get_by_h_and_n.side_effect = exception.ComputeHostNotFound(
-            host='fake')
-        fake_service = service.Service(id=123)
-        fake_service.host = 'fake'
-        another_node = fake_old_compute_node.copy()
-        another_node['hypervisor_hostname'] = 'elsewhere'
-        svc_get_by_ch.return_value = fake_service
-        cn_get_by_svc_id.return_value = [another_node]
-        svc_get_by_id.return_value = fake_service
-
-        self.assertRaises(exception.ComputeHostNotFound,
-                          compute_node.ComputeNode.get_by_host_and_nodename,
-                          self.context, 'fake', 'vm.danplanet.com')
-
-    @mock.patch('nova.objects.Service.get_by_id')
-    @mock.patch('nova.db.compute_nodes_get_by_service_id')
-    @mock.patch('nova.objects.Service.get_by_compute_host')
-    @mock.patch.object(db, 'compute_node_get_by_host_and_nodename')
-    def test_get_by_host_and_nodename_good_and_bad(self, cn_get_by_h_and_n,
-                                                   svc_get_by_ch,
-                                                   cn_get_by_svc_id,
-                                                   svc_get_by_id):
-        cn_get_by_h_and_n.side_effect = exception.ComputeHostNotFound(
-            host='fake')
-        fake_service = service.Service(id=123)
-        fake_service.host = 'fake'
-        bad_node = fake_old_compute_node.copy()
-        bad_node['hypervisor_hostname'] = 'elsewhere'
-        good_node = fake_old_compute_node.copy()
-        svc_get_by_ch.return_value = fake_service
-        cn_get_by_svc_id.return_value = [bad_node, good_node]
-        svc_get_by_id.return_value = fake_service
-
-        compute = compute_node.ComputeNode.get_by_host_and_nodename(
-            self.context, 'fake', 'vm.danplanet.com')
-        # NOTE(sbauza): Result is still converted to new style Compute
-        self.compare_obj(compute, good_node,
-                         subs=self.subs(),
-                         comparators=self.comparators())
-
     @mock.patch('nova.db.compute_node_get_all_by_host')
     def test_get_first_node_by_host_for_old_compat(
             self, cn_get_all_by_host):
@@ -300,26 +233,44 @@ class _TestComputeNodeObject(object):
                 'stats': fake_stats_db_format,
                 'host_ip': fake_host_ip,
                 'supported_instances': fake_supported_hv_specs_db_format,
+                'uuid': uuidsentinel.fake_compute_node,
             }).AndReturn(fake_compute_node)
         self.mox.ReplayAll()
         compute = compute_node.ComputeNode(context=self.context)
         compute.service_id = 456
+        compute.uuid = uuidsentinel.fake_compute_node
         compute.stats = fake_stats
         # NOTE (pmurray): host_ip is coerced to an IPAddress
         compute.host_ip = fake_host_ip
         compute.supported_hv_specs = fake_supported_hv_specs
-        compute.create()
+        with mock.patch('oslo_utils.uuidutils.generate_uuid') as mock_gu:
+            compute.create()
+            self.assertFalse(mock_gu.called)
         self.compare_obj(compute, fake_compute_node,
                          subs=self.subs(),
                          comparators=self.comparators())
 
+    @mock.patch('nova.db.compute_node_create')
+    @mock.patch('oslo_utils.uuidutils.generate_uuid')
+    def test_create_allocates_uuid(self, mock_gu, mock_create):
+        mock_create.return_value = fake_compute_node
+        mock_gu.return_value = fake_compute_node['uuid']
+        obj = objects.ComputeNode(context=self.context)
+        obj.create()
+        mock_gu.assert_called_once_with()
+        mock_create.assert_called_once_with(
+            self.context, {'uuid': fake_compute_node['uuid']})
+
     def test_recreate_fails(self):
         self.mox.StubOutWithMock(db, 'compute_node_create')
-        db.compute_node_create(self.context, {'service_id': 456}).AndReturn(
+        db.compute_node_create(
+            self.context, {'service_id': 456,
+                           'uuid': uuidsentinel.fake_compute_node}).AndReturn(
             fake_compute_node)
         self.mox.ReplayAll()
         compute = compute_node.ComputeNode(context=self.context)
         compute.service_id = 456
+        compute.uuid = uuidsentinel.fake_compute_node
         compute.create()
         self.assertRaises(exception.ObjectActionError, compute.create)
 
@@ -332,12 +283,14 @@ class _TestComputeNodeObject(object):
                 'stats': fake_stats_db_format,
                 'host_ip': fake_host_ip,
                 'supported_instances': fake_supported_hv_specs_db_format,
+                'uuid': uuidsentinel.fake_compute_node,
             }).AndReturn(fake_compute_node)
         self.mox.ReplayAll()
         compute = compute_node.ComputeNode(context=self.context)
         compute.id = 123
         compute.vcpus_used = 3
         compute.stats = fake_stats
+        compute.uuid = uuidsentinel.fake_compute_node
         # NOTE (pmurray): host_ip is coerced to an IPAddress
         compute.host_ip = fake_host_ip
         compute.supported_hv_specs = fake_supported_hv_specs
@@ -345,6 +298,21 @@ class _TestComputeNodeObject(object):
         self.compare_obj(compute, fake_compute_node,
                          subs=self.subs(),
                          comparators=self.comparators())
+
+    def test_query_allocates_uuid(self):
+        fake = dict(fake_compute_node)
+        fake.pop('uuid')
+        db.compute_node_create(self.context, fake)
+        with mock.patch('oslo_utils.uuidutils.generate_uuid') as mock_gu:
+            mock_gu.return_value = uuidsentinel.fake_compute_node
+            obj = objects.ComputeNode.get_by_id(self.context, fake['id'])
+            mock_gu.assert_called_once_with()
+            self.assertEqual(uuidsentinel.fake_compute_node, obj.uuid)
+            self.assertNotIn('uuid', obj.obj_get_changes())
+        with mock.patch('oslo_utils.uuidutils.generate_uuid') as mock_gu:
+            obj = objects.ComputeNode.get_by_id(self.context, fake['id'])
+            self.assertEqual(uuidsentinel.fake_compute_node, obj.uuid)
+            self.assertFalse(mock_gu.called)
 
     @mock.patch.object(db, 'compute_node_create',
                        return_value=fake_compute_node)
@@ -400,30 +368,6 @@ class _TestComputeNodeObject(object):
         computes = compute_node.ComputeNodeList.get_all_by_host(self.context,
                                                                 'fake')
         self.assertEqual(1, len(computes))
-        self.compare_obj(computes[0], fake_compute_node,
-                         subs=self.subs(),
-                         comparators=self.comparators())
-
-    @mock.patch('nova.objects.Service.get_by_id')
-    @mock.patch('nova.db.compute_nodes_get_by_service_id')
-    @mock.patch('nova.objects.Service.get_by_compute_host')
-    @mock.patch('nova.db.compute_node_get_all_by_host')
-    def test_get_all_by_host_with_old_compute(self, cn_get_all_by_host,
-                                              svc_get_by_ch,
-                                              cn_get_by_svc_id,
-                                              svc_get_by_id):
-        cn_get_all_by_host.side_effect = exception.ComputeHostNotFound(
-            host='fake')
-        fake_service = service.Service(id=123)
-        fake_service.host = 'fake'
-        svc_get_by_ch.return_value = fake_service
-        cn_get_by_svc_id.return_value = [fake_old_compute_node]
-        svc_get_by_id.return_value = fake_service
-
-        computes = compute_node.ComputeNodeList.get_all_by_host(self.context,
-                                                                'fake')
-        self.assertEqual(1, len(computes))
-        # NOTE(sbauza): Result is still converted to new style Compute
         self.compare_obj(computes[0], fake_compute_node,
                          subs=self.subs(),
                          comparators=self.comparators())
@@ -513,39 +457,51 @@ class _TestComputeNodeObject(object):
         self.assertNotIn('cpu_allocation_ratio', primitive)
         self.assertNotIn('ram_allocation_ratio', primitive)
 
+    def test_compat_disk_allocation_ratio(self):
+        compute = compute_node.ComputeNode()
+        primitive = compute.obj_to_primitive(target_version='1.15')
+        self.assertNotIn('disk_allocation_ratio', primitive)
+
     def test_compat_allocation_ratios_old_compute(self):
-        self.flags(cpu_allocation_ratio=2.0, ram_allocation_ratio=3.0)
+        self.flags(cpu_allocation_ratio=2.0, ram_allocation_ratio=3.0,
+                   disk_allocation_ratio=0.9)
         compute_dict = fake_compute_node.copy()
         # old computes don't provide allocation ratios to the table
         compute_dict['cpu_allocation_ratio'] = None
         compute_dict['ram_allocation_ratio'] = None
+        compute_dict['disk_allocation_ratio'] = None
         cls = objects.ComputeNode
         compute = cls._from_db_object(self.context, cls(), compute_dict)
 
         self.assertEqual(2.0, compute.cpu_allocation_ratio)
         self.assertEqual(3.0, compute.ram_allocation_ratio)
+        self.assertEqual(0.9, compute.disk_allocation_ratio)
 
     def test_compat_allocation_ratios_default_values(self):
         compute_dict = fake_compute_node.copy()
         # new computes provide allocation ratios defaulted to 0.0
         compute_dict['cpu_allocation_ratio'] = 0.0
         compute_dict['ram_allocation_ratio'] = 0.0
+        compute_dict['disk_allocation_ratio'] = 0.0
         cls = objects.ComputeNode
         compute = cls._from_db_object(self.context, cls(), compute_dict)
 
         self.assertEqual(16.0, compute.cpu_allocation_ratio)
         self.assertEqual(1.5, compute.ram_allocation_ratio)
+        self.assertEqual(1.0, compute.disk_allocation_ratio)
 
     def test_compat_allocation_ratios_old_compute_default_values(self):
         compute_dict = fake_compute_node.copy()
         # old computes don't provide allocation ratios to the table
         compute_dict['cpu_allocation_ratio'] = None
         compute_dict['ram_allocation_ratio'] = None
+        compute_dict['disk_allocation_ratio'] = None
         cls = objects.ComputeNode
         compute = cls._from_db_object(self.context, cls(), compute_dict)
 
         self.assertEqual(16.0, compute.cpu_allocation_ratio)
         self.assertEqual(1.5, compute.ram_allocation_ratio)
+        self.assertEqual(1.0, compute.disk_allocation_ratio)
 
 
 class TestComputeNodeObject(test_objects._LocalTest,

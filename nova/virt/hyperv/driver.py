@@ -19,6 +19,7 @@ A Hyper-V Nova Compute driver.
 
 import functools
 import platform
+import sys
 
 from os_win import exceptions as os_win_exc
 from os_win import utilsfactory
@@ -56,7 +57,13 @@ def convert_exceptions(function, exception_map):
                         raised_exception = exception_map[expected]
                         break
 
-            raise raised_exception(six.text_type(ex))
+            exc_info = sys.exc_info()
+            # NOTE(claudiub): Python 3 raises the exception object given as
+            # the second argument in six.reraise.
+            # The original message will be maintained by passing the original
+            # exception.
+            exc = raised_exception(six.text_type(exc_info[1]))
+            six.reraise(raised_exception, exc, exc_info[2])
     return wrapper
 
 
@@ -108,7 +115,7 @@ class HyperVDriver(driver.ComputeDriver):
     def _check_minimum_windows_version(self):
         if not utilsfactory.get_hostutils().check_min_windows_version(6, 2):
             # the version is of Windows is older than Windows Server 2012 R2.
-            # Log an error, lettingusers know that this version is not
+            # Log an error, letting users know that this version is not
             # supported any longer.
             LOG.error(_LE('You are running nova-compute on an unsupported '
                           'version of Windows (older than Windows / Hyper-V '

@@ -884,7 +884,7 @@ class VlanNetworkTestCase(test.TestCase):
         db.virtual_interface_get_by_instance_and_network(mox.IgnoreArg(),
                 mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(vifs[0])
         db.instance_get_by_uuid(mox.IgnoreArg(),
-                                mox.IgnoreArg(), use_slave=False,
+                                mox.IgnoreArg(),
                                 columns_to_join=['info_cache',
                                                  'security_groups']
                                 ).AndReturn(fake_inst(display_name=HOST,
@@ -918,7 +918,7 @@ class VlanNetworkTestCase(test.TestCase):
         db.virtual_interface_get_by_instance_and_network(mox.IgnoreArg(),
                 mox.IgnoreArg(), mox.IgnoreArg()).AndReturn(vifs[0])
         db.instance_get_by_uuid(mox.IgnoreArg(),
-                                mox.IgnoreArg(), use_slave=False,
+                                mox.IgnoreArg(),
                                 columns_to_join=['info_cache',
                                                  'security_groups']
                                 ).AndReturn(fake_inst(display_name=HOST,
@@ -1604,7 +1604,7 @@ class VlanNetworkTestCase(test.TestCase):
                        ).AndReturn(dict(test_network.fake_network,
                                         **networks[0]))
         db.instance_get_by_uuid(mox.IgnoreArg(),
-                                mox.IgnoreArg(), use_slave=False,
+                                mox.IgnoreArg(),
                                 columns_to_join=['info_cache',
                                                  'security_groups']
                                 ).AndReturn(fake_inst(display_name=HOST,
@@ -1688,7 +1688,7 @@ class VlanNetworkTestCase(test.TestCase):
         def vif_get(_context, _vif_id):
             return vifs[0]
 
-        self.stubs.Set(db, 'virtual_interface_get', vif_get)
+        self.stub_out('nova.db.virtual_interface_get', vif_get)
         context1 = context.RequestContext('user', 'project1')
 
         instance = db.instance_create(context1,
@@ -1814,7 +1814,7 @@ class VlanNetworkTestCase(test.TestCase):
         def vif_get(_context, _vif_id):
             return None
 
-        self.stubs.Set(db, 'virtual_interface_get', vif_get)
+        self.stub_out('nova.db.virtual_interface_get', vif_get)
         context1 = context.RequestContext('user', 'project1')
 
         instance = db.instance_create(context1,
@@ -1946,7 +1946,7 @@ class CommonNetworkTestCase(test.TestCase):
         def dnsdomain_get(context, instance_domain):
             return domains.get(instance_domain)
 
-        self.stubs.Set(db, 'dnsdomain_get', dnsdomain_get)
+        self.stub_out('nova.db.dnsdomain_get', dnsdomain_get)
         fake_instance = {'uuid': FAKEUUID,
                          'availability_zone': az}
 
@@ -3207,7 +3207,7 @@ class FloatingIPTestCase(test.TestCase):
 
         # SQLite doesn't seem to honor the uniqueness constraint on the
         # address column, so fake the collision-avoidance here
-        def fake_vif_save(vif):
+        def fake_vif_save(vif, session=None):
             if vif.address == crash_test_dummy_vif['address']:
                 raise db_exc.DBError("If you're smart, you'll retry!")
             # NOTE(russellb) The VirtualInterface object requires an ID to be

@@ -73,7 +73,9 @@ class ServerGroupTestBase(test.TestCase):
                 api_version='v2'))
 
         self.api = api_fixture.api
+        self.api.microversion = self.microversion
         self.admin_api = api_fixture.admin_api
+        self.admin_api.microversion = self.microversion
 
         # the image fake backend needed for image discovery
         nova.tests.unit.image.fake.stub_out_image_service(self)
@@ -136,13 +138,30 @@ class ServerGroupTestBase(test.TestCase):
         server['name'] = name
         return server
 
-    def _test_create_delete_groups(self, groups):
+
+class ServerGroupTestV2(ServerGroupTestBase):
+    api_major_version = 'v2'
+
+    def setUp(self):
+        super(ServerGroupTestV2, self).setUp()
+
+        self.start_service('network')
+        self.compute = self.start_service('compute')
+
+        # NOTE(gibi): start a second compute host to be able to test affinity
+        self.compute2 = self.start_service('compute', host='host2')
+        fake_network.set_stub_network_methods(self)
+
+    def test_get_no_groups(self):
+        groups = self.api.get_server_groups()
+        self.assertEqual([], groups)
+
+    def test_create_and_delete_groups(self):
+        groups = [self.anti_affinity,
+                  self.affinity]
         created_groups = []
         for group in groups:
-            created_group = self.api.post_server_groups(
-                group, api_version=self.microversion)
-            created_group.pop('user_id', None)
-            created_group.pop('project_id', None)
+            created_group = self.api.post_server_groups(group)
             created_groups.append(created_group)
             self.assertEqual(group['name'], created_group['name'])
             self.assertEqual(group['policies'], created_group['policies'])
@@ -164,37 +183,11 @@ class ServerGroupTestBase(test.TestCase):
             existing_groups = self.api.get_server_groups()
             self.assertNotIn(group, existing_groups)
 
-
-class ServerGroupTestV2(ServerGroupTestBase):
-    api_major_version = 'v2'
-
-    def setUp(self):
-        super(ServerGroupTestV2, self).setUp()
-
-        self.start_service('network')
-        self.compute = self.start_service('compute')
-
-        # NOTE(gibi): start a second compute host to be able to test affinity
-        self.compute2 = self.start_service('compute', host='host2')
-        self.addCleanup(self.compute.kill)
-        self.addCleanup(self.compute2.kill)
-        fake_network.set_stub_network_methods(self)
-
-    def test_get_no_groups(self):
-        groups = self.api.get_server_groups()
-        self.assertEqual([], groups)
-
-    def test_create_and_delete_groups(self):
-        groups = [self.anti_affinity,
-                  self.affinity]
-        self._test_create_delete_groups(groups)
-
     def test_create_wrong_policy(self):
         ex = self.assertRaises(client.OpenStackApiException,
                                self.api.post_server_groups,
                                {'name': 'fake-name-1',
-                                'policies': ['wrong-policy']},
-                               api_version=self.microversion)
+                                'policies': ['wrong-policy']})
         self.assertEqual(400, ex.response.status_code)
         self.assertIn('Invalid input', ex.response.text)
         self.assertIn('wrong-policy', ex.response.text)
@@ -204,8 +197,14 @@ class ServerGroupTestV2(ServerGroupTestBase):
 
         # Create an API using project 'openstack1'.
         # This is a non-admin API.
+        #
+        # NOTE(sdague): this is actually very much *not* how this
+        # fixture should be used. This actually spawns a whole
+        # additional API server. Should be addressed in the future.
         api_openstack1 = self.useFixture(nova_fixtures.OSAPIFixture(
-                                        project_id='openstack1')).api
+            api_version=self.api_major_version,
+            project_id='openstack1')).api
+        api_openstack1.microversion = self.microversion
 
         # Create a server group in project 'openstack'
         # Project 'openstack' is used by self.api
@@ -254,8 +253,7 @@ class ServerGroupTestV2(ServerGroupTestBase):
         return servers
 
     def test_boot_servers_with_affinity(self):
-        created_group = self.api.post_server_groups(
-            self.affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.affinity)
         servers = self._boot_servers_to_group(created_group)
 
         members = self.api.get_server_group(created_group['id'])['members']
@@ -265,8 +263,7 @@ class ServerGroupTestV2(ServerGroupTestBase):
             self.assertEqual(host, server['OS-EXT-SRV-ATTR:host'])
 
     def test_boot_servers_with_affinity_no_valid_host(self):
-        created_group = self.api.post_server_groups(
-            self.affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.affinity)
         # Using big enough flavor to use up the resources on the host
         flavor = self.api.get_flavors()[2]
         self._boot_servers_to_group(created_group, flavor=flavor)
@@ -302,8 +299,7 @@ class ServerGroupTestV2(ServerGroupTestBase):
                          failed_server['fault']['message'])
 
     def _rebuild_with_group(self, group):
-        created_group = self.api.post_server_groups(
-            group, api_version=self.microversion)
+        created_group = self.api.post_server_groups(group)
         servers = self._boot_servers_to_group(created_group)
 
         post = {'rebuild': {self._image_ref_parameter:
@@ -345,7 +341,7 @@ class ServerGroupTestV2(ServerGroupTestBase):
 
     def test_migrate_with_anti_affinity(self):
         # Start additional host to test migration with anti-affinity
-        compute3 = self.start_service('compute', host='host3')
+        self.start_service('compute', host='host3')
 
         created_group = self.api.post_server_groups(self.anti_affinity)
         servers = self._boot_servers_to_group(created_group)
@@ -357,8 +353,6 @@ class ServerGroupTestV2(ServerGroupTestBase):
 
         self.assertNotEqual(servers[0]['OS-EXT-SRV-ATTR:host'],
                             migrated_server['OS-EXT-SRV-ATTR:host'])
-
-        compute3.kill()
 
     def _get_compute_service_by_host_name(self, host_name):
         host = None
@@ -386,7 +380,7 @@ class ServerGroupTestV2(ServerGroupTestBase):
         time.sleep(self._service_down_time)
 
         # Start additional host to test evacuation
-        compute3 = self.start_service('compute', host='host3')
+        self.start_service('compute', host='host3')
 
         post = {'evacuate': {'onSharedStorage': False}}
         self.admin_api.post_server_action(servers[1]['id'], post)
@@ -395,7 +389,6 @@ class ServerGroupTestV2(ServerGroupTestBase):
         self.assertNotEqual(evacuated_server['OS-EXT-SRV-ATTR:host'],
                             servers[0]['OS-EXT-SRV-ATTR:host'])
 
-        compute3.kill()
         host.start()
 
     def test_evacuate_with_anti_affinity_no_valid_host(self):
@@ -494,8 +487,7 @@ class ServerGroupSoftAffinityConfTest(ServerGroupTestBase):
 
     @mock.patch('nova.scheduler.utils._SUPPORTS_SOFT_AFFINITY', None)
     def test_soft_affinity_no_filter(self):
-        created_group = self.api.post_server_groups(self.soft_affinity,
-                                                    self.microversion)
+        created_group = self.api.post_server_groups(self.soft_affinity)
 
         failed_server = self._boot_a_server_to_group(created_group,
                                                      expected_status='ERROR')
@@ -522,8 +514,7 @@ class ServerGroupSoftAntiAffinityConfTest(ServerGroupTestBase):
 
     @mock.patch('nova.scheduler.utils._SUPPORTS_SOFT_ANTI_AFFINITY', None)
     def test_soft_anti_affinity_no_filter(self):
-        created_group = self.api.post_server_groups(
-            self.soft_anti_affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.soft_anti_affinity)
 
         failed_server = self._boot_a_server_to_group(created_group,
                                                      expected_status='ERROR')
@@ -575,16 +566,111 @@ class ServerGroupTestV215(ServerGroupTestV2):
                 'nova.scheduler.weights.affinity.'
                 'ServerGroupSoftAntiAffinityWeigher']
 
+    def test_evacuate_with_anti_affinity(self):
+        created_group = self.api.post_server_groups(self.anti_affinity)
+        servers = self._boot_servers_to_group(created_group)
+
+        host = self._get_compute_service_by_host_name(
+            servers[1]['OS-EXT-SRV-ATTR:host'])
+        host.stop()
+        # Need to wait service_down_time amount of seconds to ensure
+        # nova considers the host down
+        time.sleep(self._service_down_time)
+
+        # Start additional host to test evacuation
+        compute3 = self.start_service('compute', host='host3')
+
+        post = {'evacuate': {}}
+        self.admin_api.post_server_action(servers[1]['id'], post)
+        evacuated_server = self._wait_for_state_change(servers[1], 'ACTIVE')
+
+        self.assertNotEqual(evacuated_server['OS-EXT-SRV-ATTR:host'],
+                            servers[0]['OS-EXT-SRV-ATTR:host'])
+
+        compute3.kill()
+        host.start()
+
+    def test_evacuate_with_anti_affinity_no_valid_host(self):
+        created_group = self.api.post_server_groups(self.anti_affinity)
+        servers = self._boot_servers_to_group(created_group)
+
+        host = self._get_compute_service_by_host_name(
+            servers[1]['OS-EXT-SRV-ATTR:host'])
+        host.stop()
+        # Need to wait service_down_time amount of seconds to ensure
+        # nova considers the host down
+        time.sleep(self._service_down_time)
+
+        post = {'evacuate': {}}
+        self.admin_api.post_server_action(servers[1]['id'], post)
+
+        server_after_failed_evac = self._wait_for_state_change(servers[1],
+                                                               'ACTIVE')
+
+        # assert that after a failed evac the server active on the same host
+        # as before
+        self.assertEqual(server_after_failed_evac['OS-EXT-SRV-ATTR:host'],
+                         servers[1]['OS-EXT-SRV-ATTR:host'])
+
+        host.start()
+
+    def test_evacuate_with_affinity_no_valid_host(self):
+        created_group = self.api.post_server_groups(self.affinity)
+        servers = self._boot_servers_to_group(created_group)
+
+        host = self._get_compute_service_by_host_name(
+            servers[1]['OS-EXT-SRV-ATTR:host'])
+        host.stop()
+        # Need to wait service_down_time amount of seconds to ensure
+        # nova considers the host down
+        time.sleep(self._service_down_time)
+
+        post = {'evacuate': {}}
+        self.admin_api.post_server_action(servers[1]['id'], post)
+
+        server_after_failed_evac = self._wait_for_state_change(servers[1],
+                                                               'ACTIVE')
+
+        # assert that after a failed evac the server active on the same host
+        # as before
+        self.assertEqual(server_after_failed_evac['OS-EXT-SRV-ATTR:host'],
+                         servers[1]['OS-EXT-SRV-ATTR:host'])
+
+        host.start()
+
     def test_create_and_delete_groups(self):
         groups = [self.anti_affinity,
                   self.affinity,
                   self.soft_affinity,
                   self.soft_anti_affinity]
-        self._test_create_delete_groups(groups)
+
+        created_groups = []
+
+        for group in groups:
+            created_group = self.api.post_server_groups(group)
+            created_groups.append(created_group)
+            self.assertEqual(group['name'], created_group['name'])
+            self.assertEqual(group['policies'], created_group['policies'])
+            self.assertEqual([], created_group['members'])
+            self.assertEqual({}, created_group['metadata'])
+            self.assertIn('id', created_group)
+
+            group_details = self.api.get_server_group(created_group['id'])
+            self.assertEqual(created_group, group_details)
+
+            existing_groups = self.api.get_server_groups()
+            self.assertIn(created_group, existing_groups)
+
+        existing_groups = self.api.get_server_groups()
+        self.assertEqual(len(groups), len(existing_groups))
+
+        for group in created_groups:
+            self.api.delete_server_group(group['id'])
+            existing_groups = self.api.get_server_groups()
+            self.assertNotIn(group, existing_groups)
 
     def test_boot_servers_with_soft_affinity(self):
-        created_group = self.api.post_server_groups(
-            self.soft_affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.soft_affinity)
         servers = self._boot_servers_to_group(created_group)
         members = self.api.get_server_group(created_group['id'])['members']
 
@@ -595,8 +681,7 @@ class ServerGroupTestV215(ServerGroupTestV2):
                          servers[1]['OS-EXT-SRV-ATTR:host'])
 
     def test_boot_servers_with_soft_affinity_no_resource_on_first_host(self):
-        created_group = self.api.post_server_groups(
-            self.soft_affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.soft_affinity)
 
         # Using big enough flavor to use up the resources on the first host
         flavor = self.api.get_flavors()[2]
@@ -616,8 +701,7 @@ class ServerGroupTestV215(ServerGroupTestV2):
         self.assertNotIn(third_server['OS-EXT-SRV-ATTR:host'], hosts)
 
     def test_boot_servers_with_soft_anti_affinity(self):
-        created_group = self.api.post_server_groups(
-            self.soft_anti_affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.soft_anti_affinity)
         servers = self._boot_servers_to_group(created_group)
         members = self.api.get_server_group(created_group['id'])['members']
 
@@ -629,8 +713,7 @@ class ServerGroupTestV215(ServerGroupTestV2):
 
     def test_boot_servers_with_soft_anti_affinity_one_available_host(self):
         self.compute2.kill()
-        created_group = self.api.post_server_groups(
-            self.soft_anti_affinity, api_version=self.microversion)
+        created_group = self.api.post_server_groups(self.soft_anti_affinity)
         servers = self._boot_servers_to_group(created_group)
 
         members = self.api.get_server_group(created_group['id'])['members']
@@ -652,8 +735,7 @@ class ServerGroupTestV215(ServerGroupTestV2):
                             rebuilt_server['OS-EXT-SRV-ATTR:host'])
 
     def _migrate_with_soft_affinity_policies(self, group):
-        created_group = self.api.post_server_groups(
-            group, api_version=self.microversion)
+        created_group = self.api.post_server_groups(group)
         servers = self._boot_servers_to_group(created_group)
 
         post = {'migrate': {}}
@@ -675,8 +757,7 @@ class ServerGroupTestV215(ServerGroupTestV2):
         self.assertEqual(migrated_server, other_server)
 
     def _evacuate_with_soft_anti_affinity_policies(self, group):
-        created_group = self.api.post_server_groups(
-            group, api_version=self.microversion)
+        created_group = self.api.post_server_groups(group)
         servers = self._boot_servers_to_group(created_group)
 
         host = self._get_compute_service_by_host_name(
@@ -686,7 +767,7 @@ class ServerGroupTestV215(ServerGroupTestV2):
         # nova considers the host down
         time.sleep(self._service_down_time)
 
-        post = {'evacuate': {'onSharedStorage': False}}
+        post = {'evacuate': {}}
         self.admin_api.post_server_action(servers[1]['id'], post)
         evacuated_server = self._wait_for_state_change(servers[1], 'ACTIVE')
 

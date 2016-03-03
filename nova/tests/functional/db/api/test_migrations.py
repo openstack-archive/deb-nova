@@ -33,7 +33,6 @@ import os
 
 from migrate.versioning import repository
 import mock
-from oslo_config import cfg
 from oslo_db.sqlalchemy import test_base
 from oslo_db.sqlalchemy import test_migrations
 from oslo_db.sqlalchemy import utils as db_utils
@@ -45,9 +44,6 @@ from nova.db.sqlalchemy.api_migrations import migrate_repo
 from nova.db.sqlalchemy import api_models
 from nova.db.sqlalchemy import migration as sa_migration
 from nova import test
-
-
-CONF = cfg.CONF
 
 
 class NovaAPIModelsSync(test_migrations.ModelsMigrationsSync):
@@ -197,6 +193,69 @@ class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
         if engine.name != 'ibm_db_sa':
             self.assertIndexExists(engine, 'request_specs',
                     'request_spec_instance_uuid_idx')
+
+    def _check_005(self, engine, data):
+        # flavors
+        for column in ['created_at', 'updated_at', 'name', 'id', 'memory_mb',
+            'vcpus', 'swap', 'vcpu_weight', 'flavorid', 'rxtx_factor',
+            'root_gb', 'ephemeral_gb', 'disabled', 'is_public']:
+            self.assertColumnExists(engine, 'flavors', column)
+        self.assertUniqueConstraintExists(engine, 'flavors',
+                ['flavorid'])
+        self.assertUniqueConstraintExists(engine, 'flavors',
+                ['name'])
+
+        # flavor_extra_specs
+        for column in ['created_at', 'updated_at', 'id', 'flavor_id', 'key',
+            'value']:
+            self.assertColumnExists(engine, 'flavor_extra_specs', column)
+
+        if engine.name != 'ibm_db_sa':
+            self.assertIndexExists(engine, 'flavor_extra_specs',
+                'flavor_extra_specs_flavor_id_key_idx')
+        self.assertUniqueConstraintExists(engine, 'flavor_extra_specs',
+            ['flavor_id', 'key'])
+
+        inspector = reflection.Inspector.from_engine(engine)
+        # There should only be one foreign key here
+        fk = inspector.get_foreign_keys('flavor_extra_specs')[0]
+        self.assertEqual('flavors', fk['referred_table'])
+        self.assertEqual(['id'], fk['referred_columns'])
+        self.assertEqual(['flavor_id'], fk['constrained_columns'])
+
+        # flavor_projects
+        for column in ['created_at', 'updated_at', 'id', 'flavor_id',
+            'project_id']:
+            self.assertColumnExists(engine, 'flavor_projects', column)
+
+        self.assertUniqueConstraintExists(engine, 'flavor_projects',
+            ['flavor_id', 'project_id'])
+
+        inspector = reflection.Inspector.from_engine(engine)
+        # There should only be one foreign key here
+        fk = inspector.get_foreign_keys('flavor_projects')[0]
+        self.assertEqual('flavors', fk['referred_table'])
+        self.assertEqual(['id'], fk['referred_columns'])
+        self.assertEqual(['flavor_id'], fk['constrained_columns'])
+
+    def _check_006(self, engine, data):
+        for column in ['id', 'request_spec_id', 'project_id', 'user_id',
+                'display_name', 'instance_metadata', 'progress', 'vm_state',
+                'image_ref', 'access_ip_v4', 'access_ip_v6', 'info_cache',
+                'security_groups', 'config_drive', 'key_name', 'locked_by']:
+            self.assertColumnExists(engine, 'build_requests', column)
+
+        self.assertIndexExists(engine, 'build_requests',
+            'build_requests_project_id_idx')
+        self.assertUniqueConstraintExists(engine, 'build_requests',
+                ['request_spec_id'])
+
+        inspector = reflection.Inspector.from_engine(engine)
+        # There should only be one foreign key here
+        fk = inspector.get_foreign_keys('build_requests')[0]
+        self.assertEqual('request_specs', fk['referred_table'])
+        self.assertEqual(['id'], fk['referred_columns'])
+        self.assertEqual(['request_spec_id'], fk['constrained_columns'])
 
 
 class TestNovaAPIMigrationsWalkSQLite(NovaAPIMigrationsWalk,

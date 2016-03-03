@@ -206,12 +206,6 @@ class ActionDispatcherTest(test.NoDBTestCase):
         self.assertEqual(serializer.dispatch({}, action='update'), 'trousers')
 
 
-class DictSerializerTest(test.NoDBTestCase):
-    def test_dispatch_default(self):
-        serializer = wsgi.DictSerializer()
-        self.assertEqual(serializer.serialize({}, 'update'), '')
-
-
 class JSONDictSerializerTest(test.NoDBTestCase):
     def test_json(self):
         input_dict = dict(servers=dict(a=(2, 3)))
@@ -220,12 +214,6 @@ class JSONDictSerializerTest(test.NoDBTestCase):
         result = serializer.serialize(input_dict)
         result = result.replace('\n', '').replace(' ', '')
         self.assertEqual(result, expected_json)
-
-
-class TextDeserializerTest(test.NoDBTestCase):
-    def test_dispatch_default(self):
-        deserializer = wsgi.TextDeserializer()
-        self.assertEqual(deserializer.deserialize({}, 'update'), {})
 
 
 class JSONDeserializerTest(test.NoDBTestCase):
@@ -416,7 +404,9 @@ class ResourceTest(test.NoDBTestCase):
         response = req.get_response(app)
         self.assertEqual(response.status_int, 200)
         # verify no content_type is contained in the request
-        req.content_type = None
+        req = webob.Request.blank('/tests/test_id', method="PUT",
+                                  content_type='application/xml')
+        req.content_type = 'application/xml'
         req.body = b'{"body": {"key": "value"}}'
         response = req.get_response(app)
         expected_unsupported_type_body = {'badRequest':
@@ -555,9 +545,8 @@ class ResourceTest(test.NoDBTestCase):
         request.headers['Content-Type'] = 'application/none'
         request.body = b'foo'
 
-        content_type, body = resource.get_body(request)
-        self.assertIsNone(content_type)
-        self.assertEqual(b'', body)
+        self.assertRaises(exception.InvalidContentType,
+                          resource.get_body, request)
 
     def test_get_body_no_content_type(self):
         class Controller(object):
@@ -646,31 +635,16 @@ class ResourceTest(test.NoDBTestCase):
         self.assertEqual(b'', response.body)
         self.assertEqual(response.status_int, 200)
 
-    def test_deserialize_badtype(self):
+    def test_deserialize_default(self):
         class Controller(object):
             def index(self, req, pants=None):
                 return pants
 
         controller = Controller()
         resource = wsgi.Resource(controller)
-        self.assertRaises(exception.InvalidContentType,
-                          resource.deserialize,
-                          controller.index, 'application/none', 'foo')
 
-    def test_deserialize_default(self):
-        class JSONDeserializer(object):
-            def deserialize(self, body):
-                return 'json'
-
-        class Controller(object):
-            def index(self, req, pants=None):
-                return pants
-
-        controller = Controller()
-        resource = wsgi.Resource(controller, json=JSONDeserializer)
-
-        obj = resource.deserialize(controller.index, 'application/json', 'foo')
-        self.assertEqual(obj, 'json')
+        obj = resource.deserialize('["foo"]')
+        self.assertEqual(obj, {'body': ['foo']})
 
     def test_register_actions(self):
         class Controller(object):
@@ -1083,62 +1057,6 @@ class ResponseObjectTest(test.NoDBTestCase):
         hdrs = robj.headers
         hdrs['hEADER'] = 'bar'
         self.assertEqual(robj['hEADER'], 'foo')
-
-    def test_default_serializers(self):
-        robj = wsgi.ResponseObject({})
-        self.assertEqual(robj.serializers, {})
-
-    def test_bind_serializers(self):
-        robj = wsgi.ResponseObject({}, json='foo')
-        robj._bind_method_serializers(dict(xml='bar', json='baz'))
-        self.assertEqual(robj.serializers, dict(xml='bar', json='foo'))
-
-    def test_get_serializer(self):
-        robj = wsgi.ResponseObject({}, json='json', xml='xml', atom='atom')
-        for content_type, mtype in wsgi._MEDIA_TYPE_MAP.items():
-            _mtype, serializer = robj.get_serializer(content_type)
-            self.assertEqual(serializer, mtype)
-
-    def test_get_serializer_defaults(self):
-        robj = wsgi.ResponseObject({})
-        default_serializers = dict(json='json', xml='xml', atom='atom')
-        for content_type, mtype in wsgi._MEDIA_TYPE_MAP.items():
-            self.assertRaises(exception.InvalidContentType,
-                              robj.get_serializer, content_type)
-            _mtype, serializer = robj.get_serializer(content_type,
-                                                     default_serializers)
-            self.assertEqual(serializer, mtype)
-
-    def test_serialize(self):
-        class JSONSerializer(object):
-            def serialize(self, obj):
-                return 'json'
-
-        class AtomSerializer(object):
-            def serialize(self, obj):
-                return 'atom'
-
-        robj = wsgi.ResponseObject({}, code=202,
-                                   json=JSONSerializer,
-                                   atom=AtomSerializer)
-        robj['X-header1'] = 'header1'
-        robj['X-header2'] = 'header2'
-        robj['X-header3'] = 3
-        robj['X-header-unicode'] = u'header-unicode'
-
-        for content_type, mtype in wsgi._MEDIA_TYPE_MAP.items():
-            request = wsgi.Request.blank('/tests/123')
-            response = robj.serialize(request, content_type)
-            self.assertEqual(content_type.encode("utf-8"),
-                             response.headers['Content-Type'])
-            for hdr, val in six.iteritems(response.headers):
-                # All headers must be utf8
-                self.assertThat(val, matchers.EncodedByUTF8())
-            self.assertEqual(b'header1', response.headers['X-header1'])
-            self.assertEqual(b'header2', response.headers['X-header2'])
-            self.assertEqual(b'3', response.headers['X-header3'])
-            self.assertEqual(response.status_int, 202)
-            self.assertEqual(mtype.encode("utf-8"), response.body)
 
 
 class ValidBodyTest(test.NoDBTestCase):

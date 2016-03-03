@@ -124,6 +124,7 @@ class TestOpenStackClient(object):
         self.auth_key = auth_key
         self.auth_uri = auth_uri
         self.project_id = project_id
+        self.microversion = None
 
     def request(self, url, method='GET', body=None, headers=None):
         _headers = {'Content-Type': 'application/json'}
@@ -167,6 +168,8 @@ class TestOpenStackClient(object):
 
         headers = kwargs.setdefault('headers', {})
         headers['X-Auth-Token'] = auth_result['x-auth-token']
+        if self.microversion:
+            headers['X-OpenStack-Nova-API-Version'] = self.microversion
 
         response = self.request(full_uri, **kwargs)
 
@@ -197,15 +200,12 @@ class TestOpenStackClient(object):
         kwargs.setdefault('check_response_status', [200])
         return APIResponse(self.api_request(relative_uri, **kwargs))
 
-    def api_post(self, relative_uri, body, api_version=None, **kwargs):
+    def api_post(self, relative_uri, body, **kwargs):
         kwargs['method'] = 'POST'
         if body:
             headers = kwargs.setdefault('headers', {})
             headers['Content-Type'] = 'application/json'
             kwargs['body'] = jsonutils.dumps(body)
-
-        if api_version:
-            headers['X-OpenStack-Nova-API-Version'] = api_version
 
         kwargs.setdefault('check_response_status', [200, 202])
         return APIResponse(self.api_request(relative_uri, **kwargs))
@@ -349,9 +349,8 @@ class TestOpenStackClient(object):
         return self.api_get('/os-server-groups/%s' %
                             group_id).body['server_group']
 
-    def post_server_groups(self, group, api_version=None):
-        response = self.api_post('/os-server-groups', {"server_group": group},
-                                 api_version)
+    def post_server_groups(self, group):
+        response = self.api_post('/os-server-groups', {"server_group": group})
         return response.body['server_group']
 
     def delete_server_group(self, group_id):

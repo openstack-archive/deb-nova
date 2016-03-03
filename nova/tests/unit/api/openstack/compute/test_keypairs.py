@@ -24,7 +24,6 @@ from nova.api.openstack.compute.legacy_v2.contrib import keypairs \
         as keypairs_v2
 from nova.api.openstack import wsgi as os_wsgi
 from nova.compute import api as compute_api
-from nova import db
 from nova import exception
 from nova import objects
 from nova import policy
@@ -32,6 +31,7 @@ from nova import quota
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit.objects import test_keypair
+from nova.tests import uuidsentinel as uuids
 
 
 QUOTAS = quota.QUOTAS
@@ -82,12 +82,12 @@ class KeypairsTestV21(test.TestCase):
         fakes.stub_out_networking(self)
         fakes.stub_out_rate_limiting(self.stubs)
 
-        self.stubs.Set(db, "key_pair_get_all_by_user",
-                       db_key_pair_get_all_by_user)
-        self.stubs.Set(db, "key_pair_create",
-                       db_key_pair_create)
-        self.stubs.Set(db, "key_pair_destroy",
-                       db_key_pair_destroy)
+        self.stub_out("nova.db.key_pair_get_all_by_user",
+                      db_key_pair_get_all_by_user)
+        self.stub_out("nova.db.key_pair_create",
+                      db_key_pair_create)
+        self.stub_out("nova.db.key_pair_destroy",
+                      db_key_pair_destroy)
         self.flags(
             osapi_compute_extension=[
                 'nova.api.openstack.compute.contrib.select_extensions'],
@@ -233,7 +233,7 @@ class KeypairsTestV21(test.TestCase):
         self.assertIn('Quota exceeded, too many key pairs.', ex.explanation)
 
     def test_keypair_create_duplicate(self):
-        self.stubs.Set(db, "key_pair_create", db_key_pair_create_duplicate)
+        self.stub_out("nova.db.key_pair_create", db_key_pair_create_duplicate)
         body = {'keypair': {'name': 'create_duplicate'}}
         ex = self.assertRaises(webob.exc.HTTPConflict,
                                self.controller.create, self.req, body=body)
@@ -252,8 +252,8 @@ class KeypairsTestV21(test.TestCase):
         def db_key_pair_get_not_found(context, user_id, name):
             raise exception.KeypairNotFound(user_id=user_id, name=name)
 
-        self.stubs.Set(db, "key_pair_destroy",
-                       db_key_pair_get_not_found)
+        self.stub_out("nova.db.key_pair_destroy",
+                      db_key_pair_get_not_found)
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller.delete, self.req, 'FAKE')
 
@@ -264,7 +264,7 @@ class KeypairsTestV21(test.TestCase):
                         name='foo', public_key='XXX', fingerprint='YYY',
                         type='ssh')
 
-        self.stubs.Set(db, "key_pair_get", _db_key_pair_get)
+        self.stub_out("nova.db.key_pair_get", _db_key_pair_get)
 
         res_dict = self.controller.show(self.req, 'FAKE')
         self.assertEqual('foo', res_dict['keypair']['name'])
@@ -277,17 +277,17 @@ class KeypairsTestV21(test.TestCase):
         def _db_key_pair_get(context, user_id, name):
             raise exception.KeypairNotFound(user_id=user_id, name=name)
 
-        self.stubs.Set(db, "key_pair_get", _db_key_pair_get)
+        self.stub_out("nova.db.key_pair_get", _db_key_pair_get)
 
         self.assertRaises(webob.exc.HTTPNotFound,
                           self.controller.show, self.req, 'FAKE')
 
     def test_show_server(self):
-        self.stubs.Set(db, 'instance_get',
-                        fakes.fake_instance_get())
-        self.stubs.Set(db, 'instance_get_by_uuid',
-                        fakes.fake_instance_get())
-        req = webob.Request.blank(self.base_url + '/servers/1')
+        self.stub_out('nova.db.instance_get',
+                      fakes.fake_instance_get())
+        self.stub_out('nova.db.instance_get_by_uuid',
+                      fakes.fake_instance_get())
+        req = webob.Request.blank(self.base_url + '/servers/' + uuids.server)
         req.headers['Content-Type'] = 'application/json'
         response = req.get_response(self.app_server)
         self.assertEqual(response.status_int, 200)
@@ -358,12 +358,10 @@ class KeypairPolicyTestV21(test.NoDBTestCase):
                         name='foo', public_key='XXX', fingerprint='YYY',
                         type='ssh')
 
-        self.stubs.Set(db, "key_pair_get",
-                       _db_key_pair_get)
-        self.stubs.Set(db, "key_pair_get_all_by_user",
-                       db_key_pair_get_all_by_user)
-        self.stubs.Set(db, "key_pair_destroy",
-                       db_key_pair_destroy)
+        self.stub_out("nova.db.key_pair_get", _db_key_pair_get)
+        self.stub_out("nova.db.key_pair_get_all_by_user",
+                      db_key_pair_get_all_by_user)
+        self.stub_out("nova.db.key_pair_destroy", db_key_pair_destroy)
 
         self.req = fakes.HTTPRequest.blank('')
 

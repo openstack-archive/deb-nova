@@ -13,6 +13,7 @@
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
+import six
 
 from nova.compute import power_state
 from nova.conductor.tasks import base
@@ -37,7 +38,7 @@ CONF.register_opt(migrate_opt)
 class LiveMigrationTask(base.TaskBase):
     def __init__(self, context, instance, destination,
                  block_migration, disk_over_commit, migration, compute_rpcapi,
-                 servicegroup_api, scheduler_client):
+                 servicegroup_api, scheduler_client, request_spec=None):
         super(LiveMigrationTask, self).__init__(context, instance)
         self.destination = destination
         self.block_migration = block_migration
@@ -49,6 +50,7 @@ class LiveMigrationTask(base.TaskBase):
         self.compute_rpcapi = compute_rpcapi
         self.servicegroup_api = servicegroup_api
         self.scheduler_client = scheduler_client
+        self.request_spec = request_spec
 
     def _execute(self):
         self._check_instance_is_active()
@@ -164,21 +166,40 @@ class LiveMigrationTask(base.TaskBase):
         attempted_hosts = [self.source]
         image = utils.get_image_from_system_metadata(
             self.instance.system_metadata)
-        request_spec = scheduler_utils.build_request_spec(self.context, image,
-                                                          [self.instance])
+        filter_properties = {'ignore_hosts': attempted_hosts}
+        # TODO(sbauza): Remove that once setup_instance_group() accepts a
+        # RequestSpec object
+        request_spec = {'instance_properties': {'uuid': self.instance.uuid}}
+        scheduler_utils.setup_instance_group(self.context, request_spec,
+                                                 filter_properties)
+        if not self.request_spec:
+            # NOTE(sbauza): We were unable to find an original RequestSpec
+            # object - probably because the instance is old.
+            # We need to mock that the old way
+            request_spec = objects.RequestSpec.from_components(
+                self.context, self.instance.uuid, image,
+                self.instance.flavor, self.instance.numa_topology,
+                self.instance.pci_requests,
+                filter_properties, None, self.instance.availability_zone
+            )
+        else:
+            request_spec = self.request_spec
 
         host = None
         while host is None:
             self._check_not_over_max_retries(attempted_hosts)
-            filter_properties = {'ignore_hosts': attempted_hosts}
-            scheduler_utils.setup_instance_group(self.context, request_spec,
-                                                 filter_properties)
-            # TODO(sbauza): Hydrate here the object until we modify the
-            # scheduler.utils methods to directly use the RequestSpec object
-            spec_obj = objects.RequestSpec.from_primitives(
-                self.context, request_spec, filter_properties)
-            host = self.scheduler_client.select_destinations(self.context,
-                            spec_obj)[0]['host']
+            request_spec.ignore_hosts = attempted_hosts
+            try:
+                host = self.scheduler_client.select_destinations(self.context,
+                                request_spec)[0]['host']
+            except messaging.RemoteError as ex:
+                # TODO(ShaoHe Feng) There maybe multi-scheduler, and the
+                # scheduling algorithm is R-R, we can let other scheduler try.
+                # Note(ShaoHe Feng) There are types of RemoteError, such as
+                # NoSuchMethod, UnsupportedVersion, we can distinguish it by
+                # ex.exc_type.
+                raise exception.MigrationSchedulerRPCError(
+                    reason=six.text_type(ex))
             try:
                 self._check_compatible_with_source_hypervisor(host)
                 self._call_livem_checks_on_host(host)

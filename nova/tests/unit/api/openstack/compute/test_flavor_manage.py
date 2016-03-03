@@ -27,7 +27,6 @@ from nova.api.openstack.compute.legacy_v2.contrib import flavor_access \
 from nova.api.openstack.compute.legacy_v2.contrib import flavormanage \
         as flavormanage_v2
 from nova.compute import flavors
-from nova import db
 from nova import exception
 from nova import test
 from nova.tests.unit.api.openstack import fakes
@@ -104,8 +103,7 @@ class FlavorManageTestV21(test.NoDBTestCase):
                        "get_flavor_by_flavor_id",
                        fake_get_flavor_by_flavor_id)
         self.stubs.Set(flavors, "destroy", fake_destroy)
-        self.stubs.Set(db, "flavor_create", fake_create)
-        self.app = self._setup_app()
+        self.stub_out("nova.db.flavor_create", fake_create)
 
         self.request_body = {
             "flavor": {
@@ -125,7 +123,8 @@ class FlavorManageTestV21(test.NoDBTestCase):
     def _get_http_request(self, url=''):
         return fakes.HTTPRequest.blank(url)
 
-    def _setup_app(self):
+    @property
+    def app(self):
         return fakes.wsgi_app_v21(init_only=('os-flavor-manage',
                                              'os-flavor-rxtx',
                                              'os-flavor-access', 'flavors',
@@ -379,7 +378,6 @@ class PrivateFlavorManageTestV21(test.TestCase):
         super(PrivateFlavorManageTestV21, self).setUp()
         self.flavor_access_controller = (flavor_access_v21.
                                          FlavorAccessController())
-        self.app = self._setup_app()
         self.expected = {
             "flavor": {
                 "name": "test",
@@ -392,7 +390,8 @@ class PrivateFlavorManageTestV21(test.TestCase):
             }
         }
 
-    def _setup_app(self):
+    @property
+    def app(self):
         return fakes.wsgi_app_v21(init_only=('os-flavor-manage',
                                              'os-flavor-access',
                                              'os-flavor-rxtx', 'flavors',
@@ -447,7 +446,8 @@ class FlavorManageTestV2(FlavorManageTestV21):
             osapi_compute_ext_list=['Flavormanage', 'Flavorextradata',
                 'Flavor_access', 'Flavor_rxtx', 'Flavor_swap'])
 
-    def _setup_app(self):
+    @property
+    def app(self):
         return fakes.wsgi_app(init_only=('flavors',),
                               fake_auth_context=self._get_http_request().
                                   environ['nova.context'])
@@ -478,7 +478,8 @@ class PrivateFlavorManageTestV2(PrivateFlavorManageTestV21):
         self.flavor_access_controller = (flavor_access_v2.
                                          FlavorAccessController())
 
-    def _setup_app(self):
+    @property
+    def app(self):
         return fakes.wsgi_app(init_only=('flavors',),
                               fake_auth_context=self._get_http_request().
                                   environ['nova.context'])

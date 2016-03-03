@@ -31,7 +31,7 @@ from nova.compute import resources as ext_resources
 from nova.compute import task_states
 from nova.compute import vm_states
 from nova import exception
-from nova.i18n import _, _LI, _LW
+from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import migration as migration_obj
@@ -81,6 +81,21 @@ allocation_ratio_opts = [
              'NOTE: This can be set per-compute, or if set to 0.0, the value '
              'set on the scheduler node(s) will be used '
              'and defaulted to 1.5'),
+    cfg.FloatOpt('disk_allocation_ratio',
+        default=0.0,
+        help='This is the virtual disk to physical disk allocation ratio used '
+             'by the disk_filter.py script to determine if a host has '
+             'sufficient disk space to fit a requested instance. A ratio '
+             'greater than 1.0 will result in over-subscription of the '
+             'available physical disk, which can be useful for more '
+             'efficiently packing instances created with images that do not '
+             'use the entire virtual disk,such as sparse or compressed '
+             'images. It can be set to a value between 0.0 and 1.0 in order '
+             'to preserve a percentage of the disk for uses other than '
+             'instances.'
+             'NOTE: This can be set per-compute, or if set to 0.0, the value '
+             'set on the scheduler node(s) will be used '
+             'and defaulted to 1.0'),
 ]
 
 
@@ -114,6 +129,9 @@ def _instance_in_resize_state(instance):
     return False
 
 
+_REMOVED_STATES = (vm_states.DELETED, vm_states.SHELVED_OFFLOADED)
+
+
 class ResourceTracker(object):
     """Compute helper class for keeping track of resource usage as instances
     are built and destroyed.
@@ -136,6 +154,7 @@ class ResourceTracker(object):
         self.scheduler_client = scheduler_client.SchedulerClient()
         self.ram_allocation_ratio = CONF.ram_allocation_ratio
         self.cpu_allocation_ratio = CONF.cpu_allocation_ratio
+        self.disk_allocation_ratio = CONF.disk_allocation_ratio
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def instance_claim(self, context, instance_ref, limits=None):
@@ -430,6 +449,7 @@ class ResourceTracker(object):
         # update the allocation ratios for the related ComputeNode object
         self.compute_node.ram_allocation_ratio = self.ram_allocation_ratio
         self.compute_node.cpu_allocation_ratio = self.cpu_allocation_ratio
+        self.compute_node.disk_allocation_ratio = self.disk_allocation_ratio
 
         # now copy rest to compute_node
         self.compute_node.update_from_virt_driver(resources)
@@ -491,6 +511,20 @@ class ResourceTracker(object):
 
         self._update_available_resource(context, resources)
 
+    def _pair_instances_to_migrations(self, migrations, instances):
+        instance_by_uuid = {inst.uuid: inst for inst in instances}
+        for migration in migrations:
+            try:
+                migration.instance = instance_by_uuid[migration.instance_uuid]
+            except KeyError:
+                # NOTE(danms): If this happens, we don't set it here, and
+                # let the code either fail or lazy-load the instance later
+                # which is what happened before we added this optimization.
+                # This _should_ not be possible, of course.
+                LOG.error(_LE('Migration for instance %(uuid)s refers to '
+                              'another host\'s instance!'),
+                          {'uuid': migration.instance_uuid})
+
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def _update_available_resource(self, context, resources):
 
@@ -516,7 +550,8 @@ class ResourceTracker(object):
         instances = objects.InstanceList.get_by_host_and_node(
             context, self.host, self.nodename,
             expected_attrs=['system_metadata',
-                            'numa_topology'])
+                            'numa_topology',
+                            'flavor', 'migration_context'])
 
         # Now calculate usage based on instance utilization:
         self._update_usage_from_instances(context, instances)
@@ -525,6 +560,7 @@ class ResourceTracker(object):
         migrations = objects.MigrationList.get_in_progress_by_host_and_node(
                 context, self.host, self.nodename)
 
+        self._pair_instances_to_migrations(migrations, instances)
         self._update_usage_from_migrations(context, migrations)
 
         # Detect and account for orphaned instances that may exist on the
@@ -804,8 +840,10 @@ class ResourceTracker(object):
 
             # filter to most recently updated migration for each instance:
             other_migration = filtered.get(uuid, None)
-            if (not other_migration or
-                    migration.updated_at >= other_migration.updated_at):
+            # NOTE(claudiub): In Python 3, you cannot compare NoneTypes.
+            if (not other_migration or (
+                    migration.updated_at and other_migration.updated_at and
+                    migration.updated_at >= other_migration.updated_at)):
                 filtered[uuid] = migration
 
         for migration in filtered.values():
@@ -823,20 +861,20 @@ class ResourceTracker(object):
 
         uuid = instance['uuid']
         is_new_instance = uuid not in self.tracked_instances
-        is_deleted_instance = instance['vm_state'] == vm_states.DELETED
+        is_removed_instance = instance['vm_state'] in _REMOVED_STATES
 
         if is_new_instance:
             self.tracked_instances[uuid] = obj_base.obj_to_primitive(instance)
             sign = 1
 
-        if is_deleted_instance:
+        if is_removed_instance:
             self.tracked_instances.pop(uuid)
             sign = -1
 
         self.stats.update_stats_for_instance(instance)
 
         # if it's a new or deleted instance:
-        if is_new_instance or is_deleted_instance:
+        if is_new_instance or is_removed_instance:
             if self.pci_tracker:
                 self.pci_tracker.update_pci_for_instance(context,
                                                          instance,
@@ -875,7 +913,7 @@ class ResourceTracker(object):
                                                    self.driver)
 
         for instance in instances:
-            if instance.vm_state != vm_states.DELETED:
+            if instance.vm_state not in _REMOVED_STATES:
                 self._update_usage_from_instance(context, instance)
 
     def _find_orphaned_instances(self):

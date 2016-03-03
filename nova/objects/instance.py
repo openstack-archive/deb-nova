@@ -383,14 +383,20 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         instance.obj_reset_changes()
         return instance
 
+    @staticmethod
+    @db.select_db_reader_mode
+    def _db_instance_get_by_uuid(context, uuid, columns_to_join,
+                                 use_slave=False):
+        return db.instance_get_by_uuid(context, uuid,
+                                       columns_to_join=columns_to_join)
+
     @base.remotable_classmethod
     def get_by_uuid(cls, context, uuid, expected_attrs=None, use_slave=False):
         if expected_attrs is None:
             expected_attrs = ['info_cache', 'security_groups']
         columns_to_join = _expected_cols(expected_attrs)
-        db_inst = db.instance_get_by_uuid(context, uuid,
-                                          columns_to_join=columns_to_join,
-                                          use_slave=use_slave)
+        db_inst = cls._db_instance_get_by_uuid(context, uuid, columns_to_join,
+                                               use_slave=use_slave)
         return cls._from_db_object(context, cls(), db_inst,
                                    expected_attrs)
 
@@ -421,14 +427,18 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 }
         updates['extra'] = {}
         numa_topology = updates.pop('numa_topology', None)
+        expected_attrs.append('numa_topology')
         if numa_topology:
-            expected_attrs.append('numa_topology')
             updates['extra']['numa_topology'] = numa_topology._to_json()
+        else:
+            updates['extra']['numa_topology'] = None
         pci_requests = updates.pop('pci_requests', None)
+        expected_attrs.append('pci_requests')
         if pci_requests:
-            expected_attrs.append('pci_requests')
             updates['extra']['pci_requests'] = (
                 pci_requests.to_json())
+        else:
+            updates['extra']['pci_requests'] = None
         flavor = updates.pop('flavor', None)
         if flavor:
             expected_attrs.append('flavor')
@@ -445,10 +455,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             }
             updates['extra']['flavor'] = jsonutils.dumps(flavor_info)
         vcpu_model = updates.pop('vcpu_model', None)
+        expected_attrs.append('vcpu_model')
         if vcpu_model:
-            expected_attrs.append('vcpu_model')
             updates['extra']['vcpu_model'] = (
                 jsonutils.dumps(vcpu_model.obj_to_primitive()))
+        else:
+            updates['extra']['vcpu_model'] = None
         db_inst = db.instance_create(self._context, updates)
         self._from_db_object(self._context, self, db_inst, expected_attrs)
 
@@ -798,6 +810,10 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     def _load_ec2_ids(self):
         self.ec2_ids = objects.EC2Ids.get_by_instance(self._context, self)
 
+    def _load_security_groups(self):
+        self.security_groups = objects.SecurityGroupList.get_by_instance(
+            self._context, self)
+
     def _load_migration_context(self, db_context=_NO_DATA_SENTINEL):
         if db_context is _NO_DATA_SENTINEL:
             try:
@@ -847,6 +863,11 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             objects.MigrationContext._destroy(self._context, self.uuid)
             self.migration_context = None
 
+    def clear_numa_topology(self):
+        numa_topology = self.numa_topology
+        if numa_topology is not None:
+            self.numa_topology = numa_topology.clear_host_pinning()
+
     def obj_load_attr(self, attrname):
         if attrname not in INSTANCE_OPTIONAL_ATTRS:
             raise exception.ObjectActionError(
@@ -877,6 +898,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             self._load_ec2_ids()
         elif attrname == 'migration_context':
             self._load_migration_context()
+        elif attrname == 'security_groups':
+            self._load_security_groups()
         elif 'flavor' in attrname:
             self._load_flavor()
         else:
@@ -995,8 +1018,9 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         'objects': fields.ListOfObjectsField('Instance'),
     }
 
-    @base.remotable_classmethod
-    def get_by_filters(cls, context, filters,
+    @classmethod
+    @db.select_db_reader_mode
+    def _get_by_filters_impl(cls, context, filters,
                        sort_key='created_at', sort_dir='desc', limit=None,
                        marker=None, expected_attrs=None, use_slave=False,
                        sort_keys=None, sort_dirs=None):
@@ -1004,18 +1028,34 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
             db_inst_list = db.instance_get_all_by_filters_sort(
                 context, filters, limit=limit, marker=marker,
                 columns_to_join=_expected_cols(expected_attrs),
-                use_slave=use_slave, sort_keys=sort_keys, sort_dirs=sort_dirs)
+                sort_keys=sort_keys, sort_dirs=sort_dirs)
         else:
             db_inst_list = db.instance_get_all_by_filters(
                 context, filters, sort_key, sort_dir, limit=limit,
-                marker=marker, columns_to_join=_expected_cols(expected_attrs),
-                use_slave=use_slave)
+                marker=marker, columns_to_join=_expected_cols(expected_attrs))
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 
     @base.remotable_classmethod
+    def get_by_filters(cls, context, filters,
+                       sort_key='created_at', sort_dir='desc', limit=None,
+                       marker=None, expected_attrs=None, use_slave=False,
+                       sort_keys=None, sort_dirs=None):
+        return cls._get_by_filters_impl(
+            context, filters, sort_key=sort_key, sort_dir=sort_dir,
+            limit=limit, marker=marker, expected_attrs=expected_attrs,
+            use_slave=use_slave, sort_keys=sort_keys, sort_dirs=sort_dirs)
+
+    @staticmethod
+    @db.select_db_reader_mode
+    def _db_instance_get_all_by_host(context, host, columns_to_join,
+                                     use_slave=False):
+        return db.instance_get_all_by_host(context, host,
+                                           columns_to_join=columns_to_join)
+
+    @base.remotable_classmethod
     def get_by_host(cls, context, host, expected_attrs=None, use_slave=False):
-        db_inst_list = db.instance_get_all_by_host(
+        db_inst_list = cls._db_instance_get_all_by_host(
             context, host, columns_to_join=_expected_cols(expected_attrs),
             use_slave=use_slave)
         return _make_instance_list(context, cls(), db_inst_list,
@@ -1053,6 +1093,15 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 
+    @staticmethod
+    @db.select_db_reader_mode
+    def _db_instance_get_active_by_window_joined(
+            context, begin, end, project_id, host, columns_to_join,
+            use_slave=False):
+        return db.instance_get_active_by_window_joined(
+            context, begin, end, project_id, host,
+            columns_to_join=columns_to_join)
+
     @base.remotable_classmethod
     def _get_active_by_window_joined(cls, context, begin, end=None,
                                     project_id=None, host=None,
@@ -1062,9 +1111,10 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
         # to timezone-aware datetime objects for the DB API call.
         begin = timeutils.parse_isotime(begin)
         end = timeutils.parse_isotime(end) if end else None
-        db_inst_list = db.instance_get_active_by_window_joined(
+        db_inst_list = cls._db_instance_get_active_by_window_joined(
             context, begin, end, project_id, host,
-            columns_to_join=_expected_cols(expected_attrs))
+            columns_to_join=_expected_cols(expected_attrs),
+            use_slave=use_slave)
         return _make_instance_list(context, cls(), db_inst_list,
                                    expected_attrs)
 

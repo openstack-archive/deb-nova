@@ -91,6 +91,7 @@ VIR_CRED_EXTERNAL = 9
 VIR_MIGRATE_LIVE = 1
 VIR_MIGRATE_PEER2PEER = 2
 VIR_MIGRATE_TUNNELLED = 4
+VIR_MIGRATE_PERSIST_DEST = 8
 VIR_MIGRATE_UNDEFINE_SOURCE = 16
 VIR_MIGRATE_NON_SHARED_INC = 128
 
@@ -585,6 +586,13 @@ class Domain(object):
                 error_domain=VIR_FROM_QEMU)
 
     def migrateToURI2(self, dconnuri, miguri, dxml, flags, dname, bandwidth):
+        raise make_libvirtError(
+                libvirtError,
+                "Migration always fails for fake libvirt!",
+                error_code=VIR_ERR_INTERNAL_ERROR,
+                error_domain=VIR_FROM_QEMU)
+
+    def migrateToURI3(self, dconnuri, params, logical_sum):
         raise make_libvirtError(
                 libvirtError,
                 "Migration always fails for fake libvirt!",

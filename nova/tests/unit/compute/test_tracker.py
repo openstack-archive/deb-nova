@@ -74,6 +74,7 @@ _COMPUTE_NODE_FIXTURES = [
         numa_topology=None,
         cpu_allocation_ratio=16.0,
         ram_allocation_ratio=1.5,
+        disk_allocation_ratio=1.0,
         ),
 ]
 
@@ -452,7 +453,9 @@ class TestUpdateAvailableResources(BaseTestCase):
                                          'fake-node',
                                          expected_attrs=[
                                              'system_metadata',
-                                             'numa_topology'])
+                                             'numa_topology',
+                                             'flavor',
+                                             'migration_context'])
         get_cn_mock.assert_called_once_with(mock.sentinel.ctx, 'fake-host',
                                             'fake-node')
         migr_mock.assert_called_once_with(mock.sentinel.ctx, 'fake-host',
@@ -979,6 +982,7 @@ class TestInitComputeNode(BaseTestCase):
         get_mock.side_effect = exc.NotFound
         cpu_alloc_ratio = 1.0
         ram_alloc_ratio = 1.0
+        disk_alloc_ratio = 1.0
 
         resources = {
             'host_ip': '1.1.1.1',
@@ -1021,11 +1025,13 @@ class TestInitComputeNode(BaseTestCase):
             # NOTE(sbauza): ResourceTracker adds CONF allocation ratios
             ram_allocation_ratio=ram_alloc_ratio,
             cpu_allocation_ratio=cpu_alloc_ratio,
+            disk_allocation_ratio=disk_alloc_ratio,
         )
 
         # Forcing the flags to the values we know
         self.rt.ram_allocation_ratio = ram_alloc_ratio
         self.rt.cpu_allocation_ratio = cpu_alloc_ratio
+        self.rt.disk_allocation_ratio = disk_alloc_ratio
 
         self.rt._init_compute_node(mock.sentinel.ctx, resources)
 
@@ -1037,7 +1043,8 @@ class TestInitComputeNode(BaseTestCase):
                                                  self.rt.compute_node))
 
     def test_copy_resources_adds_allocation_ratios(self):
-        self.flags(cpu_allocation_ratio=4.0, ram_allocation_ratio=3.0)
+        self.flags(cpu_allocation_ratio=4.0, ram_allocation_ratio=3.0,
+                   disk_allocation_ratio=2.0)
         self._setup_rt()
 
         resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
@@ -1047,6 +1054,7 @@ class TestInitComputeNode(BaseTestCase):
         self.rt._copy_resources(resources)
         self.assertEqual(4.0, self.rt.compute_node.cpu_allocation_ratio)
         self.assertEqual(3.0, self.rt.compute_node.ram_allocation_ratio)
+        self.assertEqual(2.0, self.rt.compute_node.disk_allocation_ratio)
 
 
 class TestUpdateComputeNode(BaseTestCase):
@@ -1079,6 +1087,7 @@ class TestUpdateComputeNode(BaseTestCase):
             running_vms=0,
             cpu_allocation_ratio=16.0,
             ram_allocation_ratio=1.5,
+            disk_allocation_ratio=1.0,
         )
         self.rt.compute_node = compute
         self.rt._update(mock.sentinel.ctx)
@@ -1126,6 +1135,7 @@ class TestUpdateComputeNode(BaseTestCase):
             running_vms=0,
             cpu_allocation_ratio=16.0,
             ram_allocation_ratio=1.5,
+            disk_allocation_ratio=1.0,
         )
         self.rt.compute_node = compute
         self.rt._update(mock.sentinel.ctx)
@@ -1215,6 +1225,40 @@ class TestInstanceClaim(BaseTestCase):
             update_mock.assert_called_once_with(self.elevated)
             self.assertTrue(obj_base.obj_equal_prims(expected,
                                                      self.rt.compute_node))
+
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
+    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
+    def test_update_usage_removed(self, migr_mock, pci_mock):
+        # Test that RT.update_usage() removes the instance when update is
+        # called in a removed state
+        pci_mock.return_value = objects.InstancePCIRequests(requests=[])
+
+        expected = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
+        disk_used = self.instance.root_gb + self.instance.ephemeral_gb
+        expected.update({
+            'local_gb_used': disk_used,
+            'memory_mb_used': self.instance.memory_mb,
+            'free_disk_gb': expected['local_gb'] - disk_used,
+            "free_ram_mb": expected['memory_mb'] - self.instance.memory_mb,
+            'running_vms': 1,
+            'vcpus_used': 1,
+            'pci_device_pools': objects.PciDevicePoolList(),
+        })
+        with mock.patch.object(self.rt, '_update') as update_mock:
+            with mock.patch.object(self.instance, 'save'):
+                self.rt.instance_claim(self.ctx, self.instance, None)
+            update_mock.assert_called_once_with(self.elevated)
+            self.assertTrue(obj_base.obj_equal_prims(expected,
+                                                     self.rt.compute_node))
+
+        expected_updated = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
+        expected_updated['pci_device_pools'] = objects.PciDevicePoolList()
+
+        self.instance.vm_state = vm_states.SHELVED_OFFLOADED
+        with mock.patch.object(self.rt, '_update') as update_mock:
+            self.rt.update_usage(self.ctx, self.instance)
+        self.assertTrue(obj_base.obj_equal_prims(expected_updated,
+                                                 self.rt.compute_node))
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
     @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')

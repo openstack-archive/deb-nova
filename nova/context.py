@@ -17,10 +17,11 @@
 
 """RequestContext: context for requests that persist through all of nova."""
 
+from contextlib import contextmanager
 import copy
 
-from keystoneclient import auth
-from keystoneclient import service_catalog
+from keystoneauth1.access import service_catalog as ksa_service_catalog
+from keystoneauth1 import plugin
 from oslo_context import context
 from oslo_db.sqlalchemy import enginefacade
 from oslo_log import log as logging
@@ -35,8 +36,8 @@ from nova import utils
 LOG = logging.getLogger(__name__)
 
 
-class _ContextAuthPlugin(auth.BaseAuthPlugin):
-    """A keystoneclient auth plugin that uses the values from the Context.
+class _ContextAuthPlugin(plugin.BaseAuthPlugin):
+    """A keystoneauth auth plugin that uses the values from the Context.
 
     Ideally we would use the plugin provided by auth_token middleware however
     this plugin isn't serialized yet so we construct one from the serialized
@@ -47,8 +48,7 @@ class _ContextAuthPlugin(auth.BaseAuthPlugin):
         super(_ContextAuthPlugin, self).__init__()
 
         self.auth_token = auth_token
-        sc = {'serviceCatalog': sc}
-        self.service_catalog = service_catalog.ServiceCatalogV2(sc)
+        self.service_catalog = ksa_service_catalog.ServiceCatalogV2(sc)
 
     def get_token(self, *args, **kwargs):
         return self.auth_token
@@ -57,7 +57,7 @@ class _ContextAuthPlugin(auth.BaseAuthPlugin):
                      region_name=None, service_name=None, **kwargs):
         return self.service_catalog.url_for(service_type=service_type,
                                             service_name=service_name,
-                                            endpoint_type=interface,
+                                            interface=interface,
                                             region_name=region_name)
 
 
@@ -142,6 +142,12 @@ class RequestContext(context.RequestContext):
         self.user_name = user_name
         self.project_name = project_name
         self.is_admin = is_admin
+
+        # NOTE(dheeraj): The following attribute is used by cellsv2 to store
+        # connection information for connecting to the target cell.
+        # It is only manipulated using the target_cell contextmanager
+        # provided by this module
+        self.db_connection = None
         self.user_auth_plugin = user_auth_plugin
         if self.is_admin is None:
             self.is_admin = policy.check_is_admin(self)
@@ -273,3 +279,23 @@ def authorize_quota_class_context(context, class_name):
             raise exception.Forbidden()
         elif context.quota_class != class_name:
             raise exception.Forbidden()
+
+
+@contextmanager
+def target_cell(context, cell_mapping):
+    """Adds database connection information to the context for communicating
+    with the given target cell.
+
+    :param context: The RequestContext to add database connection information
+    :param cell_mapping: A objects.CellMapping object
+    """
+    original_db_connection = context.db_connection
+    # avoid circular import
+    from nova import db
+    connection_string = cell_mapping.database_connection
+    context.db_connection = db.create_context_manager(connection_string)
+
+    try:
+        yield context
+    finally:
+        context.db_connection = original_db_connection

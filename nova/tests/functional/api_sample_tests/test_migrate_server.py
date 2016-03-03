@@ -53,7 +53,7 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
     def test_post_live_migrate_server(self):
         # Get api samples to server live migrate request.
         def fake_live_migrate(_self, context, instance, scheduler_hint,
-                              block_migration, disk_over_commit):
+                              block_migration, disk_over_commit, request_spec):
             self.assertEqual(self.uuid, instance["uuid"])
             host = scheduler_hint["host"]
             self.assertEqual(self.compute.host, host)
@@ -79,3 +79,13 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
                                  'live-migrate-server',
                                  {'hostname': self.compute.host})
         self.assertEqual(202, response.status_code)
+
+
+class MigrateServerSamplesJsonTestV225(MigrateServerSamplesJsonTest):
+    extension_name = "os-migrate-server"
+    microversion = '2.25'
+    scenarios = [('v2_25', {'api_major_version': 'v2.1'})]
+
+    def test_post_migrate(self):
+        # no changes for migrate-server
+        pass

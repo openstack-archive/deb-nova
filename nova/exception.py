@@ -843,6 +843,12 @@ class PortNotUsable(Invalid):
     msg_fmt = _("Port %(port_id)s not usable for instance %(instance)s.")
 
 
+class PortNotUsableDNS(Invalid):
+    msg_fmt = _("Port %(port_id)s not usable for instance %(instance)s. "
+                "Value %(value)s assigned to dns_name attribute does not "
+                "match instance's hostname %(hostname)s")
+
+
 class PortNotFree(Invalid):
     msg_fmt = _("No free port available for instance %(instance)s.")
 
@@ -1122,6 +1128,17 @@ class MigrationNotFoundByStatus(MigrationNotFound):
                 "with status %(status)s.")
 
 
+class MigrationNotFoundForInstance(MigrationNotFound):
+    msg_fmt = _("Migration %(migration_id)s not found for instance "
+                "%(instance_id)s")
+
+
+class InvalidMigrationState(Invalid):
+    msg_fmt = _("Migration %(migration_id)s state of instance "
+                "%(instance_uuid)s is %(state)s. Cannot %(method)s while the "
+                "migration is in this state.")
+
+
 class ConsoleLogOutputException(NovaException):
     msg_fmt = _("Console log output could not be retrieved for instance "
                 "%(instance_id)s. Reason: %(reason)s")
@@ -1183,7 +1200,7 @@ class FlavorAccessNotFound(NotFound):
 
 
 class FlavorExtraSpecUpdateCreateFailed(NovaException):
-    msg_fmt = _("Flavor %(id)d extra spec cannot be updated or created "
+    msg_fmt = _("Flavor %(id)s extra spec cannot be updated or created "
                 "after %(retries)d retries.")
 
 
@@ -1302,6 +1319,10 @@ class MigrationError(NovaException):
 
 class MigrationPreCheckError(MigrationError):
     msg_fmt = _("Migration pre-check error: %(reason)s")
+
+
+class MigrationSchedulerRPCError(MigrationError):
+    msg_fmt = _("Migration select destinations error: %(reason)s")
 
 
 class MalformedRequestBody(NovaException):
@@ -1586,11 +1607,6 @@ class InstanceRecreateNotSupported(Invalid):
     msg_fmt = _('Instance recreate is not supported.')
 
 
-class ServiceGroupUnavailable(NovaException):
-    msg_fmt = _("The service from servicegroup driver %(driver)s is "
-                "temporarily unavailable.")
-
-
 class DBNotAllowed(NovaException):
     msg_fmt = _('%(binary)s attempted direct database access which is '
                 'not allowed by policy')
@@ -1736,6 +1752,19 @@ class PciDeviceInvalidStatus(Invalid):
         "instead of %(hopestatus)s")
 
 
+class PciDeviceVFInvalidStatus(Invalid):
+    msg_fmt = _(
+        "Not all Virtual Functions of PF %(compute_node_id)s:%(address)s "
+        "are free.")
+
+
+class PciDevicePFInvalidStatus(Invalid):
+    msg_fmt = _(
+        "Physical Function %(compute_node_id)s:%(address)s, related to VF"
+        " %(compute_node_id)s:%(vf_address)s is %(status)s "
+        "instead of %(hopestatus)s")
+
+
 class PciDeviceInvalidOwner(Invalid):
     msg_fmt = _(
         "PCI device %(compute_node_id)s:%(address)s is owned by %(owner)s "
@@ -1826,6 +1855,16 @@ class LiveMigrationWithOldNovaNotSafe(NovaException):
     msg_fmt = _("Host %(server)s is running an old version of Nova, "
                 "live migrations involving that version may cause data loss. "
                 "Upgrade Nova on %(server)s and try again.")
+
+
+class LiveMigrationWithOldNovaNotSupported(NovaException):
+    msg_fmt = _("Live migration with API v2.25 requires all the Mitaka "
+                "upgrade to be complete before it is available.")
+
+
+class LiveMigrationURINotAvailable(NovaException):
+    msg_fmt = _('No live migration URI configured and no default available '
+                'for "%(virt_type)s" hypervisor virtualization type.')
 
 
 class UnshelveException(NovaException):
@@ -2038,8 +2077,8 @@ class UEFINotSupported(Invalid):
     msg_fmt = _("UEFI is not supported")
 
 
-class NMINotSupported(Invalid):
-    msg_fmt = _("Injecting NMI is not supported")
+class TriggerCrashDumpNotSupported(Invalid):
+    msg_fmt = _("Triggering crash dump is not supported")
 
 
 class UnsupportedHostCPUControlPolicy(Invalid):
@@ -2054,3 +2093,12 @@ class RealtimeMaskNotFoundOrInvalid(Invalid):
     msg_fmt = _("Realtime policy needs vCPU(s) mask configured with at least "
                 "1 RT vCPU and 1 ordinary vCPU. See hw:cpu_realtime_mask "
                 "or hw_cpu_realtime_mask")
+
+
+class OsInfoNotFound(NotFound):
+    msg_fmt = _("No configuration information found for operating system "
+                "%(os_name)s")
+
+
+class BuildRequestNotFound(NotFound):
+    msg_fmt = _("BuildRequest not found for instance %(uuid)s")

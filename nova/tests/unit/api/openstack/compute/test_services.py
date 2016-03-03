@@ -13,6 +13,7 @@
 #    under the License.
 
 
+import copy
 import datetime
 
 import iso8601
@@ -47,6 +48,7 @@ fake_services_list = [
          topic='scheduler',
          updated_at=datetime.datetime(2012, 10, 29, 13, 42, 2),
          created_at=datetime.datetime(2012, 9, 18, 2, 46, 27),
+         last_seen_up=datetime.datetime(2012, 10, 29, 13, 42, 2),
          forced_down=False,
          disabled_reason='test1'),
     dict(test_service.fake_service,
@@ -57,6 +59,7 @@ fake_services_list = [
          topic='compute',
          updated_at=datetime.datetime(2012, 10, 29, 13, 42, 5),
          created_at=datetime.datetime(2012, 9, 18, 2, 46, 27),
+         last_seen_up=datetime.datetime(2012, 10, 29, 13, 42, 5),
          forced_down=False,
          disabled_reason='test2'),
     dict(test_service.fake_service,
@@ -67,6 +70,7 @@ fake_services_list = [
          topic='scheduler',
          updated_at=datetime.datetime(2012, 9, 19, 6, 55, 34),
          created_at=datetime.datetime(2012, 9, 18, 2, 46, 28),
+         last_seen_up=datetime.datetime(2012, 9, 19, 6, 55, 34),
          forced_down=False,
          disabled_reason=None),
     dict(test_service.fake_service,
@@ -77,8 +81,32 @@ fake_services_list = [
          topic='compute',
          updated_at=datetime.datetime(2012, 9, 18, 8, 3, 38),
          created_at=datetime.datetime(2012, 9, 18, 2, 46, 28),
+         last_seen_up=datetime.datetime(2012, 9, 18, 8, 3, 38),
          forced_down=False,
          disabled_reason='test4'),
+    # NOTE(rpodolyaka): API services are special case and must be filtered out
+    dict(test_service.fake_service,
+         binary='nova-osapi_compute',
+         host='host2',
+         id=5,
+         disabled=False,
+         topic=None,
+         updated_at=None,
+         created_at=datetime.datetime(2012, 9, 18, 2, 46, 28),
+         last_seen_up=None,
+         forced_down=False,
+         disabled_reason=None),
+    dict(test_service.fake_service,
+         binary='nova-metadata',
+         host='host2',
+         id=6,
+         disabled=False,
+         topic=None,
+         updated_at=None,
+         created_at=datetime.datetime(2012, 9, 18, 2, 46, 28),
+         last_seen_up=None,
+         forced_down=False,
+         disabled_reason=None),
     ]
 
 
@@ -142,6 +170,8 @@ def fake_db_service_update(services):
         service = _service_get_by_id(services, service_id)
         if service is None:
             raise exception.ServiceNotFound(service_id=service_id)
+        service = copy.deepcopy(service)
+        service.update(values)
         return service
     return service_update
 

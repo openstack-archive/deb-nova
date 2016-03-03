@@ -19,13 +19,9 @@
 
 import urllib
 
-from oslo_config import cfg
-
 from nova import exception
 from nova.i18n import _
 from nova import utils
-
-CONF = cfg.CONF
 
 
 class SecurityGroupBase(object):
@@ -173,7 +169,7 @@ class SecurityGroupBase(object):
         """
         pass
 
-    def populate_security_groups(self, instance, security_groups):
+    def populate_security_groups(self, security_groups):
         """Called when populating the database for an instances
         security groups.
         """

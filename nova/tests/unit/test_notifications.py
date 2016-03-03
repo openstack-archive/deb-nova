@@ -18,7 +18,6 @@
 import copy
 
 import mock
-from oslo_config import cfg
 from oslo_context import context as o_context
 from oslo_context import fixture as o_fixture
 
@@ -33,9 +32,6 @@ from nova.objects import base as obj_base
 from nova import test
 from nova.tests.unit import fake_network
 from nova.tests.unit import fake_notifier
-
-CONF = cfg.CONF
-CONF.import_opt('compute_driver', 'nova.virt.driver')
 
 
 class NotificationsTestCase(test.TestCase):

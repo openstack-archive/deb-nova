@@ -177,6 +177,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self._set_exception_vars()
         self.node_name = self.conn._nodename
         self.ds = 'ds1'
+        self._display_name = 'fake-display-name'
 
         self.vim = vmwareapi_fake.FakeVim()
 
@@ -187,12 +188,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         (image_service, image_id) = glance.get_remote_image_service(
             self.context, image_ref)
         metadata = image_service.show(self.context, image_id)
-        self.image = {
+        self.image = objects.ImageMeta.from_dict({
             'id': image_ref,
             'disk_format': 'vmdk',
             'size': int(metadata['size']),
-        }
-        self.fake_image_uuid = self.image['id']
+        })
+        self.fake_image_uuid = self.image.id
         nova.tests.unit.image.fake.stub_out_image_service(self)
         self.vnc_host = 'ha-host'
 
@@ -268,8 +269,10 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         def _fake_check_session(_self):
             return True
 
-        self.stubs.Set(vmwareapi_fake.FakeVim, '_login', _fake_login)
-        self.stubs.Set(vmwareapi_fake.FakeVim, '_check_session',
+        self.stub_out('nova.tests.unit.virt.vmwareapi.fake.FakeVim._login',
+                      _fake_login)
+        self.stub_out('nova.tests.unit.virt.vmwareapi.'
+                       'fake.FakeVim._check_session',
                        _fake_check_session)
 
         with mock.patch.object(greenthread, 'sleep'):
@@ -301,6 +304,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         if ephemeral is not None:
             self.type_data['ephemeral_gb'] = ephemeral
         values = {'name': 'fake_name',
+                  'display_name': self._display_name,
                   'id': 1,
                   'uuid': uuid,
                   'project_id': self.project_id,
@@ -348,7 +352,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         # Get record for VM
         vms = vmwareapi_fake._get_objects("VirtualMachine")
         for vm in vms.objects:
-            if vm.get('name') == self.uuid:
+            if vm.get('name') == vm_util._get_vm_name(self._display_name,
+                                                      self.uuid):
                 return vm
         self.fail('Unable to find VM backing!')
 
@@ -439,11 +444,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         uuids = self.conn.list_instance_uuids()
         self.assertEqual(1, len(uuids))
 
-    def test_list_instance_uuids_invalid_uuid(self):
-        self._create_vm(uuid='fake_id')
-        uuids = self.conn.list_instance_uuids()
-        self.assertEqual(0, len(uuids))
-
     def _cached_files_exist(self, exists=True):
         cache = ds_obj.DatastorePath(self.ds, 'vmware_base',
                                       self.fake_image_uuid,
@@ -493,7 +493,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         vmwareapi_fake.assertPathExists(self, str(root))
 
     def _iso_disk_type_created(self, instance_type='m1.large'):
-        self.image['disk_format'] = 'iso'
+        self.image.disk_format = 'iso'
         self._create_vm(instance_type=instance_type)
         path = ds_obj.DatastorePath(self.ds, 'vmware_base',
                                      self.fake_image_uuid,
@@ -519,9 +519,9 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                               iso_uploaded_path):
             self.assertEqual(iso_uploaded_path, str(iso_path))
 
-        self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
+        self.stub_out('nova.virt.vmwareapi.vmops._attach_cdrom_to_vm',
                        fake_attach_cdrom)
-        self.image['disk_format'] = 'iso'
+        self.image.disk_format = 'iso'
         self._create_vm()
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
@@ -544,24 +544,24 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             ds_obj.DatastorePath(self.ds, 'fake-config-drive')]
         self.iso_index = 0
 
-        def fake_create_config_drive(instance, injected_files, password,
-                                     network_info, data_store_name,
-                                     folder, uuid, cookies):
-            return 'fake-config-drive'
-
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
                               iso_uploaded_path):
             self.assertEqual(iso_uploaded_path, str(iso_path[self.iso_index]))
             self.iso_index += 1
 
-        self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
-                       fake_attach_cdrom)
-        self.stubs.Set(self.conn._vmops, '_create_config_drive',
-                       fake_create_config_drive)
-
-        self.image['disk_format'] = 'iso'
-        self._create_vm()
-        self.assertEqual(2, self.iso_index)
+        with test.nested(
+            mock.patch.object(self.conn._vmops,
+                              '_attach_cdrom_to_vm',
+                              side_effect=fake_attach_cdrom),
+            mock.patch.object(self.conn._vmops,
+                              '_create_config_drive',
+                              return_value='fake-config-drive'),
+        ) as (fake_attach_cdrom_to_vm, fake_create_config_drive):
+            self.image.disk_format = 'iso'
+            self._create_vm()
+            self.assertEqual(2, self.iso_index)
+            self.assertEqual(fake_attach_cdrom_to_vm.call_count, 2)
+            self.assertEqual(fake_create_config_drive.call_count, 1)
 
     def test_ephemeral_disk_attach(self):
         self._create_vm(ephemeral=50)
@@ -598,24 +598,19 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         iso_path = ds_obj.DatastorePath(self.ds, 'fake-config-drive')
         self.cd_attach_called = False
 
-        def fake_create_config_drive(instance, injected_files, password,
-                                     network_info, data_store_name,
-                                     folder, uuid, cookies):
-
-            return 'fake-config-drive'
-
         def fake_attach_cdrom(vm_ref, instance, data_store_ref,
                               iso_uploaded_path):
             self.assertEqual(iso_uploaded_path, str(iso_path))
             self.cd_attach_called = True
 
-        self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
-                       fake_attach_cdrom)
-        self.stubs.Set(self.conn._vmops, '_create_config_drive',
-                       fake_create_config_drive)
-
-        self._create_vm()
-        self.assertTrue(self.cd_attach_called)
+        with test.nested(
+            mock.patch.object(self.conn._vmops, '_attach_cdrom_to_vm',
+                              side_effect=fake_attach_cdrom),
+            mock.patch.object(self.conn._vmops, '_create_config_drive',
+                              return_value='fake-config-drive'),
+        ) as (fake_attach_cdrom_to_vm, fake_create_config_drive):
+            self._create_vm()
+            self.assertTrue(self.cd_attach_called)
 
     @mock.patch.object(vmops.VMwareVMOps, 'power_off')
     @mock.patch.object(driver.VMwareVCDriver, 'detach_volume')
@@ -780,13 +775,15 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         def _fake_extend(instance, requested_size, name, dc_ref):
             vmwareapi_fake._add_file(str(root))
 
-        self.stubs.Set(self.conn._vmops, '_extend_virtual_disk',
-                       _fake_extend)
-
-        self._create_vm()
-        info = self._get_info()
-        self._check_vm_info(info, power_state.RUNNING)
-        vmwareapi_fake.assertPathExists(self, str(root))
+        with test.nested(
+            mock.patch.object(self.conn._vmops, '_extend_virtual_disk',
+                              side_effect=_fake_extend)
+        ) as (fake_extend_virtual_disk):
+            self._create_vm()
+            info = self._get_info()
+            self._check_vm_info(info, power_state.RUNNING)
+            vmwareapi_fake.assertPathExists(self, str(root))
+            self.assertEqual(1, fake_extend_virtual_disk[0].call_count)
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
                        'from_image')
@@ -1552,7 +1549,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
                 return str(ds_obj.DatastorePath(data_store_name,
                                                  instance_uuid, 'fake.iso'))
 
-            self.stubs.Set(self.conn._vmops, '_create_config_drive',
+            self.stub_out('nova.virt.vmwareapi.vmops._create_config_drive',
                            fake_create_config_drive)
 
         self._create_vm()
@@ -1563,9 +1560,10 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         info = self._get_info()
         self._check_vm_info(info, power_state.RUNNING)
-        self.stubs.Set(vm_util, "power_on_instance",
+        self.stub_out('nova.virt.vmwareapi.vm_util.power_on_instance',
                        fake_power_on_instance)
-        self.stubs.Set(self.conn._volumeops, "attach_disk_to_vm",
+        self.stub_out('nova.virt.vmwareapi.volumeops.'
+                       'VMwareVolumeOps.attach_disk_to_vm',
                        fake_attach_disk_to_vm)
 
         self.conn.rescue(self.context, self.instance, self.network_info,
@@ -1886,7 +1884,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         def _fake_get_timestamp_filename(fake):
             return self._get_timestamp_filename()
 
-        self.stubs.Set(imagecache.ImageCacheManager, '_get_timestamp_filename',
+        self.stub_out('nova.virt.vmwareapi.imagecache.'
+                      'ImageCacheManager._get_timestamp_filename',
                        _fake_get_timestamp_filename)
 
     def _timestamp_file_exists(self, exists=True):

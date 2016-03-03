@@ -23,6 +23,7 @@ import warnings
 
 import fixtures
 from oslo_config import cfg
+from oslo_db.sqlalchemy import enginefacade
 from oslo_messaging import conffixture as messaging_conffixture
 import six
 
@@ -423,6 +424,8 @@ class SpawnIsSynchronousFixture(fixtures.Fixture):
         super(SpawnIsSynchronousFixture, self).setUp()
         self.useFixture(fixtures.MonkeyPatch(
             'nova.utils.spawn_n', lambda f, *a, **k: f(*a, **k)))
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.utils.spawn', lambda f, *a, **k: f(*a, **k)))
 
 
 class BannedDBSchemaOperations(fixtures.Fixture):
@@ -446,3 +449,67 @@ class BannedDBSchemaOperations(fixtures.Fixture):
             self.useFixture(fixtures.MonkeyPatch(
                 'sqlalchemy.%s.alter' % thing,
                 lambda *a, **k: self._explode(thing, 'alter')))
+
+
+class StableObjectJsonFixture(fixtures.Fixture):
+    """Fixture that makes sure we get stable JSON object representations.
+
+    Since objects contain things like set(), which can't be converted to
+    JSON, we have some situations where the representation isn't fully
+    deterministic. This doesn't matter at all at runtime, but does to
+    unit tests that try to assert things at a low level.
+
+    This fixture mocks the obj_to_primitive() call and makes sure to
+    sort the list of changed fields (which came from a set) before
+    returning it to the caller.
+    """
+    def __init__(self):
+        self._original_otp = obj_base.NovaObject.obj_to_primitive
+
+    def setUp(self):
+        super(StableObjectJsonFixture, self).setUp()
+
+        def _doit(obj, *args, **kwargs):
+            result = self._original_otp(obj, *args, **kwargs)
+            if 'nova_object.changes' in result:
+                result['nova_object.changes'].sort()
+            return result
+
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.objects.base.NovaObject.obj_to_primitive', _doit))
+
+
+class EngineFacadeFixture(fixtures.Fixture):
+    """Fixture to isolation EngineFacade during tests.
+
+    Because many elements of EngineFacade are based on globals, once
+    an engine facade has been initialized, all future code goes
+    through it. This means that the initialization of sqlite in
+    databases in our Database fixture will drive all connections to
+    sqlite. While that's fine in a production environment, during
+    testing this means we can't test againts multiple backends in the
+    same test run.
+
+    oslo.db does not yet support a reset mechanism here. This builds a
+    custom in tree engine facade fixture to handle this. Eventually
+    this will be added to oslo.db and this can be removed. Tracked by
+    https://bugs.launchpad.net/oslo.db/+bug/1548960
+
+    """
+    def __init__(self, ctx_manager, engine, sessionmaker):
+        super(EngineFacadeFixture, self).__init__()
+        self._ctx_manager = ctx_manager
+        self._engine = engine
+        self._sessionmaker = sessionmaker
+
+    def setUp(self):
+        super(EngineFacadeFixture, self).setUp()
+
+        self._existing_factory = self._ctx_manager._root_factory
+        self._ctx_manager._root_factory = enginefacade._TestTransactionFactory(
+            self._engine, self._sessionmaker, apply_global=False,
+            synchronous_reader=True)
+        self.addCleanup(self.cleanup)
+
+    def cleanup(self):
+        self._ctx_manager._root_factory = self._existing_factory

@@ -17,7 +17,6 @@ import sys
 
 from neutronclient.common import exceptions as n_exc
 from neutronclient.neutron import v2_0 as neutronv20
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import uuidutils
@@ -33,7 +32,6 @@ from nova import objects
 from nova import utils
 
 
-CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 # NOTE: Neutron client has a max URL length of 8192, so we have
@@ -547,10 +545,10 @@ class SecurityGroupAPI(security_group_base.SecurityGroupBase):
                     'instance': instance.uuid})
             self.raise_not_found(msg)
 
-    def populate_security_groups(self, instance, security_groups):
-        # Setting to empty list since we do not want to populate this field
+    def populate_security_groups(self, security_groups):
+        # Returning an empty list since we do not want to populate this field
         # in the nova database if using the neutron driver
-        instance.security_groups = objects.SecurityGroupList()
+        return objects.SecurityGroupList()
 
     def get_default_rule(self, context, id):
         msg = _("Network driver does not support this function.")

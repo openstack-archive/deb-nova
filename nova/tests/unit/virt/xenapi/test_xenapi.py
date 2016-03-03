@@ -26,7 +26,6 @@ import uuid
 import mock
 from mox3 import mox
 from oslo_concurrency import lockutils
-from oslo_config import cfg
 from oslo_config import fixture as config_fixture
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
@@ -41,6 +40,7 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+import nova.conf
 from nova import context
 from nova import crypto
 from nova import db
@@ -73,12 +73,10 @@ from nova.virt.xenapi import volume_utils
 
 LOG = logging.getLogger(__name__)
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.import_opt('compute_manager', 'nova.service')
 CONF.import_opt('network_manager', 'nova.service')
-CONF.import_opt('compute_driver', 'nova.virt.driver')
 CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('default_availability_zone', 'nova.availability_zones')
 CONF.import_opt('login_timeout', 'nova.virt.xenapi.client.session',
                 group="xenserver")
 
@@ -297,7 +295,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.flags(connection_url='test_url',
                    connection_password='test_pass',
                    group='xenserver')
-        db_fakes.stub_out_db_instance_api(self.stubs)
+        db_fakes.stub_out_db_instance_api(self)
         xenapi_fake.create_network('fake', 'fake_br1')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
         stubs.stubout_get_this_vm_uuid(self.stubs)
@@ -933,7 +931,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                       'IPv6 pretty-printing broken on OSX, see bug 1409135')
     def test_spawn_netinject_file(self):
         self.flags(flat_injected=True)
-        db_fakes.stub_out_db_instance_api(self.stubs, injected=True)
+        db_fakes.stub_out_db_instance_api(self, injected=True)
 
         self._tee_executed = False
 
@@ -984,7 +982,7 @@ iface eth0 inet6 static
     @testtools.skipIf(test_utils.is_osx(),
                       'IPv6 pretty-printing broken on OSX, see bug 1409135')
     def test_spawn_netinject_xenstore(self):
-        db_fakes.stub_out_db_instance_api(self.stubs, injected=True)
+        db_fakes.stub_out_db_instance_api(self, injected=True)
 
         self._tee_executed = False
 
@@ -1440,8 +1438,8 @@ iface eth0 inet6 static
                 return [test_aggregate.fake_aggregate]
             else:
                 return []
-        self.stubs.Set(db, 'aggregate_get_by_host',
-                       fake_aggregate_get)
+        self.stub_out('nova.db.aggregate_get_by_host',
+                      fake_aggregate_get)
 
         def fake_host_find(context, session, src, dst):
             if find_host:
@@ -1480,8 +1478,7 @@ iface eth0 inet6 static
         fake_inst = fake_instance.fake_db_instance(id=123)
         fake_inst2 = fake_instance.fake_db_instance(id=456)
         db.instance_get_all_by_host(self.context, fake_inst['host'],
-                                    columns_to_join=None,
-                                    use_slave=False
+                                    columns_to_join=None
                                     ).AndReturn([fake_inst, fake_inst2])
         self.mox.ReplayAll()
         expected_name = CONF.instance_name_template % fake_inst['id']
@@ -1495,7 +1492,7 @@ iface eth0 inet6 static
         def fake_aggregate_get_by_host(self, *args, **kwargs):
             was['called'] = True
             raise test.TestingException()
-        self.stubs.Set(db, "aggregate_get_by_host",
+        self.stub_out("nova.db.aggregate_get_by_host",
                        fake_aggregate_get_by_host)
 
         self.stubs.Set(self.conn._session, "is_slave", True)
@@ -1509,8 +1506,8 @@ iface eth0 inet6 static
             agg = copy.copy(test_aggregate.fake_aggregate)
             agg['metadetails'][CONF.host] = 'this_should_be_metadata'
             return [agg]
-        self.stubs.Set(db, 'aggregate_get_by_host',
-                       fake_aggregate_get)
+        self.stub_out('nova.db.aggregate_get_by_host',
+                      fake_aggregate_get)
 
         self.stubs.Set(self.conn._session, "is_slave", True)
 
@@ -1654,7 +1651,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.flags(firewall_driver='nova.virt.xenapi.firewall.'
                                    'Dom0IptablesFirewallDriver')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
-        db_fakes.stub_out_db_instance_api(self.stubs)
+        db_fakes.stub_out_db_instance_api(self)
         xenapi_fake.create_network('fake', 'fake_br1')
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -1692,8 +1689,15 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.stubs.Set(vmops.VMOps, '_inject_instance_metadata',
                        fake_inject_instance_metadata)
 
+    def _create_instance(self, **kw):
+        values = self.instance_values.copy()
+        values.update(kw)
+        instance = objects.Instance(context=self.context, **values)
+        instance.create()
+        return instance
+
     def test_migrate_disk_and_power_off(self):
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = self._create_instance()
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=80,
                                              ephemeral_gb=0)
@@ -1706,7 +1710,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                                         '127.0.0.1', flavor, None)
 
     def test_migrate_disk_and_power_off_passes_exceptions(self):
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = self._create_instance()
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=80,
                                              ephemeral_gb=0)
@@ -1722,7 +1726,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                           '127.0.0.1', flavor, None)
 
     def test_migrate_disk_and_power_off_throws_on_zero_gb_resize_down(self):
-        instance = db.instance_create(self.context, self.instance_values)
+        instance = self._create_instance()
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
                                              ephemeral_gb=0)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
@@ -1734,10 +1738,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_disk_and_power_off_with_zero_gb_old_and_new_works(self):
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
                                              ephemeral_gb=0)
-        values = copy.copy(self.instance_values)
-        values["root_gb"] = 0
-        values["ephemeral_gb"] = 0
-        instance = db.instance_create(self.context, values)
+        instance = self._create_instance(root_gb=0, ephemeral_gb=0)
         xenapi_fake.create_vm(instance['name'], 'Running')
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         vm_ref = vm_utils.lookup(conn._session, instance['name'])
@@ -1873,8 +1874,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
 
     @stub_vm_utils_with_vdi_attached_here
     def test_migrate_too_many_partitions_no_resize_down(self):
-        instance_values = self.instance_values
-        instance = db.instance_create(self.context, instance_values)
+        instance = self._create_instance()
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = db.flavor_get_by_name(self.context, 'm1.small')
         flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
@@ -1892,8 +1892,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
 
     @stub_vm_utils_with_vdi_attached_here
     def test_migrate_bad_fs_type_no_resize_down(self):
-        instance_values = self.instance_values
-        instance = db.instance_create(self.context, instance_values)
+        instance = self._create_instance()
         xenapi_fake.create_vm(instance['name'], 'Running')
         flavor = db.flavor_get_by_name(self.context, 'm1.small')
         flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
@@ -2411,7 +2410,7 @@ class XenAPIGenerateLocal(stubs.XenAPITestBase):
         self.flags(firewall_driver='nova.virt.xenapi.firewall.'
                                    'Dom0IptablesFirewallDriver')
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
-        db_fakes.stub_out_db_instance_api(self.stubs)
+        db_fakes.stub_out_db_instance_api(self)
         self.conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         self.user_id = 'fake'
@@ -2862,63 +2861,6 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         self.assertTrue(len(filter(regex.match, self._out_rules)) > 0,
                         "Rules were not updated properly. "
                         "The rule for UDP acceptance is missing")
-
-    def test_provider_firewall_rules(self):
-        # setup basic instance data
-        instance_ref = self._create_instance_ref()
-        # FRAGILE: as in libvirt tests
-        # peeks at how the firewall names chains
-        chain_name = 'inst-%s' % instance_ref['id']
-
-        network_info = fake_network.fake_get_instance_nw_info(self, 1, 1)
-        self.fw.prepare_instance_filter(instance_ref, network_info)
-        self.assertIn('provider', self.fw.iptables.ipv4['filter'].chains)
-        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
-                      if rule.chain == 'provider']
-        self.assertEqual(0, len(rules))
-
-        admin_ctxt = context.get_admin_context()
-        # add a rule and send the update message, check for 1 rule
-        db.provider_fw_rule_create(admin_ctxt,
-                                   {'protocol': 'tcp',
-                                    'cidr': '10.99.99.99/32',
-                                    'from_port': 1,
-                                    'to_port': 65535})
-        self.fw.refresh_provider_fw_rules()
-        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
-                      if rule.chain == 'provider']
-        self.assertEqual(1, len(rules))
-
-        # Add another, refresh, and make sure number of rules goes to two
-        provider_fw1 = db.provider_fw_rule_create(admin_ctxt,
-                                                  {'protocol': 'udp',
-                                                   'cidr': '10.99.99.99/32',
-                                                   'from_port': 1,
-                                                   'to_port': 65535})
-        self.fw.refresh_provider_fw_rules()
-        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
-                      if rule.chain == 'provider']
-        self.assertEqual(2, len(rules))
-
-        # create the instance filter and make sure it has a jump rule
-        self.fw.prepare_instance_filter(instance_ref, network_info)
-        self.fw.apply_instance_filter(instance_ref, network_info)
-        inst_rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
-                           if rule.chain == chain_name]
-        jump_rules = [rule for rule in inst_rules if '-j' in rule.rule]
-        provjump_rules = []
-        # IptablesTable doesn't make rules unique internally
-        for rule in jump_rules:
-            if 'provider' in rule.rule and rule not in provjump_rules:
-                provjump_rules.append(rule)
-        self.assertEqual(1, len(provjump_rules))
-
-        # remove a rule from the db, cast to compute to refresh rule
-        db.provider_fw_rule_destroy(admin_ctxt, provider_fw1['id'])
-        self.fw.refresh_provider_fw_rules()
-        rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
-                      if rule.chain == 'provider']
-        self.assertEqual(1, len(rules))
 
 
 class XenAPISRSelectionTestCase(stubs.XenAPITestBaseNoDB):
@@ -3379,7 +3321,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
         self.flags(firewall_driver='nova.virt.xenapi.firewall.'
                                    'Dom0IptablesFirewallDriver',
                    host='host')
-        db_fakes.stub_out_db_instance_api(self.stubs)
+        db_fakes.stub_out_db_instance_api(self)
         self.context = context.get_admin_context()
 
     def test_live_migration_calls_vmops(self):
@@ -3525,7 +3467,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
                            'is_volume_backed': False,
                            'migrate_data': {
                             'destination_sr_ref': None,
-                            'migrate_send_data': None
+                            'migrate_send_data': {'key': 'value'}
                            }}
         result = self.conn.check_can_live_migrate_source(self.context,
                                                          {'host': 'host'},
@@ -3552,7 +3494,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
             block_migration=True,
             is_volume_backed=True,
             destination_sr_ref=None,
-            migrate_send_data=None)
+            migrate_send_data={'key': 'value'})
         result = self.conn.check_can_live_migrate_source(self.context,
                                                          {'host': 'host'},
                                                          dest_check_data)
@@ -3591,7 +3533,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
                            'is_volume_backed': True,
                            'migrate_data': {
                             'destination_sr_ref': None,
-                            'migrate_send_data': None
+                            'migrate_send_data': {'key': 'value'}
                            }}
         self.assertRaises(exception.MigrationError,
                           self.conn.check_can_live_migrate_source,
@@ -3608,7 +3550,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
             return [dict(test_aggregate.fake_aggregate,
                          metadetails={"host": "test_host_uuid"})]
 
-        self.stubs.Set(db, "aggregate_get_by_host",
+        self.stub_out("nova.db.aggregate_get_by_host",
                 fake_aggregate_get_by_host)
         self.conn.check_can_live_migrate_destination(self.context,
                 {'host': 'host'}, False, False)
@@ -3622,7 +3564,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
             return [dict(test_aggregate.fake_aggregate,
                          metadetails={"dest_other": "test_host_uuid"})]
 
-        self.stubs.Set(db, "aggregate_get_by_host",
+        self.stub_out("nova.db.aggregate_get_by_host",
                       fake_aggregate_get_by_host)
         self.assertRaises(exception.MigrationError,
                           self.conn.check_can_live_migrate_destination,

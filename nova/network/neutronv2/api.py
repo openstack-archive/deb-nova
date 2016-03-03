@@ -19,12 +19,9 @@ import copy
 import time
 import uuid
 
-from keystoneclient import auth
-from keystoneclient.auth import token_endpoint
-from keystoneclient import session
+from keystoneauth1 import loading as ks_loading
 from neutronclient.common import exceptions as neutron_client_exc
 from neutronclient.v2_0 import client as clientv20
-from oslo_concurrency import lockutils
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
@@ -49,11 +46,10 @@ neutron_opts = [
                help='URL for connecting to neutron'),
     cfg.StrOpt('region_name',
                help='Region name for connecting to neutron in admin context'),
-    # TODO(berrange) temporary hack until Neutron can pass over the
-    # name of the OVS bridge it is configured with
     cfg.StrOpt('ovs_bridge',
                default='br-int',
-               help='Name of Integration Bridge used by Open vSwitch'),
+               help='Default OVS bridge name to use if not specified '
+                    'by Neutron'),
     cfg.IntOpt('extension_sync_interval',
                 default=600,
                 help='Number of seconds before querying neutron for'
@@ -72,9 +68,9 @@ deprecations = {'cafile': [cfg.DeprecatedOpt('ca_certificates_file',
                 'timeout': [cfg.DeprecatedOpt('url_timeout',
                                               group=NEUTRON_GROUP)]}
 
-_neutron_options = session.Session.register_conf_options(
+_neutron_options = ks_loading.register_session_conf_options(
     CONF, NEUTRON_GROUP, deprecated_opts=deprecations)
-auth.register_conf_options(CONF, NEUTRON_GROUP)
+ks_loading.register_auth_conf_options(CONF, NEUTRON_GROUP)
 
 
 CONF.import_opt('default_floating_pool', 'nova.network.floating_ips')
@@ -89,22 +85,22 @@ _ADMIN_AUTH = None
 
 
 def list_opts():
-    list = copy.deepcopy(_neutron_options)
-    list.insert(0, auth.get_common_conf_options()[0])
+    opts = copy.deepcopy(_neutron_options)
+    opts.insert(0, ks_loading.get_auth_common_conf_options()[0])
     # NOTE(dims): There are a lot of auth plugins, we just generate
     # the config options for a few common ones
     plugins = ['password', 'v2password', 'v3password']
     for name in plugins:
-        for plugin_option in auth.get_plugin_class(name).get_options():
+        for plugin_option in ks_loading.get_plugin_loader(name).get_options():
             found = False
-            for option in list:
+            for option in opts:
                 if option.name == plugin_option.name:
                     found = True
                     break
             if not found:
-                list.append(plugin_option)
-    list.sort(key=lambda x: x.name)
-    return [(NEUTRON_GROUP, list)]
+                opts.append(plugin_option)
+    opts.sort(key=lambda x: x.name)
+    return [(NEUTRON_GROUP, opts)]
 
 
 def reset_state():
@@ -116,7 +112,7 @@ def reset_state():
 
 
 def _load_auth_plugin(conf):
-    auth_plugin = auth.load_from_conf_options(conf, NEUTRON_GROUP)
+    auth_plugin = ks_loading.load_auth_from_conf_options(conf, NEUTRON_GROUP)
 
     if auth_plugin:
         return auth_plugin
@@ -136,25 +132,13 @@ def get_client(context, admin=False):
     auth_plugin = None
 
     if not _SESSION:
-        _SESSION = session.Session.load_from_conf_options(CONF, NEUTRON_GROUP)
+        _SESSION = ks_loading.load_session_from_conf_options(
+            CONF, NEUTRON_GROUP)
 
     if admin or (context.is_admin and not context.auth_token):
-        # NOTE(jamielennox): The theory here is that we maintain one
-        # authenticated admin auth globally. The plugin will authenticate
-        # internally (not thread safe) and on demand so we extract a current
-        # auth plugin from it (whilst locked). This may or may not require
-        # reauthentication. We then use the static token plugin to issue the
-        # actual request with that current token in a thread safe way.
         if not _ADMIN_AUTH:
             _ADMIN_AUTH = _load_auth_plugin(CONF)
-
-        with lockutils.lock('neutron_admin_auth_token_lock'):
-            # FIXME(jamielennox): We should also retrieve the endpoint from the
-            # catalog here rather than relying on setting it in CONF.
-            auth_token = _ADMIN_AUTH.get_token(_SESSION)
-
-        # FIXME(jamielennox): why aren't we using the service catalog?
-        auth_plugin = token_endpoint.Token(CONF.neutron.url, auth_token)
+        auth_plugin = _ADMIN_AUTH
 
     elif context.auth_token:
         auth_plugin = context.get_auth_plugin()
@@ -394,6 +378,8 @@ class API(base_api.NetworkAPI):
             port's MAC address is not in that set.
         :raises nova.exception.PortInUse: If a requested port is already
             attached to another instance.
+        :raises nova.exception.PortNotUsableDNS: If a requested port has a
+            value assigned to its dns_name attribute.
         """
 
         available_macs = None
@@ -423,6 +409,16 @@ class API(base_api.NetworkAPI):
                     # instance.
                     if port.get('device_id'):
                         raise exception.PortInUse(port_id=request.port_id)
+
+                    # Make sure that if the user assigned a value to the port's
+                    # dns_name attribute, it is equal to the instance's
+                    # hostname
+                    if port.get('dns_name'):
+                        if port['dns_name'] != instance.hostname:
+                            raise exception.PortNotUsableDNS(
+                                port_id=request.port_id,
+                                instance=instance.uuid, value=port['dns_name'],
+                                hostname=instance.hostname)
 
                     # Make sure the port is usable
                     if (port.get('binding:vif_type') ==
@@ -635,14 +631,14 @@ class API(base_api.NetworkAPI):
                     and network.get('port_security_enabled', True))):
 
                 raise exception.SecurityGroupCannotBeApplied()
-            request.network_id = network['id']
             zone = 'compute:%s' % instance.availability_zone
             port_req_body = {'port': {'device_id': instance.uuid,
                                       'device_owner': zone}}
             try:
                 self._populate_neutron_extension_values(
                     context, instance, request.pci_request_id, port_req_body,
-                    neutron=neutron, bind_host_id=bind_host_id)
+                    network=network, neutron=neutron,
+                    bind_host_id=bind_host_id)
                 if request.port_id:
                     port = ports[request.port_id]
                     port_client.update_port(port['id'], port_req_body)
@@ -655,6 +651,9 @@ class API(base_api.NetworkAPI):
                             security_group_ids, available_macs, dhcp_opts)
                     created_port_ids.append(created_port)
                     ports_in_requested_order.append(created_port)
+                self._update_port_dns_name(context, instance, network,
+                                           ports_in_requested_order[-1],
+                                           neutron)
             except Exception:
                 with excutils.save_and_reraise_exception():
                     self._unbind_ports(context,
@@ -715,7 +714,8 @@ class API(base_api.NetworkAPI):
 
     def _populate_neutron_extension_values(self, context, instance,
                                            pci_request_id, port_req_body,
-                                           neutron=None, bind_host_id=None):
+                                           network=None, neutron=None,
+                                           bind_host_id=None):
         """Populate neutron extension values for the instance.
 
         If the extensions loaded contain QOS_QUEUE then pass the rxtx_factor.
@@ -725,11 +725,53 @@ class API(base_api.NetworkAPI):
             flavor = instance.get_flavor()
             rxtx_factor = flavor.get('rxtx_factor')
             port_req_body['port']['rxtx_factor'] = rxtx_factor
-        if self._has_port_binding_extension(context, neutron=neutron):
+        has_port_binding_extension = (
+            self._has_port_binding_extension(context, neutron=neutron))
+        if has_port_binding_extension:
             port_req_body['port']['binding:host_id'] = bind_host_id
             self._populate_neutron_binding_profile(instance,
                                                    pci_request_id,
                                                    port_req_body)
+        if constants.DNS_INTEGRATION in self.extensions:
+            # If the DNS integration extension is enabled in Neutron, most
+            # ports will get their dns_name attribute set in the port create or
+            # update requests in allocate_for_instance. So we just add the
+            # dns_name attribute to the payload of those requests. The
+            # exception is when the port binding extension is enabled in
+            # Neutron and the port is on a network that has a non-blank
+            # dns_domain attribute. This case requires to be processed by
+            # method _update_port_dns_name
+            if (not has_port_binding_extension
+                or not network.get('dns_domain')):
+                port_req_body['port']['dns_name'] = instance.hostname
+
+    def _update_port_dns_name(self, context, instance, network, port_id,
+                              neutron):
+        """Update an instance port dns_name attribute with instance.hostname.
+
+        The dns_name attribute of a port on a network with a non-blank
+        dns_domain attribute will be sent to the external DNS service
+        (Designate) if DNS integration is enabled in Neutron. This requires the
+        assignment of the dns_name to the port to be done with a Neutron client
+        using the user's context. allocate_for_instance uses a port with admin
+        context if the port binding extensions is enabled in Neutron. In this
+        case, we assign in this method the dns_name attribute to the port with
+        an additional update request. Only a very small fraction of ports will
+        require this additional update request.
+        """
+        if (constants.DNS_INTEGRATION in self.extensions and
+            self._has_port_binding_extension(context) and
+            network.get('dns_domain')):
+            try:
+                port_req_body = {'port': {'dns_name': instance.hostname}}
+                neutron.update_port(port_id, port_req_body)
+            except neutron_client_exc.BadRequest:
+                LOG.warning(_LW('Neutron error: Instance hostname '
+                                '%(hostname)s is not a valid DNS name'),
+                            {'hostname': instance.hostname}, instance=instance)
+                msg = (_('Instance hostname %(hostname)s is not a valid DNS '
+                         'name') % {'hostname': instance.hostname})
+                raise exception.InvalidInput(reason=msg)
 
     def _delete_ports(self, neutron, instance, ports, raise_if_fail=False):
         exceptions = []
@@ -1537,10 +1579,12 @@ class API(base_api.NetworkAPI):
 
     def _nw_info_build_network(self, port, networks, subnets):
         network_name = None
+        network_mtu = None
         for net in networks:
             if port['network_id'] == net['id']:
                 network_name = net['name']
                 tenant_id = net['tenant_id']
+                network_mtu = net.get('mtu')
                 break
         else:
             tenant_id = port['tenant_id']
@@ -1554,14 +1598,14 @@ class API(base_api.NetworkAPI):
         # Network model metadata
         should_create_bridge = None
         vif_type = port.get('binding:vif_type')
-        port_details = port.get('binding:vif_details')
-        # TODO(berrange) Neutron should pass the bridge name
-        # in another binding metadata field
+        port_details = port.get('binding:vif_details', {})
         if vif_type == network_model.VIF_TYPE_OVS:
-            bridge = CONF.neutron.ovs_bridge
+            bridge = port_details.get(network_model.VIF_DETAILS_BRIDGE_NAME,
+                                      CONF.neutron.ovs_bridge)
             ovs_interfaceid = port['id']
         elif vif_type == network_model.VIF_TYPE_BRIDGE:
-            bridge = "brq" + port['network_id']
+            bridge = port_details.get(network_model.VIF_DETAILS_BRIDGE_NAME,
+                                      "brq" + port['network_id'])
             should_create_bridge = True
         elif vif_type == network_model.VIF_TYPE_DVS:
             # The name of the DVS port group will contain the neutron
@@ -1570,7 +1614,8 @@ class API(base_api.NetworkAPI):
         elif (vif_type == network_model.VIF_TYPE_VHOSTUSER and
          port_details.get(network_model.VIF_DETAILS_VHOSTUSER_OVS_PLUG,
                           False)):
-            bridge = CONF.neutron.ovs_bridge
+            bridge = port_details.get(network_model.VIF_DETAILS_BRIDGE_NAME,
+                                      CONF.neutron.ovs_bridge)
             ovs_interfaceid = port['id']
 
         # Prune the bridge name if necessary. For the DVS this is not done
@@ -1583,7 +1628,8 @@ class API(base_api.NetworkAPI):
             bridge=bridge,
             injected=CONF.flat_injected,
             label=network_name,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            mtu=network_mtu
             )
         network['subnets'] = subnets
         port_profile = port.get('binding:profile')
@@ -1654,11 +1700,6 @@ class API(base_api.NetworkAPI):
         for current_neutron_port in current_neutron_ports:
             current_neutron_port_map[current_neutron_port['id']] = (
                 current_neutron_port)
-
-        # In that case we should repopulate ports from the state of
-        # Neutron.
-        if not port_ids:
-            port_ids = current_neutron_port_map.keys()
 
         for port_id in port_ids:
             current_neutron_port = current_neutron_port_map.get(port_id)

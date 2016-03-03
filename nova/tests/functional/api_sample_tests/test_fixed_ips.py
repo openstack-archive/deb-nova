@@ -38,7 +38,7 @@ class FixedIpTest(test_servers.ServersSampleBase):
 
     def setUp(self):
         super(FixedIpTest, self).setUp()
-
+        self.api.microversion = self.microversion
         instance = dict(test_utils.get_test_instance(),
                         hostname='openstack', host='host')
         fake_fixed_ips = [{'id': 1,
@@ -95,15 +95,13 @@ class FixedIpTest(test_servers.ServersSampleBase):
     def test_fixed_ip_reserve(self):
         # Reserve a Fixed IP.
         response = self._do_post('os-fixed-ips/192.168.1.1/action',
-                                 'fixedip-post-req', {},
-                                 api_version=self.microversion)
+                                 'fixedip-post-req', {})
         self.assertEqual(202, response.status_code)
         self.assertEqual("", response.content)
 
     def _test_get_fixed_ip(self, **kwargs):
         # Return data about the given fixed ip.
-        response = self._do_get('os-fixed-ips/192.168.1.1',
-                                api_version=self.microversion)
+        response = self._do_get('os-fixed-ips/192.168.1.1')
         project = {'cidr': '192.168.1.0/24',
                    'hostname': 'openstack',
                    'host': 'host',
@@ -123,4 +121,4 @@ class FixedIpV24Test(FixedIpTest):
     scenarios = [('v2_4', {'api_major_version': 'v2.1'})]
 
     def test_get_fixed_ip(self):
-        self._test_get_fixed_ip(reserved=False)
+        self._test_get_fixed_ip(reserved='False')

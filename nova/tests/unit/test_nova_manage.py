@@ -36,7 +36,7 @@ from nova.tests.unit import test_flavors
 class FixedIpCommandsTestCase(test.TestCase):
     def setUp(self):
         super(FixedIpCommandsTestCase, self).setUp()
-        db_fakes.stub_out_db_network_api(self.stubs)
+        db_fakes.stub_out_db_network_api(self)
         self.commands = manage.FixedIpCommands()
 
     def test_reserve(self):
@@ -76,10 +76,10 @@ class FixedIpCommandsTestCase(test.TestCase):
         self.assertNotEqual(1, sys.stdout.getvalue().find('192.168.0.100'))
 
 
-class FloatingIpCommandsTestCase(test.TestCase):
+class FloatingIpCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(FloatingIpCommandsTestCase, self).setUp()
-        db_fakes.stub_out_db_network_api(self.stubs)
+        db_fakes.stub_out_db_network_api(self)
         self.commands = manage.FloatingIpCommands()
 
     def test_address_to_hosts(self):
@@ -117,7 +117,7 @@ class FloatingIpCommandsTestCase(test.TestCase):
                           '192.168.100.1/12')
 
 
-class NetworkCommandsTestCase(test.TestCase):
+class NetworkCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(NetworkCommandsTestCase, self).setUp()
         self.commands = manage.NetworkCommands()
@@ -211,7 +211,7 @@ class NetworkCommandsTestCase(test.TestCase):
 
         def fake_network_get_all(context):
             return [db_fakes.FakeModel(self.net)]
-        self.stubs.Set(db, 'network_get_all', fake_network_get_all)
+        self.stub_out('nova.db.network_get_all', fake_network_get_all)
         output = StringIO()
         sys.stdout = output
         self.commands.list()
@@ -245,35 +245,35 @@ class NetworkCommandsTestCase(test.TestCase):
         self.fake_net = self.net
         self.fake_net['project_id'] = None
         self.fake_net['host'] = None
-        self.stubs.Set(db, 'network_get_by_uuid',
-                       self.fake_network_get_by_uuid)
+        self.stub_out('nova.db.network_get_by_uuid',
+                      self.fake_network_get_by_uuid)
 
         def fake_network_delete_safe(context, network_id):
             self.assertTrue(context.to_dict()['is_admin'])
             self.assertEqual(network_id, self.fake_net['id'])
-        self.stubs.Set(db, 'network_delete_safe', fake_network_delete_safe)
+        self.stub_out('nova.db.network_delete_safe', fake_network_delete_safe)
         self.commands.delete(uuid=self.fake_net['uuid'])
 
     def test_delete_by_cidr(self):
         self.fake_net = self.net
         self.fake_net['project_id'] = None
         self.fake_net['host'] = None
-        self.stubs.Set(db, 'network_get_by_cidr',
-                       self.fake_network_get_by_cidr)
+        self.stub_out('nova.db.network_get_by_cidr',
+                      self.fake_network_get_by_cidr)
 
         def fake_network_delete_safe(context, network_id):
             self.assertTrue(context.to_dict()['is_admin'])
             self.assertEqual(network_id, self.fake_net['id'])
-        self.stubs.Set(db, 'network_delete_safe', fake_network_delete_safe)
+        self.stub_out('nova.db.network_delete_safe', fake_network_delete_safe)
         self.commands.delete(fixed_range=self.fake_net['cidr'])
 
     def _test_modify_base(self, update_value, project, host, dis_project=None,
                           dis_host=None):
         self.fake_net = self.net
         self.fake_update_value = update_value
-        self.stubs.Set(db, 'network_get_by_cidr',
-                       self.fake_network_get_by_cidr)
-        self.stubs.Set(db, 'network_update', self.fake_network_update)
+        self.stub_out('nova.db.network_get_by_cidr',
+                      self.fake_network_get_by_cidr)
+        self.stub_out('nova.db.network_update', self.fake_network_update)
         self.commands.modify(self.fake_net['cidr'], project=project, host=host,
                              dis_project=dis_project, dis_host=dis_host)
 
@@ -291,7 +291,7 @@ class NetworkCommandsTestCase(test.TestCase):
                                dis_host=True)
 
 
-class NeutronV2NetworkCommandsTestCase(test.TestCase):
+class NeutronV2NetworkCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(NeutronV2NetworkCommandsTestCase, self).setUp()
         self.flags(network_api_class='nova.network.neutronv2.api.API')
@@ -332,7 +332,7 @@ class ProjectCommandsTestCase(test.TestCase):
         self.assertEqual(2, self.commands.quota('admin', 'volumes1', '10'))
 
 
-class VmCommandsTestCase(test.TestCase):
+class VmCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(VmCommandsTestCase, self).setUp()
         self.commands = manage.VmCommands()
@@ -382,6 +382,10 @@ class DBCommandsTestCase(test.NoDBTestCase):
 
     def test_archive_deleted_rows_negative(self):
         self.assertEqual(1, self.commands.archive_deleted_rows(-1))
+
+    def test_archive_deleted_rows_large_number(self):
+        large_number = '1' * 100
+        self.assertEqual(1, self.commands.archive_deleted_rows(large_number))
 
     @mock.patch.object(db, 'archive_deleted_rows',
                        return_value=dict(instances=10, consoles=5))
@@ -459,8 +463,57 @@ class DBCommandsTestCase(test.NoDBTestCase):
         self.commands.sync(version=4)
         sqla_sync.assert_called_once_with(version=4, database='main')
 
+    def _fake_db_command(self, migrations=None):
+        if migrations is None:
+            mock_mig_1 = mock.MagicMock(__name__="mock_mig_1")
+            mock_mig_2 = mock.MagicMock(__name__="mock_mig_2")
+            mock_mig_1.return_value = (5, 4)
+            mock_mig_2.return_value = (6, 6)
+            migrations = (mock_mig_1, mock_mig_2)
 
-class ApiDbCommandsTestCase(test.TestCase):
+        class _CommandSub(manage.DbCommands):
+            online_migrations = migrations
+
+        return _CommandSub
+
+    @mock.patch('nova.context.get_admin_context')
+    def test_online_migrations(self, mock_get_context):
+        ctxt = mock_get_context.return_value
+        command_cls = self._fake_db_command()
+        command = command_cls()
+        command.online_data_migrations(10)
+        command_cls.online_migrations[0].assert_called_once_with(ctxt, 10)
+        command_cls.online_migrations[1].assert_called_once_with(ctxt, 6)
+
+    @mock.patch('nova.context.get_admin_context')
+    def test_online_migrations_no_max_count(self, mock_get_context):
+        total = [120]
+        batches = [50, 40, 30, 0]
+        runs = []
+
+        def fake_migration(context, count):
+            self.assertEqual(mock_get_context.return_value, context)
+            runs.append(count)
+            count = batches.pop(0)
+            total[0] -= count
+            return total[0], count
+
+        command_cls = self._fake_db_command((fake_migration,))
+        command = command_cls()
+        command.online_data_migrations(None)
+        self.assertEqual([], batches)
+        self.assertEqual(0, total[0])
+        self.assertEqual([50, 50, 50, 50], runs)
+
+    def test_online_migrations_error(self):
+        fake_migration = mock.MagicMock()
+        fake_migration.side_effect = Exception
+        command_cls = self._fake_db_command((fake_migration,))
+        command = command_cls()
+        command.online_data_migrations(None)
+
+
+class ApiDbCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(ApiDbCommandsTestCase, self).setUp()
         self.commands = manage.ApiDbCommands()
@@ -488,7 +541,7 @@ class ServiceCommandsTestCase(test.TestCase):
         self.assertEqual(2, self.commands.disable('nohost', 'noservice'))
 
 
-class CellCommandsTestCase(test.TestCase):
+class CellCommandsTestCase(test.NoDBTestCase):
     def setUp(self):
         super(CellCommandsTestCase, self).setUp()
         self.commands = manage.CellCommands()

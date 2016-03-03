@@ -49,6 +49,8 @@ CONF.register_opts(libvirt_opts, 'libvirt')
 CONF.import_opt('instances_path', 'nova.compute.manager')
 LOG = logging.getLogger(__name__)
 
+RESIZE_SNAPSHOT_NAME = 'nova-resize'
+
 
 def execute(*args, **kwargs):
     return utils.execute(*args, **kwargs)
@@ -246,6 +248,14 @@ def chown(path, owner):
     execute('chown', owner, path, run_as_root=True)
 
 
+def update_mtime(path):
+    """Touch a file without being the owner.
+
+    :param path: File bump the mtime on
+    """
+    execute('touch', '-c', path, run_as_root=True)
+
+
 def _id_map_to_config(id_map):
     return "%s:%s:%s" % (id_map.start, id_map.target, id_map.count)
 
@@ -302,13 +312,13 @@ def load_file(path):
 def file_open(*args, **kwargs):
     """Open file
 
-    see built-in file() documentation for more details
+    see built-in open() documentation for more details
 
     Note: The reason this is kept in a separate module is to easily
           be able to provide a stub module that doesn't alter system
           state at all (for unit tests)
     """
-    return file(*args, **kwargs)
+    return open(*args, **kwargs)
 
 
 def file_delete(path):
@@ -455,7 +465,7 @@ def get_instance_path(instance, forceold=False, relative=False):
 
 
 def get_instance_path_at_destination(instance, migrate_data=None):
-    """Get the the instance path on destination node while live migration.
+    """Get the instance path on destination node while live migration.
 
     This method determines the directory name for instance storage on
     destination node, while live migration.

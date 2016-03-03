@@ -78,7 +78,11 @@ class ServerGroupsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
         self.assertEqual(204, response.status_code)
 
 
-class ServerGroupsV213SampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
-    extension_name = "os-server-groups"
-    request_api_version = '2.13'
-    scenarios = [('v2_13', {})]
+class ServerGroupsV213SampleJsonTest(ServerGroupsSampleJsonTest):
+    scenarios = [
+        ("v2_13", {'api_major_version': 'v2.1', 'microversion': '2.13'})
+    ]
+
+    def setUp(self):
+        super(ServerGroupsV213SampleJsonTest, self).setUp()
+        self.api.microversion = self.microversion

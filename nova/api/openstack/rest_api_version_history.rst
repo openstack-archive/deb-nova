@@ -37,8 +37,8 @@ user documentation.
 
   Fixes status code for ``os-keypairs`` delete method from 202 to 204
 
-2.3
----
+2.3 (Maximum in Kilo)
+---------------------
 
   Exposed additional attributes in ``os-extended-server-attributes``:
   ``reservation_id``, ``launch_index``, ``ramdisk_id``, ``kernel_id``, ``hostname``,
@@ -124,8 +124,8 @@ user documentation.
   Exposed attribute ``forced_down`` for ``os-services``.
   Added ability to change the ``forced_down`` attribute by calling an update.
 
-2.12
-----
+2.12 (Maximum in Liberty)
+-------------------------
 
   Exposes VIF ``net-id`` attribute in ``os-virtual-interfaces``.
   User will be able to get Virtual Interfaces ``net-id`` in Virtual Interfaces
@@ -157,3 +157,64 @@ user documentation.
   Exposes new host_status attribute for servers/detail and servers/{server_id}.
   Ability to get nova-compute status when querying servers. By default, this is
   only exposed to cloud administrators.
+
+2.17
+----
+
+  Add a new API for triggering crash dump in an instance. Different operation
+  systems in instance may need different configurations to trigger crash dump.
+
+2.18
+----
+  Establishes a set of routes that makes project_id an optional construct in v2.1.
+
+2.19
+----
+  Allow the user to set and get the server description.
+  The user will be able to set the description when creating, rebuilding,
+  or updating a server, and get the description as part of the server details.
+
+2.20
+----
+  From this version of the API user can call detach and attach volumes for
+  instances which are in shelved and shelved_offloaded state.
+
+2.21
+----
+
+  The ``os-instance-actions`` API now returns information from deleted
+  instances.
+
+2.22
+----
+
+  A new resource servers:migrations added. A new API to force live migration
+  to complete added::
+
+    POST /servers/<uuid>/migrations/<id>/action
+    {
+      "force_complete": null
+    }
+
+2.23
+----
+
+  From this version of the API users can get the migration summary list by
+  index API or the information of a specific migration by get API.
+  And the old top-level resource `/os-migrations` won't be extended anymore.
+  Add migration_type for old /os-migrations API, also add ref link to the
+  /servers/{uuid}/migrations/{id} for it when the migration is an in-progress
+  live-migration.
+
+2.24
+----
+
+  A new API call to cancel a running live migration::
+
+    DELETE /servers/<uuid>/migrations/<id>
+
+2.25
+----
+
+  Modify input parameter for ``os-migrateLive``. The block_migration will
+  support 'auto' value, and disk_over_commit flag will be removed.

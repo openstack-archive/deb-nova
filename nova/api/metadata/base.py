@@ -479,11 +479,11 @@ class InstanceMetadata(object):
                 path = 'openstack/%s/%s' % (version, VD_JSON_NAME)
                 yield (path, self.lookup(path))
 
-        for (cid, content) in six.iteritems(self.content):
             if self._check_version(LIBERTY, version, ALL_OPENSTACK_VERSIONS):
                 path = 'openstack/%s/%s' % (version, NW_JSON_NAME)
                 yield (path, self.lookup(path))
 
+        for (cid, content) in six.iteritems(self.content):
             yield ('%s/%s/%s' % ("openstack", CONTENT_DIR, cid), content)
 
 
@@ -544,7 +544,8 @@ def get_metadata_by_address(address):
 def get_metadata_by_instance_id(instance_id, address, ctxt=None):
     ctxt = ctxt or context.get_admin_context()
     instance = objects.Instance.get_by_uuid(
-        ctxt, instance_id, expected_attrs=['ec2_ids', 'flavor', 'info_cache'])
+        ctxt, instance_id, expected_attrs=['ec2_ids', 'flavor', 'info_cache',
+                                           'metadata', 'system_metadata'])
     return InstanceMetadata(instance, address)
 
 

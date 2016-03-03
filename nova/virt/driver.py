@@ -22,46 +22,15 @@ Driver base-classes:
 
 import sys
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import importutils
 
+import nova.conf
 from nova.i18n import _, _LE, _LI
 from nova import utils
 from nova.virt import event as virtevent
 
-driver_opts = [
-    cfg.StrOpt('compute_driver',
-               help='Driver to use for controlling virtualization. Options '
-                    'include: libvirt.LibvirtDriver, xenapi.XenAPIDriver, '
-                    'fake.FakeDriver, ironic.IronicDriver, '
-                    'vmwareapi.VMwareVCDriver, hyperv.HyperVDriver'),
-    cfg.StrOpt('default_ephemeral_format',
-               help='The default format an ephemeral_volume will be '
-                    'formatted with on creation.'),
-    cfg.StrOpt('preallocate_images',
-               default='none',
-               choices=('none', 'space'),
-               help='VM image preallocation mode: '
-                    '"none" => no storage provisioning is done up front, '
-                    '"space" => storage is fully allocated at instance start'),
-    cfg.BoolOpt('use_cow_images',
-                default=True,
-                help='Whether to use cow images'),
-    cfg.BoolOpt('vif_plugging_is_fatal',
-                default=True,
-                help="Fail instance boot if vif plugging fails"),
-    cfg.IntOpt('vif_plugging_timeout',
-               default=300,
-               help='Number of seconds to wait for neutron vif plugging '
-                    'events to arrive before continuing or failing (see '
-                    'vif_plugging_is_fatal). If this is set to zero and '
-                    'vif_plugging_is_fatal is False, events should not '
-                    'be expected to arrive at all.'),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(driver_opts)
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 
@@ -771,14 +740,14 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
-    def inject_nmi(self, instance):
-        """Inject an non-maskable interruption (NMI) into the given instance.
+    def trigger_crash_dump(self, instance):
+        """Trigger crash dump mechanism on the given instance.
 
         Stalling instances can be triggered to dump the crash data. How the
         guest OS reacts in details, depends on the configuration of it.
 
         :param nova.objects.instance.Instance instance:
-            The instance where the NMI should be injected to.
+            The instance where the crash dump should be triggered.
 
         :return: None
         """
@@ -834,7 +803,7 @@ class ComputeDriver(object):
         :param block_device_info: instance block device information
         :param network_info: instance network information
         :param disk_info: instance disk information
-        :param migrate_data: implementation specific data dict.
+        :param migrate_data: a LiveMigrateData object
         """
         raise NotImplementedError()
 
@@ -855,7 +824,23 @@ class ComputeDriver(object):
             recovery method when any exception occurs.
             expected nova.compute.manager._rollback_live_migration.
         :param block_migration: if true, migrate VM disk.
-        :param migrate_data: implementation specific params.
+        :param migrate_data: a LiveMigrateData object
+
+        """
+        raise NotImplementedError()
+
+    def live_migration_force_complete(self, instance):
+        """Force live migration to complete
+
+        :param instance: Instance being live migrated
+
+        """
+        raise NotImplementedError()
+
+    def live_migration_abort(self, instance):
+        """Abort an in-progress live migration.
+
+        :param instance: instance that is live migrating
 
         """
         raise NotImplementedError()
@@ -873,7 +858,7 @@ class ComputeDriver(object):
         :param block_device_info: instance block device information
         :param destroy_disks:
             if true, destroy disks at destination during cleanup
-        :param migrate_data: implementation specific params
+        :param migrate_data: a LiveMigrateData object
 
         """
         raise NotImplementedError()
@@ -885,7 +870,7 @@ class ComputeDriver(object):
         :param context: security context
         :instance: instance object that was migrated
         :block_device_info: instance block device information
-        :param migrate_data: if not None, it is a dict which has data
+        :param migrate_data: a LiveMigrateData object
         """
         pass
 
@@ -954,7 +939,7 @@ class ComputeDriver(object):
         :param dst_compute_info: Info about the receiving machine
         :param block_migration: if true, prepare for block migration
         :param disk_over_commit: if true, allow disk over commit
-        :returns: a dict containing migration info (hypervisor-dependent)
+        :returns: a LiveMigrateData object (hypervisor-dependent)
         """
         raise NotImplementedError()
 
@@ -978,7 +963,7 @@ class ComputeDriver(object):
         :param instance: nova.db.sqlalchemy.models.Instance
         :param dest_check_data: result of check_can_live_migrate_destination
         :param block_device_info: result of _get_instance_block_device_info
-        :returns: a dict containing migration info (hypervisor-dependent)
+        :returns: a LiveMigrateData object
         """
         raise NotImplementedError()
 
@@ -1011,23 +996,6 @@ class ComputeDriver(object):
         running the specified security group.
 
         An error should be raised if the operation cannot complete.
-
-        """
-        # TODO(Vek): Need to pass context in for access to auth_token
-        raise NotImplementedError()
-
-    def refresh_provider_fw_rules(self):
-        """This triggers a firewall update based on database changes.
-
-        When this is called, rules have either been added or removed from the
-        datastore.  You can retrieve rules with
-        :py:meth:`nova.db.provider_fw_rule_get_all`.
-
-        Provider rules take precedence over security group rules.  If an IP
-        would be allowed by a security group ingress rule, but blocked by
-        a provider rule, then packets from the IP are dropped.  This includes
-        intra-project traffic in the case of the allow_project_net_traffic
-        flag for the libvirt-derived classes.
 
         """
         # TODO(Vek): Need to pass context in for access to auth_token
@@ -1320,7 +1288,7 @@ class ComputeDriver(object):
 
         This is called during spawn_instance by the compute manager.
 
-        Note that the format of the return value is specific to Quantum
+        Note that the format of the return value is specific to the Neutron
         client API.
 
         :return: None, or a set of DHCP options, eg:
@@ -1358,7 +1326,7 @@ class ComputeDriver(object):
         :param nova.objects.aggregate.Aggregate aggregate:
             The aggregate which should add the given `host`
         :param str host:
-            The name of the host to add to the the given `aggregate`.
+            The name of the host to add to the given `aggregate`.
         :param dict kwargs:
             A free-form thingy...
 
@@ -1377,7 +1345,7 @@ class ComputeDriver(object):
         :param nova.objects.aggregate.Aggregate aggregate:
             The aggregate which should remove the given `host`
         :param str host:
-            The name of the host to remove from the the given `aggregate`.
+            The name of the host to remove from the given `aggregate`.
         :param dict kwargs:
             A free-form thingy...
 

@@ -162,6 +162,7 @@ class TestOSAPIFixture(testtools.TestCase):
         self.useFixture(fixtures.OutputStreamCapture())
         self.useFixture(fixtures.StandardLogging())
         self.useFixture(conf_fixture.ConfFixture())
+        self.useFixture(fixtures.RPCFixture('nova.test'))
         api = self.useFixture(fixtures.OSAPIFixture()).api
 
         # request the API root, which provides us the versions of the API
@@ -331,3 +332,17 @@ class TestBannedDBSchemaOperations(testtools.TestCase):
                               table.drop)
             self.assertRaises(exception.DBNotAllowed,
                               table.alter)
+
+
+class TestStableObjectJsonFixture(testtools.TestCase):
+    def test_changes_sort(self):
+        class TestObject(obj_base.NovaObject):
+            def obj_what_changed(self):
+                return ['z', 'a']
+
+        obj = TestObject()
+        self.assertEqual(['z', 'a'],
+                         obj.obj_to_primitive()['nova_object.changes'])
+        with fixtures.StableObjectJsonFixture():
+            self.assertEqual(['a', 'z'],
+                             obj.obj_to_primitive()['nova_object.changes'])

@@ -15,18 +15,17 @@
 
 import re
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import strutils
 import six
 
+import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova import utils
 from nova.virt import driver
 
-CONF = cfg.CONF
-CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 DEFAULT_ROOT_DEV_NAME = '/dev/sda1'
@@ -494,7 +493,7 @@ _pref = re.compile('^((x?v|s|h)d)')
 def strip_prefix(device_name):
     """remove both leading /dev/ and xvd or sd or vd or hd."""
     device_name = strip_dev(device_name)
-    return _pref.sub('', device_name)
+    return _pref.sub('', device_name) if device_name else device_name
 
 
 _nums = re.compile('\d+')
@@ -504,7 +503,7 @@ def get_device_letter(device_name):
     letter = strip_prefix(device_name)
     # NOTE(vish): delete numbers in case we have something like
     #             /dev/sda1
-    return _nums.sub('', letter)
+    return _nums.sub('', letter) if device_name else device_name
 
 
 def instance_block_mapping(instance, bdms):

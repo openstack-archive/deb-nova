@@ -632,6 +632,9 @@ def _numa_cell_supports_pagesize_request(host_cell, inst_cell):
     :param host_cell: host cell to fit the instance cell onto
     :param inst_cell: instance cell we want to fit
 
+    :raises: exception.MemoryPageSizeNotSupported if custom page
+             size not supported in host cell.
+
     :returns: The page size able to be handled by host_cell
     """
     avail_pagesize = [page.size_kb for page in host_cell.mempages]
@@ -1034,6 +1037,13 @@ def is_realtime_enabled(flavor):
     return strutils.bool_from_string(flavor_rt)
 
 
+def _get_realtime_mask(flavor, image):
+    """Returns realtime mask based on flavor/image meta"""
+    flavor_mask = flavor.get('extra_specs', {}).get("hw:cpu_realtime_mask")
+    image_mask = image.properties.get("hw_cpu_realtime_mask")
+    return image_mask or flavor_mask
+
+
 def vcpus_realtime_topology(vcpus_set, flavor, image):
     """Partitions vcpus used for realtime and 'normal' vcpus.
 
@@ -1041,10 +1051,7 @@ def vcpus_realtime_topology(vcpus_set, flavor, image):
     vcpus configured for realtime scheduler and set running as a
     'normal' vcpus.
     """
-    flavor_mask = flavor.get('extra_specs', {}).get("hw:cpu_realtime_mask")
-    image_mask = image.properties.get("hw_cpu_realtime_mask")
-
-    mask = image_mask or flavor_mask
+    mask = _get_realtime_mask(flavor, image)
     if not mask:
         raise exception.RealtimeMaskNotFoundOrInvalid()
 
@@ -1089,9 +1096,11 @@ def _add_cpu_pinning_constraint(flavor, image_meta, numa_topology):
     else:
         cpu_policy = fields.CPUAllocationPolicy.SHARED
 
-    if (is_realtime_enabled(flavor) and
-        cpu_policy != fields.CPUAllocationPolicy.DEDICATED):
+    rt = is_realtime_enabled(flavor)
+    if (rt and cpu_policy != fields.CPUAllocationPolicy.DEDICATED):
         raise exception.RealtimeConfigurationInvalid()
+    elif rt and not _get_realtime_mask(flavor, image_meta):
+        raise exception.RealtimeMaskNotFoundOrInvalid()
 
     flavor_thread_policy = flavor.get('extra_specs', {}).get(
         'hw:cpu_thread_policy')
@@ -1200,8 +1209,16 @@ def numa_fit_instance_to_host(
     InstanceNUMATopology with it's cell ids set to host cell id's of
     the first successful permutation, or None.
     """
-    if (not (host_topology and instance_topology) or
-        len(host_topology) < len(instance_topology)):
+    if not (host_topology and instance_topology):
+        LOG.debug("Require both a host and instance NUMA topology to "
+                  "fit instance on host.")
+        return
+    elif len(host_topology) < len(instance_topology):
+        LOG.debug("There are not enough free cores on the system to schedule "
+                  "the instance correctly. Required: %(required)s, actual: "
+                  "%(actual)s",
+                  {'required': len(instance_topology),
+                   'actual': len(host_topology)})
         return
     else:
         # TODO(ndipanov): We may want to sort permutations differently
@@ -1211,8 +1228,14 @@ def numa_fit_instance_to_host(
             cells = []
             for host_cell, instance_cell in zip(
                     host_cell_perm, instance_topology.cells):
-                got_cell = _numa_fit_instance_cell(
-                    host_cell, instance_cell, limits)
+                try:
+                    got_cell = _numa_fit_instance_cell(
+                        host_cell, instance_cell, limits)
+                except exception.MemoryPageSizeNotSupported:
+                    # This exception will been raised if instance cell's
+                    # custom pagesize is not supported with host cell in
+                    # _numa_cell_supports_pagesize_request function.
+                    break
                 if got_cell is None:
                     break
                 cells.append(got_cell)
@@ -1407,7 +1430,7 @@ def get_host_numa_usage_from_instance(host, instance, free=False,
 
     :param host: nova.objects.ComputeNode instance, or a db object or dict
     :param instance: nova.objects.Instance instance, or a db object or dict
-    :param free: if True the the returned topology will have it's usage
+    :param free: if True the returned topology will have it's usage
                  decreased instead.
     :param never_serialize_result: if True result will always be an instance of
                                    objects.NUMATopology class.

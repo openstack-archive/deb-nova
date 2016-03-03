@@ -41,6 +41,7 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_mode
 from nova.compute import vm_states
+import nova.conf
 from nova.console import type as ctype
 from nova import context as nova_context
 from nova import exception
@@ -74,10 +75,9 @@ xenapi_vmops_opts = [
                help='Dom0 plugin driver used to handle image uploads.'),
     ]
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.register_opts(xenapi_vmops_opts, 'xenserver')
 CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('vncserver_proxyclient_address', 'nova.vnc', group='vnc')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     firewall.__name__,
@@ -157,7 +157,6 @@ class VMOps(object):
         self._volumeops = volumeops.VolumeOps(self._session)
         self.firewall_driver = firewall.load_driver(
             DEFAULT_FIREWALL_DRIVER,
-            self._virtapi,
             xenapi_session=self._session)
         vif_impl = importutils.import_class(CONF.xenserver.vif_driver)
         self.vif_driver = vif_impl(xenapi_session=self._session)
@@ -1577,11 +1576,10 @@ class VMOps(object):
             self._destroy_vdis(instance, vm_ref)
             self._destroy_kernel_ramdisk(instance, vm_ref)
 
-        vm_utils.destroy_vm(self._session, instance, vm_ref)
-
-        self.unplug_vifs(instance, network_info)
+        self.unplug_vifs(instance, network_info, vm_ref)
         self.firewall_driver.unfilter_instance(
                 instance, network_info=network_info)
+        vm_utils.destroy_vm(self._session, instance, vm_ref)
 
     def pause(self, instance):
         """Pause VM instance."""
@@ -1897,25 +1895,18 @@ class VMOps(object):
         self._session.call_xenapi("VM.get_domid", vm_ref)
 
         for device, vif in enumerate(network_info):
-            vif_rec = self.vif_driver.plug(instance, vif,
-                                           vm_ref=vm_ref, device=device)
-            network_ref = vif_rec['network']
-            LOG.debug('Creating VIF for network %s',
-                      network_ref, instance=instance)
-            vif_ref = self._session.call_xenapi('VIF.create', vif_rec)
-            LOG.debug('Created VIF %(vif_ref)s, network %(network_ref)s',
-                      {'vif_ref': vif_ref, 'network_ref': network_ref},
-                      instance=instance)
+            LOG.debug('Create VIF %s', vif, instance=instance)
+            self.vif_driver.plug(instance, vif, vm_ref=vm_ref, device=device)
 
     def plug_vifs(self, instance, network_info):
         """Set up VIF networking on the host."""
         for device, vif in enumerate(network_info):
             self.vif_driver.plug(instance, vif, device=device)
 
-    def unplug_vifs(self, instance, network_info):
+    def unplug_vifs(self, instance, network_info, vm_ref):
         if network_info:
             for vif in network_info:
-                self.vif_driver.unplug(instance, vif)
+                self.vif_driver.unplug(instance, vif, vm_ref)
 
     def reset_network(self, instance, rescue=False):
         """Calls resetnetwork method in agent."""
@@ -2058,9 +2049,6 @@ class VMOps(object):
         """recreates security group rules for specified instance."""
         self.firewall_driver.refresh_instance_security_rules(instance)
 
-    def refresh_provider_fw_rules(self):
-        self.firewall_driver.refresh_provider_fw_rules()
-
     def unfilter_instance(self, instance_ref, network_info):
         """Removes filters for each VIF of the specified instance."""
         self.firewall_driver.unfilter_instance(instance_ref,
@@ -2141,10 +2129,25 @@ class VMOps(object):
         :param ctxt: security context
         :param instance_ref: nova.db.sqlalchemy.models.Instance object
         :param block_migration: if true, prepare for block migration
+                                if None, calculate it from driver
         :param disk_over_commit: if true, allow disk over commit
 
         """
-        dest_check_data = migrate_data_obj.XenapiLiveMigrateData()
+        dest_check_data = objects.XenapiLiveMigrateData()
+
+        # Notes(eliqiao): if block_migration is None, we calculate it
+        # by checking if src and dest node are in same aggregate
+        if block_migration is None:
+            src = instance_ref['host']
+            try:
+                self._ensure_host_in_aggregate(ctxt, src)
+            except exception.MigrationPreCheckError:
+                block_migration = True
+            else:
+                sr_ref = vm_utils.safe_find_sr(self._session)
+                sr_rec = self._session.get_rec('SR', sr_ref)
+                block_migration = not sr_rec["shared"]
+
         if block_migration:
             dest_check_data.block_migration = True
             dest_check_data.migrate_send_data = self._migrate_receive(ctxt)
@@ -2153,6 +2156,9 @@ class VMOps(object):
         else:
             dest_check_data.block_migration = False
             src = instance_ref['host']
+            # TODO(eilqiao): There is still one case that block_migration is
+            # passed from admin user, so we need this check until
+            # block_migration flag is removed from API
             self._ensure_host_in_aggregate(ctxt, src)
             # TODO(johngarbutt) we currently assume
             # instance is on a SR shared with other destination
@@ -2191,7 +2197,7 @@ class VMOps(object):
                                 'relax-xsm-sr-check=true required'))
 
         if not isinstance(dest_check_data, migrate_data_obj.LiveMigrateData):
-            obj = migrate_data_obj.XenapiLiveMigrateData()
+            obj = objects.XenapiLiveMigrateData()
             obj.from_legacy_dict(dest_check_data)
             dest_check_data = obj
 
@@ -2286,6 +2292,13 @@ class VMOps(object):
         """unpack xapi specific parameters, and call a live migrate command."""
         destination_sr_ref = migrate_data.destination_sr_ref
         migrate_send_data = migrate_data.migrate_send_data
+        # NOTE(coreywright): though a nullable object field, migrate_send_data
+        # is required for XenAPI live migration commands
+        if not migrate_send_data:
+            raise exception.InvalidParameterValue(
+                'XenAPI requires destination migration data')
+        # NOTE(coreywright): convert to xmlrpc marshallable type
+        migrate_send_data = dict(migrate_send_data)
 
         vdi_map = self._generate_vdi_map(destination_sr_ref, vm_ref)
 

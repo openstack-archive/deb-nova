@@ -819,6 +819,67 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
                         'ix_pci_devices_compute_node_id_parent_addr_deleted',
                         ['compute_node_id', 'parent_addr', 'deleted'])
 
+    def _check_314(self, engine, data):
+        self.assertColumnExists(engine, 'inventories', 'resource_class_id')
+        self.assertColumnExists(engine, 'allocations', 'resource_class_id')
+
+        self.assertColumnExists(engine, 'resource_providers', 'id')
+        self.assertColumnExists(engine, 'resource_providers', 'uuid')
+
+        self.assertColumnExists(engine, 'compute_nodes', 'uuid')
+        self.assertColumnExists(engine, 'shadow_compute_nodes', 'uuid')
+
+        self.assertIndexMembers(engine, 'allocations',
+                        'allocations_resource_provider_class_id_idx',
+                        ['resource_provider_id', 'resource_class_id'])
+
+    def _check_315(self, engine, data):
+        self.assertColumnExists(engine, 'migrations',
+                                'memory_total')
+        self.assertColumnExists(engine, 'migrations',
+                                'memory_processed')
+        self.assertColumnExists(engine, 'migrations',
+                                'memory_remaining')
+        self.assertColumnExists(engine, 'migrations',
+                                'disk_total')
+        self.assertColumnExists(engine, 'migrations',
+                                'disk_processed')
+        self.assertColumnExists(engine, 'migrations',
+                                'disk_remaining')
+
+    def _check_316(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes',
+                                'disk_allocation_ratio')
+
+    def _check_317(self, engine, data):
+        self.assertColumnExists(engine, 'aggregates', 'uuid')
+        self.assertColumnExists(engine, 'shadow_aggregates', 'uuid')
+
+    def _check_318(self, engine, data):
+        self.assertColumnExists(engine, 'resource_providers', 'name')
+        self.assertColumnExists(engine, 'resource_providers', 'generation')
+        self.assertColumnExists(engine, 'resource_providers', 'can_host')
+        self.assertIndexMembers(engine, 'resource_providers',
+                                'resource_providers_name_idx',
+                                ['name'])
+
+        self.assertColumnExists(engine, 'resource_provider_aggregates',
+                                'resource_provider_id')
+        self.assertColumnExists(engine, 'resource_provider_aggregates',
+                                'aggregate_id')
+
+        self.assertIndexMembers(engine, 'resource_provider_aggregates',
+            'resource_provider_aggregates_aggregate_id_idx',
+            ['aggregate_id'])
+
+        self.assertIndexMembers(engine, 'resource_provider_aggregates',
+            'resource_provider_aggregates_aggregate_id_idx',
+            ['aggregate_id'])
+
+        self.assertIndexMembers(engine, 'inventories',
+            'inventories_resource_provider_resource_class_idx',
+            ['resource_provider_id', 'resource_class_id'])
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
                                test_base.DbTestCase,

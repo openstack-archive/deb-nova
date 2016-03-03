@@ -13,7 +13,6 @@
 #    under the License.
 
 import mock
-from oslo_config import cfg
 import webob
 
 from nova.api.openstack.compute.legacy_v2.contrib import \
@@ -25,9 +24,6 @@ import nova.db
 from nova import exception
 from nova import test
 from nova.tests.unit.api.openstack import fakes
-
-
-CONF = cfg.CONF
 
 
 class AttrDict(dict):
@@ -284,10 +280,10 @@ class TestSecurityGroupDefaultRulesV21(test.TestCase):
             self.assertEqual(sgr['id'], id)
             return security_group_default_rule_db(sgr)
 
-        self.stubs.Set(nova.db, 'security_group_default_rule_destroy',
-                       security_group_default_rule_destroy)
-        self.stubs.Set(nova.db, 'security_group_default_rule_get',
-                       return_security_group_default_rule)
+        self.stub_out('nova.db.security_group_default_rule_destroy',
+                      security_group_default_rule_destroy)
+        self.stub_out('nova.db.security_group_default_rule_get',
+                      return_security_group_default_rule)
 
         self.controller.delete(self.req, '1')
 

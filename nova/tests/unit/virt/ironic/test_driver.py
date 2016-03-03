@@ -135,25 +135,25 @@ class IronicDriverTestCase(test.NoDBTestCase):
                                           instance_uuid=self.instance_uuid)
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    uuid=self.instance_uuid)
-        ironicclient = cw.IronicClientWrapper()
-
         mock_gbiui.return_value = node
-        result = ironic_driver._validate_instance_and_node(ironicclient,
-                                                           instance)
+        result = self.driver._validate_instance_and_node(instance)
         self.assertEqual(result.uuid, node_uuid)
+        mock_gbiui.assert_called_once_with(instance.uuid,
+                                           fields=ironic_driver._NODE_FIELDS)
 
     @mock.patch.object(FAKE_CLIENT.node, 'get_by_instance_uuid')
     def test__validate_instance_and_node_failed(self, mock_gbiui):
-        ironicclient = cw.IronicClientWrapper()
         mock_gbiui.side_effect = ironic_exception.NotFound()
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    uuid=self.instance_uuid)
         self.assertRaises(exception.InstanceNotFound,
-                          ironic_driver._validate_instance_and_node,
-                          ironicclient, instance)
+                          self.driver._validate_instance_and_node, instance)
+        mock_gbiui.assert_called_once_with(instance.uuid,
+                                           fields=ironic_driver._NODE_FIELDS)
 
     @mock.patch.object(objects.Instance, 'refresh')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def test__wait_for_active_pass(self, fake_validate, fake_refresh):
         instance = fake_instance.fake_instance_obj(self.ctx,
                 uuid=uuidutils.generate_uuid())
@@ -161,12 +161,13 @@ class IronicDriverTestCase(test.NoDBTestCase):
                 provision_state=ironic_states.DEPLOYING)
 
         fake_validate.return_value = node
-        self.driver._wait_for_active(FAKE_CLIENT, instance)
-        fake_validate.assert_called_once_with(FAKE_CLIENT, instance)
+        self.driver._wait_for_active(instance)
+        fake_validate.assert_called_once_with(instance)
         fake_refresh.assert_called_once_with()
 
     @mock.patch.object(objects.Instance, 'refresh')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def test__wait_for_active_done(self, fake_validate, fake_refresh):
         instance = fake_instance.fake_instance_obj(self.ctx,
                 uuid=uuidutils.generate_uuid())
@@ -175,13 +176,13 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         fake_validate.return_value = node
         self.assertRaises(loopingcall.LoopingCallDone,
-                self.driver._wait_for_active,
-                FAKE_CLIENT, instance)
-        fake_validate.assert_called_once_with(FAKE_CLIENT, instance)
+                self.driver._wait_for_active, instance)
+        fake_validate.assert_called_once_with(instance)
         fake_refresh.assert_called_once_with()
 
     @mock.patch.object(objects.Instance, 'refresh')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def test__wait_for_active_fail(self, fake_validate, fake_refresh):
         instance = fake_instance.fake_instance_obj(self.ctx,
                 uuid=uuidutils.generate_uuid())
@@ -190,21 +191,20 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         fake_validate.return_value = node
         self.assertRaises(exception.InstanceDeployFailure,
-                self.driver._wait_for_active,
-                FAKE_CLIENT, instance)
-        fake_validate.assert_called_once_with(FAKE_CLIENT, instance)
+                self.driver._wait_for_active, instance)
+        fake_validate.assert_called_once_with(instance)
         fake_refresh.assert_called_once_with()
 
     @mock.patch.object(objects.Instance, 'refresh')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def _wait_for_active_abort(self, instance_params, fake_validate,
                               fake_refresh):
         instance = fake_instance.fake_instance_obj(self.ctx,
                 uuid=uuidutils.generate_uuid(),
                 **instance_params)
         self.assertRaises(exception.InstanceDeployFailure,
-                self.driver._wait_for_active,
-                FAKE_CLIENT, instance)
+                self.driver._wait_for_active, instance)
         # Assert _validate_instance_and_node wasn't called
         self.assertFalse(fake_validate.called)
         fake_refresh.assert_called_once_with()
@@ -218,7 +218,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
     def test__wait_for_active_abort_error(self):
         self._wait_for_active_abort({'vm_state': vm_states.ERROR})
 
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def test__wait_for_power_state_pass(self, fake_validate):
         instance = fake_instance.fake_instance_obj(self.ctx,
                 uuid=uuidutils.generate_uuid())
@@ -226,11 +227,11 @@ class IronicDriverTestCase(test.NoDBTestCase):
                 target_power_state=ironic_states.POWER_OFF)
 
         fake_validate.return_value = node
-        self.driver._wait_for_power_state(
-                FAKE_CLIENT, instance, 'fake message')
+        self.driver._wait_for_power_state(instance, 'fake message')
         self.assertTrue(fake_validate.called)
 
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def test__wait_for_power_state_ok(self, fake_validate):
         instance = fake_instance.fake_instance_obj(self.ctx,
                 uuid=uuidutils.generate_uuid())
@@ -239,8 +240,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         fake_validate.return_value = node
         self.assertRaises(loopingcall.LoopingCallDone,
-                self.driver._wait_for_power_state,
-                FAKE_CLIENT, instance, 'fake message')
+                self.driver._wait_for_power_state, instance, 'fake message')
         self.assertTrue(fake_validate.called)
 
     def _test__node_resource(self, has_inst_info):
@@ -526,7 +526,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
                                                    uuid=self.instance_uuid)
         self.assertTrue(self.driver.instance_exists(instance))
         mock_call.assert_called_once_with('node.get_by_instance_uuid',
-                                          self.instance_uuid)
+                                          self.instance_uuid,
+                                          fields=ironic_driver._NODE_FIELDS)
 
     @mock.patch.object(cw.IronicClientWrapper, 'call')
     def test_instance_exists_fail(self, mock_call):
@@ -535,7 +536,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
                                                    uuid=self.instance_uuid)
         self.assertFalse(self.driver.instance_exists(instance))
         mock_call.assert_called_once_with('node.get_by_instance_uuid',
-                                          self.instance_uuid)
+                                          self.instance_uuid,
+                                          fields=ironic_driver._NODE_FIELDS)
 
     @mock.patch.object(cw.IronicClientWrapper, 'call')
     @mock.patch.object(objects.Instance, 'get_by_uuid')
@@ -591,7 +593,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_get.return_value = node
         mock_list.return_value = []
         self.assertTrue(self.driver.node_is_available(node.uuid))
-        mock_get.assert_called_with(node.uuid)
+        mock_get.assert_called_with(node.uuid,
+                                    fields=ironic_driver._NODE_FIELDS)
         mock_list.assert_called_with(detail=True, limit=0)
 
         mock_get.side_effect = ironic_exception.NotFound
@@ -722,7 +725,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         result = self.driver.get_available_resource(node.uuid)
         self.assertEqual(fake_resource, result)
         mock_nr.assert_called_once_with(node)
-        mock_get.assert_called_once_with(node.uuid)
+        mock_get.assert_called_once_with(node.uuid,
+                                         fields=ironic_driver._NODE_FIELDS)
 
     @mock.patch.object(FAKE_CLIENT.node, 'get')
     @mock.patch.object(FAKE_CLIENT.node, 'list')
@@ -823,7 +827,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         self.driver.spawn(self.ctx, instance, image_meta, [], None)
 
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_adf.assert_called_once_with(node, instance,
                                          test.MatchType(objects.ImageMeta),
@@ -837,7 +842,6 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertFalse(mock_save.called)
 
         mock_looping.assert_called_once_with(mock_wait_active,
-                                             FAKE_CLIENT_WRAPPER,
                                              instance)
         fake_looping_call.start.assert_called_once_with(
             interval=CONF.ironic.api_retry_interval)
@@ -959,7 +963,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         expected_patch = [{'path': '/instance_uuid', 'op': 'remove'}]
         mock_update.assert_called_once_with(node.uuid, expected_patch)
 
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     @mock.patch.object(FAKE_CLIENT.node, 'update')
     def test__cleanup_deploy_instance_already_removed(self, mock_update,
                                                       mock_validate):
@@ -974,7 +979,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
                                     flavor=flavor)
         # assert node.update is not called
         self.assertFalse(mock_update.called)
-        mock_validate.assert_called_once_with(mock.ANY, instance)
+        mock_validate.assert_called_once_with(instance)
 
     @mock.patch.object(FAKE_CLIENT.node, 'update')
     def test__cleanup_deploy_without_flavor(self, mock_update):
@@ -1020,7 +1025,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         self.assertRaises(exception.ValidationError, self.driver.spawn,
                           self.ctx, instance, image_meta, [], None)
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.validate.assert_called_once_with(node_uuid)
 
     @mock.patch.object(configdrive, 'required_by')
@@ -1048,7 +1054,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertRaises(TestException, self.driver.spawn,
                           self.ctx, instance, image_meta, [], None)
 
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_cleanup_deploy.assert_called_with(self.ctx, node, instance, None,
                                                flavor=flavor)
@@ -1076,7 +1083,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertRaises(exception.NovaException, self.driver.spawn,
                           self.ctx, instance, image_meta, [], None)
 
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_cleanup_deploy.assert_called_once_with(self.ctx, node,
                                                     instance, None,
@@ -1105,7 +1113,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
                           self.driver.spawn,
                           self.ctx, instance, image_meta, [], None)
 
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.validate.assert_called_once_with(node_uuid)
         mock_cleanup_deploy.assert_called_once_with(self.ctx, node,
                                                     instance, None,
@@ -1184,7 +1193,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_node.set_provision_state.side_effect = fake_set_provision_state
         self.driver.destroy(self.ctx, instance, network_info, None)
 
-        mock_node.get_by_instance_uuid.assert_called_with(instance.uuid)
+        mock_node.get_by_instance_uuid.assert_called_with(
+            instance.uuid, fields=ironic_driver._NODE_FIELDS)
         mock_cleanup_deploy.assert_called_with(self.ctx, node,
                                                instance, network_info)
 
@@ -1201,7 +1211,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
             self._test_destroy(state)
 
     @mock.patch.object(FAKE_CLIENT.node, 'set_provision_state')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     def test_destroy_trigger_undeploy_fail(self, fake_validate, mock_sps):
         node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
         node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid,
@@ -1213,19 +1224,19 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertRaises(exception.NovaException, self.driver.destroy,
                           self.ctx, instance, None, None)
 
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
-    def _test__unprovision_instance(self, mock_validate_inst, state=None):
-        fake_ironic_client = mock.Mock()
+    @mock.patch.object(FAKE_CLIENT.node, 'set_provision_state')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
+    def _test__unprovision_instance(self, mock_validate_inst, mock_set_pstate,
+                                    state=None):
         node = ironic_utils.get_test_node(
             driver='fake',
             provision_state=state)
         instance = fake_instance.fake_instance_obj(self.ctx, node=node.uuid)
         mock_validate_inst.return_value = node
-        self.driver._unprovision(fake_ironic_client, instance, node)
-        mock_validate_inst.assert_called_once_with(fake_ironic_client,
-                                                   instance)
-        fake_ironic_client.call.assert_called_once_with(
-            "node.set_provision_state", node.uuid, "deleted")
+        self.driver._unprovision(instance, node)
+        mock_validate_inst.assert_called_once_with(instance)
+        mock_set_pstate.assert_called_once_with(node.uuid, "deleted")
 
     def test__unprovision_cleaning(self):
         self._test__unprovision_instance(state=ironic_states.CLEANING)
@@ -1233,10 +1244,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
     def test__unprovision_cleanwait(self):
         self._test__unprovision_instance(state=ironic_states.CLEANWAIT)
 
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
-    def test__unprovision_fail_max_retries(self, mock_validate_inst):
+    @mock.patch.object(FAKE_CLIENT.node, 'set_provision_state')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
+    def test__unprovision_fail_max_retries(self, mock_validate_inst,
+                                           mock_set_pstate):
         CONF.set_default('api_max_retries', default=2, group='ironic')
-        fake_ironic_client = mock.Mock()
         node = ironic_utils.get_test_node(
             driver='fake',
             provision_state=ironic_states.ACTIVE)
@@ -1244,27 +1257,26 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         mock_validate_inst.return_value = node
         self.assertRaises(exception.NovaException, self.driver._unprovision,
-                          fake_ironic_client, instance, node)
-        expected_calls = (mock.call(mock.ANY, instance),
-                          mock.call(mock.ANY, instance))
+                          instance, node)
+        expected_calls = (mock.call(instance),
+                          mock.call(instance))
         mock_validate_inst.assert_has_calls(expected_calls)
-        fake_ironic_client.call.assert_called_once_with(
-            "node.set_provision_state", node.uuid, "deleted")
+        mock_set_pstate.assert_called_once_with(node.uuid, "deleted")
 
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
-    def test__unprovision_instance_not_found(self, mock_validate_inst):
-        fake_ironic_client = mock.Mock()
+    @mock.patch.object(FAKE_CLIENT.node, 'set_provision_state')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
+    def test__unprovision_instance_not_found(self, mock_validate_inst,
+                                             mock_set_pstate):
         node = ironic_utils.get_test_node(
             driver='fake', provision_state=ironic_states.DELETING)
         instance = fake_instance.fake_instance_obj(self.ctx, node=node.uuid)
 
         mock_validate_inst.side_effect = exception.InstanceNotFound(
             instance_id='fake')
-        self.driver._unprovision(fake_ironic_client, instance, node)
-        mock_validate_inst.assert_called_once_with(fake_ironic_client,
-                                                   instance)
-        fake_ironic_client.call.assert_called_once_with(
-            "node.set_provision_state", node.uuid, "deleted")
+        self.driver._unprovision(instance, node)
+        mock_validate_inst.assert_called_once_with(instance)
+        mock_set_pstate.assert_called_once_with(node.uuid, "deleted")
 
     @mock.patch.object(FAKE_CLIENT, 'node')
     def test_destroy_unassociate_fail(self, mock_node):
@@ -1279,10 +1291,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
                           self.ctx, instance, None, None)
         mock_node.set_provision_state.assert_called_once_with(node_uuid,
                                                               'deleted')
-        mock_node.get_by_instance_uuid.assert_called_with(instance.uuid)
+        mock_node.get_by_instance_uuid.assert_called_with(
+            instance.uuid, fields=ironic_driver._NODE_FIELDS)
 
     @mock.patch.object(loopingcall, 'FixedIntervalLoopingCall')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     @mock.patch.object(FAKE_CLIENT.node, 'set_power_state')
     def test_reboot(self, mock_sp, fake_validate, mock_looping):
         node = ironic_utils.get_test_node()
@@ -1296,14 +1310,16 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_sp.assert_called_once_with(node.uuid, 'reboot')
 
     @mock.patch.object(loopingcall, 'FixedIntervalLoopingCall')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     @mock.patch.object(FAKE_CLIENT.node, 'set_power_state')
     def test_power_off(self, mock_sp, fake_validate, mock_looping):
         self._test_power_on_off(mock_sp, fake_validate, mock_looping,
                                 method_name='power_off')
 
     @mock.patch.object(loopingcall, 'FixedIntervalLoopingCall')
-    @mock.patch.object(ironic_driver, '_validate_instance_and_node')
+    @mock.patch.object(ironic_driver.IronicDriver,
+                       '_validate_instance_and_node')
     @mock.patch.object(FAKE_CLIENT.node, 'set_power_state')
     def test_power_on(self, mock_sp, fake_validate, mock_looping):
         self._test_power_on_off(mock_sp, fake_validate, mock_looping,
@@ -1364,7 +1380,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         network_info = utils.get_test_network_info()
         self.driver.plug_vifs(instance, network_info)
 
-        mock_get.assert_called_once_with(node_uuid)
+        mock_get.assert_called_once_with(node_uuid,
+                                         fields=ironic_driver._NODE_FIELDS)
         mock__plug_vifs.assert_called_once_with(node, instance, network_info)
 
     @mock.patch.object(FAKE_CLIENT.port, 'update')
@@ -1433,7 +1450,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
                                 utils.get_test_network_info())
 
         # asserts
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.list_ports.assert_called_once_with(node_uuid, detail=True)
         mock_update.assert_called_once_with(port.uuid, expected_patch)
 
@@ -1449,7 +1467,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
         self.driver.unplug_vifs(instance, utils.get_test_network_info())
 
-        mock_node.get.assert_called_once_with(node_uuid)
+        mock_node.get.assert_called_once_with(
+            node_uuid, fields=ironic_driver._NODE_FIELDS)
         mock_node.list_ports.assert_called_once_with(node_uuid, detail=True)
         # assert port.update() was not called
         self.assertFalse(mock_update.called)
@@ -1489,13 +1508,6 @@ class IronicDriverTestCase(test.NoDBTestCase):
         instance = fake_instance.fake_instance_obj(self.ctx)
         self.driver.refresh_instance_security_rules(instance)
         mock_risr.assert_called_once_with(instance)
-
-    @mock.patch.object(firewall.NoopFirewallDriver,
-                       'refresh_provider_fw_rules', create=True)
-    def test_refresh_provider_fw_rules(self, mock_rpfr):
-        fake_instance.fake_instance_obj(self.ctx)
-        self.driver.refresh_provider_fw_rules()
-        mock_rpfr.assert_called_once_with()
 
     @mock.patch.object(firewall.NoopFirewallDriver,
                       'refresh_instance_security_rules', create=True)
@@ -1546,9 +1558,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
             flavor, preserve)
         mock_set_pstate.assert_called_once_with(node_uuid,
                                                 ironic_states.REBUILD)
-        mock_looping.assert_called_once_with(mock_wait_active,
-                                             FAKE_CLIENT_WRAPPER,
-                                             instance)
+        mock_looping.assert_called_once_with(mock_wait_active, instance)
         fake_looping_call.start.assert_called_once_with(
             interval=CONF.ironic.api_retry_interval)
         fake_looping_call.wait.assert_called_once_with()

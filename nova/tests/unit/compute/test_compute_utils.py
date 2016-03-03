@@ -21,7 +21,6 @@ import string
 import uuid
 
 import mock
-from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import importutils
 import six
@@ -30,8 +29,8 @@ from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
+import nova.conf
 from nova import context
-from nova import db
 from nova import exception
 from nova.image import glance
 from nova.network import api as network_api
@@ -51,9 +50,8 @@ from nova.tests.unit.objects import test_migration
 from nova.tests import uuidsentinel as uuids
 from nova.virt import driver
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.import_opt('compute_manager', 'nova.service')
-CONF.import_opt('compute_driver', 'nova.virt.driver')
 
 
 def create_instance(context, user_id='fake', project_id='fake', params=None):
@@ -103,8 +101,8 @@ class ComputeValidateDeviceTestCase(test.NoDBTestCase):
 
         self.data = []
 
-        self.stubs.Set(db, 'block_device_mapping_get_all_by_instance',
-                       lambda context, instance, use_slave=False: self.data)
+        self.stub_out('nova.db.block_device_mapping_get_all_by_instance',
+                      lambda context, instance: self.data)
 
     def _validate_device(self, device=None):
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
