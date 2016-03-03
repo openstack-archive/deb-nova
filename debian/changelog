@@ -6,6 +6,7 @@ nova (2:13.0.0~b3-1) experimental; urgency=medium
   [ Thomas Goirand ]
   * New upstream release.
   * Fixed (build-)depends for this release.
+  * Fix namespace list for generating nova.conf.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 04 Mar 2016 03:05:59 +0800
 
