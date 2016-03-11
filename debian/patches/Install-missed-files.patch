@@ -1,0 +1,41 @@
+From 70bb51a8e42c8cbddc912c225bb661f6a60bbffa Mon Sep 17 00:00:00 2001
+From: Ivan Udovichenko <iudovichenko@mirantis.com>
+Date: Fri, 11 Mar 2016 17:25:13 +0200
+Subject: [PATCH] Install missed files
+
+---
+ MANIFEST.in | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+ create mode 100644 MANIFEST.in
+
+diff --git a/MANIFEST.in b/MANIFEST.in
+new file mode 100644
+index 0000000..cf3032d
+--- /dev/null
++++ b/MANIFEST.in
+@@ -0,0 +1,22 @@
++exclude .gitreview 
++global-exclude *.pyc
++
++include nova/api/openstack/rest_api_version_history.rst
++graft nova/CA
++include nova/cloudpipe/bootscript.template
++include nova/cloudpipe/client.ovpn.template
++include nova/console/xvp.conf.template
++include nova/db/sqlalchemy/api_migrations/migrate_repo/migrate.cfg
++include nova/db/sqlalchemy/migrate_repo/versions/246_sqlite_upgrade.sql
++graft nova/locale
++graft nova/tests/functional/api_sample_tests/api_samples
++graft nova/tests/live_migration
++include nova/tests/unit/image/abs.tar.gz
++include nova/tests/unit/image/rel.tar.gz
++include nova/tests/unit/network/interfaces-override.template
++graft nova/tests/unit/ssl_cert
++include nova/tests/unit/virt/vmwareapi/ovf.xml
++include nova/tests/unit/virt/xenapi/vm_rrd.xml
++include nova/virt/interfaces.template
++graft nova/wsgi
++
+-- 
+2.1.4
+
