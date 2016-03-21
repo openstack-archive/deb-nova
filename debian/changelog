@@ -8,6 +8,7 @@ nova (2:13.0.0~rc1-1) experimental; urgency=medium
   * New upstream release.
   * Fix [neutron]/auth_plugin -> [neutron]/auth_type fixup, to follow the
     changes in upstream generated config file.
+  * Fixed (build-)depends for this release.
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 21 Mar 2016 14:32:43 +0100
 
