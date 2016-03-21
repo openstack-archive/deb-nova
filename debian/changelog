@@ -1,14 +1,15 @@
-nova (2:13.0.0~b3-3) UNRELEASED; urgency=medium
+nova (2:13.0.0~rc1-1) UNRELEASED; urgency=medium
 
   [ Ivan Udovichenko ]
   * d/patches: Add Install-missed-files.patch file.
   * d/patches/series: Remove outdated entry and add the new one.
 
   [ Thomas Goirand ]
+  * New upstream release.
   * Fix [neutron]/auth_plugin -> [neutron]/auth_type fixup, to follow the
     changes in upstream generated config file.
 
- -- Thomas Goirand <zigo@debian.org>  Sun, 13 Mar 2016 14:31:31 +0100
+ -- Thomas Goirand <zigo@debian.org>  Mon, 21 Mar 2016 14:32:43 +0100
 
 nova (2:13.0.0~b3-1) experimental; urgency=medium
 
