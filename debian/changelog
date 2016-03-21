@@ -1,4 +1,4 @@
-nova (2:13.0.0~rc1-1) UNRELEASED; urgency=medium
+nova (2:13.0.0~rc1-1) experimental; urgency=medium
 
   [ Ivan Udovichenko ]
   * d/patches: Add Install-missed-files.patch file.
