@@ -50,7 +50,8 @@ metadata_opts = [
                     'config drive'),
     cfg.StrOpt('vendordata_driver',
                default='nova.api.metadata.vendordata_json.JsonFileVendorData',
-               help='Driver to use for vendor data'),
+               help='DEPRECATED: Driver to use for vendor data',
+               deprecated_for_removal=True),
 ]
 
 CONF = cfg.CONF
@@ -130,7 +131,7 @@ class InstanceMetadata(object):
 
         secgroup_api = openstack_driver.get_openstack_security_group_driver()
         self.security_groups = secgroup_api.get_instance_security_groups(
-            ctxt, instance.uuid)
+            ctxt, instance)
 
         self.mappings = _format_instance_mapping(ctxt, instance)
 
@@ -545,7 +546,8 @@ def get_metadata_by_instance_id(instance_id, address, ctxt=None):
     ctxt = ctxt or context.get_admin_context()
     instance = objects.Instance.get_by_uuid(
         ctxt, instance_id, expected_attrs=['ec2_ids', 'flavor', 'info_cache',
-                                           'metadata', 'system_metadata'])
+                                           'metadata', 'system_metadata',
+                                           'security_groups'])
     return InstanceMetadata(instance, address)
 
 

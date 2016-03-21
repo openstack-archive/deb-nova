@@ -3456,6 +3456,19 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         real = db.service_get_all_by_binary(self.ctxt, 'b1')
         self._assertEqualListsOfObjects(expected, real)
 
+    def test_service_get_all_by_binary_include_disabled(self):
+        values = [
+            {'host': 'host1', 'binary': 'b1'},
+            {'host': 'host2', 'binary': 'b1'},
+            {'disabled': True, 'binary': 'b1'},
+            {'host': 'host3', 'binary': 'b2'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+        expected = services[:3]
+        real = db.service_get_all_by_binary(self.ctxt, 'b1',
+                                            include_disabled=True)
+        self._assertEqualListsOfObjects(expected, real)
+
     def test_service_get_all_by_host(self):
         values = [
             {'host': 'host1', 'topic': 't11', 'binary': 'b11'},
@@ -9122,7 +9135,7 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'numa_node': 1,
                 'dev_type': fields.PciDeviceType.SRIOV_VF,
                 'dev_id': 'pci_0000:0f:08.7',
-                'extra_info': None,
+                'extra_info': '{}',
                 'label': 'label_8086_1520',
                 'status': fields.PciDeviceStatus.AVAILABLE,
                 'instance_uuid': '00000000-0000-0000-0000-000000000010',
@@ -9137,7 +9150,7 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'numa_node': 0,
                 'dev_type': fields.PciDeviceType.SRIOV_VF,
                 'dev_id': 'pci_0000:0f:08.7',
-                'extra_info': None,
+                'extra_info': '{}',
                 'label': 'label_8086_1520',
                 'status': fields.PciDeviceStatus.AVAILABLE,
                 'instance_uuid': '00000000-0000-0000-0000-000000000010',
@@ -9277,6 +9290,92 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           self.admin_context,
                           v1['compute_node_id'],
                           v1['address'])
+
+    def _create_fake_pci_devs_old_format(self):
+        v1, v2 = self._get_fake_pci_devs()
+
+        for v in (v1, v2):
+            v['parent_addr'] = None
+            v['extra_info'] = jsonutils.dumps(
+                {'phys_function': 'fake-phys-func'})
+
+            db.pci_device_update(self.admin_context, v['compute_node_id'],
+                                 v['address'], v)
+
+    @mock.patch.object(objects.PciDevice, 'should_migrate_data',
+                       return_value=False)
+    def test_pcidevice_online_mig_not_ready(self, mock_should_migrate):
+        self._create_fake_pci_devs_old_format()
+
+        found, done = db.pcidevice_online_data_migration(self.admin_context,
+                                                         None)
+        self.assertEqual(0, found)
+        self.assertEqual(0, done)
+
+    @mock.patch.object(objects.PciDevice, 'should_migrate_data',
+                       return_value=True)
+    def test_pcidevice_online_mig_data_migrated_limit(self,
+                                                      mock_should_migrate):
+        self._create_fake_pci_devs_old_format()
+
+        found, done = db.pcidevice_online_data_migration(self.admin_context, 1)
+        self.assertEqual(1, found)
+        self.assertEqual(1, done)
+
+    @mock.patch.object(objects.PciDevice, 'should_migrate_data',
+                       return_value=True)
+    def test_pcidevice_online_mig(self, mock_should_migrate):
+        self._create_fake_pci_devs_old_format()
+
+        found, done = db.pcidevice_online_data_migration(self.admin_context,
+                                                         50)
+        self.assertEqual(2, found)
+        self.assertEqual(2, done)
+        results = db.pci_device_get_all_by_node(self.admin_context,
+                                                self.compute_node['id'])
+        for result in results:
+            self.assertEqual('fake-phys-func', result['parent_addr'])
+
+        found, done = db.pcidevice_online_data_migration(self.admin_context,
+                                                         50)
+        self.assertEqual(0, found)
+        self.assertEqual(0, done)
+
+    def test_migrate_aggregates(self):
+        db.aggregate_create(self.context, {'name': 'foo'})
+        db.aggregate_create(self.context, {'name': 'bar',
+                                           'uuid': 'fake-uuid'})
+        total, done = db.aggregate_uuids_online_data_migration(
+            self.context, 10)
+        self.assertEqual(1, total)
+        self.assertEqual(1, done)
+        total, done = db.aggregate_uuids_online_data_migration(
+            self.context, 10)
+        self.assertEqual(0, total)
+        self.assertEqual(0, done)
+
+    def test_migrate_computenode(self):
+        db.compute_node_create(self.context,
+                               dict(vcpus=1, memory_mb=512, local_gb=10,
+                                    vcpus_used=0, memory_mb_used=256,
+                                    local_gb_used=5,
+                                    hypervisor_type='HyperDanVM',
+                                    hypervisor_version='34', cpu_info='foo'))
+        db.compute_node_create(self.context,
+                               dict(vcpus=1, memory_mb=512, local_gb=10,
+                                    uuid='foo',
+                                    vcpus_used=0, memory_mb_used=256,
+                                    local_gb_used=5,
+                                    hypervisor_type='HyperDanVM',
+                                    hypervisor_version='34', cpu_info='foo'))
+        total, done = db.computenode_uuids_online_data_migration(
+            self.context, 10)
+        self.assertEqual(1, total)
+        self.assertEqual(1, done)
+        total, done = db.computenode_uuids_online_data_migration(
+            self.context, 10)
+        self.assertEqual(0, total)
+        self.assertEqual(0, done)
 
 
 class RetryOnDeadlockTestCase(test.TestCase):
@@ -9637,3 +9736,12 @@ class TestInstanceInfoCache(test.TestCase):
         self.assertEqual(network_info1, info_cache1.network_info)
         info_cache2 = db.instance_info_cache_get(self.context, instance2.uuid)
         self.assertEqual(network_info2, info_cache2.network_info)
+
+    def test_instance_info_cache_create_using_update(self):
+        network_info = 'net'
+        instance_uuid = uuidutils.generate_uuid()
+        db.instance_info_cache_update(self.context, instance_uuid,
+                                      {'network_info': network_info})
+        info_cache = db.instance_info_cache_get(self.context, instance_uuid)
+        self.assertEqual(network_info, info_cache.network_info)
+        self.assertEqual(instance_uuid, info_cache.instance_uuid)

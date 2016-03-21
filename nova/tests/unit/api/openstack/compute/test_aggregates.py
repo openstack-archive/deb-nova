@@ -16,6 +16,7 @@
 """Tests for the aggregates admin api."""
 
 import mock
+import uuid
 from webob import exc
 
 from nova.api.openstack.compute import aggregates as aggregates_v21
@@ -25,6 +26,7 @@ from nova.compute import api as compute_api
 from nova import context
 from nova import exception
 from nova import objects
+from nova.objects import base as obj_base
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import matchers
@@ -263,6 +265,19 @@ class AggregateTestCaseV21(test.NoDBTestCase):
                                      {"name": "test",
                                       "availability_zone": ""}})
 
+    @mock.patch('nova.compute.api.AggregateAPI.create_aggregate')
+    def test_create_with_none_availability_zone(self, mock_create_agg):
+        mock_create_agg.return_value = objects.Aggregate(self.context,
+                                                         name='test',
+                                                         uuid=uuid.uuid4(),
+                                                         hosts=[],
+                                                         metadata={})
+        body = {"aggregate": {"name": "test",
+                              "availability_zone": None}}
+        result = self.controller.create(self.req, body=body)
+        mock_create_agg.assert_called_once_with(self.context, 'test', None)
+        self.assertEqual(result['aggregate']['name'], 'test')
+
     def test_create_with_extra_invalid_arg(self):
         self.assertRaises(self.bad_request, self.controller.create,
                           self.req, body={"name": "test",
@@ -380,6 +395,21 @@ class AggregateTestCaseV21(test.NoDBTestCase):
         self.assertRaises(self.bad_request, self.controller.update,
                           self.req, "2", body=test_metadata)
 
+    @mock.patch('nova.compute.api.AggregateAPI.update_aggregate')
+    def test_update_with_none_availability_zone(self, mock_update_agg):
+        agg_id = uuid.uuid4()
+        mock_update_agg.return_value = objects.Aggregate(self.context,
+                                                         name='test',
+                                                         uuid=agg_id,
+                                                         hosts=[],
+                                                         metadata={})
+        body = {"aggregate": {"name": "test",
+                              "availability_zone": None}}
+        result = self.controller.update(self.req, agg_id, body=body)
+        mock_update_agg.assert_called_once_with(self.context, agg_id,
+                                                body['aggregate'])
+        self.assertEqual(result['aggregate']['name'], 'test')
+
     def test_update_with_bad_aggregate(self):
         test_metadata = {"aggregate": {"name": "test_name"}}
 
@@ -429,7 +459,7 @@ class AggregateTestCaseV21(test.NoDBTestCase):
                                                            "host1"}})
 
         aggregate = _transform_aggregate_az(aggregate['aggregate'])
-        self._assert_agg_data(AGGREGATE, aggregate)
+        self._assert_agg_data(AGGREGATE, _make_agg_obj(aggregate))
 
     def test_add_host_no_admin(self):
         self.assertRaises(exception.PolicyNotAuthorized,
@@ -713,9 +743,8 @@ class AggregateTestCaseV21(test.NoDBTestCase):
         self.assertEqual(agg, marshalled_agg['aggregate'])
 
     def _assert_agg_data(self, expected, actual):
-        expected_data = expected.obj_to_primitive()['nova_object.data']
-        actual_data = expected.obj_to_primitive()['nova_object.data']
-        self.assertEqual(expected_data, actual_data)
+        self.assertTrue(obj_base.obj_equal_prims(expected, actual),
+                        "The aggregate objects were not equal")
 
 
 class AggregateTestCaseV2(AggregateTestCaseV21):

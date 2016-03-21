@@ -5359,54 +5359,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.assertEqual(uuids[3], vm4.UUIDString())
         mock_list.assert_called_with(only_guests=True, only_running=False)
 
-    @mock.patch.object(host.Host, "list_instance_domains")
-    def test_get_all_block_devices(self, mock_list):
-        xml = [
-            """
-                <domain type='kvm'>
-                    <devices>
-                        <disk type='file'>
-                            <source file='filename'/>
-                        </disk>
-                        <disk type='block'>
-                            <source dev='/path/to/dev/1'/>
-                        </disk>
-                    </devices>
-                </domain>
-            """,
-            """
-                <domain type='kvm'>
-                    <devices>
-                        <disk type='file'>
-                            <source file='filename'/>
-                        </disk>
-                    </devices>
-                </domain>
-            """,
-            """
-                <domain type='kvm'>
-                    <devices>
-                        <disk type='file'>
-                            <source file='filename'/>
-                        </disk>
-                        <disk type='block'>
-                            <source dev='/path/to/dev/3'/>
-                        </disk>
-                    </devices>
-                </domain>
-            """,
-        ]
-
-        mock_list.return_value = [
-            FakeVirtDomain(xml[0], id=3, name="instance00000001"),
-            FakeVirtDomain(xml[1], id=1, name="instance00000002"),
-            FakeVirtDomain(xml[2], id=5, name="instance00000003")]
-
-        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        devices = drvr._get_all_block_devices()
-        self.assertEqual(devices, ['/path/to/dev/1', '/path/to/dev/3'])
-        mock_list.assert_called_with(only_guests=True, only_running=True)
-
     @mock.patch('nova.virt.libvirt.host.Host.get_online_cpus')
     def test_get_host_vcpus(self, get_online_cpus):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -6937,7 +6889,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_spice='10.0.0.2',
             serial_listen_addr='127.0.0.1',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
         self.mox.ReplayAll()
         self.assertRaises(fakelibvirt.libvirtError,
                           drvr._live_migration_operation,
@@ -6974,7 +6927,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         migrate_data = objects.LibvirtLiveMigrateData(
             serial_listen_addr='',
             target_connect_addr=None,
-            bdms=[bdm])
+            bdms=[bdm],
+            block_migration=False)
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         test_mock = mock.MagicMock()
@@ -7025,7 +6979,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         migrate_data = objects.LibvirtLiveMigrateData(
             serial_listen_addr='',
             target_connect_addr='127.0.0.2',
-            bdms=[bdm])
+            bdms=[bdm],
+            block_migration=False)
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         test_mock = mock.MagicMock()
@@ -7234,7 +7189,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_spice='10.0.0.2',
             serial_listen_addr='9.0.0.12',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
         dom = fakelibvirt.virDomain
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(fakelibvirt.libvirtError,
@@ -7256,7 +7212,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         CONF.set_override("enabled", True, "serial_console")
         dom = fakelibvirt.virDomain
         migrate_data = objects.LibvirtLiveMigrateData(
-            serial_listen_addr='', target_connect_addr=None)
+            serial_listen_addr='', target_connect_addr=None,
+            block_migration=False)
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.MigrationError,
@@ -7292,7 +7249,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_spice='0.0.0.0',
             serial_listen_addr='127.0.0.1',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
         self.mox.ReplayAll()
         self.assertRaises(fakelibvirt.libvirtError,
                           drvr._live_migration_operation,
@@ -7323,7 +7281,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         migrate_data = objects.LibvirtLiveMigrateData(
             serial_listen_addr='',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
         self.mox.ReplayAll()
         self.assertRaises(fakelibvirt.libvirtError,
                           drvr._live_migration_operation,
@@ -7353,7 +7312,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_spice='0.0.0.0',
             serial_listen_addr='127.0.0.1',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
 
         dom = fakelibvirt.virDomain
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -7385,7 +7345,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_vnc='1.2.3.4',
             graphics_listen_addr_spice='1.2.3.4',
             serial_listen_addr='127.0.0.1',
-            target_connect_addr=None)
+            target_connect_addr=None,
+            block_migration=False)
         self.mox.ReplayAll()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.MigrationError,
@@ -7432,7 +7393,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_spice='127.0.0.1',
             serial_listen_addr='127.0.0.1',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
         self.mox.ReplayAll()
         self.assertRaises(fakelibvirt.libvirtError,
                           drvr._live_migration_operation,
@@ -7479,7 +7441,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_spice='127.0.0.1',
             serial_listen_addr='127.0.0.1',
             target_connect_addr=None,
-            bdms=[])
+            bdms=[],
+            block_migration=False)
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
 
         self.mox.StubOutWithMock(
@@ -8067,7 +8030,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         dom = fakelibvirt.Domain(drvr._get_connection(),
                                  "<domain><name>demo</name></domain>", True)
         guest = libvirt_guest.Guest(dom)
-        migrate_data = {}
+        migrate_data = objects.LibvirtLiveMigrateData(block_migration=True)
         disks_to_copy = (['/some/path/one', '/test/path/two'],
                          ['vda', 'vdb'])
         mock_copy_disk_path.return_value = disks_to_copy
@@ -8635,6 +8598,43 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 [mock.call(self.context, instance, mock.ANY, {},
                            fallback_from_host=instance.host)])
             self.assertIsInstance(res, objects.LibvirtLiveMigrateData)
+
+    def test_pre_live_migration_recreate_disk_info(self):
+
+        migrate_data = {'is_shared_block_storage': False,
+                        'is_shared_instance_path': False,
+                        'block_migration': True,
+                        'instance_relative_path': '/some/path/'}
+        disk_info = [{'disk_size': 5368709120, 'type': 'raw',
+                      'virt_disk_size': 5368709120,
+                      'path': '/some/path/disk',
+                      'backing_file': '', 'over_committed_disk_size': 0},
+                     {'disk_size': 1073741824, 'type': 'raw',
+                      'virt_disk_size': 1073741824,
+                      'path': '/some/path/disk.eph0',
+                      'backing_file': '', 'over_committed_disk_size': 0}]
+        image_disk_info = {'/some/path/disk': 'raw',
+                           '/some/path/disk.eph0': 'raw'}
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = objects.Instance(**self.test_instance)
+        instance_path = os.path.dirname(disk_info[0]['path'])
+        disk_info_path = os.path.join(instance_path, 'disk.info')
+
+        with test.nested(
+            mock.patch.object(os, 'mkdir'),
+            mock.patch.object(fake_libvirt_utils, 'write_to_file'),
+            mock.patch.object(drvr, '_create_images_and_backing')
+        ) as (
+            mkdir, write_to_file, create_images_and_backing
+        ):
+            drvr.pre_live_migration(self.context, instance,
+                                    block_device_info=None,
+                                    network_info=[],
+                                    disk_info=jsonutils.dumps(disk_info),
+                                    migrate_data=migrate_data)
+            write_to_file.assert_called_with(disk_info_path,
+                                             jsonutils.dumps(image_disk_info))
 
     def test_get_instance_disk_info_works_correctly(self):
         # Test data
@@ -9726,6 +9726,29 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 libvirt_driver.MAX_CONSOLE_BYTES = prev_max
 
             self.assertEqual('67890', output)
+
+    @mock.patch('nova.virt.libvirt.host.Host.get_domain')
+    @mock.patch.object(libvirt_guest.Guest, "get_xml_desc")
+    def test_get_console_output_not_available(self, mock_get_xml, get_domain):
+        xml = """
+        <domain type='kvm'>
+            <devices>
+                <disk type='file'>
+                    <source file='filename'/>
+                </disk>
+                <console type='foo'>
+                    <source path='srcpath'/>
+                    <target port='0'/>
+                </console>
+            </devices>
+        </domain>
+        """
+        mock_get_xml.return_value = xml
+        get_domain.return_value = mock.MagicMock()
+        instance = objects.Instance(**self.test_instance)
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertRaises(exception.ConsoleNotAvailable,
+                          drvr.get_console_output, self.context, instance)
 
     def test_get_host_ip_addr(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -13626,6 +13649,37 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self._test_get_guest_config_parallels_volume(vm_mode.EXE, 4)
         self._test_get_guest_config_parallels_volume(vm_mode.HVM, 6)
 
+    def _test_prepare_domain_for_snapshot(self, live_snapshot, state):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance_ref = objects.Instance(**self.test_instance)
+        with mock.patch.object(drvr, "suspend") as mock_suspend:
+            drvr._prepare_domain_for_snapshot(
+                self.context, live_snapshot, state, instance_ref)
+            return mock_suspend.called
+
+    def test_prepare_domain_for_snapshot(self):
+        # Ensure that suspend() is only called on RUNNING or PAUSED instances
+        for test_power_state in power_state.STATE_MAP.keys():
+            if test_power_state in (power_state.RUNNING, power_state.PAUSED):
+                self.assertTrue(self._test_prepare_domain_for_snapshot(
+                    False, test_power_state))
+            else:
+                self.assertFalse(self._test_prepare_domain_for_snapshot(
+                    False, test_power_state))
+
+    def test_prepare_domain_for_snapshot_lxc(self):
+        self.flags(virt_type='lxc', group='libvirt')
+        # Ensure that suspend() is never called with LXC
+        for test_power_state in power_state.STATE_MAP.keys():
+            self.assertFalse(self._test_prepare_domain_for_snapshot(
+                False, test_power_state))
+
+    def test_prepare_domain_for_snapshot_live_snapshots(self):
+        # Ensure that suspend() is never called for live snapshots
+        for test_power_state in power_state.STATE_MAP.keys():
+            self.assertFalse(self._test_prepare_domain_for_snapshot(
+                True, test_power_state))
+
 
 class HostStateTestCase(test.NoDBTestCase):
 
@@ -14170,6 +14224,51 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         flavor_obj = objects.Flavor(**flavor)
         self._test_migrate_disk_and_power_off(flavor_obj)
 
+    @mock.patch('nova.utils.execute')
+    @mock.patch('nova.virt.libvirt.utils.copy_image')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._destroy')
+    @mock.patch('nova.virt.libvirt.utils.get_instance_path')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver'
+                '._is_storage_shared_with')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver'
+                '.get_instance_disk_info')
+    def test_migrate_disk_and_power_off_resize_copy_disk_info(self,
+                                                              mock_disk_info,
+                                                              mock_shared,
+                                                              mock_path,
+                                                              mock_destroy,
+                                                              mock_copy,
+                                                              mock_execuate):
+
+        instance = self._create_instance()
+        disk_info = self._disk_info()
+        disk_info_text = jsonutils.loads(disk_info)
+        instance_base = os.path.dirname(disk_info_text[0]['path'])
+        flavor = {'root_gb': 10, 'ephemeral_gb': 25}
+        flavor_obj = objects.Flavor(**flavor)
+
+        mock_disk_info.return_value = disk_info
+        mock_path.return_value = instance_base
+        mock_shared.return_value = False
+
+        src_disk_info_path = os.path.join(instance_base + '_resize',
+                                          'disk.info')
+
+        with mock.patch.object(os.path, 'exists', autospec=True) \
+                as mock_exists:
+            # disk.info exists on the source
+            mock_exists.side_effect = \
+                lambda path: path == src_disk_info_path
+            self.drvr.migrate_disk_and_power_off(context.get_admin_context(),
+                                                 instance, mock.sentinel,
+                                                 flavor_obj, None)
+            self.assertTrue(mock_exists.called)
+
+        dst_disk_info_path = os.path.join(instance_base, 'disk.info')
+        mock_copy.assert_any_call(src_disk_info_path, dst_disk_info_path,
+                                  host=mock.sentinel, on_execute=mock.ANY,
+                                  on_completion=mock.ANY)
+
     def test_wait_for_running(self):
         def fake_get_info(instance):
             if instance['name'] == "not_found":
@@ -14277,6 +14376,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         powered_on = power_on
         self.fake_create_domain_called = False
         self.fake_disk_resize_called = False
+        create_image_called = [False]
 
         def fake_to_xml(context, instance, network_info, disk_info,
                         image_meta=None, rescue=None,
@@ -14292,6 +14392,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
                               block_device_info=None, inject_files=True,
                               fallback_from_host=None):
             self.assertFalse(inject_files)
+            create_image_called[0] = True
 
         def fake_create_domain_and_network(
             context, xml, instance, network_info, disk_info,
@@ -14314,6 +14415,10 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
                 return hardware.InstanceInfo(state=power_state.SHUTDOWN)
 
         def fake_disk_resize(image, size):
+            # Assert that _create_image is called before disk resize,
+            # otherwise we might be trying to resize a disk whose backing
+            # file hasn't been fetched, yet.
+            self.assertTrue(create_image_called[0])
             self.fake_disk_resize_called = True
 
         self.flags(use_cow_images=True)
@@ -15355,29 +15460,6 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         instance = objects.Instance(uuid='fake-uuid', id=1)
         self.assertTrue(drvr.instance_on_disk(instance))
-
-    def test_get_interfaces(self):
-        dom_xml = """
-              <domain type="qemu">
-                  <devices>
-                      <interface type="ethernet">
-                          <mac address="fe:eb:da:ed:ef:ac"/>
-                          <model type="virtio"/>
-                          <target dev="eth0"/>
-                      </interface>
-                      <interface type="bridge">
-                          <mac address="ca:fe:de:ad:be:ef"/>
-                          <model type="virtio"/>
-                          <target dev="br0"/>
-                      </interface>
-                  </devices>
-              </domain>"""
-
-        list_interfaces = ['eth0', 'br0']
-
-        drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
-
-        self.assertEqual(list_interfaces, drv._get_interfaces(dom_xml))
 
     def test_get_disk_xml(self):
         dom_xml = """

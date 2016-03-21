@@ -735,10 +735,20 @@ class TrackerTestCase(BaseTrackerTestCase):
     def test_set_instance_host_and_node(self):
         inst = objects.Instance()
         with mock.patch.object(inst, 'save') as mock_save:
-            self.tracker._set_instance_host_and_node(self.context, inst)
+            self.tracker._set_instance_host_and_node(inst)
             mock_save.assert_called_once_with()
         self.assertEqual(self.tracker.host, inst.host)
         self.assertEqual(self.tracker.nodename, inst.node)
+        self.assertEqual(self.tracker.host, inst.launched_on)
+
+    def test_unset_instance_host_and_node(self):
+        inst = objects.Instance()
+        with mock.patch.object(inst, 'save') as mock_save:
+            self.tracker._set_instance_host_and_node(inst)
+            self.tracker._unset_instance_host_and_node(inst)
+            self.assertEqual(2, mock_save.call_count)
+        self.assertIsNone(inst.host)
+        self.assertIsNone(inst.node)
         self.assertEqual(self.tracker.host, inst.launched_on)
 
 
@@ -1211,7 +1221,7 @@ class ComputeMonitorTestCase(BaseTestCase):
         metrics = self.tracker._get_host_metrics(self.context,
                                                  self.node_name)
         mock_LOG_warning.assert_called_once_with(
-            u'Cannot get the metrics from %s.', mock.ANY)
+            u'Cannot get the metrics from %(mon)s; error: %(exc)s', mock.ANY)
         self.assertEqual(0, len(metrics))
 
     def test_get_host_metrics(self):

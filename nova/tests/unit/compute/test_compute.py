@@ -5545,7 +5545,8 @@ class ComputeTestCase(BaseTestCase):
                          'source_type': 'volume',
                          'destination_type': 'volume'}))
         ]
-        migrate_data = migrate_data_obj.LiveMigrateData()
+        migrate_data = migrate_data_obj.XenapiLiveMigrateData(
+            block_migration=True)
 
         # creating mocks
         self.mox.StubOutWithMock(self.compute.driver,
@@ -5846,6 +5847,7 @@ class ComputeTestCase(BaseTestCase):
         _test()
 
         self.assertEqual('error', migration.status)
+        self.assertEqual(0, instance.progress)
         migration.save.assert_called_once_with()
 
     @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
@@ -6816,6 +6818,46 @@ class ComputeTestCase(BaseTestCase):
 
         self.assertNotEqual(0, instance.deleted)
 
+    def test_terminate_instance_updates_tracker(self):
+        rt = self.compute._get_resource_tracker(NODENAME)
+        admin_context = context.get_admin_context()
+
+        self.assertEqual(0, rt.compute_node.vcpus_used)
+        instance = self._create_fake_instance_obj()
+        instance.vcpus = 1
+
+        rt.instance_claim(admin_context, instance)
+        self.assertEqual(1, rt.compute_node.vcpus_used)
+
+        self.compute.terminate_instance(admin_context, instance, [], [])
+        self.assertEqual(0, rt.compute_node.vcpus_used)
+
+    @mock.patch('nova.compute.manager.ComputeManager'
+                '._notify_about_instance_usage')
+    @mock.patch('nova.objects.Quotas.reserve')
+    # NOTE(cdent): At least in this test destroy() on the instance sets it
+    # state back to active, meaning the resource tracker won't
+    # update properly.
+    @mock.patch('nova.objects.Instance.destroy')
+    def test_init_deleted_instance_updates_tracker(self, noop1, noop2, noop3):
+        rt = self.compute._get_resource_tracker(NODENAME)
+        admin_context = context.get_admin_context()
+
+        self.assertEqual(0, rt.compute_node.vcpus_used)
+        instance = self._create_fake_instance_obj()
+        instance.vcpus = 1
+
+        self.assertEqual(0, rt.compute_node.vcpus_used)
+
+        rt.instance_claim(admin_context, instance)
+        self.compute._init_instance(admin_context, instance)
+        self.assertEqual(1, rt.compute_node.vcpus_used)
+
+        instance.vm_state = vm_states.DELETED
+        self.compute._init_instance(admin_context, instance)
+
+        self.assertEqual(0, rt.compute_node.vcpus_used)
+
     def test_init_instance_for_partial_deletion(self):
         admin_context = context.get_admin_context()
         instance = objects.Instance(admin_context)
@@ -7697,12 +7739,12 @@ class ComputeAPITestCase(BaseTestCase):
         instance.update(base_options)
         inst_type = flavors.get_flavor_by_name("m1.tiny")
         instance = self.compute_api._populate_instance_for_create(
-                                                    self.context,
-                                                    instance,
-                                                    self.fake_image,
-                                                    1,
-                                                    security_groups=None,
-                                                    instance_type=inst_type)
+                                self.context,
+                                instance,
+                                self.fake_image,
+                                1,
+                                security_groups=objects.SecurityGroupList(),
+                                instance_type=inst_type)
         self.assertEqual(str(base_options['image_ref']),
                          instance['system_metadata']['image_base_image_ref'])
         self.assertEqual(vm_states.BUILDING, instance['vm_state'])
@@ -10476,6 +10518,11 @@ class ComputeAPIAggrTestCase(BaseTestCase):
         msg = fake_notifier.NOTIFICATIONS[14]
         self.assertEqual(msg.event_type,
                          'aggregate.updatemetadata.end')
+        aggr4 = self.api.create_aggregate(self.context, 'fake_aggregate', None)
+        metadata = {'availability_zone': ""}
+        self.assertRaises(exception.InvalidAggregateActionUpdate,
+                          self.api.update_aggregate, self.context,
+                          aggr4.id, metadata)
 
     def test_update_aggregate_az_fails_with_nova_az(self):
         # Ensure aggregate's availability zone can't be updated,
@@ -10619,6 +10666,11 @@ class ComputeAPIAggrTestCase(BaseTestCase):
         msg = fake_notifier.NOTIFICATIONS[14]
         self.assertEqual(msg.event_type,
                          'aggregate.updatemetadata.end')
+        aggr4 = self.api.create_aggregate(self.context, 'fake_aggregate', None)
+        metadata = {'availability_zone': ""}
+        self.assertRaises(exception.InvalidAggregateActionUpdateMeta,
+                          self.api.update_aggregate_metadata, self.context,
+                          aggr4.id, metadata)
 
     def test_delete_aggregate(self):
         # Ensure we can delete an aggregate.
@@ -10834,7 +10886,7 @@ class ComputeAPIAggrTestCase(BaseTestCase):
                       map(lambda x: x.availability_zone, aggregate_list))
         self.assertIn('fake_zone2',
                       map(lambda x: x.availability_zone, aggregate_list))
-        test_agg_meta = getattr(aggregate_list[1], 'metadata', None)
+        test_agg_meta = aggregate_list[1].metadata
         self.assertIn('foo_key1', test_agg_meta)
         self.assertIn('foo_key2', test_agg_meta)
         self.assertEqual('foo_value1', test_agg_meta['foo_key1'])
@@ -10850,7 +10902,8 @@ class ComputeAPIAggrTestCase(BaseTestCase):
                                        values[0][1][0])
         aggregate_list = self.api.get_aggregate_list(self.context)
         aggregate = aggregate_list[0]
-        self.assertIn(values[0][1][0], getattr(aggregate, 'hosts', None))
+        hosts = aggregate.hosts if 'hosts' in aggregate else None
+        self.assertIn(values[0][1][0], hosts)
 
 
 class ComputeAPIAggrCallsSchedulerTestCase(test.NoDBTestCase):

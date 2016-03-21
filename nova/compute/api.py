@@ -545,20 +545,25 @@ class API(base.Base):
             'auto_disk_config': auto_disk_config
         }
 
-    def _apply_instance_name_template(self, context, instance, index):
+    def _new_instance_name_from_template(self, uuid, display_name, index):
         params = {
-            'uuid': instance.uuid,
-            'name': instance.display_name,
+            'uuid': uuid,
+            'name': display_name,
             'count': index + 1,
         }
-        original_name = instance.display_name
         try:
             new_name = (CONF.multi_instance_display_name_template %
                         params)
         except (KeyError, TypeError):
             LOG.exception(_LE('Failed to set instance name using '
                               'multi_instance_display_name_template.'))
-            new_name = instance.display_name
+            new_name = display_name
+        return new_name
+
+    def _apply_instance_name_template(self, context, instance, index):
+        original_name = instance.display_name
+        new_name = self._new_instance_name_from_template(instance.uuid,
+                instance.display_name, index)
         instance.display_name = new_name
         if not instance.get('hostname', None):
             if utils.sanitize_hostname(original_name) == "":
@@ -727,7 +732,7 @@ class API(base.Base):
         # the volume cannot have the same device name as root_device_name
         if image_ref:
             for bdm in block_device_mapping:
-                if (bdm.get('source_type') == 'volume' and
+                if (bdm.get('destination_type') == 'volume' and
                     block_device.strip_dev(bdm.get(
                     'device_name')) == root_device_name):
                     msg = _('The volume cannot be assigned the same device'
@@ -900,6 +905,45 @@ class API(base.Base):
         # by the network quotas
         return base_options, max_network_count
 
+    def _create_build_request(self, context, instance_uuid, base_options,
+            request_spec, security_groups, num_instances, index):
+        # Store the BuildRequest that will help populate an instance
+        # object for a list/show request
+        info_cache = objects.InstanceInfoCache()
+        info_cache.instance_uuid = instance_uuid
+        info_cache.network_info = network_model.NetworkInfo()
+        # NOTE: base_options['config_drive'] is either True or '' due
+        # to how it's represented in the instances table in the db.
+        # BuildRequest needs a boolean.
+        bool_config_drive = strutils.bool_from_string(
+                base_options['config_drive'], default=False)
+        # display_name follows a whole set of rules
+        display_name = base_options['display_name']
+        if display_name is None:
+            display_name = self._default_display_name(instance_uuid)
+        if num_instances > 1:
+            display_name = self._new_instance_name_from_template(instance_uuid,
+                    display_name, index)
+        build_request = objects.BuildRequest(context,
+                request_spec=request_spec,
+                project_id=context.project_id,
+                user_id=context.user_id,
+                display_name=display_name,
+                instance_metadata=base_options['metadata'],
+                progress=0,
+                vm_state=vm_states.BUILDING,
+                task_state=task_states.SCHEDULING,
+                image_ref=base_options['image_ref'],
+                access_ip_v4=base_options['access_ip_v4'],
+                access_ip_v6=base_options['access_ip_v6'],
+                info_cache=info_cache,
+                security_groups=security_groups,
+                config_drive=bool_config_drive,
+                key_name=base_options['key_name'],
+                locked_by=None)
+        build_request.create()
+        return build_request
+
     def _provision_instances(self, context, instance_type, min_count,
             max_count, base_options, boot_meta, security_groups,
             block_device_mapping, shutdown_terminate,
@@ -907,7 +951,9 @@ class API(base.Base):
         # Reserve quotas
         num_instances, quotas = self._check_num_instances_quota(
                 context, instance_type, min_count, max_count)
-        LOG.debug("Going to run %s instances..." % num_instances)
+        security_groups = self.security_group_api.populate_security_groups(
+                security_groups)
+        LOG.debug("Going to run %s instances...", num_instances)
         instances = []
         try:
             for i in range(num_instances):
@@ -921,6 +967,12 @@ class API(base.Base):
                         base_options['pci_requests'], filter_properties,
                         instance_group, base_options['availability_zone'])
                 req_spec.create()
+                build_request = self._create_build_request(context,
+                        instance_uuid, base_options, req_spec, security_groups,
+                        num_instances, i)
+                # TODO(alaski): Cast to conductor here which will call the
+                # scheduler and defer instance creation until the scheduler
+                # has picked a cell/host.
                 instance = objects.Instance(context=context)
                 instance.uuid = instance_uuid
                 instance.update(base_options)
@@ -929,6 +981,14 @@ class API(base.Base):
                         security_groups, block_device_mapping,
                         num_instances, i, shutdown_terminate)
                 instances.append(instance)
+                # The BuildRequest needs to be stored until the instance is in
+                # an instance table. At that point it will never be used again
+                # and should be deleted. As instance creation is pushed back,
+                # as noted above, this will move with it.
+                # TODO(alaski): Sync API updates to the build_request to the
+                # instance before it is destroyed. Right now only locked_by can
+                # be updated before this is destroyed.
+                build_request.destroy()
 
                 if instance_group:
                     if check_server_group_quota:
@@ -1081,7 +1141,7 @@ class API(base.Base):
         # max_net_count is the maximum number of instances requested by the
         # user adjusted for any network quota constraints, including
         # consideration of connections to each requested network
-        if max_net_count == 0:
+        if max_net_count < min_count:
             raise exception.PortLimitExceeded()
         elif max_net_count < max_count:
             LOG.info(_LI("max count reduced from %(max_count)d to "
@@ -1352,8 +1412,7 @@ class API(base.Base):
 
         instance.system_metadata.update(system_meta)
 
-        pop_sec_groups = self.security_group_api.populate_security_groups
-        instance.security_groups = pop_sec_groups(security_groups)
+        instance.security_groups = security_groups
 
         return instance
 
@@ -1993,7 +2052,7 @@ class API(base.Base):
         if search_opts is None:
             search_opts = {}
 
-        LOG.debug("Searching by: %s" % str(search_opts))
+        LOG.debug("Searching by: %s", str(search_opts))
 
         # Fixups for the DB call
         filters = {}
@@ -3324,6 +3383,9 @@ class API(base.Base):
                                                   state=migration.status,
                                                   method='force complete')
 
+        self._record_action_start(
+            context, instance, instance_actions.LIVE_MIGRATION_FORCE_COMPLETE)
+
         self.compute_rpcapi.live_migration_force_complete(
             context, instance, migration.id)
 
@@ -3723,6 +3785,7 @@ class AggregateAPI(base.Base):
                                   action_name=AGGREGATE_ACTION_UPDATE)
         if values:
             aggregate.update_metadata(values)
+            aggregate.updated_at = timeutils.utcnow()
         self.scheduler_client.update_aggregates(context, [aggregate])
         # If updated values include availability_zones, then the cache
         # which stored availability_zones and host need to be reset
@@ -3742,6 +3805,7 @@ class AggregateAPI(base.Base):
         # which stored availability_zones and host need to be reset
         if metadata and metadata.get('availability_zone'):
             availability_zones.reset_cache()
+        aggregate.updated_at = timeutils.utcnow()
         return aggregate
 
     @wrap_exception()
@@ -3776,6 +3840,11 @@ class AggregateAPI(base.Base):
 
         """
         if 'availability_zone' in metadata:
+            if not metadata['availability_zone']:
+                msg = _("Aggregate %s does not support empty named "
+                        "availability zone") % aggregate.name
+                self._raise_invalid_aggregate_exc(action_name, aggregate.id,
+                                                  msg)
             _hosts = hosts or aggregate.hosts
             host_aggregates = objects.AggregateList.get_by_metadata_key(
                 context, 'availability_zone', hosts=_hosts)
@@ -4320,14 +4389,11 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
             context, group_ids)
         self._refresh_instance_security_rules(context, instances)
 
-    def get_instance_security_groups(self, context, instance_uuid,
-                                     detailed=False):
+    def get_instance_security_groups(self, context, instance, detailed=False):
         if detailed:
             return self.db.security_group_get_by_instance(context,
-                                                          instance_uuid)
-        instance = objects.Instance(uuid=instance_uuid)
-        groups = objects.SecurityGroupList.get_by_instance(context, instance)
-        return [{'name': group.name} for group in groups]
+                                                          instance.uuid)
+        return [{'name': group.name} for group in instance.security_groups]
 
     def populate_security_groups(self, security_groups):
         if not security_groups:

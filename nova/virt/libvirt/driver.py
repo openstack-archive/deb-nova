@@ -158,10 +158,9 @@ libvirt_opts = [
                 default=True,
                 help='Sync virtual and real mouse cursors in Windows VMs'),
     cfg.StrOpt('live_migration_inbound_addr',
-               default=None,
                help='Live migration target ip or hostname '
-                    '(if this option is set to be None,'
-                    'the hostname of the migration target'
+                    '(if this option is set to None, which is the default, '
+                    'the hostname of the migration target '
                     'compute node will be used)'),
     cfg.StrOpt('live_migration_uri',
                help='Override the default libvirt live migration target URI '
@@ -1664,13 +1663,8 @@ class LibvirtDriver(driver.ComputeDriver):
         if state == power_state.SHUTDOWN:
             live_snapshot = False
 
-        # NOTE(dkang): managedSave does not work for LXC
-        if CONF.libvirt.virt_type != 'lxc' and not live_snapshot:
-            if state == power_state.RUNNING or state == power_state.PAUSED:
-                self._detach_pci_devices(guest,
-                    pci_manager.get_instance_pci_devs(instance))
-                self._detach_sriov_ports(context, instance, guest)
-                guest.save_memory_state()
+        self._prepare_domain_for_snapshot(context, live_snapshot, state,
+                                          instance)
 
         snapshot_backend = self.image_backend.snapshot(instance,
                 disk_path,
@@ -1748,6 +1742,13 @@ class LibvirtDriver(driver.ComputeDriver):
                         ignore_errors=True)
 
         LOG.info(_LI("Snapshot image upload complete"), instance=instance)
+
+    def _prepare_domain_for_snapshot(self, context, live_snapshot, state,
+                                     instance):
+        # NOTE(dkang): managedSave does not work for LXC
+        if CONF.libvirt.virt_type != 'lxc' and not live_snapshot:
+            if state == power_state.RUNNING or state == power_state.PAUSED:
+                self.suspend(context, instance)
 
     def _snapshot_domain(self, context, live_snapshot, virt_dom, state,
                          instance):
@@ -2224,7 +2225,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise exception.NovaException(msg)
 
             # libgfapi delete
-            LOG.debug("XML: %s" % xml)
+            LOG.debug("XML: %s", xml)
 
             LOG.debug("active disk object: %s", active_disk_object)
 
@@ -2851,8 +2852,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     continue
                 break
         else:
-            msg = _("Guest does not have a console available")
-            raise exception.NovaException(msg)
+            raise exception.ConsoleNotAvailable()
 
         self._chown_console_log_for_instance(instance)
         data = self._flush_libvirt_console(pty)
@@ -4932,44 +4932,6 @@ class LibvirtDriver(driver.ComputeDriver):
             guest.resume()
         return guest
 
-    def _get_all_block_devices(self):
-        """Return all block devices in use on this node."""
-        devices = []
-        for guest in self._host.list_guests():
-            try:
-                doc = etree.fromstring(guest.get_xml_desc())
-            except libvirt.libvirtError as e:
-                LOG.warn(_LW("couldn't obtain the XML from domain:"
-                             " %(uuid)s, exception: %(ex)s") %
-                         {"uuid": guest.id, "ex": e})
-                continue
-            except Exception:
-                continue
-            sources = doc.findall("./devices/disk[@type='block']/source")
-            for source in sources:
-                devices.append(source.get('dev'))
-        return devices
-
-    def _get_interfaces(self, xml):
-        """Note that this function takes a domain xml.
-
-        Returns a list of all network interfaces for this instance.
-        """
-        doc = None
-
-        try:
-            doc = etree.fromstring(xml)
-        except Exception:
-            return []
-
-        interfaces = []
-
-        nodes = doc.findall('./devices/interface/target')
-        for target in nodes:
-            interfaces.append(target.get('dev'))
-
-        return interfaces
-
     def _get_vcpu_total(self):
         """Get available vcpu number of physical computer.
 
@@ -6006,7 +5968,7 @@ class LibvirtDriver(driver.ComputeDriver):
         guest = libvirt_guest.Guest(dom)
 
         try:
-            if block_migration:
+            if migrate_data.block_migration:
                 migration_flags = self._block_migration_flags
             else:
                 migration_flags = self._live_migration_flags
@@ -6018,8 +5980,10 @@ class LibvirtDriver(driver.ComputeDriver):
             if 'graphics_listen_addr_spice' in migrate_data:
                 listen_addrs['spice'] = str(
                     migrate_data.graphics_listen_addr_spice)
-            serial_listen_addr = migrate_data.serial_listen_addr
-            if migrate_data.target_connect_addr is not None:
+            serial_listen_addr = (migrate_data.serial_listen_addr if
+                'serial_listen_addr' in migrate_data else None)
+            if ('target_connect_addr' in migrate_data and
+                    migrate_data.target_connect_addr is not None):
                 dest = migrate_data.target_connect_addr
 
             migratable_flag = getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
@@ -6496,7 +6460,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         disk_paths = []
         device_names = []
-        if block_migration:
+        if migrate_data.block_migration:
             disk_paths, device_names = self._live_migration_copy_disk_paths(
                 context, instance, guest)
 
@@ -6654,6 +6618,24 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('Creating instance directory: %s', instance_dir,
                       instance=instance)
             os.mkdir(instance_dir)
+
+            # Recreate the disk.info file and in doing so stop the
+            # imagebackend from recreating it incorrectly by inspecting the
+            # contents of each file when using the Raw backend.
+            if disk_info:
+                image_disk_info = {}
+                for info in disk_info:
+                    image_file = os.path.basename(info['path'])
+                    image_path = os.path.join(instance_dir, image_file)
+                    image_disk_info[image_path] = info['type']
+
+                LOG.debug('Creating disk.info with the contents: %s',
+                          image_disk_info, instance=instance)
+
+                image_disk_info_path = os.path.join(instance_dir,
+                                                    'disk.info')
+                libvirt_utils.write_to_file(image_disk_info_path,
+                                            jsonutils.dumps(image_disk_info))
 
             if not is_shared_block_storage:
                 # Ensure images and backing files are present.
@@ -7215,6 +7197,11 @@ class LibvirtDriver(driver.ComputeDriver):
                 dest = None
                 utils.execute('mkdir', '-p', inst_base)
 
+            on_execute = lambda process: \
+                self.job_tracker.add_job(instance, process.pid)
+            on_completion = lambda process: \
+                self.job_tracker.remove_job(instance, process.pid)
+
             active_flavor = instance.get_flavor()
             for info in disk_info:
                 # assume inst_base == dirname(info['path'])
@@ -7233,15 +7220,21 @@ class LibvirtDriver(driver.ComputeDriver):
                 if not (fname == 'disk.swap' and
                     active_flavor.get('swap', 0) != flavor.get('swap', 0)):
 
-                    on_execute = lambda process: self.job_tracker.add_job(
-                        instance, process.pid)
-                    on_completion = lambda process: self.job_tracker.\
-                        remove_job(instance, process.pid)
                     compression = info['type'] not in NO_COMPRESSION_TYPES
                     libvirt_utils.copy_image(from_path, img_path, host=dest,
                                              on_execute=on_execute,
                                              on_completion=on_completion,
                                              compression=compression)
+
+            # Ensure disk.info is written to the new path to avoid disks being
+            # reinspected and potentially changing format.
+            src_disk_info_path = os.path.join(inst_base_resize, 'disk.info')
+            if os.path.exists(src_disk_info_path):
+                dst_disk_info_path = os.path.join(inst_base, 'disk.info')
+                libvirt_utils.copy_image(src_disk_info_path,
+                                         dst_disk_info_path,
+                                         host=dest, on_execute=on_execute,
+                                         on_completion=on_completion)
         except Exception:
             with excutils.save_and_reraise_exception():
                 self._cleanup_remote_migration(dest, inst_base,
@@ -7332,6 +7325,18 @@ class LibvirtDriver(driver.ComputeDriver):
                          block_device_info=None, power_on=True):
         LOG.debug("Starting finish_migration", instance=instance)
 
+        block_disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
+                                                  instance,
+                                                  image_meta,
+                                                  block_device_info)
+        # assume _create_image does nothing if a target file exists.
+        # NOTE: This has the intended side-effect of fetching a missing
+        # backing file.
+        self._create_image(context, instance, block_disk_info['mapping'],
+                           network_info=network_info,
+                           block_device_info=None, inject_files=False,
+                           fallback_from_host=migration.source_compute)
+
         # resize disks. only "disk" and "disk.local" are necessary.
         disk_info = jsonutils.loads(disk_info)
         for info in disk_info:
@@ -7340,20 +7345,45 @@ class LibvirtDriver(driver.ComputeDriver):
                 image = imgmodel.LocalFileImage(info['path'],
                                                 info['type'])
                 self._disk_resize(image, size)
+
+            # NOTE(mdbooth): The 2 lines below look wrong, but are actually
+            # required to prevent a security hole when migrating from a host
+            # with use_cow_images=False to one with use_cow_images=True.
+            # Imagebackend uses use_cow_images to select between the
+            # atrociously-named-Raw and Qcow2 backends. The Qcow2 backend
+            # writes to disk.info, but does not read it as it assumes qcow2.
+            # Therefore if we don't convert raw to qcow2 here, a raw disk will
+            # be incorrectly assumed to be qcow2, which is a severe security
+            # flaw. The reverse is not true, because the atrociously-named-Raw
+            # backend supports both qcow2 and raw disks, and will choose
+            # appropriately between them as long as disk.info exists and is
+            # correctly populated, which it is because Qcow2 writes to
+            # disk.info.
+            #
+            # In general, we do not yet support format conversion during
+            # migration. For example:
+            #   * Converting from use_cow_images=True to use_cow_images=False
+            #     isn't handled. This isn't a security bug, but is almost
+            #     certainly buggy in other cases, as the 'Raw' backend doesn't
+            #     expect a backing file.
+            #   * Converting to/from lvm and rbd backends is not supported.
+            #
+            # This behaviour is inconsistent, and therefore undesirable for
+            # users. It is tightly-coupled to implementation quirks of 2
+            # out of 5 backends in imagebackend and defends against a severe
+            # security flaw which is not at all obvious without deep analysis,
+            # and is therefore undesirable to developers. It also introduces a
+            # bug, as it converts all disks to qcow2 regardless of their
+            # intended format (config disks are always supposed to be raw). We
+            # should aim to remove it. This will not be possible, though, until
+            # we can represent the storage layout of a specific instance
+            # independent of the default configuration of the local compute
+            # host.
             if info['type'] == 'raw' and CONF.use_cow_images:
                 self._disk_raw_to_qcow2(info['path'])
 
-        disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
-                                            instance,
-                                            image_meta,
-                                            block_device_info)
-        # assume _create_image do nothing if a target file exists.
-        self._create_image(context, instance, disk_info['mapping'],
-                           network_info=network_info,
-                           block_device_info=None, inject_files=False,
-                           fallback_from_host=migration.source_compute)
-        xml = self._get_guest_xml(context, instance, network_info, disk_info,
-                                  image_meta,
+        xml = self._get_guest_xml(context, instance, network_info,
+                                  block_disk_info, image_meta,
                                   block_device_info=block_device_info,
                                   write_to_disk=True)
         # NOTE(mriedem): vifs_already_plugged=True here, regardless of whether
@@ -7362,7 +7392,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # L2 agent (or neutron server) so neutron may not know that the VIF was
         # unplugged in the first place and never send an event.
         self._create_domain_and_network(context, xml, instance, network_info,
-                                        disk_info,
+                                        block_disk_info,
                                         block_device_info=block_device_info,
                                         power_on=power_on,
                                         vifs_already_plugged=True)

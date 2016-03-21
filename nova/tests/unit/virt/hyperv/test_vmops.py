@@ -22,7 +22,7 @@ from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_utils import units
 import six
-import unittest2
+import testtools
 
 from nova import exception
 from nova import objects
@@ -65,13 +65,28 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         self._vmops._pathutils = mock.MagicMock()
         self._vmops._hostutils = mock.MagicMock()
 
+    @mock.patch('nova.network.is_neutron')
     @mock.patch('nova.virt.hyperv.vmops.importutils.import_object')
-    def test_load_vif_driver_class(self, mock_import_object):
+    def test_load_vif_driver_neutron(self, mock_import_object, is_neutron):
+        is_neutron.return_value = True
         self._vmops._load_vif_driver_class()
         mock_import_object.assert_called_once_with(
-            self._vmops._vif_driver_class_map[CONF.network_api_class])
-        self.assertEqual(self._vmops._vif_driver,
-                         mock_import_object.return_value)
+            vmops.NEUTRON_VIF_DRIVER)
+
+    @mock.patch('nova.network.is_neutron')
+    @mock.patch('nova.virt.hyperv.vmops.importutils.import_object')
+    def test_load_vif_driver_nova(self, mock_import_object, is_neutron):
+        is_neutron.return_value = False
+        self._vmops._load_vif_driver_class()
+        mock_import_object.assert_called_once_with(
+            vmops.NOVA_VIF_DRIVER)
+
+    @mock.patch('nova.network.is_neutron')
+    def test_load_vif_driver_unknown(self, is_neutron):
+        # TODO(sdague): delete once network_api_class is removed from
+        # config.
+        is_neutron.return_value = None
+        self.assertRaises(TypeError, self._vmops._load_vif_driver_class)
 
     @mock.patch('nova.virt.hyperv.vmops.importutils.import_object')
     def test_load_vif_driver_class_error(self, mock_import_object):
@@ -986,7 +1001,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             self._vmops._MAX_CONSOLE_LOG_FILE_SIZE)
         fake_iothread.return_value.start.assert_called_once_with()
 
-    @unittest2.skip('mock_open in 1.2 read only works once 1475661')
+    @testtools.skip('mock_open in 1.2 read only works once 1475661')
     @mock.patch("os.path.exists")
     def test_get_console_output(self, fake_path_exists):
         mock_instance = fake_instance.fake_instance_obj(self.context)

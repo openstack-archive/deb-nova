@@ -780,7 +780,10 @@ class Host(object):
             LOG.info(_LI("Libvirt host capabilities %s"), xmlstr)
             self._caps = vconfig.LibvirtConfigCaps()
             self._caps.parse_str(xmlstr)
-            if hasattr(libvirt, 'VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES'):
+            # NOTE(mriedem): Don't attempt to get baseline CPU features
+            # if libvirt can't determine the host cpu model.
+            if (hasattr(libvirt, 'VIR_CONNECT_BASELINE_CPU_EXPAND_FEATURES')
+                and self._caps.host.cpu.model is not None):
                 try:
                     features = self.get_connection().baselineCPU(
                         [self._caps.host.cpu.to_xml()],
@@ -888,7 +891,7 @@ class Host(object):
             return secret
         except libvirt.libvirtError:
             with excutils.save_and_reraise_exception():
-                LOG.error(_LE('Error defining a secret with XML: %s') % xml)
+                LOG.error(_LE('Error defining a secret with XML: %s'), xml)
 
     def delete_secret(self, usage_type, usage_id):
         """Delete a secret.
@@ -939,7 +942,7 @@ class Host(object):
                     dom_mem = int(guest._get_domain_info(self)[2])
                 except libvirt.libvirtError as e:
                     LOG.warn(_LW("couldn't obtain the memory from domain:"
-                                 " %(uuid)s, exception: %(ex)s") %
+                                 " %(uuid)s, exception: %(ex)s"),
                              {"uuid": guest.uuid, "ex": e})
                     continue
                 # skip dom0

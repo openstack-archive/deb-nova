@@ -141,9 +141,13 @@ def service_get_all_by_topic(context, topic):
     return IMPL.service_get_all_by_topic(context, topic)
 
 
-def service_get_all_by_binary(context, binary):
-    """Get all services for a given binary."""
-    return IMPL.service_get_all_by_binary(context, binary)
+def service_get_all_by_binary(context, binary, include_disabled=False):
+    """Get services for a given binary.
+
+    Includes disabled services if 'include_disabled' parameter is True
+    """
+    return IMPL.service_get_all_by_binary(context, binary,
+                                          include_disabled=include_disabled)
 
 
 def service_get_all_by_host(context, host):
@@ -1967,6 +1971,18 @@ def archive_deleted_rows(max_rows=None):
 
     """
     return IMPL.archive_deleted_rows(max_rows=max_rows)
+
+
+def pcidevice_online_data_migration(context, max_count):
+    return IMPL.pcidevice_online_data_migration(context, max_count)
+
+
+def aggregate_uuids_online_data_migration(context, max_count):
+    return IMPL.aggregate_uuids_online_data_migration(context, max_count)
+
+
+def computenode_uuids_online_data_migration(context, max_count):
+    return IMPL.computenode_uuids_online_data_migration(context, max_count)
 
 
 ####################

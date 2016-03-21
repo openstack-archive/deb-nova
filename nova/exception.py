@@ -420,6 +420,11 @@ class InvalidStrTime(Invalid):
     msg_fmt = _("Invalid datetime string: %(reason)s")
 
 
+class InvalidName(Invalid):
+    msg_fmt = _("An invalid 'name' value was provided. "
+                "The name must be: %(reason)s")
+
+
 class InstanceInvalidState(Invalid):
     msg_fmt = _("Instance %(instance_uuid)s in %(attr)s %(state)s. Cannot "
                 "%(method)s while the instance is in this state.")
@@ -827,6 +832,10 @@ class VifDetailsMissingMacvtapParameters(Invalid):
                 " correct.")
 
 
+class OvsConfigurationFailure(NovaException):
+    msg_fmt = _("OVS configuration failed with: %(inner_exception)s.")
+
+
 class DatastoreNotFound(NotFound):
     msg_fmt = _("Could not find the datastore reference(s) which the VM uses.")
 
@@ -1166,6 +1175,10 @@ class ConsoleNotFound(NotFound):
 
 class ConsoleNotFoundForInstance(ConsoleNotFound):
     msg_fmt = _("Console for instance %(instance_uuid)s could not be found.")
+
+
+class ConsoleNotAvailable(NotFound):
+    msg_fmt = _("Guest does not have a console available.")
 
 
 class ConsoleNotFoundInPoolForInstance(ConsoleNotFound):
@@ -1551,6 +1564,11 @@ class ConfigDriveNotFound(NotFound):
 class InterfaceAttachFailed(Invalid):
     msg_fmt = _("Failed to attach network adapter device to "
                 "%(instance_uuid)s")
+
+
+class InterfaceAttachFailedNoNetwork(InterfaceAttachFailed):
+    msg_fmt = _("No specific network was requested and none are available "
+                "for project '%(project_id)s'.")
 
 
 class InterfaceDetachFailed(Invalid):

@@ -227,8 +227,8 @@ timeout_opts = [
                     "Set to 0 to disable."),
     cfg.IntOpt("resize_confirm_window",
                default=0,
-               help="Automatically confirm resizes after N seconds. "
-                    "Set to 0 to disable."),
+               help="Automatically confirm resizes and cold migrations "
+                    "after N seconds. Set to 0 to disable."),
     cfg.IntOpt("shutdown_timeout",
                default=60,
                help="Total amount of time to wait in seconds for an instance "
@@ -918,6 +918,7 @@ class ComputeManager(manager.Manager):
         for bdm in bdms:
             bdm.destroy()
 
+        self._update_resource_tracker(context, instance)
         self._notify_about_instance_usage(context, instance, "delete.end",
                 system_metadata=system_meta)
 
@@ -1948,7 +1949,13 @@ class ComputeManager(manager.Manager):
             retry['exc_reason'] = e.kwargs['reason']
             # NOTE(comstud): Deallocate networks if the driver wants
             # us to do so.
-            if self.driver.deallocate_networks_on_reschedule(instance):
+            # NOTE(vladikr): SR-IOV ports should be deallocated to
+            # allow new sriov pci devices to be allocated on a new host.
+            # Otherwise, if devices with pci addresses are already allocated
+            # on the destination host, the instance will fail to spawn.
+            # info_cache.network_info should be present at this stage.
+            if (self.driver.deallocate_networks_on_reschedule(instance) or
+                self.deallocate_sriov_ports_on_reschedule(instance)):
                 self._cleanup_allocated_networks(context, instance,
                         requested_networks)
             else:
@@ -2001,6 +2008,24 @@ class ComputeManager(manager.Manager):
             self._set_instance_obj_error_state(context, instance,
                                                clean_task_state=True)
             return build_results.FAILED
+
+    def deallocate_sriov_ports_on_reschedule(self, instance):
+        """Determine if networks are needed to be deallocated before reschedule
+
+        Check the cached network info for any assigned SR-IOV ports.
+        SR-IOV ports should be deallocated prior to rescheduling
+        in order to allow new sriov pci devices to be allocated on a new host.
+        """
+        info_cache = instance.info_cache
+
+        def _has_sriov_port(vif):
+            return vif['vnic_type'] in network_model.VNIC_TYPES_SRIOV
+
+        if (info_cache and info_cache.network_info):
+            for vif in info_cache.network_info:
+                if _has_sriov_port(vif):
+                    return True
+        return False
 
     def _build_and_run_instance(self, context, instance, image, injected_files,
             admin_password, requested_networks, security_groups,
@@ -2433,7 +2458,6 @@ class ComputeManager(manager.Manager):
             instance.power_state = power_state.NOSTATE
             instance.terminated_at = timeutils.utcnow()
             instance.save()
-            self._update_resource_tracker(context, instance)
             system_meta = instance.system_metadata
             instance.destroy()
         except Exception:
@@ -4420,6 +4444,7 @@ class ComputeManager(manager.Manager):
         self._inject_network_info(context, instance, network_info)
 
     @messaging.expected_exceptions(NotImplementedError,
+                                   exception.ConsoleNotAvailable,
                                    exception.InstanceNotFound)
     @wrap_exception()
     @wrap_instance_fault
@@ -4753,6 +4778,8 @@ class ComputeManager(manager.Manager):
                               context=context, instance=instance)
                 self.volume_api.roll_detaching(context, volume_id)
 
+        return connection_info
+
     def _detach_volume(self, context, volume_id, instance, destroy_bdm=True,
                        attachment_id=None):
         """Detach a volume from an instance.
@@ -4797,8 +4824,46 @@ class ComputeManager(manager.Manager):
                 self.notifier.info(context, 'volume.usage',
                                    compute_utils.usage_volume_info(vol_usage))
 
-        self._driver_detach_volume(context, instance, bdm)
+        connection_info = self._driver_detach_volume(context, instance, bdm)
         connector = self.driver.get_volume_connector(instance)
+
+        if connection_info and not destroy_bdm and (
+           connector.get('host') != instance.host):
+            # If the volume is attached to another host (evacuate) then
+            # this connector is for the wrong host. Use the connector that
+            # was stored in connection_info instead (if we have one, and it
+            # is for the expected host).
+            stashed_connector = connection_info.get('connector')
+            if not stashed_connector:
+                # Volume was attached before we began stashing connectors
+                LOG.warning(_LW("Host mismatch detected, but stashed "
+                                "volume connector not found. Instance host is "
+                                "%(ihost)s, but volume connector host is "
+                                "%(chost)s."),
+                            {'ihost': instance.host,
+                             'chost': connector.get('host')})
+            elif stashed_connector.get('host') != instance.host:
+                # Unexpected error. The stashed connector is also not matching
+                # the needed instance host.
+                LOG.error(_LE("Host mismatch detected in stashed volume "
+                              "connector. Will use local volume connector. "
+                              "Instance host is %(ihost)s. Local volume "
+                              "connector host is %(chost)s. Stashed volume "
+                              "connector host is %(schost)s."),
+                          {'ihost': instance.host,
+                           'chost': connector.get('host'),
+                           'schost': stashed_connector.get('host')})
+            else:
+                # Fix found. Use stashed connector.
+                LOG.debug("Host mismatch detected. Found usable stashed "
+                          "volume connector. Instance host is %(ihost)s. "
+                          "Local volume connector host was %(chost)s. "
+                          "Stashed volume connector host is %(schost)s.",
+                          {'ihost': instance.host,
+                           'chost': connector.get('host'),
+                           'schost': stashed_connector.get('host')})
+                connector = stashed_connector
+
         self.volume_api.terminate_connection(context, volume_id, connector)
 
         if destroy_bdm:
@@ -5193,7 +5258,8 @@ class ComputeManager(manager.Manager):
                     migrate_data)
 
         try:
-            if block_migration:
+            if ('block_migration' in migrate_data and
+                    migrate_data.block_migration):
                 block_device_info = self._get_instance_block_device_info(
                     context, instance)
                 disk = self.driver.get_instance_disk_info(
@@ -5260,6 +5326,7 @@ class ComputeManager(manager.Manager):
                       migrate_data)
 
     @wrap_exception()
+    @wrap_instance_event
     @wrap_instance_fault
     def live_migration_force_complete(self, context, instance, migration_id):
         """Force live migration to complete.
@@ -5306,7 +5373,7 @@ class ComputeManager(manager.Manager):
         self._notify_about_instance_usage(
             context, instance, 'live.migration.abort.end')
 
-    def _live_migration_cleanup_flags(self, block_migration, migrate_data):
+    def _live_migration_cleanup_flags(self, migrate_data):
         """Determine whether disks or instance path need to be cleaned up after
         live migration (at source on success, at destination on rollback)
 
@@ -5317,22 +5384,26 @@ class ComputeManager(manager.Manager):
         newly created instance-xxx dir on the destination as a part of its
         rollback process
 
-        :param block_migration: if true, it was a block migration
         :param migrate_data: implementation specific data
         :returns: (bool, bool) -- do_cleanup, destroy_disks
         """
-        # NOTE(angdraug): block migration wouldn't have been allowed if either
-        #                 block storage or instance path were shared
-        is_shared_block_storage = not block_migration
-        is_shared_instance_path = not block_migration
+        # NOTE(pkoniszewski): block migration specific params are set inside
+        # migrate_data objects for drivers that expose block live migration
+        # information (i.e. Libvirt and Xenapi). For other drivers cleanup is
+        # not needed.
+        is_shared_block_storage = True
+        is_shared_instance_path = True
         if isinstance(migrate_data, migrate_data_obj.LibvirtLiveMigrateData):
             is_shared_block_storage = migrate_data.is_shared_block_storage
             is_shared_instance_path = migrate_data.is_shared_instance_path
+        elif isinstance(migrate_data, migrate_data_obj.XenapiLiveMigrateData):
+            is_shared_block_storage = not migrate_data.block_migration
+            is_shared_instance_path = not migrate_data.block_migration
 
         # No instance booting at source host, but instance dir
         # must be deleted for preparing next block migration
         # must be deleted for preparing next live migration w/o shared storage
-        do_cleanup = block_migration or not is_shared_instance_path
+        do_cleanup = not is_shared_instance_path
         destroy_disks = not is_shared_block_storage
 
         return (do_cleanup, destroy_disks)
@@ -5416,7 +5487,7 @@ class ComputeManager(manager.Manager):
                 instance, block_migration, dest)
 
         do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
-                block_migration, migrate_data)
+                migrate_data)
 
         if do_cleanup:
             LOG.debug('Calling driver.cleanup from _post_live_migration',
@@ -5523,6 +5594,7 @@ class ComputeManager(manager.Manager):
                 instance.power_state = current_power_state
                 instance.task_state = None
                 instance.node = node_name
+                instance.progress = 0
                 instance.save(expected_task_state=task_states.MIGRATING)
 
         # NOTE(tr3buchet): tear down networks on source host
@@ -5554,6 +5626,7 @@ class ComputeManager(manager.Manager):
 
         """
         instance.task_state = None
+        instance.progress = 0
         instance.save(expected_task_state=[task_states.MIGRATING])
 
         if isinstance(migrate_data, dict):
@@ -5581,7 +5654,7 @@ class ComputeManager(manager.Manager):
                                           "live_migration._rollback.start")
 
         do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
-                block_migration, migrate_data)
+                migrate_data)
 
         if do_cleanup:
             self.compute_rpcapi.rollback_live_migration_at_destination(
@@ -6401,7 +6474,7 @@ class ComputeManager(manager.Manager):
         # Delete orphan compute node not reported by driver but still in db
         for cn in compute_nodes_in_db:
             if cn.hypervisor_hostname not in nodenames:
-                LOG.info(_LI("Deleting orphan compute node %s") % cn.id)
+                LOG.info(_LI("Deleting orphan compute node %s"), cn.id)
                 cn.destroy()
 
     def _get_compute_nodes_in_db(self, context, use_slave=False):

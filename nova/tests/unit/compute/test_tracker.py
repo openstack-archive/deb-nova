@@ -26,6 +26,7 @@ from nova.compute import vm_states
 from nova import exception as exc
 from nova import objects
 from nova.objects import base as obj_base
+from nova.pci import manager as pci_manager
 from nova import test
 
 _VIRT_DRIVER_AVAIL_RESOURCES = {
@@ -1285,6 +1286,49 @@ class TestInstanceClaim(BaseTestCase):
             self.assertTrue(obj_base.obj_equal_prims(expected,
                                                      self.rt.compute_node))
 
+    @mock.patch('nova.pci.stats.PciDeviceStats.support_requests',
+                return_value=True)
+    @mock.patch('nova.pci.manager.PciDevTracker.claim_instance')
+    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
+    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
+    def test_claim_with_pci(self, migr_mock, pci_mock,
+                            pci_manager_mock, pci_stats_mock):
+        # Test that a claim involving PCI requests correctly claims
+        # PCI devices on the host and sends an updated pci_device_pools
+        # attribute of the ComputeNode object.
+        self.assertFalse(self.rt.disabled)
+
+        # TODO(jaypipes): Remove once the PCI tracker is always created
+        # upon the resource tracker being initialized...
+        self.rt.pci_tracker = pci_manager.PciDevTracker(mock.sentinel.ctx)
+
+        pci_pools = objects.PciDevicePoolList()
+        pci_manager_mock.return_value = pci_pools
+
+        request = objects.InstancePCIRequest(count=1,
+            spec=[{'vendor_id': 'v', 'product_id': 'p'}])
+        pci_mock.return_value = objects.InstancePCIRequests(requests=[request])
+
+        disk_used = self.instance.root_gb + self.instance.ephemeral_gb
+        expected = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
+        expected.update({
+            'local_gb_used': disk_used,
+            'memory_mb_used': self.instance.memory_mb,
+            'free_disk_gb': expected['local_gb'] - disk_used,
+            "free_ram_mb": expected['memory_mb'] - self.instance.memory_mb,
+            'running_vms': 1,
+            'vcpus_used': 1,
+            'pci_device_pools': pci_pools
+        })
+        with mock.patch.object(self.rt, '_update') as update_mock:
+            with mock.patch.object(self.instance, 'save'):
+                self.rt.instance_claim(self.ctx, self.instance, None)
+            update_mock.assert_called_once_with(self.elevated)
+            pci_manager_mock.assert_called_once_with(mock.ANY,  # context...
+                                                     self.instance)
+            self.assertTrue(obj_base.obj_equal_prims(expected,
+                                                     self.rt.compute_node))
+
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
     @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
     def test_claim_abort_context_manager(self, migr_mock, pci_mock):
@@ -1294,8 +1338,15 @@ class TestInstanceClaim(BaseTestCase):
         self.assertEqual(0, self.rt.compute_node.memory_mb_used)
         self.assertEqual(0, self.rt.compute_node.running_vms)
 
-        @mock.patch.object(self.instance, 'save')
-        def _doit(mock_save):
+        mock_save = mock.MagicMock()
+        mock_clear_numa = mock.MagicMock()
+
+        @mock.patch.object(self.instance, 'save', mock_save)
+        @mock.patch.object(self.instance, 'clear_numa_topology',
+                           mock_clear_numa)
+        @mock.patch.object(objects.Instance, 'obj_clone',
+                           return_value=self.instance)
+        def _doit(mock_clone):
             with self.rt.instance_claim(self.ctx, self.instance, None):
                 # Raise an exception. Just make sure below that the abort()
                 # method of the claim object was called (and the resulting
@@ -1303,6 +1354,10 @@ class TestInstanceClaim(BaseTestCase):
                 raise test.TestingException()
 
         self.assertRaises(test.TestingException, _doit)
+        self.assertEqual(2, mock_save.call_count)
+        mock_clear_numa.assert_called_once_with()
+        self.assertIsNone(self.instance.host)
+        self.assertIsNone(self.instance.node)
 
         # Assert that the resources claimed by the Claim() constructor
         # are returned to the resource tracker due to the claim's abort()
@@ -1317,15 +1372,32 @@ class TestInstanceClaim(BaseTestCase):
         pci_mock.return_value = objects.InstancePCIRequests(requests=[])
         disk_used = self.instance.root_gb + self.instance.ephemeral_gb
 
-        with mock.patch.object(self.instance, 'save'):
-            claim = self.rt.instance_claim(self.ctx, self.instance, None)
+        @mock.patch.object(objects.Instance, 'obj_clone',
+                           return_value=self.instance)
+        @mock.patch.object(self.instance, 'save')
+        def _claim(mock_save, mock_clone):
+            return self.rt.instance_claim(self.ctx, self.instance, None)
 
+        claim = _claim()
         self.assertEqual(disk_used, self.rt.compute_node.local_gb_used)
         self.assertEqual(self.instance.memory_mb,
                          self.rt.compute_node.memory_mb_used)
         self.assertEqual(1, self.rt.compute_node.running_vms)
 
-        claim.abort()
+        mock_save = mock.MagicMock()
+        mock_clear_numa = mock.MagicMock()
+
+        @mock.patch.object(self.instance, 'save', mock_save)
+        @mock.patch.object(self.instance, 'clear_numa_topology',
+                           mock_clear_numa)
+        def _abort():
+            claim.abort()
+
+        _abort()
+        mock_save.assert_called_once_with()
+        mock_clear_numa.assert_called_once_with()
+        self.assertIsNone(self.instance.host)
+        self.assertIsNone(self.instance.node)
 
         self.assertEqual(0, self.rt.compute_node.local_gb_used)
         self.assertEqual(0, self.rt.compute_node.memory_mb_used)

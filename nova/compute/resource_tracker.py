@@ -48,7 +48,9 @@ resource_tracker_opts = [
                help='Amount of memory in MB to reserve for the host'),
     cfg.StrOpt('compute_stats_class',
                default='nova.compute.stats.Stats',
-               help='Class that will manage stats for the local compute host'),
+               help='DEPRECATED: Class that will manage stats for the '
+                   'local compute host',
+               deprecated_for_removal=True),
     cfg.ListOpt('compute_resources',
                 default=[],
                 help='DEPRECATED: The names of the extra resources to track. '
@@ -129,9 +131,6 @@ def _instance_in_resize_state(instance):
     return False
 
 
-_REMOVED_STATES = (vm_states.DELETED, vm_states.SHELVED_OFFLOADED)
-
-
 class ResourceTracker(object):
     """Compute helper class for keeping track of resource usage as instances
     are built and destroyed.
@@ -176,7 +175,7 @@ class ResourceTracker(object):
         if self.disabled:
             # compute_driver doesn't support resource tracking, just
             # set the 'host' and node fields and continue the build:
-            self._set_instance_host_and_node(context, instance_ref)
+            self._set_instance_host_and_node(instance_ref)
             return claims.NopClaim()
 
         # sanity checks:
@@ -199,12 +198,17 @@ class ResourceTracker(object):
         claim = claims.Claim(context, instance_ref, self, self.compute_node,
                              overhead=overhead, limits=limits)
 
+        if self.pci_tracker:
+            # NOTE(jaypipes): ComputeNode.pci_device_pools is set below
+            # in _update_usage_from_instance().
+            self.pci_tracker.claim_instance(context, instance_ref)
+
         # self._set_instance_host_and_node() will save instance_ref to the DB
         # so set instance_ref['numa_topology'] first.  We need to make sure
         # that numa_topology is saved while under COMPUTE_RESOURCE_SEMAPHORE
         # so that the resource audit knows about any cpus we've pinned.
         instance_ref.numa_topology = claim.claimed_numa_topology
-        self._set_instance_host_and_node(context, instance_ref)
+        self._set_instance_host_and_node(instance_ref)
 
         # Mark resources in-use and update stats
         self._update_usage_from_instance(context, instance_ref)
@@ -324,7 +328,7 @@ class ResourceTracker(object):
         migration.status = 'pre-migrating'
         migration.save()
 
-    def _set_instance_host_and_node(self, context, instance):
+    def _set_instance_host_and_node(self, instance):
         """Tag the instance as belonging to this host.  This should be done
         while the COMPUTE_RESOURCES_SEMAPHORE is held so the resource claim
         will not be lost if the audit process starts.
@@ -334,19 +338,29 @@ class ResourceTracker(object):
         instance.node = self.nodename
         instance.save()
 
+    def _unset_instance_host_and_node(self, instance):
+        """Untag the instance so it no longer belongs to the host.
+
+        This should be done while the COMPUTE_RESOURCES_SEMAPHORE is held so
+        the resource claim will not be lost if the audit process starts.
+        """
+        instance.host = None
+        instance.node = None
+        instance.save()
+
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def abort_instance_claim(self, context, instance):
         """Remove usage from the given instance."""
-        # flag the instance as deleted to revert the resource usage
-        # and associated stats:
-        instance['vm_state'] = vm_states.DELETED
-        self._update_usage_from_instance(context, instance)
+        self._update_usage_from_instance(context, instance, is_removed=True)
+
+        instance.clear_numa_topology()
+        self._unset_instance_host_and_node(instance)
 
         self._update(context.elevated())
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def drop_move_claim(self, context, instance, instance_type=None,
-                        image_meta=None, prefix='new_'):
+                        prefix='new_'):
         """Remove usage for an incoming/outgoing migration."""
         if instance['uuid'] in self.tracked_migrations:
             migration, itype = self.tracked_migrations.pop(instance['uuid'])
@@ -356,14 +370,7 @@ class ResourceTracker(object):
                 instance_type = self._get_instance_type(ctxt, instance, prefix,
                                                         migration)
 
-            if image_meta is None:
-                image_meta = objects.ImageMeta.from_instance(instance)
-            # TODO(jaypipes): Remove when image_meta is always passed
-            # as an objects.ImageMeta
-            elif not isinstance(image_meta, objects.ImageMeta):
-                image_meta = objects.ImageMeta.from_dict(image_meta)
-
-            if (instance_type is not None and instance_type.id == itype['id']):
+            if instance_type is not None and instance_type.id == itype['id']:
                 numa_topology = self._get_migration_context_resource(
                     'numa_topology', instance)
                 usage = self._get_usage_dict(
@@ -463,8 +470,10 @@ class ResourceTracker(object):
         for monitor in self.monitors:
             try:
                 monitor.add_metrics_to_list(metrics)
-            except Exception:
-                LOG.warning(_LW("Cannot get the metrics from %s."), monitor)
+            except Exception as exc:
+                LOG.warning(_LW("Cannot get the metrics from %(mon)s; "
+                                "error: %(exc)s"),
+                            {'mon': monitor, 'exc': exc})
         # TODO(jaypipes): Remove this when compute_node.metrics doesn't need
         # to be populated as a JSON-ified string.
         metrics = metrics.to_list()
@@ -501,8 +510,7 @@ class ResourceTracker(object):
         # We want the 'cpu_info' to be None from the POV of the
         # virt driver, but the DB requires it to be non-null so
         # just force it to empty string
-        if ("cpu_info" not in resources or
-            resources["cpu_info"] is None):
+        if "cpu_info" not in resources or resources["cpu_info"] is None:
             resources["cpu_info"] = ''
 
         self._verify_resources(resources)
@@ -621,15 +629,15 @@ class ResourceTracker(object):
         vcpus = resources['vcpus']
         if vcpus:
             free_vcpus = vcpus - resources['vcpus_used']
-            LOG.debug("Hypervisor: free VCPUs: %s" % free_vcpus)
+            LOG.debug("Hypervisor: free VCPUs: %s", free_vcpus)
         else:
             free_vcpus = 'unknown'
             LOG.debug("Hypervisor: VCPU information unavailable")
 
         if ('pci_passthrough_devices' in resources and
                 resources['pci_passthrough_devices']):
-            LOG.debug("Hypervisor: assignable PCI devices: %s" %
-                resources['pci_passthrough_devices'])
+            LOG.debug("Hypervisor: assignable PCI devices: %s",
+                      resources['pci_passthrough_devices'])
 
         pci_devices = resources.get('pci_passthrough_devices')
 
@@ -750,7 +758,7 @@ class ResourceTracker(object):
             return
 
         uuid = migration.instance_uuid
-        LOG.info(_LI("Updating from migration %s") % uuid)
+        LOG.info(_LI("Updating from migration %s"), uuid)
 
         incoming = (migration.dest_compute == self.host and
                     migration.dest_node == self.nodename)
@@ -856,12 +864,14 @@ class ResourceTracker(object):
                                 "migration."), instance_uuid=uuid)
                 continue
 
-    def _update_usage_from_instance(self, context, instance):
+    def _update_usage_from_instance(self, context, instance, is_removed=False):
         """Update usage for a single instance."""
 
         uuid = instance['uuid']
         is_new_instance = uuid not in self.tracked_instances
-        is_removed_instance = instance['vm_state'] in _REMOVED_STATES
+        is_removed_instance = (
+                is_removed or
+                instance['vm_state'] in vm_states.ALLOW_RESOURCE_REMOVAL)
 
         if is_new_instance:
             self.tracked_instances[uuid] = obj_base.obj_to_primitive(instance)
@@ -871,7 +881,7 @@ class ResourceTracker(object):
             self.tracked_instances.pop(uuid)
             sign = -1
 
-        self.stats.update_stats_for_instance(instance)
+        self.stats.update_stats_for_instance(instance, is_removed_instance)
 
         # if it's a new or deleted instance:
         if is_new_instance or is_removed_instance:
@@ -913,7 +923,7 @@ class ResourceTracker(object):
                                                    self.driver)
 
         for instance in instances:
-            if instance.vm_state not in _REMOVED_STATES:
+            if instance.vm_state not in vm_states.ALLOW_RESOURCE_REMOVAL:
                 self._update_usage_from_instance(context, instance)
 
     def _find_orphaned_instances(self):
@@ -962,7 +972,7 @@ class ResourceTracker(object):
 
     def _get_instance_type(self, context, instance, prefix, migration):
         """Get the instance type from instance."""
-        stashed_flavors = migration.migration_type in ('resize')
+        stashed_flavors = migration.migration_type in ('resize',)
         if stashed_flavors:
             return getattr(instance, '%sflavor' % prefix)
         else:

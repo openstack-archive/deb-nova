@@ -91,13 +91,12 @@ def list_opts():
     # the config options for a few common ones
     plugins = ['password', 'v2password', 'v3password']
     for name in plugins:
-        for plugin_option in ks_loading.get_plugin_loader(name).get_options():
-            found = False
+        plugin = ks_loading.get_plugin_loader(name)
+        for plugin_option in ks_loading.get_auth_plugin_conf_options(plugin):
             for option in opts:
                 if option.name == plugin_option.name:
-                    found = True
                     break
-            if not found:
+            else:
                 opts.append(plugin_option)
     opts.sort(key=lambda x: x.name)
     return [(NEUTRON_GROUP, opts)]
@@ -286,7 +285,7 @@ class API(base_api.NetworkAPI):
             raise exception.NoMoreFixedIps(net=network_id)
         except neutron_client_exc.MacAddressInUseClient:
             LOG.warning(_LW('Neutron error: MAC address %(mac)s is already '
-                            'in use on network %(network)s.') %
+                            'in use on network %(network)s.'),
                         {'mac': mac_address, 'network': network_id},
                         instance=instance)
             raise exception.PortInUse(port_id=mac_address)
@@ -585,6 +584,11 @@ class API(base_api.NetworkAPI):
         # pci_request_id=None):
         if (not requested_networks
             or requested_networks.is_single_unspecified):
+            # If no networks were requested and none are available, consider
+            # it a bad request.
+            if not nets:
+                raise exception.InterfaceAttachFailedNoNetwork(
+                    project_id=instance.project_id)
             # bug/1267723 - if no network is requested and more
             # than one is available then raise NetworkAmbiguous Exception
             if len(nets) > 1:

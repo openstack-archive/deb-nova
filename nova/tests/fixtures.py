@@ -197,7 +197,12 @@ class Timeout(fixtures.Fixture):
 
 
 class Database(fixtures.Fixture):
-    def __init__(self, database='main'):
+    def __init__(self, database='main', connection=None):
+        """Create a database fixture.
+
+        :param database: The type of database, 'main' or 'api'
+        :param connection: The connection string to use
+        """
         super(Database, self).__init__()
         # NOTE(pkholkin): oslo_db.enginefacade is configured in tests the same
         # way as it is done for any other service that uses db
@@ -207,7 +212,13 @@ class Database(fixtures.Fixture):
             SESSION_CONFIGURED = True
         self.database = database
         if database == 'main':
-            self.get_engine = session.get_engine
+            if connection is not None:
+                ctxt_mgr = session.create_context_manager(
+                        connection=connection)
+                facade = ctxt_mgr.get_legacy_facade()
+                self.get_engine = facade.get_engine
+            else:
+                self.get_engine = session.get_engine
         elif database == 'api':
             self.get_engine = session.get_api_engine
 
@@ -234,6 +245,37 @@ class Database(fixtures.Fixture):
 
     def setUp(self):
         super(Database, self).setUp()
+        self.reset()
+        self.addCleanup(self.cleanup)
+
+
+class DatabaseAtVersion(fixtures.Fixture):
+    def __init__(self, version, database='main'):
+        """Create a database fixture.
+
+        :param version: Max version to sync to (or None for current)
+        :param database: The type of database, 'main' or 'api'
+        """
+        super(DatabaseAtVersion, self).__init__()
+        self.database = database
+        self.version = version
+        if database == 'main':
+            self.get_engine = session.get_engine
+        elif database == 'api':
+            self.get_engine = session.get_api_engine
+
+    def cleanup(self):
+        engine = self.get_engine()
+        engine.dispose()
+
+    def reset(self):
+        engine = self.get_engine()
+        engine.dispose()
+        engine.connect()
+        migration.db_sync(version=self.version, database=self.database)
+
+    def setUp(self):
+        super(DatabaseAtVersion, self).setUp()
         self.reset()
         self.addCleanup(self.cleanup)
 
@@ -325,7 +367,8 @@ class OSAPIFixture(fixtures.Fixture):
 
     """
 
-    def __init__(self, api_version='v2', project_id='openstack'):
+    def __init__(self, api_version='v2',
+                 project_id='6f70656e737461636b20342065766572'):
         """Constructor
 
         :param api_version: the API version that we're interested in
@@ -417,15 +460,41 @@ class IndirectionAPIFixture(fixtures.Fixture):
         self.addCleanup(self.cleanup)
 
 
+class _FakeGreenThread(object):
+    def __init__(self, func, *args, **kwargs):
+        self._result = func(*args, **kwargs)
+
+    def cancel(self, *args, **kwargs):
+        # This method doesn't make sense for a synchronous call, it's just
+        # defined to satisfy the interface.
+        pass
+
+    def kill(self, *args, **kwargs):
+        # This method doesn't make sense for a synchronous call, it's just
+        # defined to satisfy the interface.
+        pass
+
+    def link(self, func, *args, **kwargs):
+        func(self, *args, **kwargs)
+
+    def unlink(self, func, *args, **kwargs):
+        # This method doesn't make sense for a synchronous call, it's just
+        # defined to satisfy the interface.
+        pass
+
+    def wait(self):
+        return self._result
+
+
 class SpawnIsSynchronousFixture(fixtures.Fixture):
     """Patch and restore the spawn_n utility method to be synchronous"""
 
     def setUp(self):
         super(SpawnIsSynchronousFixture, self).setUp()
         self.useFixture(fixtures.MonkeyPatch(
-            'nova.utils.spawn_n', lambda f, *a, **k: f(*a, **k)))
+            'nova.utils.spawn_n', _FakeGreenThread))
         self.useFixture(fixtures.MonkeyPatch(
-            'nova.utils.spawn', lambda f, *a, **k: f(*a, **k)))
+            'nova.utils.spawn', _FakeGreenThread))
 
 
 class BannedDBSchemaOperations(fixtures.Fixture):
@@ -513,3 +582,26 @@ class EngineFacadeFixture(fixtures.Fixture):
 
     def cleanup(self):
         self._ctx_manager._root_factory = self._existing_factory
+
+
+class ForbidNewLegacyNotificationFixture(fixtures.Fixture):
+    """Make sure the test fails if new legacy notification is added"""
+    def __init__(self):
+        super(ForbidNewLegacyNotificationFixture, self).__init__()
+        self.notifier = rpc.LegacyValidatingNotifier
+
+    def setUp(self):
+        super(ForbidNewLegacyNotificationFixture, self).setUp()
+        self.notifier.fatal = True
+
+        # allow the special test value used in
+        # nova.tests.unit.test_notifications.NotificationsTestCase
+        self.notifier.allowed_legacy_notification_event_types.append(
+                '_decorated_function')
+
+        self.addCleanup(self.cleanup)
+
+    def cleanup(self):
+        self.notifier.fatal = False
+        self.notifier.allowed_legacy_notification_event_types.remove(
+                '_decorated_function')

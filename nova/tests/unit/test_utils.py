@@ -867,6 +867,9 @@ class ExpectedArgsTestCase(test.NoDBTestCase):
         def func(foo, bar, baz="lol"):
             pass
 
+        # Call to ensure nothing errors
+        func(None, None)
+
     def test_raises(self):
         @utils.expects_func_args('foo', 'baz')
         def dec(f):
@@ -885,6 +888,9 @@ class ExpectedArgsTestCase(test.NoDBTestCase):
         @dec
         def func(bar, *args, **kwargs):
             pass
+
+        # Call to ensure nothing errors
+        func(None)
 
     def test_more_layers(self):
         @utils.expects_func_args('foo', 'baz')
@@ -976,7 +982,7 @@ class ValidateNeutronConfiguration(test.NoDBTestCase):
         self.assertFalse(utils.is_neutron())
 
     def test_neutron(self):
-        self.flags(network_api_class='nova.network.neutronv2.api.API')
+        self.flags(use_neutron=True)
         self.assertTrue(utils.is_neutron())
 
 

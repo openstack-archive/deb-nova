@@ -310,9 +310,13 @@ class HostState(object):
         self.num_io_ops += 1
 
     def __repr__(self):
-        return ("(%s, %s) ram:%s disk:%s io_ops:%s instances:%s" %
-                (self.host, self.nodename, self.free_ram_mb, self.free_disk_mb,
-                 self.num_io_ops, self.num_instances))
+        return ("(%(host)s, %(node)s) ram: %(free_ram)sMB "
+                "disk: %(free_disk)sMB io_ops: %(num_io_ops)s "
+                "instances: %(num_instances)s" %
+                {'host': self.host, 'node': self.nodename,
+                 'free_ram': self.free_ram_mb, 'free_disk': self.free_disk_mb,
+                 'num_io_ops': self.num_io_ops,
+                 'num_instances': self.num_instances})
 
 
 class HostManager(object):
@@ -463,7 +467,7 @@ class HostManager(object):
             ignored_hosts = []
             for host in hosts_to_ignore:
                 for (hostname, nodename) in list(host_map.keys()):
-                    if host == hostname:
+                    if host.lower() == hostname.lower():
                         del host_map[(hostname, nodename)]
                         ignored_hosts.append(host)
             ignored_hosts_str = ', '.join(ignored_hosts)
@@ -471,8 +475,9 @@ class HostManager(object):
 
         def _match_forced_hosts(host_map, hosts_to_force):
             forced_hosts = []
+            lowered_hosts_to_force = [host.lower() for host in hosts_to_force]
             for (hostname, nodename) in list(host_map.keys()):
-                if hostname not in hosts_to_force:
+                if hostname.lower() not in lowered_hosts_to_force:
                     del host_map[(hostname, nodename)]
                 else:
                     forced_hosts.append(hostname)
@@ -546,7 +551,7 @@ class HostManager(object):
 
         service_refs = {service.host: service
                         for service in objects.ServiceList.get_by_binary(
-                            context, 'nova-compute')}
+                            context, 'nova-compute', include_disabled=True)}
         # Get resource usage across the available compute nodes:
         compute_nodes = objects.ComputeNodeList.get_all(context)
         seen_nodes = set()

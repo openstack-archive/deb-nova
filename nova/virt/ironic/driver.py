@@ -371,31 +371,7 @@ class IronicDriver(virt_driver.ComputeDriver):
             LOG.error(msg)
             raise exception.InstanceDeployFailure(msg)
 
-    def _cleanup_deploy(self, context, node, instance, network_info,
-                        flavor=None):
-        if flavor is None:
-            flavor = instance.flavor
-        patch = patcher.create(node).get_cleanup_patch(instance, network_info,
-                                                       flavor)
-
-        # TODO(lucasagomes): This code is here for backwards compatibility
-        # with old versions of Ironic that won't clean up the instance
-        # association as part of the node's tear down. Should be removed
-        # on the next cycle (M).
-        patch.append({'op': 'remove', 'path': '/instance_uuid'})
-        try:
-            self._validate_instance_and_node(instance)
-            self.ironicclient.call('node.update', node.uuid, patch)
-        except exception.InstanceNotFound:
-            LOG.debug("Instance already removed from Ironic node %s. Skip "
-                      "updating it", node.uuid, instance=instance)
-        except ironic.exc.BadRequest:
-            LOG.error(_LE("Failed to clean up the parameters on node %(node)s "
-                          "when unprovisioning the instance %(instance)s"),
-                         {'node': node.uuid, 'instance': instance.uuid})
-            reason = (_("Fail to clean up node %s parameters") % node.uuid)
-            raise exception.InstanceTerminationFailure(reason=reason)
-
+    def _cleanup_deploy(self, node, instance, network_info):
         self._unplug_vifs(node, instance, network_info)
         self._stop_firewall(instance, network_info)
 
@@ -678,13 +654,8 @@ class IronicDriver(virt_driver.ComputeDriver):
             content=files, extra_md=extra_md, network_info=network_info)
 
         with tempfile.NamedTemporaryFile() as uncompressed:
-            try:
-                with configdrive.ConfigDriveBuilder(instance_md=i_meta) as cdb:
-                    cdb.make_drive(uncompressed.name)
-            except Exception as e:
-                with excutils.save_and_reraise_exception():
-                    LOG.error(_LE("Creating config drive failed with "
-                                  "error: %s"), e, instance=instance)
+            with configdrive.ConfigDriveBuilder(instance_md=i_meta) as cdb:
+                cdb.make_drive(uncompressed.name)
 
             with tempfile.NamedTemporaryFile() as compressed:
                 # compress config drive
@@ -737,8 +708,7 @@ class IronicDriver(virt_driver.ComputeDriver):
         validate_chk = self.ironicclient.call("node.validate", node_uuid)
         if not validate_chk.deploy or not validate_chk.power:
             # something is wrong. undo what we have done
-            self._cleanup_deploy(context, node, instance, network_info,
-                                 flavor=flavor)
+            self._cleanup_deploy(node, instance, network_info)
             raise exception.ValidationError(_(
                 "Ironic node: %(id)s failed to validate."
                 " (deploy: %(deploy)s, power: %(power)s)")
@@ -756,8 +726,7 @@ class IronicDriver(virt_driver.ComputeDriver):
                               "%(instance)s on baremetal node %(node)s."),
                           {'instance': instance.uuid,
                            'node': node_uuid})
-                self._cleanup_deploy(context, node, instance, network_info,
-                                     flavor=flavor)
+                self._cleanup_deploy(node, instance, network_info)
 
         # Config drive
         configdrive_value = None
@@ -766,9 +735,17 @@ class IronicDriver(virt_driver.ComputeDriver):
             if admin_password:
                 extra_md['admin_pass'] = admin_password
 
-            configdrive_value = self._generate_configdrive(
-                instance, node, network_info, extra_md=extra_md,
-                files=injected_files)
+            try:
+                configdrive_value = self._generate_configdrive(
+                    instance, node, network_info, extra_md=extra_md,
+                    files=injected_files)
+            except Exception as e:
+                with excutils.save_and_reraise_exception():
+                    msg = (_LE("Failed to build configdrive: %s") %
+                           six.text_type(e))
+                    LOG.error(msg, instance=instance)
+                    self._cleanup_deploy(context, node, instance, network_info,
+                                         flavor=flavor)
 
             LOG.info(_LI("Config drive for instance %(instance)s on "
                          "baremetal node %(node)s created."),
@@ -786,8 +763,7 @@ class IronicDriver(virt_driver.ComputeDriver):
                            {'inst': instance.uuid,
                             'reason': six.text_type(e)})
                 LOG.error(msg)
-                self._cleanup_deploy(context, node, instance, network_info,
-                                     flavor=flavor)
+                self._cleanup_deploy(node, instance, network_info)
 
         timer = loopingcall.FixedIntervalLoopingCall(self._wait_for_active,
                                                      instance)
@@ -887,7 +863,7 @@ class IronicDriver(virt_driver.ComputeDriver):
         if node.provision_state in _UNPROVISION_STATES:
             self._unprovision(instance, node)
 
-        self._cleanup_deploy(context, node, instance, network_info)
+        self._cleanup_deploy(node, instance, network_info)
         LOG.info(_LI('Successfully unprovisioned Ironic node %s'),
                  node.uuid, instance=instance)
 
@@ -1036,13 +1012,16 @@ class IronicDriver(virt_driver.ComputeDriver):
 
         if len(network_info) > 0:
             # not needed if no vif are defined
-            for vif, pif in zip(network_info, ports):
-                # attach what neutron needs directly to the port
-                port_id = six.text_type(vif['id'])
-                patch = [{'op': 'add',
-                          'path': '/extra/vif_port_id',
-                          'value': port_id}]
-                self.ironicclient.call("port.update", pif.uuid, patch)
+            for vif in network_info:
+                for pif in ports:
+                    if vif['address'] == pif.address:
+                        # attach what neutron needs directly to the port
+                        port_id = six.text_type(vif['id'])
+                        patch = [{'op': 'add',
+                                  'path': '/extra/vif_port_id',
+                                  'value': port_id}]
+                        self.ironicclient.call("port.update", pif.uuid, patch)
+                        break
 
     def _unplug_vifs(self, node, instance, network_info):
         # NOTE(PhilDay): Accessing network_info will block if the thread
@@ -1057,7 +1036,7 @@ class IronicDriver(virt_driver.ComputeDriver):
                                       detail=True)
 
             # not needed if no vif are defined
-            for vif, pif in zip(network_info, ports):
+            for pif in ports:
                 if 'vif_port_id' in pif.extra:
                     # we can not attach a dict directly
                     patch = [{'op': 'remove', 'path': '/extra/vif_port_id'}]

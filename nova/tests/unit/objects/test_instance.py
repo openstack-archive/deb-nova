@@ -191,6 +191,13 @@ class _TestInstanceObject(object):
             self.assertTrue(inst.obj_attr_is_set(attr))
         self.assertEqual(123, inst.services[0].id)
 
+    def test_lazy_load_services_on_deleted_instance(self):
+        # We should avoid trying to hit the database to reload the instance
+        # and just set the services attribute to an empty list.
+        instance = objects.Instance(self.context, uuid=uuids.instance,
+                                    deleted=True)
+        self.assertEqual(0, len(instance.services))
+
     def test_get_by_id(self):
         self.mox.StubOutWithMock(db, 'instance_get')
         db.instance_get(self.context, 'instid',
@@ -913,6 +920,7 @@ class _TestInstanceObject(object):
         inst = objects.Instance(context=self.context)
         inst.create()
         self.assertEqual(self.fake_instance['id'], inst.id)
+        self.assertIsNotNone(inst.ec2_ids)
 
     def test_create_with_values(self):
         inst1 = objects.Instance(context=self.context,
@@ -1283,6 +1291,15 @@ class _TestInstanceObject(object):
         secgroups = inst.security_groups
         mock_get.assert_called_once_with(self.context, inst)
         self.assertEqual(fake_secgroups, secgroups)
+
+    @mock.patch('nova.objects.PciDeviceList.get_by_instance_uuid')
+    def test_load_pci_devices(self, mock_get):
+        fake_pci_devices = pci_device.PciDeviceList()
+        mock_get.return_value = fake_pci_devices
+        inst = objects.Instance(context=self.context, uuid=uuids.pci_devices)
+        pci_devices = inst.pci_devices
+        mock_get.assert_called_once_with(self.context, uuids.pci_devices)
+        self.assertEqual(fake_pci_devices, pci_devices)
 
     def test_get_with_extras(self):
         pci_requests = objects.InstancePCIRequests(requests=[

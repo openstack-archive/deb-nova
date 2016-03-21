@@ -284,6 +284,33 @@ class TestDatabaseFixture(testtools.TestCase):
         self.assertEqual("BEGIN TRANSACTION;COMMIT;", schema)
 
 
+class TestDatabaseAtVersionFixture(testtools.TestCase):
+    def test_fixture_schema_version(self):
+        self.useFixture(conf_fixture.ConfFixture())
+
+        # In/after 317 aggregates did have uuid
+        self.useFixture(fixtures.DatabaseAtVersion(318))
+        engine = session.get_engine()
+        engine.connect()
+        meta = sqlalchemy.MetaData(engine)
+        aggregate = sqlalchemy.Table('aggregates', meta, autoload=True)
+        self.assertTrue(hasattr(aggregate.c, 'uuid'))
+
+        # Before 317, aggregates had no uuid
+        self.useFixture(fixtures.DatabaseAtVersion(316))
+        engine = session.get_engine()
+        engine.connect()
+        meta = sqlalchemy.MetaData(engine)
+        aggregate = sqlalchemy.Table('aggregates', meta, autoload=True)
+        self.assertFalse(hasattr(aggregate.c, 'uuid'))
+        engine.dispose()
+
+    def test_fixture_after_database_fixture(self):
+        self.useFixture(conf_fixture.ConfFixture())
+        self.useFixture(fixtures.Database())
+        self.useFixture(fixtures.DatabaseAtVersion(318))
+
+
 class TestIndirectionAPIFixture(testtools.TestCase):
     def test_indirection_api(self):
         # Should initially be None
@@ -314,6 +341,46 @@ class TestSpawnIsSynchronousFixture(testtools.TestCase):
         tester = mock.MagicMock()
         utils.spawn_n(tester.function, 'foo', bar='bar')
         tester.function.assert_called_once_with('foo', bar='bar')
+
+    def test_spawn_return_has_wait(self):
+        self.useFixture(fixtures.SpawnIsSynchronousFixture())
+        gt = utils.spawn(lambda x: '%s' % x, 'foo')
+        foo = gt.wait()
+        self.assertEqual('foo', foo)
+
+    def test_spawn_n_return_has_wait(self):
+        self.useFixture(fixtures.SpawnIsSynchronousFixture())
+        gt = utils.spawn_n(lambda x: '%s' % x, 'foo')
+        foo = gt.wait()
+        self.assertEqual('foo', foo)
+
+    def test_spawn_has_link(self):
+        self.useFixture(fixtures.SpawnIsSynchronousFixture())
+        gt = utils.spawn(mock.MagicMock)
+        passed_arg = 'test'
+        call_count = []
+
+        def fake(thread, param):
+            self.assertEqual(gt, thread)
+            self.assertEqual(passed_arg, param)
+            call_count.append(1)
+
+        gt.link(fake, passed_arg)
+        self.assertEqual(1, len(call_count))
+
+    def test_spawn_n_has_link(self):
+        self.useFixture(fixtures.SpawnIsSynchronousFixture())
+        gt = utils.spawn_n(mock.MagicMock)
+        passed_arg = 'test'
+        call_count = []
+
+        def fake(thread, param):
+            self.assertEqual(gt, thread)
+            self.assertEqual(passed_arg, param)
+            call_count.append(1)
+
+        gt.link(fake, passed_arg)
+        self.assertEqual(1, len(call_count))
 
 
 class TestBannedDBSchemaOperations(testtools.TestCase):
