@@ -1,6 +1,8 @@
-nova (2:13.0.0~rc1-4) UNRELEASED; urgency=medium
+nova (2:13.0.0~rc1-4) experimental; urgency=medium
 
   * Standards-Version: 3.9.7 (no change)
+  * Do not use keystone admin auth token anymore (and therefore, build-depends
+    on openstack-pkg-tools >= 40~).
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 29 Mar 2016 09:45:11 +0000
 

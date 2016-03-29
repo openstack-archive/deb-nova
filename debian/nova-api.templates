@@ -7,7 +7,8 @@ _Description: Register Nova in the keystone endpoint catalog?
  endpoint-create". Select if you want to run these commands now.
  .
  Note that you will need to have an up and running keystone server on which to
- connect using the Keystone auth token.
+ connect using a known admin project name, admin username and password. The
+ admin auth token is not used anymore.
 
 Template: nova/keystone-ip
 Type: string
@@ -15,11 +16,25 @@ _Description: Keystone IP address:
  Enter the IP address of your keystone server, so that nova-api can
  contact Keystone to do the Nova service and endpoint creation.
 
-Template: nova/keystone-auth-token
+Template: nova/keystone-admin-name
+Type: string
+Default: admin
+_Description: Keystone admin name:
+ To register the service endpoint, this package needs to know the Admin login,
+ name, project name, and password to the Keystone server.
+
+Template: nova/keystone-project-name
+Type: string
+Default: admin
+_Description: Keystone admin project name:
+ To register the service endpoint, this package needs to know the Admin login,
+ name, project name, and password to the Keystone server.
+
+Template: nova/keystone-admin-password
 Type: password
-_Description: Keystone Auth Token:
- To configure its endpoint in Keystone, nova-api needs the Keystone auth
- token.
+_Description: Keystone admin password:
+ To register the service endpoint, this package needs to know the Admin login,
+ name, project name, and password to the Keystone server.
 
 Template: nova/endpoint-ip
 Type: string
