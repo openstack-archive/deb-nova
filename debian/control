@@ -457,6 +457,7 @@ Description: OpenStack Compute - storage metapackage
 Package: nova-api
 Architecture: all
 Depends: adduser,
+         dbconfig-common,
          debconf,
          iptables,
          nova-common (= ${binary:Version}),

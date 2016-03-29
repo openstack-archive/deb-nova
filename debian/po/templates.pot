@@ -1,6 +1,6 @@
 # SOME DESCRIPTIVE TITLE.
 # Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
-# This file is distributed under the same license as the PACKAGE package.
+# This file is distributed under the same license as the nova package.
 # FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
 #
 #, fuzzy
@@ -8,7 +8,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2015-02-02 01:36+0100\n"
+"POT-Creation-Date: 2016-03-29 08:46+0000\n"
 "PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
@@ -57,7 +57,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -65,7 +65,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -75,7 +75,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -401,6 +401,20 @@ msgid ""
 "Openstack can be used using availability zones, with each region "
 "representing a location. Please enter the zone that you wish to use when "
 "registering the endpoint."
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+msgid "Set up a database for Nova API?"
+msgstr ""
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-api\"."
 msgstr ""
 
 #. Type: select

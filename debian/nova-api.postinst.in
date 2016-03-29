@@ -13,6 +13,14 @@ if [ "$1" = "configure" ] ; then
 		NOVA_APIS=`echo ${RET} | sed "s/ //g"`
 		pkgos_inifile set /etc/nova/nova.conf DEFAULT enabled_apis ${NOVA_APIS}
 	fi
+
+	db_get novaapi/configure_db
+	if [ "$RET" = "true" ]; then
+		pkgos_dbc_postinst --suite nova /etc/nova/nova.conf api_database connection novaapi $@
+		echo "nova-common: Now running \"nova-manage api_db sync\", this may take a while..."
+		su nova -c "nova-manage api_db sync" || true
+	fi
+
 	db_stop
 fi
 

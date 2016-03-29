@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2015-02-02 01:36+0100\n"
+"POT-Creation-Date: 2016-03-29 08:46+0000\n"
 "PO-Revision-Date: 2015-05-06 11:48+0100\n"
 "Last-Translator: Julien Patriarca <leatherface@debian.org>\n"
 "Language-Team: FRENCH <debian-l10n-french@lists.debian.org>\n"
@@ -60,7 +60,7 @@ msgstr "Faut-il installer une base de données pour Nova ?"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -71,7 +71,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -87,7 +87,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -130,10 +130,10 @@ msgid ""
 "(you cannot run osapi_volume and cinder-api on the same server: they bind on "
 "the same port)."
 msgstr ""
-"Dans le cas de l'installation d'un nœud de calcul, il suffit de "
-"lancer le serveur API de métadonnées. Si vous utilisez Cinder, vous "
-"n'avez pas besoin d'osapi_volume (vous ne pouvez pas lancer osapi_volume et "
-"cinder-api sur le même serveur : ils sont liés au même port)."
+"Dans le cas de l'installation d'un nœud de calcul, il suffit de lancer le "
+"serveur API de métadonnées. Si vous utilisez Cinder, vous n'avez pas besoin "
+"d'osapi_volume (vous ne pouvez pas lancer osapi_volume et cinder-api sur le "
+"même serveur : ils sont liés au même port)."
 
 #. Type: string
 #. Description
@@ -473,6 +473,28 @@ msgstr ""
 "OpenStack prend en charge l'utilisation de zones disponibles, avec chaque "
 "région représentant un lieu. Veuillez entrer la zone que vous souhaitez "
 "utiliser lors de l'enregistrement d'un point d'accès."
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid "Set up a database for Nova?"
+msgid "Set up a database for Nova API?"
+msgstr "Faut-il installer une base de données pour Nova ?"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid ""
+#| "You can change this setting later on by running \"dpkg-reconfigure -plow "
+#| "nova-common\"."
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-api\"."
+msgstr ""
+"Vous pouvez changer ce réglage plus tard en exécutant « dpkg-reconfigure -"
+"plow nova-common »."
 
 #. Type: select
 #. Description

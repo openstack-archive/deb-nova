@@ -38,3 +38,22 @@ _Description: Name of the region to register:
  Openstack can be used using availability zones, with each region representing
  a location. Please enter the zone that you wish to use when registering the
  endpoint.
+
+Template: novaapi/configure_db
+Type: boolean
+Default: false
+_Description: Set up a database for Nova API?
+ No database has been set up for Nova to use. If you want
+ to set one up now, please make sure you have all needed
+ information:
+ .
+  * the host name of the database server (which must allow TCP
+    connections from this machine);
+  * a username and password to access the database;
+  * the type of database management software you want to use.
+ .
+ If you don't choose this option, no database will be set up and Nova
+ will use regular SQLite support.
+ .
+ You can change this setting later on by running "dpkg-reconfigure
+ -plow nova-api".

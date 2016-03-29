@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2015-02-02 01:36+0100\n"
+"POT-Creation-Date: 2016-03-29 08:46+0000\n"
 "PO-Revision-Date: 2014-01-08 17:05+0100\n"
 "Last-Translator: Martin Bagge / brother <brother@bsnet.se>\n"
 "Language-Team: Swedish <debian-l10n-swedish@lists.debian.org>\n"
@@ -59,7 +59,7 @@ msgstr "Installera en databas för Nova?"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -69,7 +69,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -83,7 +83,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -466,6 +466,28 @@ msgid ""
 msgstr ""
 "OpenStack kan användas med tillgänglighetszoner. Varje region representerar "
 "en plats. Ange zonen som ska användas när ändpunkten registreras."
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid "Set up a database for Nova?"
+msgid "Set up a database for Nova API?"
+msgstr "Installera en databas för Nova?"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid ""
+#| "You can change this setting later on by running \"dpkg-reconfigure -plow "
+#| "nova-common\"."
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-api\"."
+msgstr ""
+"Detta kan ändras senare genom att köra \"dpkg-reconfigure -plow nova-common"
+"\"."
 
 #. Type: select
 #. Description
