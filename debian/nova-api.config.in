@@ -4,8 +4,11 @@ set -e
 
 . /usr/share/debconf/confmodule
 
+NOVA_CONF=/etc/nova/nova.conf
+
 #PKGOS-INCLUDE#
 
 pkgos_register_endpoint_config nova
+pkgos_dbc_read_conf -pkg nova-api ${NOVA_CONF} api_database connection novaapi $@
 
 exit 0

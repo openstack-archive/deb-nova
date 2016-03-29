@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2015-02-02 01:36+0100\n"
+"POT-Creation-Date: 2016-03-29 08:46+0000\n"
 "PO-Revision-Date: 2013-04-11 23:32+0900\n"
 "Last-Translator: victory <victory.deb@gmail.com>\n"
 "Language-Team: Japanese <debian-japanese@lists.debian.org>\n"
@@ -58,7 +58,7 @@ msgstr "Nova 用のデータベースを準備しますか?"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -68,7 +68,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -82,7 +82,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -469,6 +469,28 @@ msgid ""
 msgstr ""
 "OpenStack は位置を示す各領域による利用可能区分を利用することができます。端末"
 "の登録時に利用したい区分を入力してください。"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid "Set up a database for Nova?"
+msgid "Set up a database for Nova API?"
+msgstr "Nova 用のデータベースを準備しますか?"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid ""
+#| "You can change this setting later on by running \"dpkg-reconfigure -plow "
+#| "nova-common\"."
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-api\"."
+msgstr ""
+"この設定は後で「dpkg-reconfigure -plow nova-common」を実行することにより変更"
+"できます。"
 
 #. Type: select
 #. Description

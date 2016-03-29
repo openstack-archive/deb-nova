@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2013.2.2-4\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2015-02-02 01:36+0100\n"
+"POT-Creation-Date: 2016-03-29 08:46+0000\n"
 "PO-Revision-Date: 2014-04-02 19:16+0400\n"
 "Last-Translator: Yuri Kozlov <yuray@komyakino.ru>\n"
 "Language-Team: Russian <debian-l10n-russian@lists.debian.org>\n"
@@ -60,7 +60,7 @@ msgstr "Настроить базу данных для Nova?"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -70,7 +70,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -84,7 +84,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:6001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -450,6 +450,28 @@ msgstr ""
 "Openstack может использоваться с разделением на зоны доступности, где каждая "
 "область представляет определённое расположение. Введите зону, которую вы "
 "хотите использовать при регистрации конечной точки."
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid "Set up a database for Nova?"
+msgid "Set up a database for Nova API?"
+msgstr "Настроить базу данных для Nova?"
+
+#. Type: boolean
+#. Description
+#: ../nova-api.templates:6001
+#, fuzzy
+#| msgid ""
+#| "You can change this setting later on by running \"dpkg-reconfigure -plow "
+#| "nova-common\"."
+msgid ""
+"You can change this setting later on by running \"dpkg-reconfigure -plow "
+"nova-api\"."
+msgstr ""
+"Позднее, вы можете изменить эту настройку, запустив «dpkg-reconfigure -plow "
+"nova-common»."
 
 #. Type: select
 #. Description
