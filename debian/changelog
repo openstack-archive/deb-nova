@@ -1,3 +1,9 @@
+nova (2:13.0.0~rc1-3) experimental; urgency=medium
+
+  * Fixed netron -> neutron in nova-common.postinst.in.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 29 Mar 2016 09:35:04 +0000
+
 nova (2:13.0.0~rc1-2) experimental; urgency=medium
 
   * Added dbconfig-common management of the novaapi db.
