@@ -6,7 +6,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nova 2014.1.3-6\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
-"POT-Creation-Date: 2016-03-29 08:46+0000\n"
+"POT-Creation-Date: 2016-03-29 11:54+0000\n"
 "PO-Revision-Date: 2014-11-29 08:44+0200\n"
 "Last-Translator: Chris Leick <c.leick@vollbio.de>\n"
 "Language-Team: German <debian-l10n-german@lists.debian.org>\n"
@@ -58,7 +58,7 @@ msgstr "Datenbank für Nova einrichten?"
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001 ../nova-api.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:8001
 msgid ""
 "No database has been set up for Nova to use. If you want to set one up now, "
 "please make sure you have all needed information:"
@@ -69,7 +69,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001 ../nova-api.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:8001
 msgid ""
 " * the host name of the database server (which must allow TCP\n"
 "   connections from this machine);\n"
@@ -83,7 +83,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-common.templates:6001 ../nova-api.templates:6001
+#: ../nova-common.templates:6001 ../nova-api.templates:8001
 msgid ""
 "If you don't choose this option, no database will be set up and Nova will "
 "use regular SQLite support."
@@ -374,9 +374,14 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:1001
+#, fuzzy
+#| msgid ""
+#| "Note that you will need to have an up and running keystone server on "
+#| "which to connect using the Keystone auth token."
 msgid ""
 "Note that you will need to have an up and running keystone server on which "
-"to connect using the Keystone auth token."
+"to connect using a known admin project name, admin username and password. "
+"The admin auth token is not used anymore."
 msgstr ""
 "Beachten Sie, dass Sie einen laufenden Keystone-Server haben müssen, zu dem "
 "mittels des Keystone-Authentifizierungs-Tokens eine Verbindung hergestellt "
@@ -398,31 +403,52 @@ msgstr ""
 "Geben Sie die IP-Adresse Ihres Keystone-Servers ein, so dass »nova-api« "
 "Keystone zum Erstellen des Nova-Dienstes und des Endpunkts kontaktieren kann."
 
-#. Type: password
+#. Type: string
 #. Description
 #: ../nova-api.templates:3001
-msgid "Keystone Auth Token:"
-msgstr "Keystone-Authentifizierungs-Token:"
+#, fuzzy
+#| msgid "Neutron admin tenant name:"
+msgid "Keystone admin name:"
+msgstr "Tenant-Name des Neutron-Admins:"
 
+#. Type: string
+#. Description
+#. Type: string
+#. Description
 #. Type: password
 #. Description
-#: ../nova-api.templates:3001
+#: ../nova-api.templates:3001 ../nova-api.templates:4001
+#: ../nova-api.templates:5001
 msgid ""
-"To configure its endpoint in Keystone, nova-api needs the Keystone auth "
-"token."
+"To register the service endpoint, this package needs to know the Admin "
+"login, name, project name, and password to the Keystone server."
 msgstr ""
-"Zur Konfiguration seines Endpunkts in Keystone benötigt »nova-api« das "
-"Keystone-Authentifizierungs-Token."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
+#, fuzzy
+#| msgid "Neutron admin tenant name:"
+msgid "Keystone admin project name:"
+msgstr "Tenant-Name des Neutron-Admins:"
+
+#. Type: password
+#. Description
+#: ../nova-api.templates:5001
+#, fuzzy
+#| msgid "Neutron administrator password:"
+msgid "Keystone admin password:"
+msgstr "Passwort des Neutron-Administrators:"
+
+#. Type: string
+#. Description
+#: ../nova-api.templates:6001
 msgid "Nova endpoint IP address:"
 msgstr "IP-Adresse des Nova-Endpunkts:"
 
 #. Type: string
 #. Description
-#: ../nova-api.templates:4001
+#: ../nova-api.templates:6001
 msgid ""
 "Enter the IP address that will be used to contact Nova (eg: the Nova "
 "endpoint IP address)."
@@ -432,7 +458,7 @@ msgstr ""
 
 #. Type: string
 #. Description
-#: ../nova-api.templates:4001
+#: ../nova-api.templates:6001
 msgid ""
 "This IP address should be accessible from the clients that will use this "
 "service, so if you are installing a public cloud, this should be a public IP "
@@ -444,13 +470,13 @@ msgstr ""
 
 #. Type: string
 #. Description
-#: ../nova-api.templates:5001
+#: ../nova-api.templates:7001
 msgid "Name of the region to register:"
 msgstr "Name der Region zum Registrieren:"
 
 #. Type: string
 #. Description
-#: ../nova-api.templates:5001
+#: ../nova-api.templates:7001
 msgid ""
 "Openstack can be used using availability zones, with each region "
 "representing a location. Please enter the zone that you wish to use when "
@@ -462,7 +488,7 @@ msgstr ""
 
 #. Type: boolean
 #. Description
-#: ../nova-api.templates:6001
+#: ../nova-api.templates:8001
 #, fuzzy
 #| msgid "Set up a database for Nova?"
 msgid "Set up a database for Nova API?"
@@ -470,7 +496,7 @@ msgstr "Datenbank für Nova einrichten?"
 
 #. Type: boolean
 #. Description
-#: ../nova-api.templates:6001
+#: ../nova-api.templates:8001
 #, fuzzy
 #| msgid ""
 #| "You can change this setting later on by running \"dpkg-reconfigure -plow "
@@ -509,6 +535,16 @@ msgstr ""
 #: ../nova-consoleproxy.templates:1001
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dies kann später in /etc/default/nova-consoleproxy geändert werden."
+
+#~ msgid "Keystone Auth Token:"
+#~ msgstr "Keystone-Authentifizierungs-Token:"
+
+#~ msgid ""
+#~ "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
+#~ "token."
+#~ msgstr ""
+#~ "Zur Konfiguration seines Endpunkts in Keystone benötigt »nova-api« das "
+#~ "Keystone-Authentifizierungs-Token."
 
 #~ msgid "Value for neutron_url:"
 #~ msgstr "Wert für »neutron_url«:"
