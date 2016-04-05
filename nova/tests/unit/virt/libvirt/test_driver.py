@@ -10357,15 +10357,11 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
     @mock.patch.object(host.Host,
                        'has_min_version', return_value=True)
-    @mock.patch.object(FakeVirtDomain, 'detachDeviceFlags')
-    @mock.patch.object(utils, 'get_image_from_system_metadata',
-                       return_value=None)
-    def test_detach_sriov_ports(self,
-                                mock_get_image_metadata,
-                                mock_detachDeviceFlags,
-                                mock_has_min_version):
+    def _test_detach_sriov_ports(self,
+                                 mock_has_min_version, vif_type):
         instance = objects.Instance(**self.test_instance)
 
+        expeted_pci_slot = "0000:00:00.0"
         network_info = _fake_network_info(self, 1)
         network_info[0]['vnic_type'] = network_model.VNIC_TYPE_DIRECT
         # some more adjustments for the fake network_info so that
@@ -10374,27 +10370,37 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         # and most importantly the pci_slot which is translated to
         # cfg.source_dev, then to PciDevice.address and sent to
         # _detach_pci_devices
-        network_info[0]['profile'] = dict(pci_slot="0000:00:00.0")
-        network_info[0]['type'] = "hw_veb"
+        network_info[0]['profile'] = dict(pci_slot=expeted_pci_slot)
+        network_info[0]['type'] = vif_type
         network_info[0]['details'] = dict(vlan="2145")
         instance.info_cache = objects.InstanceInfoCache(
             network_info=network_info)
         # fill the pci_devices of the instance so that
         # pci_manager.get_instance_pci_devs will not return an empty list
         # which will eventually fail the assertion for detachDeviceFlags
+        expected_pci_device_obj = (
+            objects.PciDevice(address=expeted_pci_slot, request_id=None))
         instance.pci_devices = objects.PciDeviceList()
-        instance.pci_devices.objects = [
-            objects.PciDevice(address='0000:00:00.0', request_id=None)
-        ]
+        instance.pci_devices.objects = [expected_pci_device_obj]
 
         domain = FakeVirtDomain()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         guest = libvirt_guest.Guest(domain)
 
-        drvr._detach_sriov_ports(self.context, instance, guest)
-        mock_get_image_metadata.assert_called_once_with(
-            instance.system_metadata)
-        self.assertTrue(mock_detachDeviceFlags.called)
+        with mock.patch.object(drvr, '_detach_pci_devices') as mock_detach_pci:
+            drvr._detach_sriov_ports(self.context, instance, guest)
+            mock_detach_pci.assert_called_once_with(
+                guest, [expected_pci_device_obj])
+
+    def test_detach_sriov_ports_interface_interface_hostdev(self):
+        # Note: test detach_sriov_ports method for vif with config
+        # LibvirtConfigGuestInterface
+        self._test_detach_sriov_ports(vif_type="hw_veb")
+
+    def test_detach_sriov_ports_interface_pci_hostdev(self):
+        # Note: test detach_sriov_ports method for vif with config
+        # LibvirtConfigGuestHostdevPCI
+        self._test_detach_sriov_ports(vif_type="ib_hostdev")
 
     @mock.patch.object(host.Host, 'has_min_version', return_value=True)
     @mock.patch.object(FakeVirtDomain, 'detachDeviceFlags')
@@ -13846,14 +13852,20 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
                                 **inst)
 
     @staticmethod
-    def _disk_info():
+    def _disk_info(type='qcow2', config_disk=False):
         # 10G root and 512M swap disk
-        disk_info = [{'disk_size': 1, 'type': 'qcow2',
+        disk_info = [{'disk_size': 1, 'type': type,
                       'virt_disk_size': 10737418240, 'path': '/test/disk',
                       'backing_file': '/base/disk'},
-                     {'disk_size': 1, 'type': 'qcow2',
+                     {'disk_size': 1, 'type': type,
                       'virt_disk_size': 536870912, 'path': '/test/disk.swap',
                       'backing_file': '/base/swap_512'}]
+
+        if config_disk:
+            disk_info.append({'disk_size': 1, 'type': 'raw',
+                              'virt_disk_size': 1024,
+                              'path': '/test/disk.config'})
+
         return jsonutils.dumps(disk_info)
 
     def test_migrate_disk_and_power_off_exception(self):
@@ -14300,17 +14312,15 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
     def test_disk_size_from_instance_disk_info(self):
         instance_data = {'root_gb': 10, 'ephemeral_gb': 20, 'swap_gb': 30}
         inst = objects.Instance(**instance_data)
-        info = {'path': '/path/disk'}
         self.assertEqual(10 * units.Gi,
-            self.drvr._disk_size_from_instance(inst, info))
+                         self.drvr._disk_size_from_instance(inst, 'disk'))
 
-        info = {'path': '/path/disk.local'}
         self.assertEqual(20 * units.Gi,
-            self.drvr._disk_size_from_instance(inst, info))
+                         self.drvr._disk_size_from_instance(inst,
+                                                            'disk.local'))
 
-        info = {'path': '/path/disk.swap'}
         self.assertEqual(0,
-            self.drvr._disk_size_from_instance(inst, info))
+                         self.drvr._disk_size_from_instance(inst, 'disk.swap'))
 
     @mock.patch('nova.utils.execute')
     def test_disk_raw_to_qcow2(self, mock_execute):
@@ -14446,10 +14456,25 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         migration.source_node = 'fake-source-node'
         migration.dest_node = 'fake-dest-node'
         image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
-        self.drvr.finish_migration(
-                      context.get_admin_context(), migration, ins_ref,
-                      self._disk_info(), [], image_meta,
-                      resize_instance, None, power_on)
+
+        # Source disks are raw to test conversion
+        disk_info = self._disk_info(type='raw', config_disk=True)
+
+        with mock.patch.object(self.drvr, '_disk_raw_to_qcow2',
+                               autospec=True) as mock_raw_to_qcow2:
+            self.drvr.finish_migration(
+                          context.get_admin_context(), migration, ins_ref,
+                          disk_info, [], image_meta,
+                          resize_instance, None, power_on)
+
+            # Assert that we converted the root and swap disks
+            convert_calls = [mock.call('/test/disk'),
+                             mock.call('/test/disk.swap')]
+            mock_raw_to_qcow2.assert_has_calls(convert_calls, any_order=True)
+
+            # Implicitly assert that we did not convert the config disk
+            self.assertEqual(len(convert_calls), mock_raw_to_qcow2.call_count)
+
         self.assertTrue(self.fake_create_domain_called)
         self.assertEqual(
             resize_instance, self.fake_disk_resize_called)

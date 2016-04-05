@@ -2100,16 +2100,17 @@ class VMOps(object):
                                                network_info=network_info)
 
     def _get_host_uuid_from_aggregate(self, context, hostname):
-        current_aggregate = objects.AggregateList.get_by_host(
-            context, CONF.host, key=pool_states.POOL_FLAG)[0]
-        if not current_aggregate:
-            raise exception.AggregateHostNotFound(host=CONF.host)
-        try:
-            return current_aggregate.metadata[hostname]
-        except KeyError:
-            reason = _('Destination host:%s must be in the same '
-                       'aggregate as the source server') % hostname
+        aggregate_list = objects.AggregateList.get_by_host(
+            context, CONF.host, key=pool_states.POOL_FLAG)
+
+        reason = _('Destination host:%s must be in the same '
+                   'aggregate as the source server') % hostname
+        if len(aggregate_list) == 0:
             raise exception.MigrationPreCheckError(reason=reason)
+        if hostname not in aggregate_list[0].metadata:
+            raise exception.MigrationPreCheckError(reason=reason)
+
+        return aggregate_list[0].metadata[hostname]
 
     def _ensure_host_in_aggregate(self, context, hostname):
         self._get_host_uuid_from_aggregate(context, hostname)
@@ -2335,23 +2336,26 @@ class VMOps(object):
 
     def _call_live_migrate_command(self, command_name, vm_ref, migrate_data):
         """unpack xapi specific parameters, and call a live migrate command."""
-        destination_sr_ref = migrate_data.destination_sr_ref
-        migrate_send_data = migrate_data.migrate_send_data
         # NOTE(coreywright): though a nullable object field, migrate_send_data
         # is required for XenAPI live migration commands
+        migrate_send_data = None
+        if 'migrate_send_data' in migrate_data:
+            migrate_send_data = migrate_data.migrate_send_data
         if not migrate_send_data:
             raise exception.InvalidParameterValue(
                 'XenAPI requires destination migration data')
         # NOTE(coreywright): convert to xmlrpc marshallable type
         migrate_send_data = dict(migrate_send_data)
 
+        destination_sr_ref = migrate_data.destination_sr_ref
         vdi_map = self._generate_vdi_map(destination_sr_ref, vm_ref)
 
         # Add destination SR refs for all of the VDIs that we created
         # as part of the pre migration callback
-        if 'pre_live_migration_result' in migrate_data:
-            pre_migrate_data = migrate_data['pre_live_migration_result']
-            sr_uuid_map = pre_migrate_data.get('sr_uuid_map', [])
+        sr_uuid_map = None
+        if "sr_uuid_map" in migrate_data:
+            sr_uuid_map = migrate_data.sr_uuid_map
+        if sr_uuid_map:
             for sr_uuid in sr_uuid_map:
                 # Source and destination SRs have the same UUID, so get the
                 # reference for the local SR
@@ -2364,6 +2368,16 @@ class VMOps(object):
         self._session.call_xenapi(command_name, vm_ref,
                                   migrate_send_data, True,
                                   vdi_map, vif_map, options)
+
+    def pre_live_migration(self, context, instance, block_device_info,
+                           network_info, disk_info, migrate_data):
+        if migrate_data is None:
+            raise exception.InvalidParameterValue(
+                    'XenAPI requires migrate data')
+
+        migrate_data.sr_uuid_map = self.connect_block_device_volumes(
+                block_device_info)
+        return migrate_data
 
     def live_migrate(self, context, instance, destination_hostname,
                      post_method, recover_method, block_migration,
@@ -2388,11 +2402,7 @@ class VMOps(object):
                 migrate_data.kernel_file = kernel
                 migrate_data.ramdisk_file = ramdisk
 
-            if block_migration:
-                if not migrate_data:
-                    raise exception.InvalidParameterValue('Block Migration '
-                                    'requires migrate data from destination')
-
+            if migrate_data is not None and migrate_data.block_migration:
                 iscsi_srs = self._get_iscsi_srs(context, instance)
                 try:
                     self._call_live_migrate_command(

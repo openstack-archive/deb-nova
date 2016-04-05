@@ -350,6 +350,8 @@ class RequestSpec(base.NovaObject):
         spec_obj.num_instances = 1
         spec_obj.instance_uuid = instance_uuid
         spec_obj.instance_group = instance_group
+        if spec_obj.instance_group is None and filter_properties:
+            spec_obj._populate_group_info(filter_properties)
         spec_obj.project_id = context.project_id
         spec_obj._image_meta_from_image(image)
         spec_obj._from_flavor(flavor)
@@ -447,6 +449,18 @@ class RequestSpec(base.NovaObject):
         db_spec = self._save_in_db(self._context, self.instance_uuid, updates)
         self._from_db_object(self._context, self, db_spec)
         self.obj_reset_changes()
+
+    def reset_forced_destinations(self):
+        """Clears the forced destination fields from the RequestSpec object.
+
+        This method is for making sure we don't ask the scheduler to give us
+        again the same destination(s) without persisting the modifications.
+        """
+        self.force_hosts = None
+        self.force_nodes = None
+        # NOTE(sbauza): Make sure we don't persist this, we need to keep the
+        # original request for the forced hosts
+        self.obj_reset_changes(['force_hosts', 'force_nodes'])
 
 
 @base.NovaObjectRegistry.register
