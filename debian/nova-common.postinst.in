@@ -105,7 +105,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	if [ "$RET" = "true" ]; then
 		pkgos_dbc_postinst /etc/nova/nova.conf database connection nova $@
 		echo "nova-common: Now running \"nova-manage db sync\", this may take a while..."
-		su nova -c "nova-manage db sync" || true
+		su nova -s /bin/sh -c "nova-manage db sync" || true
 	fi
 
 	db_stop

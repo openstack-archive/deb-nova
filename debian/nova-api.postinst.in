@@ -18,7 +18,7 @@ if [ "$1" = "configure" ] ; then
 	if [ "$RET" = "true" ]; then
 		pkgos_dbc_postinst --suite nova /etc/nova/nova.conf api_database connection novaapi $@
 		echo "nova-common: Now running \"nova-manage api_db sync\", this may take a while..."
-		su nova -c "nova-manage api_db sync" || true
+		su nova -s /bin/sh -c "nova-manage api_db sync" || true
 	fi
 
 	db_stop
