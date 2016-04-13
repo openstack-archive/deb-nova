@@ -80,7 +80,7 @@ if [ "$1" = "configure" ] || [ "$1" = "reconfigure" ] ; then
 	. /usr/share/debconf/confmodule
 	. /usr/share/dbconfig-common/dpkg/postinst
 
-	pkgos_var_user_group nova
+	pkgos_var_user_group nova /bin/sh
 	maintain_var_lib_nova_perms $@
 
 	# Create config files if they don't exist
