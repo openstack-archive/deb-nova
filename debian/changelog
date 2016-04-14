@@ -1,10 +1,11 @@
-nova (2:13.0.0-2) UNRELEASED; urgency=medium
+nova (2:13.0.0-2) unstable; urgency=medium
 
+  [ Ondřej Nový ]
   * Use /bin/sh as su shell in postinst script explicitly
   * Standards-Version is 3.9.8 now (no change)
   * Use /bin/sh as default shell for "nova" user
 
- -- Ondřej Nový <novy@ondrej.org>  Fri, 08 Apr 2016 16:29:12 +0200
+ -- Thomas Goirand <zigo@debian.org>  Thu, 14 Apr 2016 11:04:59 +0000
 
 nova (2:13.0.0-1) unstable; urgency=medium
 
