@@ -56,7 +56,7 @@ read_neutron_config () {
 	pkgos_read_config -p high ${NOVA_CONF} neutron metadata_proxy_shared_secret nova/metadata_secret
 }
 
-pkgos_var_user_group nova
+pkgos_var_user_group nova /bin/sh
 pkgos_dbc_read_conf -pkg nova-common ${NOVA_CONF} database connection nova $@
 pkgos_rabbit_read_conf ${NOVA_CONF} oslo_messaging_rabbit nova
 pkgos_read_admin_creds ${NOVA_CONF} keystone_authtoken nova
