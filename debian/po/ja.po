@@ -10,7 +10,7 @@ msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2016-03-29 11:54+0000\n"
-"PO-Revision-Date: 2016-02-23 12:00+0900\n"
+"PO-Revision-Date: 2016-04-07 12:59+0900\n"
 "Last-Translator: Takuma Yamada <tyamada@takumayamada.com>\n"
 "Language-Team: Japanese <debian-japanese@lists.debian.org>\n"
 "Language: ja\n"
@@ -101,8 +101,8 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-common\"."
 msgstr ""
-"「dpkg-reconfigure -plow nova-common」を実行することにより、後でこの設定を変"
-"更することができます。"
+"この設定は、後で \"dpkg-reconfigure -plow nova-common\" を実行することで変更"
+"できます。"
 
 #. Type: multiselect
 #. Description
@@ -356,7 +356,7 @@ msgstr "XenAPI (XCP サーバ) への接続に使うパスワードを入力し�
 #. Description
 #: ../nova-api.templates:1001
 msgid "Register Nova in the keystone endpoint catalog?"
-msgstr "Nova を Keystone のエンドポイントのカタログに登録しますか?"
+msgstr "Nova を Keystone のエンドポイントカタログに登録しますか?"
 
 #. Type: boolean
 #. Description
@@ -366,14 +366,13 @@ msgid ""
 "accessible. This is done using \"keystone service-create\" and \"keystone "
 "endpoint-create\". Select if you want to run these commands now."
 msgstr ""
-"各 OpenStack のサービス (各 API) がアクセスできるようにするために登録する必要"
-"があります。これは「keystone service-create」と「keystone endpoint-create」を"
-"使って行われます。今これらのコマンドを実行したい場合に選択します。"
+"各 OpenStack サービス (各 API) は、アクセス可能にするために登録する必要があり"
+"ます。\"keystone service-create\" と \"keystone endpoint-create\" を使って登"
+"録することができます。ここでこれらのコマンドを実行したい場合に選択します。"
 
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:1001
-#, fuzzy
 #| msgid ""
 #| "Note that you will need to have an up and running keystone server on "
 #| "which to connect using the Keystone auth token."
@@ -382,8 +381,9 @@ msgid ""
 "to connect using a known admin project name, admin username and password. "
 "The admin auth token is not used anymore."
 msgstr ""
-"Keystone 認証トークンを使って接続するために、Keystone サーバの起動および実行"
-"が必要になりますので注意してください。"
+"既知の管理プロジェクト名、管理者のユーザ名とパスワードを使用して接続するに"
+"は、Keystone サーバの起動および実行が必要になりますので注意してください。管理"
+"者認証トークンはもう使用されていません。"
 
 #. Type: string
 #. Description
@@ -404,10 +404,9 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-api.templates:3001
-#, fuzzy
 #| msgid "Neutron admin tenant name:"
 msgid "Keystone admin name:"
-msgstr "Neutron 管理テナント (tenant) 名:"
+msgstr "Keystone 管理者名:"
 
 #. Type: string
 #. Description
@@ -421,22 +420,23 @@ msgid ""
 "To register the service endpoint, this package needs to know the Admin "
 "login, name, project name, and password to the Keystone server."
 msgstr ""
+"サービスのエンドポイントを登録するには、このパッケージが Keystone サーバへの"
+"管理者ログイン、名前、プロジェクト名、およびパスワードを知っている必要があり"
+"ます。"
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
-#, fuzzy
 #| msgid "Neutron admin tenant name:"
 msgid "Keystone admin project name:"
-msgstr "Neutron 管理テナント (tenant) 名:"
+msgstr "Keystone 管理プロジェクト名:"
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:5001
-#, fuzzy
 #| msgid "Neutron administrator password:"
 msgid "Keystone admin password:"
-msgstr "Neutron 管理者パスワード:"
+msgstr "Keystone 管理者パスワード:"
 
 #. Type: string
 #. Description
@@ -463,8 +463,8 @@ msgid ""
 "address."
 msgstr ""
 "この IP アドレスは、このサービスを利用するクライアントからアクセス可能でなけ"
-"ればならないので、パブリッククラウドをインストールしている場合、これはパブ"
-"リック IP アドレスでなければなりません。"
+"ればなりません。パブリッククラウドをインストールしている場合は、パブリック "
+"IP アドレスにする必要があります。"
 
 #. Type: string
 #. Description
@@ -486,15 +486,13 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
 #| msgid "Set up a database for Nova?"
 msgid "Set up a database for Nova API?"
-msgstr "Nova 用のデータベースを設定しますか?"
+msgstr "Nova API 用のデータベースを設定しますか?"
 
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
 #| msgid ""
 #| "You can change this setting later on by running \"dpkg-reconfigure -plow "
 #| "nova-common\"."
@@ -502,8 +500,8 @@ msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-api\"."
 msgstr ""
-"「dpkg-reconfigure -plow nova-common」を実行することにより、後でこの設定を変"
-"更することができます。"
+"この設定は、後で \"dpkg-reconfigure -plow nova-api\" を実行することで変更"
+"できます。"
 
 #. Type: select
 #. Description
