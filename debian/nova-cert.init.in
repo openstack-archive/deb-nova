@@ -18,3 +18,4 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Cert"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-cert
+SYSTEMD_DOC="man:${NAME}(1)"

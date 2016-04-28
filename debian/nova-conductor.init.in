@@ -18,3 +18,4 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute Conductor"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-conductor
+SYSTEMD_DOC="man:${NAME}(1)"

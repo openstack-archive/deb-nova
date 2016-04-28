@@ -18,6 +18,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute novncproxy"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-novncproxy
+SYSTEMD_DOC="man:${NAME}(1)"
 
 # Exit if the default file not present, or not set to this daemon
 if [ -r /etc/default/nova-consoleproxy ] ; then

@@ -16,3 +16,4 @@
 DESC="OpenStack Compute Console"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-console
+SYSTEMD_DOC="man:${NAME}(1)"

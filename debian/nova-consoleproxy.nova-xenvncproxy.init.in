@@ -14,6 +14,7 @@
 DESC="OpenStack XVP VNC proxy"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-xvpvncproxy
+SYSTEMD_DOC="man:${NAME}(1)"
 
 # Exit if the default file not present, or not set to this daemon
 if [ -r /etc/default/nova-consoleproxy ] ; then

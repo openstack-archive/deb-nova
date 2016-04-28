@@ -19,6 +19,7 @@ PATH=/sbin:/usr/sbin:/bin:/usr/bin
 DESC="OpenStack Compute"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-compute
+SYSTEMD_DOC="man:${NAME}(1)"
 DAEMON_ARGS=""
 if [ -f '/etc/nova/nova-compute.conf' ] ; then
 	DAEMON_ARGS="--config-file=/etc/nova/nova-compute.conf"

@@ -16,3 +16,4 @@
 DESC="OpenStack Compute Network"
 PROJECT_NAME=nova
 NAME=${PROJECT_NAME}-network
+SYSTEMD_DOC="man:${NAME}(1)"

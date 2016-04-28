@@ -15,4 +15,5 @@
 
 DESC="OpenStack Compute Scheduler"
 PROJECT_NAME=nova
-NAME=nova-scheduler
+NAME=${PROJECT_NAME}-scheduler
+SYSTEMD_DOC="man:${NAME}(1)"
