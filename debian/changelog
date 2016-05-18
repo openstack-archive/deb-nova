@@ -1,7 +1,9 @@
-nova (2:13.0.0-3) UNRELEASED; urgency=medium
+nova (2:13.0.0-3) unstable; urgency=medium
 
   [ Thomas Goirand ]
   * Updated Japanese debconf templates translation update (Closes: #820768).
+  * Updated Dutch debconf templates translation (Closes: #822887).
+  * Updated Brazilian Portuguese debconf templates (Closes: #824336).
 
   [ Ondřej Nový ]
   * Added Documentation to systemd units

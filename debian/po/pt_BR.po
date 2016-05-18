@@ -1,14 +1,14 @@
 # Debconf translations for nova.
 # Copyright (C) 2012 THE nova'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the nova package.
-# Adriano Rafael Gomes <adrianorg@arg.eti.br>, 2012-2014.
+# Adriano Rafael Gomes <adrianorg@arg.eti.br>, 2012-2015.
 #
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 2014.1.2-4\n"
+"Project-Id-Version: nova 2015.1.0-8\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2016-03-29 11:54+0000\n"
-"PO-Revision-Date: 2014-09-04 13:01-0300\n"
+"PO-Revision-Date: 2016-05-14 13:23-0300\n"
 "Last-Translator: Adriano Rafael Gomes <adrianorg@arg.eti.br>\n"
 "Language-Team: Brazilian Portuguese <debian-l10n-portuguese@lists.debian."
 "org>\n"
@@ -264,7 +264,7 @@ msgstr "Por favor, informe a senha usada para conectar ao servidor RabbitMQ."
 #. Description
 #: ../nova-common.templates:16001
 msgid "Metadata proxy shared secret:"
-msgstr ""
+msgstr "Segredo compartilhado do proxy de metadados:"
 
 #. Type: password
 #. Description
@@ -274,6 +274,9 @@ msgid ""
 "through the Neutron metadata agent, which serves as a proxy to the Nova "
 "metadata REST API server."
 msgstr ""
+"Instâncias de VM usando o Neutron para lidar com a rede recuperam seus "
+"metadados através do agente de metadados Neutron, o qual funciona como um "
+"proxy para o servidor de API REST de metadados Nova."
 
 #. Type: password
 #. Description
@@ -284,6 +287,10 @@ msgid ""
 "same shared password should be used when setting up the neutron-metadata-"
 "agent package."
 msgstr ""
+"Por favor, informe a senha que deve ser usada para proteger a comunicação "
+"entre o agente proxy de metadados Neutron e o servidor de metadados Nova. A "
+"mesma senha compartilhada deve ser usada ao configurar o pacote neutron-"
+"metadata-agent."
 
 #. Type: string
 #. Description
@@ -375,17 +382,15 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:1001
-#, fuzzy
-#| msgid ""
-#| "Note that you will need to have an up and running keystone server on "
-#| "which to connect using the Keystone auth token."
 msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using a known admin project name, admin username and password. "
 "The admin auth token is not used anymore."
 msgstr ""
 "Note que você precisará ter um servidor Keystone configurado e em execução "
-"no qual conectar usando o \"token\" de autenticação do Keystone."
+"no qual conectar usando um nome de projeto de admin, nome de usuário de "
+"admin e senha conhecidos. O \"token\" de autenticação do admin não é mais "
+"usado."
 
 #. Type: string
 #. Description
@@ -407,10 +412,8 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-api.templates:3001
-#, fuzzy
-#| msgid "Neutron admin tenant name:"
 msgid "Keystone admin name:"
-msgstr "Nome de locatário (\"tenant\") do administrador do Neutron:"
+msgstr "Nome de admin do Keystone:"
 
 #. Type: string
 #. Description
@@ -424,22 +427,20 @@ msgid ""
 "To register the service endpoint, this package needs to know the Admin "
 "login, name, project name, and password to the Keystone server."
 msgstr ""
+"Para registrar o \"endpoint\" do serviço, esse pacote precisa saber o login, "
+"nome, nome do projeto e senha do Admin no servidor Keystone."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
-#, fuzzy
-#| msgid "Neutron admin tenant name:"
 msgid "Keystone admin project name:"
-msgstr "Nome de locatário (\"tenant\") do administrador do Neutron:"
+msgstr "Nome do projeto admin no Keystone:"
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:5001
-#, fuzzy
-#| msgid "Neutron administrator password:"
 msgid "Keystone admin password:"
-msgstr "Senha do administrador do Neutron:"
+msgstr "Senha do admin no Keystone:"
 
 #. Type: string
 #. Description
@@ -490,24 +491,18 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
-#| msgid "Set up a database for Nova?"
 msgid "Set up a database for Nova API?"
-msgstr "Configurar um banco de dados para o Nova?"
+msgstr "Configurar um banco de dados para a API do Nova?"
 
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
-#| msgid ""
-#| "You can change this setting later on by running \"dpkg-reconfigure -plow "
-#| "nova-common\"."
 msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-api\"."
 msgstr ""
 "Você pode mudar essa configuração depois, executando \"dpkg-reconfigure -"
-"plow nova-common\"."
+"plow nova-api\"."
 
 #. Type: select
 #. Description

@@ -259,6 +259,7 @@ Architecture: all
 Depends: adduser,
          dpkg-dev,
          libvirt-daemon-system,
+         lxc,
          nova-common,
          nova-compute,
          python-libvirt (>= 1.2.5),
