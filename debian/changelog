@@ -2,6 +2,7 @@ nova (2:14.0.0~b1-1) experimental; urgency=medium
 
   * New upstream release.
   * Fixed (build-)depends for this release.
+  * Update the namespace list when generating nova.conf.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 08 Jun 2016 14:46:53 +0200
 
