@@ -14,14 +14,11 @@
 #    under the License.
 
 import mock
-from mox3 import mox
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import encodeutils
 import webob
 
-from nova.api.openstack.compute.legacy_v2.contrib import security_groups as \
-    secgroups_v2
 from nova.api.openstack.compute import security_groups as \
     secgroups_v21
 from nova.api.openstack import wsgi
@@ -675,21 +672,21 @@ class TestSecurityGroupsV21(test.TestCase):
                           self.manager._addSecurityGroup, self.req,
                           UUID_SERVER, body)
 
-    def test_associate(self):
+    @mock.patch.object(nova.db, 'instance_add_security_group')
+    def test_associate(self, mock_add_security_group):
         self.stub_out('nova.db.instance_get', return_server)
         self.stub_out('nova.db.instance_get_by_uuid',
                        return_server_by_uuid)
-        self.mox.StubOutWithMock(nova.db, 'instance_add_security_group')
-        nova.db.instance_add_security_group(mox.IgnoreArg(),
-                                            mox.IgnoreArg(),
-                                            mox.IgnoreArg())
+
         self.stub_out('nova.db.security_group_get_by_name',
                        return_security_group_without_instances)
-        self.mox.ReplayAll()
 
         body = dict(addSecurityGroup=dict(name="test"))
 
         self.manager._addSecurityGroup(self.req, UUID_SERVER, body)
+        mock_add_security_group.assert_called_once_with(mock.ANY,
+                                                        mock.ANY,
+                                                        mock.ANY)
 
     def test_disassociate_by_non_existing_security_group_name(self):
         self.stub_out('nova.db.instance_get', return_server)
@@ -766,27 +763,20 @@ class TestSecurityGroupsV21(test.TestCase):
                           self.manager._removeSecurityGroup, self.req,
                           UUID_SERVER, body)
 
-    def test_disassociate(self):
+    @mock.patch.object(nova.db, 'instance_remove_security_group')
+    def test_disassociate(self, mock_remove_sec_group):
         self.stub_out('nova.db.instance_get', return_server)
         self.stub_out('nova.db.instance_get_by_uuid',
                       return_server_by_uuid)
-        self.mox.StubOutWithMock(nova.db, 'instance_remove_security_group')
-        nova.db.instance_remove_security_group(mox.IgnoreArg(),
-                                    mox.IgnoreArg(),
-                                    mox.IgnoreArg())
         self.stub_out('nova.db.security_group_get_by_name',
                       return_security_group_by_name)
-        self.mox.ReplayAll()
 
         body = dict(removeSecurityGroup=dict(name="test"))
 
         self.manager._removeSecurityGroup(self.req, UUID_SERVER, body)
-
-
-class TestSecurityGroupsV2(TestSecurityGroupsV21):
-    secgrp_ctl_cls = secgroups_v2.SecurityGroupController
-    server_secgrp_ctl_cls = secgroups_v2.ServerSecurityGroupController
-    secgrp_act_ctl_cls = secgroups_v2.SecurityGroupActionController
+        mock_remove_sec_group.assert_called_once_with(mock.ANY,
+                                                      mock.ANY,
+                                                      mock.ANY)
 
 
 class TestSecurityGroupRulesV21(test.TestCase):
@@ -1264,10 +1254,6 @@ class TestSecurityGroupRulesV21(test.TestCase):
                           self.req, {'security_group_rule': rule})
 
 
-class TestSecurityGroupRulesV2(TestSecurityGroupRulesV21):
-    secgrp_ctl_cls = secgroups_v2.SecurityGroupRulesController
-
-
 UUID1 = '00000000-0000-0000-0000-000000000001'
 UUID2 = '00000000-0000-0000-0000-000000000002'
 UUID3 = '00000000-0000-0000-0000-000000000003'
@@ -1397,12 +1383,6 @@ class SecurityGroupsOutputTestV21(test.TestCase):
         res = self._make_request(url)
 
         self.assertEqual(res.status_int, 404)
-
-
-class SecurityGroupsOutputTestV2(SecurityGroupsOutputTestV21):
-
-    def _setup_app(self):
-        return fakes.wsgi_app(init_only=('servers',))
 
 
 class SecurityGroupsOutputPolicyEnforcementV21(test.NoDBTestCase):

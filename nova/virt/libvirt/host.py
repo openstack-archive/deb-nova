@@ -37,7 +37,6 @@ from eventlet import greenio
 from eventlet import greenthread
 from eventlet import patcher
 from eventlet import tpool
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import importutils
@@ -45,6 +44,7 @@ from oslo_utils import units
 from oslo_utils import versionutils
 import six
 
+import nova.conf
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
@@ -65,9 +65,7 @@ native_socket = patcher.original('socket')
 native_threading = patcher.original("threading")
 native_Queue = patcher.original("Queue" if six.PY2 else "queue")
 
-CONF = cfg.CONF
-CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('my_ip', 'nova.netconf')
+CONF = nova.conf.CONF
 
 
 # This list is for libvirt hypervisor drivers that need special handling.
@@ -485,7 +483,7 @@ class Host(object):
                 self._event_lifecycle_callback,
                 self)
         except Exception as e:
-            LOG.warn(_LW("URI %(uri)s does not support events: %(error)s"),
+            LOG.warning(_LW("URI %(uri)s does not support events: %(error)s"),
                      {'uri': self._uri, 'error': e})
 
         try:
@@ -501,7 +499,7 @@ class Host(object):
             LOG.debug("The version of python-libvirt does not support "
                       "registerCloseCallback or is too old: %s", e)
         except libvirt.libvirtError as e:
-            LOG.warn(_LW("URI %(uri)s does not support connection"
+            LOG.warning(_LW("URI %(uri)s does not support connection"
                          " events: %(error)s"),
                      {'uri': self._uri, 'error': e})
 
@@ -799,7 +797,7 @@ class Host(object):
                 except libvirt.libvirtError as ex:
                     error_code = ex.get_error_code()
                     if error_code == libvirt.VIR_ERR_NO_SUPPORT:
-                        LOG.warn(_LW("URI %(uri)s does not support full set"
+                        LOG.warning(_LW("URI %(uri)s does not support full set"
                                      " of host capabilities: %(error)s"),
                                      {'uri': self._uri, 'error': ex})
                     else:
@@ -941,9 +939,9 @@ class Host(object):
                     # TODO(sahid): Use get_info...
                     dom_mem = int(guest._get_domain_info(self)[2])
                 except libvirt.libvirtError as e:
-                    LOG.warn(_LW("couldn't obtain the memory from domain:"
-                                 " %(uuid)s, exception: %(ex)s"),
-                             {"uuid": guest.uuid, "ex": e})
+                    LOG.warning(_LW("couldn't obtain the memory from domain:"
+                                    " %(uuid)s, exception: %(ex)s"),
+                                {"uuid": guest.uuid, "ex": e})
                     continue
                 # skip dom0
                 if guest.id != 0:
@@ -1015,3 +1013,10 @@ class Host(object):
                 return False
         except IOError:
             return False
+
+    def is_migratable_xml_flag(self):
+        """Determines whether libvirt is supporting dump XML suitable for
+        migration.
+        """
+        return getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
+                       None) is not None

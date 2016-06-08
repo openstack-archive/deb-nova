@@ -21,6 +21,7 @@ import unicodedata
 
 import six
 
+from nova import db
 from nova.i18n import _
 
 
@@ -347,3 +348,18 @@ ipv6 = {
 cidr = {
     'type': 'string', 'format': 'cidr'
 }
+
+
+volume_size = {
+    'type': ['integer', 'string'],
+    'pattern': '^[0-9]+$',
+    'minimum': 1,
+    'maximum': db.MAX_INT
+}
+
+
+flavor_param_positive = copy.deepcopy(volume_size)
+
+
+flavor_param_non_negative = copy.deepcopy(volume_size)
+flavor_param_non_negative['minimum'] = 0

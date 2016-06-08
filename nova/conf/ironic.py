@@ -51,13 +51,10 @@ admin_url = cfg.StrOpt(
     'admin_url',
     help='Keystone public API endpoint.')
 
-client_log_level = cfg.StrOpt(
-    'client_log_level',
-    deprecated_for_removal=True,
-    help='Log level override for ironicclient. Set this in '
-         'order to override the global "default_log_levels", '
-         '"verbose", and "debug" settings. '
-         'DEPRECATED: use standard logging configuration.')
+cafile = cfg.StrOpt(
+    'cafile',
+    help='PEM encoded Certificate Authority to use when verifying HTTPs '
+         'connections.')
 
 admin_tenant_name = cfg.StrOpt(
     'admin_tenant_name',
@@ -81,7 +78,7 @@ ALL_OPTS = [api_version,
             admin_password,
             admin_auth_token,
             admin_url,
-            client_log_level,
+            cafile,
             admin_tenant_name,
             api_max_retries,
             api_retry_interval]
@@ -93,8 +90,4 @@ def register_opts(conf):
 
 
 def list_opts():
-    # Because of bug 1395819 in oslo.config we cannot pass in the OptGroup.
-    # As soon as this bug is fixed is oslo.config and Nova uses the
-    # version which contains this fix, we can pass in the OptGroup instead
-    # of its name. This allows the generation of the group help too.
-    return {ironic_group.name: ALL_OPTS}
+    return {ironic_group: ALL_OPTS}

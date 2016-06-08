@@ -342,7 +342,7 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
                              _validate, _get_image, _check_bdm,
                              _provision, _record_action_start):
         _get_image.return_value = (None, 'fake-image')
-        _validate.return_value = ({}, 1)
+        _validate.return_value = ({}, 1, None)
         _check_bdm.return_value = objects.BlockDeviceMappingList()
         _provision.return_value = 'instances'
 
@@ -352,6 +352,7 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
         # args since this is verified in compute test code.
         self.assertTrue(self.cells_rpcapi.build_instances.called)
 
+    @mock.patch.object(objects.RequestSpec, 'get_by_instance_uuid')
     @mock.patch.object(compute_api.API, '_record_action_start')
     @mock.patch.object(compute_api.API, '_resize_cells_support')
     @mock.patch.object(compute_utils, 'reserve_quota_delta')
@@ -361,7 +362,7 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
     @mock.patch.object(compute_api.API, '_check_auto_disk_config')
     @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
     def test_resize_instance(self, _bdms, _check, _extract, _save, _upsize,
-                             _reserve, _cells, _record):
+                             _reserve, _cells, _record, _spec_get_by_uuid):
         flavor = objects.Flavor(**test_flavor.fake_flavor)
         _extract.return_value = flavor
         orig_system_metadata = {}
@@ -392,6 +393,7 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
 
         self.assertTrue(self.cells_rpcapi.live_migrate_instance.called)
 
+    @mock.patch.object(objects.RequestSpec, 'get_by_instance_uuid')
     @mock.patch.object(objects.Instance, 'save')
     @mock.patch.object(objects.Instance, 'get_flavor')
     @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
@@ -401,7 +403,8 @@ class CellsConductorAPIRPCRedirect(test.NoDBTestCase):
     @mock.patch.object(compute_api.API, '_record_action_start')
     def test_rebuild_instance(self, _record_action_start,
         _checks_for_create_and_rebuild, _check_auto_disk_config,
-        _get_image, bdm_get_by_instance_uuid, get_flavor, instance_save):
+        _get_image, bdm_get_by_instance_uuid, get_flavor, instance_save,
+        _req_spec_get_by_inst_uuid):
         orig_system_metadata = {}
         instance = fake_instance.fake_instance_obj(self.context,
                 vm_state=vm_states.ACTIVE, cell_name='fake-cell',

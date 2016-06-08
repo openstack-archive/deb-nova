@@ -282,12 +282,16 @@ class TestImageMetaProps(test.NoDBTestCase):
 
     def test_obj_make_compatible(self):
         props = {
+            'hw_firmware_type': 'uefi',
+            'hw_cpu_realtime_mask': '^0-1',
+            'hw_cpu_thread_policy': 'prefer',
             'img_config_drive': 'mandatory',
             'os_admin_user': 'root',
             'hw_vif_multiqueue_enabled': True,
             'img_hv_type': 'kvm',
             'img_hv_requested_version': '>= 1.0',
             'os_require_quiesce': True,
+            'os_secure_boot': 'required',
         }
 
         obj = objects.ImageMetaProps(**props)
@@ -299,3 +303,8 @@ class TestImageMetaProps(test.NoDBTestCase):
             obj.hw_disk_bus = bus
             self.assertRaises(exception.ObjectActionError,
                               obj.obj_to_primitive, '1.0')
+
+    def test_set_os_secure_boot(self):
+        props = {'os_secure_boot': "required"}
+        secure_props = objects.ImageMetaProps.from_dict(props)
+        self.assertEqual("required", secure_props.os_secure_boot)

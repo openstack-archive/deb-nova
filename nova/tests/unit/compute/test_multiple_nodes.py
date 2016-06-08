@@ -25,7 +25,6 @@ from nova.virt import fake
 
 
 CONF = nova.conf.CONF
-CONF.import_opt('compute_manager', 'nova.service')
 
 
 class BaseTestCase(test.TestCase):
@@ -65,7 +64,7 @@ class FakeDriverMultiNodeTestCase(BaseTestCase):
 class MultiNodeComputeTestCase(BaseTestCase):
     def setUp(self):
         super(MultiNodeComputeTestCase, self).setUp()
-        self.flags(compute_driver='nova.virt.fake.FakeDriver')
+        self.flags(compute_driver='fake.FakeDriver')
         self.compute = importutils.import_object(CONF.compute_manager)
         self.flags(use_local=True, group='conductor')
         self.conductor = self.start_service('conductor',
@@ -168,6 +167,6 @@ class MultiNodeComputeTestCase(BaseTestCase):
 
         # Verify B gets deleted since now only A is reported by driver
         self.assertEqual(len(fake_compute_nodes), 1)
-        self.assertEqual(fake_compute_nodes[0]['hypervisor_hostname'], 'A')
+        self.assertEqual(fake_compute_nodes[0].hypervisor_hostname, 'A')
         self.assertEqual(sorted(self.compute._resource_tracker_dict.keys()),
                         ['A'])

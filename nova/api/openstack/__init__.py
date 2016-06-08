@@ -18,7 +18,6 @@
 WSGI middleware for OpenStack API controllers.
 """
 
-from oslo_config import cfg
 from oslo_log import log as logging
 import routes
 import six
@@ -28,8 +27,8 @@ import webob.exc
 
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+import nova.conf
 from nova import exception
-from nova.i18n import _
 from nova.i18n import _LC
 from nova.i18n import _LE
 from nova.i18n import _LI
@@ -40,39 +39,8 @@ from nova import utils
 from nova import wsgi as base_wsgi
 
 
-api_opts = [
-        cfg.BoolOpt('enabled',
-                    default=True,
-                    help='DEPRECATED: Whether the V2.1 API is enabled or not. '
-                    'This option will be removed in the near future.',
-                    deprecated_for_removal=True, deprecated_group='osapi_v21'),
-        cfg.ListOpt('extensions_blacklist',
-                    default=[],
-                    help='DEPRECATED: A list of v2.1 API extensions to never '
-                    'load. Specify the extension aliases here. '
-                    'This option will be removed in the near future. '
-                    'After that point you have to run all of the API.',
-                    deprecated_for_removal=True, deprecated_group='osapi_v21'),
-        cfg.ListOpt('extensions_whitelist',
-                    default=[],
-                    help='DEPRECATED: If the list is not empty then a v2.1 '
-                    'API extension will only be loaded if it exists in this '
-                    'list. Specify the extension aliases here. '
-                    'This option will be removed in the near future. '
-                    'After that point you have to run all of the API.',
-                    deprecated_for_removal=True, deprecated_group='osapi_v21'),
-        cfg.StrOpt('project_id_regex',
-                   help='DEPRECATED: The validation regex for project_ids '
-                   'used in urls. This defaults to [0-9a-f\-]+ if not set, '
-                   'which matches normal uuids created by keystone.',
-                   deprecated_for_removal=True, deprecated_group='osapi_v21')
-]
-api_opts_group = cfg.OptGroup(name='osapi_v21', title='API v2.1 Options')
-
 LOG = logging.getLogger(__name__)
-CONF = cfg.CONF
-CONF.register_group(api_opts_group)
-CONF.register_opts(api_opts, api_opts_group)
+CONF = nova.conf.CONF
 
 # List of v21 API extensions which are considered to form
 # the core API and so must be present
@@ -145,11 +113,14 @@ class LegacyV2CompatibleWrapper(base_wsgi.Middleware):
 
     def _filter_request_headers(self, req):
         """For keeping same behavior with v2 API, ignores microversions
-        HTTP header X-OpenStack-Nova-API-Version in the request.
+        HTTP headers X-OpenStack-Nova-API-Version and OpenStack-API-Version
+        in the request.
         """
 
         if wsgi.API_VERSION_REQUEST_HEADER in req.headers:
             del req.headers[wsgi.API_VERSION_REQUEST_HEADER]
+        if wsgi.LEGACY_API_VERSION_REQUEST_HEADER in req.headers:
+            del req.headers[wsgi.LEGACY_API_VERSION_REQUEST_HEADER]
         return req
 
     def _filter_response_headers(self, response):
@@ -159,13 +130,16 @@ class LegacyV2CompatibleWrapper(base_wsgi.Middleware):
 
         if wsgi.API_VERSION_REQUEST_HEADER in response.headers:
             del response.headers[wsgi.API_VERSION_REQUEST_HEADER]
+        if wsgi.LEGACY_API_VERSION_REQUEST_HEADER in response.headers:
+            del response.headers[wsgi.LEGACY_API_VERSION_REQUEST_HEADER]
 
         if 'Vary' in response.headers:
             vary_headers = response.headers['Vary'].split(',')
             filtered_vary = []
             for vary in vary_headers:
                 vary = vary.strip()
-                if vary == wsgi.API_VERSION_REQUEST_HEADER:
+                if (vary == wsgi.API_VERSION_REQUEST_HEADER or
+                    vary == wsgi.LEGACY_API_VERSION_REQUEST_HEADER):
                     continue
                 filtered_vary.append(vary)
             if filtered_vary:
@@ -252,85 +226,6 @@ class PlainMapper(APIMapper):
                                      **kwargs)
 
 
-class APIRouter(base_wsgi.Router):
-    """Routes requests on the OpenStack API to the appropriate controller
-    and method.
-    """
-    ExtensionManager = None  # override in subclasses
-
-    @classmethod
-    def factory(cls, global_config, **local_config):
-        """Simple paste factory, :class:`nova.wsgi.Router` doesn't have one."""
-        return cls()
-
-    def __init__(self, ext_mgr=None, init_only=None):
-        if ext_mgr is None:
-            if self.ExtensionManager:
-                ext_mgr = self.ExtensionManager()
-            else:
-                raise Exception(_("Must specify an ExtensionManager class"))
-
-        mapper = ProjectMapper()
-        self.resources = {}
-        self._setup_routes(mapper, ext_mgr, init_only)
-        self._setup_ext_routes(mapper, ext_mgr, init_only)
-        self._setup_extensions(ext_mgr)
-        super(APIRouter, self).__init__(mapper)
-
-    def _setup_ext_routes(self, mapper, ext_mgr, init_only):
-        for resource in ext_mgr.get_resources():
-            LOG.debug('Extending resource: %s',
-                      resource.collection)
-
-            if init_only is not None and resource.collection not in init_only:
-                continue
-
-            inherits = None
-            if resource.inherits:
-                inherits = self.resources.get(resource.inherits)
-                if not resource.controller:
-                    resource.controller = inherits.controller
-            wsgi_resource = wsgi.Resource(resource.controller,
-                                          inherits=inherits)
-            self.resources[resource.collection] = wsgi_resource
-            kargs = dict(
-                controller=wsgi_resource,
-                collection=resource.collection_actions,
-                member=resource.member_actions)
-
-            if resource.parent:
-                kargs['parent_resource'] = resource.parent
-
-            mapper.resource(resource.collection, resource.collection, **kargs)
-
-            if resource.custom_routes_fn:
-                resource.custom_routes_fn(mapper, wsgi_resource)
-
-    def _setup_extensions(self, ext_mgr):
-        for extension in ext_mgr.get_controller_extensions():
-            collection = extension.collection
-            controller = extension.controller
-
-            msg_format_dict = {'collection': collection,
-                               'ext_name': extension.extension.name}
-            if collection not in self.resources:
-                LOG.warning(_LW('Extension %(ext_name)s: Cannot extend '
-                                'resource %(collection)s: No such resource'),
-                            msg_format_dict)
-                continue
-
-            LOG.debug('Extension %(ext_name)s extended resource: '
-                      '%(collection)s',
-                      msg_format_dict)
-
-            resource = self.resources[collection]
-            resource.register_actions(controller)
-            resource.register_extensions(controller)
-
-    def _setup_routes(self, mapper, ext_mgr, init_only):
-        raise NotImplementedError()
-
-
 class APIRouterV21(base_wsgi.Router):
     """Routes requests on the OpenStack v2.1 API to the appropriate controller
     and method.
@@ -345,12 +240,10 @@ class APIRouterV21(base_wsgi.Router):
     def api_extension_namespace():
         return 'nova.api.v21.extensions'
 
-    def __init__(self, init_only=None, v3mode=False):
+    def __init__(self, init_only=None):
         # TODO(cyeoh): bp v3-api-extension-framework. Currently load
         # all extensions but eventually should be able to exclude
         # based on a config file
-        # TODO(oomichi): We can remove v3mode argument after moving all v3 APIs
-        # to v2.1.
         def _check_load_extension(ext):
             if (self.init_only is None or ext.obj.alias in
                 self.init_only) and isinstance(ext.obj,
@@ -366,11 +259,6 @@ class APIRouterV21(base_wsgi.Router):
                     if ext.obj.alias not in blacklist:
                         return self._register_extension(ext)
             return False
-
-        if not CONF.osapi_v21.enabled:
-            LOG.info(_LI("V2.1 API has been disabled by configuration"))
-            LOG.warning(_LW("In the M release you must run the v2.1 API."))
-            return
 
         if (CONF.osapi_v21.extensions_blacklist or
                 CONF.osapi_v21.extensions_whitelist):
@@ -398,10 +286,7 @@ class APIRouterV21(base_wsgi.Router):
             invoke_on_load=True,
             invoke_kwds={"extension_info": self.loaded_extension_info})
 
-        if v3mode:
-            mapper = PlainMapper()
-        else:
-            mapper = ProjectMapper()
+        mapper = ProjectMapper()
 
         self.resources = {}
 

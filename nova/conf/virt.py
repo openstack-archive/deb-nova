@@ -13,8 +13,9 @@
 # under the License.
 
 from oslo_config import cfg
+from oslo_config import types
 
-from nova import paths
+from nova.conf import paths
 
 vcpu_pin_set = cfg.StrOpt(
     'vcpu_pin_set',
@@ -299,6 +300,80 @@ timeout_nbd = cfg.IntOpt(
     help='Amount of time, in seconds, to wait for NBD '
     'device start up.')
 
+image_cache_manager_interval = cfg.IntOpt(
+    'image_cache_manager_interval',
+    default=2400,
+    help='Number of seconds to wait between runs of the image '
+    'cache manager. Set to -1 to disable. '
+    'Setting this to 0 will run at the default rate.')
+
+image_cache_subdirectory_name = cfg.StrOpt(
+    'image_cache_subdirectory_name',
+    default='_base',
+    help='Where cached images are stored under $instances_path. '
+    'This is NOT the full path - just a folder name. '
+    'For per-compute-host cached images, set to _base_$my_ip')
+
+remove_unused_base_images = cfg.BoolOpt(
+    'remove_unused_base_images',
+    default=True,
+    help='Should unused base images be removed?')
+
+remove_unused_original_minimum_age_seconds = cfg.IntOpt(
+    'remove_unused_original_minimum_age_seconds',
+    default=(24 * 3600),
+    help='Unused unresized base images younger than this will not '
+    'be removed')
+
+pointer_model = cfg.StrOpt(
+    'pointer_model',
+    default=None, choices=[None, 'usbtablet'],
+    help="""Generic property to specify the pointer type.
+
+Input devices allow interaction with a graphical framebuffer. For
+example to provide a graphic tablet for absolute cursor movement.
+
+Possible values:
+
+* None: Uses relative movement. Mouse connected by PS2
+* usbtablet: Uses absolute movement. Tablet connect by USB
+
+Services which consume this:
+
+* nova-compute
+
+Interdependencies to other options:
+
+* usbtablet must be configured with VNC enabled or SPICE enabled and SPICE
+  agent disabled. When used with libvirt the instance mode should be
+  configured as HVM.
+ """)
+
+reserved_huge_pages = cfg.MultiOpt(
+    "reserved_huge_pages",
+    item_type=types.Dict,
+    help="""Reserves a number of huge/large memory pages per NUMA host cells
+
+Possible values:
+
+* A list of valid key=value which reflect NUMA node ID, page size
+  (Default unit is KiB) and number of pages to be reserved.
+
+    reserved_huge_pages = node=0,size=2048,count=64
+    reserved_huge_pages = node=1,size=1GB,count=1
+
+  In this example we are reserving on NUMA node 0 64 pages of 2MiB
+  and on NUMA node 1 1 page of 1GiB.
+
+Services which consume this:
+
+* nova-compute
+
+Related options:
+
+* None""")
+
+
 ALL_OPTS = [vcpu_pin_set,
             compute_driver,
             default_ephemeral_format,
@@ -312,7 +387,13 @@ ALL_OPTS = [vcpu_pin_set,
             injected_network_template,
             virt_mkfs,
             resize_fs_using_block_device,
-            timeout_nbd]
+            timeout_nbd,
+            image_cache_manager_interval,
+            image_cache_subdirectory_name,
+            remove_unused_base_images,
+            remove_unused_original_minimum_age_seconds,
+            pointer_model,
+            reserved_huge_pages]
 
 
 def register_opts(conf):

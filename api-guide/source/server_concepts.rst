@@ -150,55 +150,59 @@ be used and interpreted by nova.
    and pagination.
 
 .. code::
+
    Precondition:
    there are 2 servers existing in cloud with following info:
 
-   "servers":[
-   {
-       "name": "t1",
-       "locked": "true",
-       ...
-   }
-   {
-       "name":"t2",
-       "locked": "false",
-       ...
-   }
+   "servers": [
+       {
+           "name": "t1",
+           "locked": "true",
+           ...
+       },
+       {
+           "name": "t2",
+           "locked": "false",
+           ...
+       }
+   ]
 
    **Example: General user query server with administrator only options**
 
 .. code::
+
    Request with non-administrator context:
    GET /servers/detail?locked=1
    Note that 'locked' is not returned through API layer
 
    Response:
    {
-       "servers":[
-       {
-          "name": "t1",
-          ...
-       }
-       {
-          "name":"t2",
-          ...
-       }
+       "servers": [
+           {
+               "name": "t1",
+               ...
+           },
+           {
+               "name": "t2",
+               ...
+           }
        ]
    }
 
    **Example: Administrator query server with administrator only options**
 
 .. code::
+
    Request with administrator context:
    GET /servers/detail?locked=1
 
    Response:
    {
-       "servers":[
-       {
-          "name": "t1",
-          ...
-       }
+       "servers": [
+           {
+               "name": "t1",
+               ...
+           }
        ]
    }
 
@@ -213,6 +217,7 @@ be used and interpreted by nova.
    **Example: User query server using exact matching on host**
 
 .. code::
+
    Precondition:
    Request with administrator context:
    GET /servers/detail
@@ -220,17 +225,17 @@ be used and interpreted by nova.
    Response:
 
    {
-       "servers":[
-       {
-           "name": "t1",
-           "OS-EXT-SRV-ATTR:host": "devstack"
-           ...
-       }
-       {
-           "name": "t2",
-           "OS-EXT-SRV-ATTR:host": "devstack1"
-           ...
-       }
+       "servers": [
+           {
+               "name": "t1",
+               "OS-EXT-SRV-ATTR:host": "devstack"
+               ...
+           },
+           {
+               "name": "t2",
+               "OS-EXT-SRV-ATTR:host": "devstack1"
+               ...
+           }
        ]
    }
 
@@ -240,18 +245,19 @@ be used and interpreted by nova.
    Response:
 
    {
-       "servers":[
-       {
-           "name": "t1",
-           "OS-EXT-SRV-ATTR:host": "devstack"
-           ...
-       }
+       "servers": [
+           {
+               "name": "t1",
+               "OS-EXT-SRV-ATTR:host": "devstack"
+               ...
+           }
        ]
    }
-   
+
    **Example: Query server using regex matching on name**
 
 .. code::
+
    Precondition:
    Request with administrator context:
    GET /servers/detail
@@ -259,23 +265,23 @@ be used and interpreted by nova.
    Response:
 
    {
-       "servers":[
-       {
-           "name": "test11",
-           ...
-       }
-       {
-           "name": "test21",
-           ...
-       }
-       {
-           "name": "t1",
-           ...
-       }
-       {
-           "name": "t14",
-           ...
-       }
+       "servers": [
+           {
+               "name": "test11",
+               ...
+           },
+           {
+               "name": "test21",
+               ...
+           },
+           {
+               "name": "t1",
+               ...
+           },
+           {
+               "name": "t14",
+               ...
+           }
        ]
    }
 
@@ -285,19 +291,19 @@ be used and interpreted by nova.
    Response:
 
    {
-       "servers":[
-       {
-           "name": "test11",
-           ...
-       }
-       {
-           "name": "t1",
-           ...
-       }
-       {
-           "name": "t14",
-           ...
-       }
+       "servers": [
+           {
+               "name": "test11",
+               ...
+           },
+           {
+               "name": "t1",
+               ...
+           },
+           {
+               "name": "t14",
+               ...
+           }
        ]
    }
 
@@ -305,6 +311,7 @@ be used and interpreted by nova.
    regex matching on name**
 
 .. code::
+
    Precondition:
    Request with administrator context:
    GET /servers/detail
@@ -312,22 +319,22 @@ be used and interpreted by nova.
    Response:
 
    {
-       "servers":[
-       {
-           "name": "test1",
-           "OS-EXT-SRV-ATTR:host": "devstack"
-           ...
-       }
-       {
-           "name": "t2",
-           "OS-EXT-SRV-ATTR:host": "devstack1"
-           ...
-       }
-       {
-           "name": "test3",
-           "OS-EXT-SRV-ATTR:host": "devstack1"
-           ...
-       }
+       "servers": [
+           {
+               "name": "test1",
+               "OS-EXT-SRV-ATTR:host": "devstack"
+               ...
+           },
+           {
+               "name": "t2",
+               "OS-EXT-SRV-ATTR:host": "devstack1"
+               ...
+           },
+           {
+               "name": "test3",
+               "OS-EXT-SRV-ATTR:host": "devstack1"
+               ...
+           }
        ]
    }
 
@@ -337,16 +344,16 @@ be used and interpreted by nova.
    Response:
 
    {
-       "servers":[
-       {
-           "name": "test3",
-           "OS-EXT-SRV-ATTR:host": "devstack1"
-           ...
-       }
+       "servers": [
+           {
+               "name": "test3",
+               "OS-EXT-SRV-ATTR:host": "devstack1"
+               ...
+           }
        ]
    }
 
--  **Speical keys are used to tweek the query**
+-  **Special keys are used to tweak the query**
    ``changes-since`` returns instances updated after the given time,
    ``deleted`` return (or exclude) deleted instances and ``soft_deleted``
    modify behavior of 'deleted' to either include or exclude instances whose
@@ -355,23 +362,25 @@ be used and interpreted by nova.
    **Example: User query server with special keys changes-since**
 
 .. code::
+
    Precondition:
    GET /servers/detail
 
    Response:
    {
-       "servers":[
-       {
-           "name": "t1"
-           "updated": "2015-12-15T15:55:52Z"
-           ...
-       }
-       {
-           "name": "t2",
-           "updated": "2015-12-17T15:55:52Z"
-           ...
-       }
-   }    
+       "servers": [
+           {
+               "name": "t1"
+               "updated": "2015-12-15T15:55:52Z"
+               ...
+           },
+           {
+               "name": "t2",
+               "updated": "2015-12-17T15:55:52Z"
+               ...
+           }
+       ]
+   }
 
    GET /servers/detail?changes-since='2015-12-16T15:55:52Z'
 
@@ -650,12 +659,12 @@ assigned at creation time.
 .. code::
 
     {
-       "server":{
-          "name":"new-server-test",
-          "imageRef":"52415800-8b69-11e0-9b19-734f6f006e54",
-          "flavorRef":"52415800-8b69-11e0-9b19-734f1195ff37",
-          "accessIPv4":"67.23.10.132"
-       }
+        "server": {
+            "name": "new-server-test",
+            "imageRef": "52415800-8b69-11e0-9b19-734f6f006e54",
+            "flavorRef": "52415800-8b69-11e0-9b19-734f1195ff37",
+            "accessIPv4": "67.23.10.132"
+        }
     }
 
 .. note:: Both IPv4 and IPv6 addresses may be used as access addresses and both
@@ -668,13 +677,13 @@ assigned at creation time.
 .. code::
 
     {
-       "server":{
-          "name":"new-server-test",
-          "imageRef":"52415800-8b69-11e0-9b19-734f6f006e54",
-          "flavorRef":"52415800-8b69-11e0-9b19-734f1195ff37",
-          "accessIPv4":"67.23.10.132",
-          "accessIPv6":"::babe:67.23.10.132"
-       }
+        "server": {
+            "name": "new-server-test",
+            "imageRef": "52415800-8b69-11e0-9b19-734f6f006e54",
+            "flavorRef": "52415800-8b69-11e0-9b19-734f1195ff37",
+            "accessIPv4": "67.23.10.132",
+            "accessIPv6": "::babe:67.23.10.132"
+        }
     }
 
 Moving servers

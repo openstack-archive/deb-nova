@@ -831,8 +831,9 @@ def _numa_fit_instance_cell_with_pinning(host_cell, instance_cell):
     else:
         # Straightforward to pin to available cpus when there is no
         # hyperthreading on the host
+        free_cpus = [set([cpu]) for cpu in host_cell.free_cpus]
         return _pack_instance_onto_cores(
-            [host_cell.free_cpus], instance_cell, host_cell.id)
+            free_cpus, instance_cell, host_cell.id)
 
 
 def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
@@ -1112,7 +1113,7 @@ def _add_cpu_pinning_constraint(flavor, image_meta, numa_topology):
         return numa_topology
 
     if flavor_thread_policy in [None, fields.CPUThreadAllocationPolicy.PREFER]:
-        cpu_thread_policy = image_thread_policy
+        cpu_thread_policy = flavor_thread_policy or image_thread_policy
     elif image_thread_policy and image_thread_policy != flavor_thread_policy:
         raise exception.ImageCPUThreadPolicyForbidden()
     else:
@@ -1248,6 +1249,36 @@ def numa_fit_instance_to_host(
                     return objects.InstanceNUMATopology(cells=cells)
 
 
+def numa_get_reserved_huge_pages():
+    """Returns reserved memory pages from host option
+
+    Based from the compute node option reserved_huge_pages, this
+    method will return a well formatted list of dict which can be used
+    to build NUMATopology.
+
+    :raises: exceptionInvalidReservedMemoryPagesOption is option is
+             not corretly set.
+
+    :returns: a list of dict ordered by NUMA node ids; keys of dict
+              are pages size where values are the number reserved.
+    """
+    bucket = {}
+    if CONF.reserved_huge_pages:
+        try:
+            bucket = collections.defaultdict(dict)
+            for cfg in CONF.reserved_huge_pages:
+                try:
+                    pagesize = int(cfg['size'])
+                except ValueError:
+                    pagesize = strutils.string_to_bytes(
+                        cfg['size'], return_int=True) / units.Ki
+                bucket[int(cfg['node'])][pagesize] = int(cfg['count'])
+        except (ValueError, TypeError, KeyError):
+            raise exception.InvalidReservedMemoryPagesOption(
+                conf=CONF.reserved_huge_pages)
+    return bucket
+
+
 def _numa_pagesize_usage_from_cell(hostcell, instancecell, sign):
     topo = []
     for pages in hostcell.mempages:
@@ -1257,7 +1288,8 @@ def _numa_pagesize_usage_from_cell(hostcell, instancecell, sign):
                 total=pages.total,
                 used=max(0, pages.used +
                          instancecell.memory * units.Ki /
-                         pages.size_kb * sign)))
+                         pages.size_kb * sign),
+                reserved=pages.reserved if 'reserved' in pages else 0))
         else:
             topo.append(pages)
     return topo

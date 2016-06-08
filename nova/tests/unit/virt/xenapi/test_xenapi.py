@@ -74,11 +74,6 @@ from nova.virt.xenapi import volume_utils
 LOG = logging.getLogger(__name__)
 
 CONF = nova.conf.CONF
-CONF.import_opt('compute_manager', 'nova.service')
-CONF.import_opt('network_manager', 'nova.service')
-CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('login_timeout', 'nova.virt.xenapi.client.session',
-                group="xenserver")
 
 IMAGE_MACHINE = '1'
 IMAGE_KERNEL = '2'
@@ -610,7 +605,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
         self.vm = vm
 
     def check_vm_record(self, conn, instance_type_id, check_injection):
-        flavor = db.flavor_get(conn, instance_type_id)
+        flavor = objects.Flavor.get_by_id(self.context, instance_type_id)
         mem_kib = int(flavor['memory_mb']) << 10
         mem_bytes = str(mem_kib << 10)
         vcpus = flavor['vcpus']
@@ -746,10 +741,6 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
 
             flavor = objects.Flavor.get_by_id(self.context,
                                               instance_type_id)
-            if instance_type_id == 5:
-                # NOTE(danms): xenapi test stubs have flavor 5 with no
-                # vcpu_weight
-                flavor.vcpu_weight = None
             instance.flavor = flavor
             instance.create()
         else:
@@ -1886,8 +1877,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_too_many_partitions_no_resize_down(self):
         instance = self._create_instance()
         xenapi_fake.create_vm(instance['name'], 'Running')
-        flavor = db.flavor_get_by_name(self.context, 'm1.small')
-        flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
+        flavor = objects.Flavor.get_by_name(self.context, 'm1.small')
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         def fake_get_partitions(partition):
@@ -1904,8 +1894,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
     def test_migrate_bad_fs_type_no_resize_down(self):
         instance = self._create_instance()
         xenapi_fake.create_vm(instance['name'], 'Running')
-        flavor = db.flavor_get_by_name(self.context, 'm1.small')
-        flavor = fake_flavor.fake_flavor_obj(self.context, **flavor)
+        flavor = objects.Flavor.get_by_name(self.context, 'm1.small')
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
 
         def fake_get_partitions(partition):

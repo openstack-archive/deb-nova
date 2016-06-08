@@ -135,7 +135,8 @@ class ComputeDriver(object):
     capabilities = {
         "has_imagecache": False,
         "supports_recreate": False,
-        "supports_migrate_to_same_host": False
+        "supports_migrate_to_same_host": False,
+        "supports_attach_interface": False
     }
 
     def __init__(self, virtapi):
@@ -210,7 +211,8 @@ class ComputeDriver(object):
         :param instance_info: Instance/flavor to calculate overhead for.
         :returns: Dict of estimated overhead values.
         """
-        return {'memory_mb': 0}
+        return {'memory_mb': 0,
+                'disk_gb': 0}
 
     def list_instances(self):
         """Return the names of all the instances known to the virtualization
@@ -1617,9 +1619,9 @@ def load_compute_driver(virtapi, compute_driver=None):
 
     LOG.info(_LI("Loading compute driver '%s'"), compute_driver)
     try:
-        driver = importutils.import_object_ns('nova.virt',
-                                              compute_driver,
-                                              virtapi)
+        driver = importutils.import_object(
+            'nova.virt.%s' % compute_driver,
+            virtapi)
         return utils.check_isinstance(driver, ComputeDriver)
     except ImportError:
         LOG.exception(_LE("Unable to load the virtualization driver"))

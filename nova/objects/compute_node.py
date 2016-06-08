@@ -12,30 +12,27 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
+
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import uuidutils
 from oslo_utils import versionutils
 
+import nova.conf
 from nova import db
 from nova import exception
+from nova.i18n import _LW
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
 from nova.objects import pci_device_pool
 
-CONF = cfg.CONF
-CONF.import_opt('cpu_allocation_ratio', 'nova.compute.resource_tracker')
-CONF.import_opt('ram_allocation_ratio', 'nova.compute.resource_tracker')
-CONF.import_opt('disk_allocation_ratio', 'nova.compute.resource_tracker')
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 
-# TODO(berrange): Remove NovaObjectDictCompat
 @base.NovaObjectRegistry.register
-class ComputeNode(base.NovaPersistentObject, base.NovaObject,
-                  base.NovaObjectDictCompat):
+class ComputeNode(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: Added get_by_service_id()
     # Version 1.2: String attributes updated to support unicode
@@ -148,19 +145,19 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
                 service = objects.Service.get_by_id(
                     compute._context, db_compute['service_id'])
             except exception.ServiceNotFound:
-                compute['host'] = None
+                compute.host = None
                 return
             try:
-                compute['host'] = service.host
+                compute.host = service.host
             except (AttributeError, exception.OrphanedObjectError):
                 # Host can be nullable in Service
-                compute['host'] = None
+                compute.host = None
         elif 'host' in db_compute and db_compute['host'] is not None:
             # New-style DB having host as a field
-            compute['host'] = db_compute['host']
+            compute.host = db_compute['host']
         else:
             # We assume it should not happen but in case, let's set it to None
-            compute['host'] = None
+            compute.host = None
 
     @staticmethod
     def _from_db_object(context, compute, db_compute):
@@ -169,7 +166,9 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
             'supported_hv_specs',
             'host',
             'pci_device_pools',
-            'uuid',
+            'local_gb',
+            'memory_mb',
+            'vcpus',
             ])
         fields = set(compute.fields) - special_cases
         for key in fields:
@@ -205,18 +204,25 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
                     if value == 0.0 and key == 'disk_allocation_ratio':
                         # It's not specified either on the controller
                         value = 1.0
-            compute[key] = value
+            setattr(compute, key, value)
+
+        for key in ('vcpus', 'local_gb', 'memory_mb'):
+            inv_key = 'inv_%s' % key
+            if inv_key in db_compute and db_compute[inv_key] is not None:
+                setattr(compute, key, db_compute[inv_key])
+            else:
+                setattr(compute, key, db_compute[key])
 
         stats = db_compute['stats']
         if stats:
-            compute['stats'] = jsonutils.loads(stats)
+            compute.stats = jsonutils.loads(stats)
 
         sup_insts = db_compute.get('supported_instances')
         if sup_insts:
             hv_specs = jsonutils.loads(sup_insts)
             hv_specs = [objects.HVSpec.from_list(hv_spec)
                         for hv_spec in hv_specs]
-            compute['supported_hv_specs'] = hv_specs
+            compute.supported_hv_specs = hv_specs
 
         pci_stats = db_compute.get('pci_stats')
         if pci_stats is not None:
@@ -228,23 +234,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         # host column is present in the table or not
         compute._host_from_db_object(compute, db_compute)
 
-        # NOTE(danms): Remove this conditional load (and remove uuid from
-        # the list of special_cases above) once we're in Newton and have
-        # enforced that all UUIDs in the database are not NULL.
-        if db_compute.get('uuid'):
-            compute.uuid = db_compute['uuid']
-
         compute.obj_reset_changes()
-
-        # NOTE(danms): This needs to come after obj_reset_changes() to make
-        # sure we only save the uuid, if we generate one.
-        # FIXME(danms): Remove this in Newton once we have enforced that
-        # all compute nodes have uuids set in the database.
-        if 'uuid' not in compute:
-            compute.uuid = uuidutils.generate_uuid()
-            LOG.debug('Generated UUID %(uuid)s for compute node %(id)i',
-                      dict(uuid=compute.uuid, id=compute.id))
-            compute.save()
 
         return compute
 
@@ -307,6 +297,81 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
                 pools = jsonutils.dumps(pools.obj_to_primitive())
             updates['pci_stats'] = pools
 
+    def update_inventory(self):
+        """Update inventory records from legacy model values."""
+
+        inventory_list = \
+            objects.InventoryList.get_all_by_resource_provider_uuid(
+                self._context, self.uuid)
+        if not inventory_list:
+            return False
+
+        for inventory in inventory_list:
+            if inventory.resource_class == fields.ResourceClass.VCPU:
+                key = 'vcpus'
+            elif inventory.resource_class == fields.ResourceClass.MEMORY_MB:
+                key = 'memory_mb'
+            elif inventory.resource_class == fields.ResourceClass.DISK_GB:
+                key = 'local_gb'
+            else:
+                LOG.warning(_LW('Unknown inventory class %s for compute node'),
+                            inventory.resource_class)
+                continue
+
+            if key in self.obj_what_changed():
+                inventory.total = getattr(self, key)
+                inventory.save()
+
+        return True
+
+    def create_inventory(self):
+        """Create the initial inventory objects for this compute node.
+
+        This is only ever called once, either for the first time when a compute
+        is created, or after an upgrade where the required services have
+        reached the required version.
+        """
+        rp = objects.ResourceProvider(context=self._context, uuid=self.uuid)
+        rp.create()
+
+        cpu = objects.Inventory(context=self._context,
+                                resource_provider=rp,
+                                resource_class=fields.ResourceClass.VCPU,
+                                total=self.vcpus,
+                                reserved=0,
+                                min_unit=1,
+                                max_unit=1,
+                                step_size=1,
+                                allocation_ratio=self.cpu_allocation_ratio)
+        cpu.create()
+
+        mem = objects.Inventory(context=self._context,
+                                resource_provider=rp,
+                                resource_class=fields.ResourceClass.MEMORY_MB,
+                                total=self.memory_mb,
+                                reserved=0,
+                                min_unit=1,
+                                max_unit=1,
+                                step_size=1,
+                                allocation_ratio=self.ram_allocation_ratio)
+        mem.create()
+
+        # FIXME(danms): Eventually we want to not write this record
+        # if the compute host is on shared storage. We'll need some
+        # indication from it to that effect, so for now we always
+        # write it so that we can make all the usual machinery depend
+        # on these records instead of the legacy columns.
+        disk = objects.Inventory(context=self._context,
+                                 resource_provider=rp,
+                                 resource_class=fields.ResourceClass.DISK_GB,
+                                 total=self.local_gb,
+                                 reserved=0,
+                                 min_unit=1,
+                                 max_unit=1,
+                                 step_size=1,
+                                 allocation_ratio=self.disk_allocation_ratio)
+        disk.create()
+
     @base.remotable
     def create(self):
         if self.obj_attr_is_set('id'):
@@ -315,6 +380,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         updates = self.obj_get_changes()
         if 'uuid' not in updates:
             updates['uuid'] = uuidutils.generate_uuid()
+            self.uuid = updates['uuid']
 
         self._convert_stats_to_db_format(updates)
         self._convert_host_ip_to_db_format(updates)
@@ -322,6 +388,12 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         self._convert_pci_stats_to_db_format(updates)
 
         db_compute = db.compute_node_create(self._context, updates)
+        # NOTE(danms): compute_node_create() operates on (and returns) the
+        # compute node model only. We need to get the full inventory-based
+        # result in order to satisfy _from_db_object(). So, we do a double
+        # query here. This can be removed in Newton once we're sure that all
+        # compute nodes are inventory-based
+        db_compute = db.compute_node_get(self._context, db_compute['id'])
         self._from_db_object(self._context, self, db_compute)
 
     @base.remotable
@@ -336,6 +408,12 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         self._convert_pci_stats_to_db_format(updates)
 
         db_compute = db.compute_node_update(self._context, self.id, updates)
+        # NOTE(danms): compute_node_update() operates on (and returns) the
+        # compute node model only. We need to get the full inventory-based
+        # result in order to satisfy _from_db_object(). So, we do a double
+        # query here. This can be removed in Newton once we're sure that all
+        # compute nodes are inventory-based
+        db_compute = db.compute_node_get(self._context, self.id)
         self._from_db_object(self._context, self, db_compute)
 
     @base.remotable
@@ -354,7 +432,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
                 "disk_available_least", "host_ip"]
         for key in keys:
             if key in resources:
-                self[key] = resources[key]
+                setattr(self, key, resources[key])
 
         # supported_instances has a different name in compute_node
         if 'supported_instances' in resources:

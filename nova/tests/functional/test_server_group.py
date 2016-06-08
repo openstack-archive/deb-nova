@@ -18,10 +18,12 @@ import time
 
 from oslo_config import cfg
 
+from nova import context
+from nova import db
+from nova.db.sqlalchemy import api as db_api
 from nova import test
 from nova.tests import fixtures as nova_fixtures
 from nova.tests.functional.api import client
-from nova.tests.functional import api_paste_fixture
 from nova.tests.unit import fake_network
 from nova.tests.unit import policy_fixture
 
@@ -37,7 +39,7 @@ PROJECT_ID_ALT = "616c6c796f7572626173656172656f73"
 
 class ServerGroupTestBase(test.TestCase):
     REQUIRES_LOCKING = True
-    api_major_version = 'v2'
+    api_major_version = 'v2.1'
     microversion = None
     _image_ref_parameter = 'imageRef'
     _flavor_ref_parameter = 'flavorRef'
@@ -67,13 +69,8 @@ class ServerGroupTestBase(test.TestCase):
 
         self.useFixture(policy_fixture.RealPolicyFixture())
 
-        if self.api_major_version == 'v2.1':
-            api_fixture = self.useFixture(nova_fixtures.OSAPIFixture(
-                api_version='v2.1'))
-        else:
-            self.useFixture(api_paste_fixture.ApiPasteLegacyV2Fixture())
-            api_fixture = self.useFixture(nova_fixtures.OSAPIFixture(
-                api_version='v2'))
+        api_fixture = self.useFixture(nova_fixtures.OSAPIFixture(
+            api_version='v2.1'))
 
         self.api = api_fixture.api
         self.api.microversion = self.microversion
@@ -142,11 +139,10 @@ class ServerGroupTestBase(test.TestCase):
         return server
 
 
-class ServerGroupTestV2(ServerGroupTestBase):
-    api_major_version = 'v2'
+class ServerGroupTestV21(ServerGroupTestBase):
 
     def setUp(self):
-        super(ServerGroupTestV2, self).setUp()
+        super(ServerGroupTestV21, self).setUp()
 
         self.start_service('network')
         self.compute = self.start_service('compute')
@@ -265,6 +261,33 @@ class ServerGroupTestV2(ServerGroupTestBase):
             self.assertIn(server['id'], members)
             self.assertEqual(host, server['OS-EXT-SRV-ATTR:host'])
 
+    def test_boot_servers_with_affinity_overquota(self):
+        # Tests that we check server group member quotas and cleanup created
+        # resources when we fail with OverQuota.
+        self.flags(quota_server_group_members=1)
+        # make sure we start with 0 servers
+        servers = self.api.get_servers(detail=False)
+        self.assertEqual(0, len(servers))
+        created_group = self.api.post_server_groups(self.affinity)
+        ex = self.assertRaises(client.OpenStackApiException,
+                               self._boot_servers_to_group,
+                               created_group)
+        self.assertEqual(403, ex.response.status_code)
+        # _boot_servers_to_group creates 2 instances in the group in order, not
+        # multiple servers in a single request. Since our quota is 1, the first
+        # server create would pass, the second should fail, and we should be
+        # left with 1 server and it's 1 block device mapping.
+        servers = self.api.get_servers(detail=False)
+        self.assertEqual(1, len(servers))
+        ctxt = context.get_admin_context()
+        servers = db.instance_get_all(ctxt)
+        self.assertEqual(1, len(servers))
+        ctxt_mgr = db_api.get_context_manager(ctxt)
+        with ctxt_mgr.reader.using(ctxt):
+            bdms = db_api._block_device_mapping_get_query(ctxt).all()
+        self.assertEqual(1, len(bdms))
+        self.assertEqual(servers[0]['uuid'], bdms[0]['instance_uuid'])
+
     def test_boot_servers_with_affinity_no_valid_host(self):
         created_group = self.api.post_server_groups(self.affinity)
         # Using big enough flavor to use up the resources on the host
@@ -357,6 +380,21 @@ class ServerGroupTestV2(ServerGroupTestBase):
         self.assertNotEqual(servers[0]['OS-EXT-SRV-ATTR:host'],
                             migrated_server['OS-EXT-SRV-ATTR:host'])
 
+    def test_resize_to_same_host_with_anti_affinity(self):
+        self.flags(allow_resize_to_same_host=True)
+        created_group = self.api.post_server_groups(self.anti_affinity)
+        servers = self._boot_servers_to_group(created_group,
+                                              flavor=self.api.get_flavors()[0])
+
+        post = {'resize': {'flavorRef': '2'}}
+        server1_old_host = servers[1]['OS-EXT-SRV-ATTR:host']
+        self.admin_api.post_server_action(servers[1]['id'], post)
+        migrated_server = self._wait_for_state_change(servers[1],
+                                                      'VERIFY_RESIZE')
+
+        self.assertEqual(server1_old_host,
+                         migrated_server['OS-EXT-SRV-ATTR:host'])
+
     def _get_compute_service_by_host_name(self, host_name):
         host = None
         if self.compute.host == host_name:
@@ -441,6 +479,15 @@ class ServerGroupTestV2(ServerGroupTestBase):
                          servers[1]['OS-EXT-SRV-ATTR:host'])
 
         host.start()
+
+    def test_soft_affinity_not_supported(self):
+        ex = self.assertRaises(client.OpenStackApiException,
+                               self.api.post_server_groups,
+                               {'name': 'fake-name-1',
+                                'policies': ['soft-affinity']})
+        self.assertEqual(400, ex.response.status_code)
+        self.assertIn('Invalid input', ex.response.text)
+        self.assertIn('soft-affinity', ex.response.text)
 
 
 class ServerGroupAffinityConfTest(ServerGroupTestBase):
@@ -527,20 +574,7 @@ class ServerGroupSoftAntiAffinityConfTest(ServerGroupTestBase):
         self.assertEqual(400, failed_server['fault']['code'])
 
 
-class ServerGroupTestV21(ServerGroupTestV2):
-    api_major_version = 'v2.1'
-
-    def test_soft_affinity_not_supported(self):
-        ex = self.assertRaises(client.OpenStackApiException,
-                               self.api.post_server_groups,
-                               {'name': 'fake-name-1',
-                                'policies': ['soft-affinity']})
-        self.assertEqual(400, ex.response.status_code)
-        self.assertIn('Invalid input', ex.response.text)
-        self.assertIn('soft-affinity', ex.response.text)
-
-
-class ServerGroupTestV215(ServerGroupTestV2):
+class ServerGroupTestV215(ServerGroupTestV21):
     api_major_version = 'v2.1'
     microversion = '2.15'
 
@@ -795,3 +829,6 @@ class ServerGroupTestV215(ServerGroupTestV2):
             self._evacuate_with_soft_anti_affinity_policies(
                 self.soft_anti_affinity))
         self.assertEqual(evacuated_server, other_server)
+
+    def test_soft_affinity_not_supported(self):
+        pass

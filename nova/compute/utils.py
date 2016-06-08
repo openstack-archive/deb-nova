@@ -19,13 +19,13 @@ import string
 import traceback
 
 import netifaces
-from oslo_config import cfg
 from oslo_log import log
 import six
 
 from nova import block_device
 from nova.compute import power_state
 from nova.compute import task_states
+import nova.conf
 from nova import exception
 from nova.i18n import _LW
 from nova.network import model as network_model
@@ -35,8 +35,7 @@ from nova import rpc
 from nova import utils
 from nova.virt import driver
 
-CONF = cfg.CONF
-CONF.import_opt('host', 'nova.netconf')
+CONF = nova.conf.CONF
 LOG = log.getLogger(__name__)
 
 
@@ -185,6 +184,30 @@ def get_next_device_name(instance, device_name_list,
         raise exception.DevicePathInUse(path=device)
 
     return prefix + req_letter
+
+
+def get_root_bdm(context, instance, bdms=None):
+    if bdms is None:
+        if isinstance(instance, objects.Instance):
+            uuid = instance.uuid
+        else:
+            uuid = instance['uuid']
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                context, uuid)
+
+    return bdms.root_bdm()
+
+
+def is_volume_backed_instance(context, instance, bdms=None):
+    root_bdm = get_root_bdm(context, instance, bdms)
+    if root_bdm is not None:
+        return root_bdm.is_volume
+    # in case we hit a very old instance without root bdm, we _assume_ that
+    # instance is backed by a volume, if and only if image_ref is not set
+    if isinstance(instance, objects.Instance):
+        return not instance.image_ref
+
+    return not instance['image_ref']
 
 
 def _get_unused_letter(used_letters):
@@ -455,16 +478,12 @@ def upsize_quota_delta(context, new_flavor, old_flavor):
     return resize_quota_delta(context, new_flavor, old_flavor, 1, 1)
 
 
-def reverse_upsize_quota_delta(context, migration_ref):
+def reverse_upsize_quota_delta(context, instance):
     """Calculate deltas required to reverse a prior upsizing
     quota adjustment.
     """
-    old_flavor = objects.Flavor.get_by_id(
-        context, migration_ref['old_instance_type_id'])
-    new_flavor = objects.Flavor.get_by_id(
-        context, migration_ref['new_instance_type_id'])
-
-    return resize_quota_delta(context, new_flavor, old_flavor, -1, -1)
+    return resize_quota_delta(context, instance.new_flavor,
+                              instance.old_flavor, -1, -1)
 
 
 def downsize_quota_delta(context, instance):
@@ -528,7 +547,7 @@ class UnlimitedSemaphore(object):
     def __enter__(self):
         pass
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_val, exc_tb):
         pass
 
     @property

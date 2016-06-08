@@ -18,8 +18,6 @@ import six
 import webob
 
 from nova.api.openstack import api_version_request
-from nova.api.openstack.compute.legacy_v2.contrib import admin_actions as \
-    migrate_server_v2
 from nova.api.openstack.compute import migrate_server as \
     migrate_server_v21
 from nova import exception
@@ -264,22 +262,17 @@ class MigrateServerTestsV21(admin_only_action_common.CommonTests):
         self._test_migrate_live_failed_with_exception(
             exception.MigrationPreCheckError(reason=''))
 
-    def test_migrate_live_migration_with_old_nova_not_safe(self):
+    def test_migrate_live_migration_precheck_client_exception(self):
         self._test_migrate_live_failed_with_exception(
-            exception.LiveMigrationWithOldNovaNotSafe(server=''))
+            exception.MigrationPreCheckClientException(reason=''),
+            expected_exc=webob.exc.HTTPInternalServerError,
+            check_response=False)
 
     def test_migrate_live_migration_with_unexpected_error(self):
         self._test_migrate_live_failed_with_exception(
             exception.MigrationError(reason=''),
             expected_exc=webob.exc.HTTPInternalServerError,
             check_response=False)
-
-
-class MigrateServerTestsV2(MigrateServerTestsV21):
-    migrate_server = migrate_server_v2
-    controller_name = 'AdminActionsController'
-    validation_error = webob.exc.HTTPBadRequest
-    _api_version = '2'
 
 
 class MigrateServerTestsV225(MigrateServerTestsV21):

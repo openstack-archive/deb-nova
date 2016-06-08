@@ -22,15 +22,20 @@ import os
 import warnings
 
 import fixtures
+import mock
 from oslo_config import cfg
 from oslo_db.sqlalchemy import enginefacade
 from oslo_messaging import conffixture as messaging_conffixture
 import six
 
+from nova.compute import rpcapi as compute_rpcapi
+from nova import context
 from nova.db import migration
 from nova.db.sqlalchemy import api as session
 from nova import exception
+from nova import objects
 from nova.objects import base as obj_base
+from nova.objects import service as service_obj
 from nova import rpc
 from nova import service
 from nova.tests.functional.api import client
@@ -196,6 +201,22 @@ class Timeout(fixtures.Fixture):
             self.useFixture(fixtures.Timeout(self.test_timeout, gentle=True))
 
 
+class DatabasePoisonFixture(fixtures.Fixture):
+    def setUp(self):
+        super(DatabasePoisonFixture, self).setUp()
+        self.useFixture(fixtures.MonkeyPatch(
+            'oslo_db.sqlalchemy.enginefacade._TransactionFactory.'
+            '_create_session',
+            self._poison_configure))
+
+    def _poison_configure(self, *a, **k):
+        warnings.warn('This test uses methods that set internal oslo_db '
+                      'state, but it does not claim to use the database. '
+                      'This will conflict with the setup of tests that '
+                      'do use the database and cause failures later.')
+        return mock.MagicMock()
+
+
 class Database(fixtures.Fixture):
     def __init__(self, database='main', connection=None):
         """Create a database fixture.
@@ -278,6 +299,33 @@ class DatabaseAtVersion(fixtures.Fixture):
         super(DatabaseAtVersion, self).setUp()
         self.reset()
         self.addCleanup(self.cleanup)
+
+
+class DefaultFlavorsFixture(fixtures.Fixture):
+    def setUp(self):
+        super(DefaultFlavorsFixture, self).setUp()
+        ctxt = context.get_admin_context()
+        defaults = {'rxtx_factor': 1.0, 'disabled': False, 'is_public': True,
+                    'ephemeral_gb': 0, 'swap': 0}
+        default_flavors = [
+            objects.Flavor(context=ctxt, memory_mb=512, vcpus=1,
+                           root_gb=1, flavorid='1', name='m1.tiny',
+                           **defaults),
+            objects.Flavor(context=ctxt, memory_mb=2048, vcpus=1,
+                           root_gb=20, flavorid='2', name='m1.small',
+                           **defaults),
+            objects.Flavor(context=ctxt, memory_mb=4096, vcpus=2,
+                           root_gb=40, flavorid='3', name='m1.medium',
+                           **defaults),
+            objects.Flavor(context=ctxt, memory_mb=8192, vcpus=4,
+                           root_gb=80, flavorid='4', name='m1.large',
+                           **defaults),
+            objects.Flavor(context=ctxt, memory_mb=16384, vcpus=8,
+                           root_gb=160, flavorid='5', name='m1.xlarge',
+                           **defaults),
+            ]
+        for flavor in default_flavors:
+            flavor.create()
 
 
 class RPCFixture(fixtures.Fixture):
@@ -605,3 +653,15 @@ class ForbidNewLegacyNotificationFixture(fixtures.Fixture):
         self.notifier.fatal = False
         self.notifier.allowed_legacy_notification_event_types.remove(
                 '_decorated_function')
+
+
+class AllServicesCurrent(fixtures.Fixture):
+    def setUp(self):
+        super(AllServicesCurrent, self).setUp()
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.objects.Service.get_minimum_version_multi',
+            self._fake_minimum))
+        compute_rpcapi.LAST_VERSION = None
+
+    def _fake_minimum(self, *args, **kwargs):
+        return service_obj.SERVICE_VERSION

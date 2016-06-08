@@ -20,7 +20,6 @@ import functools
 import os
 import shutil
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
@@ -45,44 +44,7 @@ from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt.storage import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
 
-__imagebackend_opts = [
-    cfg.StrOpt('images_type',
-               default='default',
-               choices=('raw', 'qcow2', 'lvm', 'rbd', 'ploop', 'default'),
-               help='VM Images format. If default is specified, then'
-                    ' use_cow_images flag is used instead of this one.'),
-    cfg.StrOpt('images_volume_group',
-               help='LVM Volume Group that is used for VM images, when you'
-                    ' specify images_type=lvm.'),
-    cfg.BoolOpt('sparse_logical_volumes',
-                default=False,
-                help='Create sparse logical volumes (with virtualsize)'
-                     ' if this flag is set to True.'),
-    cfg.StrOpt('images_rbd_pool',
-               default='rbd',
-               help='The RADOS pool in which rbd volumes are stored'),
-    cfg.StrOpt('images_rbd_ceph_conf',
-               default='',  # default determined by librados
-               help='Path to the ceph configuration file to use'),
-    cfg.StrOpt('hw_disk_discard',
-               choices=('ignore', 'unmap'),
-               help='Discard option for nova managed disks. Need'
-                    ' Libvirt(1.0.6) Qemu1.5 (raw format) Qemu1.6(qcow2'
-                    ' format)'),
-        ]
-
 CONF = nova.conf.CONF
-CONF.register_opts(__imagebackend_opts, 'libvirt')
-CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
-CONF.import_opt('enabled', 'nova.compute.api',
-                group='ephemeral_storage_encryption')
-CONF.import_opt('cipher', 'nova.compute.api',
-                group='ephemeral_storage_encryption')
-CONF.import_opt('key_size', 'nova.compute.api',
-                group='ephemeral_storage_encryption')
-CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume.net', group='libvirt')
-CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume.net',
-                group='libvirt')
 
 LOG = logging.getLogger(__name__)
 IMAGE_API = image.API()
@@ -218,7 +180,7 @@ class Image(object):
 
         return info
 
-    def check_image_exists(self):
+    def exists(self):
         return os.path.exists(self.path)
 
     def cache(self, fetch_func, filename, size=None, *args, **kwargs):
@@ -246,7 +208,7 @@ class Image(object):
             fileutils.ensure_tree(base_dir)
         base = os.path.join(base_dir, filename)
 
-        if not self.check_image_exists() or not os.path.exists(base):
+        if not self.exists() or not os.path.exists(base):
             self.create_image(fetch_func_sync, base, size,
                               *args, **kwargs)
 
@@ -468,10 +430,15 @@ class Image(object):
         pass
 
 
-class Raw(Image):
+class Flat(Image):
+    """The Flat backend uses either raw or qcow2 storage. It never uses
+    a backing store, so when using qcow2 it copies an image rather than
+    creating an overlay. By default it creates raw files, but will use qcow2
+    when creating a disk from a qcow2 if force_raw_images is not set in config.
+    """
     def __init__(self, instance=None, disk_name=None, path=None):
         self.disk_name = disk_name
-        super(Raw, self).__init__("file", "raw", is_block_dev=False)
+        super(Flat, self).__init__("file", "raw", is_block_dev=False)
 
         self.path = (path or
                      os.path.join(libvirt_utils.get_instance_path(instance),
@@ -497,11 +464,11 @@ class Raw(Image):
 
     def _supports_encryption(self):
         # NOTE(dgenin): Kernel, ramdisk and disk.config are fetched using
-        # the Raw backend regardless of which backend is configured for
-        # ephemeral storage. Encryption for the Raw backend is not yet
+        # the Flat backend regardless of which backend is configured for
+        # ephemeral storage. Encryption for the Flat backend is not yet
         # implemented so this loophole is necessary to allow other
         # backends already supporting encryption to function. This can
-        # be removed once encryption for Raw is implemented.
+        # be removed once encryption for Flat is implemented.
         if self.disk_name not in ['kernel', 'ramdisk', 'disk.config']:
             return False
         else:
@@ -518,14 +485,13 @@ class Raw(Image):
         def copy_raw_image(base, target, size):
             libvirt_utils.copy_image(base, target)
             if size:
-                # class Raw is misnamed, format may not be 'raw' in all cases
                 image = imgmodel.LocalFileImage(target,
                                                 self.driver_format)
                 disk.extend(image, size)
 
         generating = 'image_id' not in kwargs
         if generating:
-            if not self.check_image_exists():
+            if not self.exists():
                 # Generating image in place
                 prepare_template(target=self.path, *args, **kwargs)
         else:
@@ -654,7 +620,7 @@ class Lvm(Image):
         self.ephemeral_key_uuid = instance.get('ephemeral_key_uuid')
 
         if self.ephemeral_key_uuid is not None:
-            self.key_manager = keymgr.API()
+            self.key_manager = keymgr.API(CONF)
         else:
             self.key_manager = None
 
@@ -734,7 +700,7 @@ class Lvm(Image):
                     # NOTE(dgenin): Key manager corresponding to the
                     # specific backend catches and reraises an
                     # an exception if key retrieval fails.
-                    key = self.key_manager.get_key(kwargs['context'],
+                    key = self.key_manager.get(kwargs['context'],
                             self.ephemeral_key_uuid).get_encoded()
                 except Exception:
                     with excutils.save_and_reraise_exception():
@@ -857,7 +823,7 @@ class Rbd(Image):
     def _can_fallocate(self):
         return False
 
-    def check_image_exists(self):
+    def exists(self):
         return self.driver.exists(self.rbd_name)
 
     def get_disk_size(self, name):
@@ -870,12 +836,12 @@ class Rbd(Image):
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
 
-        if not self.check_image_exists():
+        if not self.exists():
             prepare_template(target=base, max_size=size, *args, **kwargs)
 
         # prepare_template() may have cloned the image into a new rbd
         # image already instead of downloading it locally
-        if not self.check_image_exists():
+        if not self.exists():
             self.driver.import_image(base, self.rbd_name)
         self.verify_base_size(base, size)
 
@@ -930,7 +896,7 @@ class Rbd(Image):
 
     def import_file(self, instance, local_file, remote_name):
         name = '%s_%s' % (instance.uuid, remote_name)
-        if self.check_image_exists():
+        if self.exists():
             self.driver.remove_image(name)
         self.driver.import_image(local_file, name)
 
@@ -1107,12 +1073,13 @@ class Ploop(Image):
 class Backend(object):
     def __init__(self, use_cow):
         self.BACKEND = {
-            'raw': Raw,
+            'raw': Flat,
+            'flat': Flat,
             'qcow2': Qcow2,
             'lvm': Lvm,
             'rbd': Rbd,
             'ploop': Ploop,
-            'default': Qcow2 if use_cow else Raw
+            'default': Qcow2 if use_cow else Flat
         }
 
     def backend(self, image_type=None):

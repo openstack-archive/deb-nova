@@ -10,13 +10,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 import six
 
 from nova.compute import power_state
 from nova.conductor.tasks import base
+import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova import objects
@@ -24,15 +24,7 @@ from nova.scheduler import utils as scheduler_utils
 from nova import utils
 
 LOG = logging.getLogger(__name__)
-
-migrate_opt = cfg.IntOpt('migrate_max_retries',
-        default=-1,
-        help='Number of times to retry live-migration before failing. '
-             'If == -1, try until out of hosts. '
-             'If == 0, only try once, no retries.')
-
-CONF = cfg.CONF
-CONF.register_opt(migrate_opt)
+CONF = nova.conf.CONF
 
 
 class LiveMigrationTask(base.TaskBase):
@@ -141,13 +133,13 @@ class LiveMigrationTask(base.TaskBase):
         source_info = self._get_compute_info(self.source)
         destination_info = self._get_compute_info(destination)
 
-        source_type = source_info['hypervisor_type']
-        destination_type = destination_info['hypervisor_type']
+        source_type = source_info.hypervisor_type
+        destination_type = destination_info.hypervisor_type
         if source_type != destination_type:
             raise exception.InvalidHypervisorType()
 
-        source_version = source_info['hypervisor_version']
-        destination_version = destination_info['hypervisor_version']
+        source_version = source_info.hypervisor_version
+        destination_version = destination_info.hypervisor_version
         if source_version > destination_version:
             raise exception.DestinationHypervisorTooOld()
 

@@ -376,6 +376,7 @@ class InstanceExtra(BASE, NovaBase, models.SoftDeleteMixin):
     flavor = orm.deferred(Column(Text))
     vcpu_model = orm.deferred(Column(Text))
     migration_context = orm.deferred(Column(Text))
+    keypairs = orm.deferred(Column(Text))
     instance = orm.relationship(Instance,
                             backref=orm.backref('extra',
                                                 uselist=False),
@@ -614,6 +615,8 @@ class BlockDeviceMapping(BASE, NovaBase, models.SoftDeleteMixin):
 
     connection_info = Column(MediumText())
 
+    tag = Column(String(255))
+
 
 class SecurityGroupInstanceAssociation(BASE, NovaBase, models.SoftDeleteMixin):
     __tablename__ = 'security_group_instance_association'
@@ -834,6 +837,7 @@ class VirtualInterface(BASE, NovaBase, models.SoftDeleteMixin):
     network_id = Column(Integer)
     instance_uuid = Column(String(36), ForeignKey('instances.uuid'))
     uuid = Column(String(36))
+    tag = Column(String(255))
 
 
 # TODO(vish): can these both come from the same baseclass?

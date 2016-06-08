@@ -16,21 +16,20 @@ import webob
 
 from nova.api.openstack import api_version_request
 from nova.api.openstack.compute import fixed_ips as fixed_ips_v21
-from nova.api.openstack.compute.legacy_v2.contrib import fixed_ips \
-        as fixed_ips_v2
 from nova.api.openstack import wsgi as os_wsgi
 from nova import context
 from nova import exception
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit.objects import test_network
+from nova.tests import uuidsentinel as uuids
 
 
 fake_fixed_ips = [{'id': 1,
                    'address': '192.168.1.1',
                    'network_id': 1,
                    'virtual_interface_id': 1,
-                   'instance_uuid': '1',
+                   'instance_uuid': uuids.instance_1,
                    'allocated': False,
                    'leased': False,
                    'reserved': False,
@@ -45,7 +44,7 @@ fake_fixed_ips = [{'id': 1,
                    'address': '192.168.1.2',
                    'network_id': 1,
                    'virtual_interface_id': 2,
-                   'instance_uuid': '2',
+                   'instance_uuid': uuids.instance_2,
                    'allocated': False,
                    'leased': False,
                    'reserved': False,
@@ -60,7 +59,7 @@ fake_fixed_ips = [{'id': 1,
                    'address': '10.0.0.2',
                    'network_id': 1,
                    'virtual_interface_id': 3,
-                   'instance_uuid': '3',
+                   'instance_uuid': uuids.instance_3,
                    'allocated': False,
                    'leased': False,
                    'reserved': False,
@@ -237,20 +236,6 @@ class FixedIpTestV21(test.NoDBTestCase):
         action = self._get_unreserve_action()
         self.assertRaises(webob.exc.HTTPNotFound, action, req,
                           '10.0.0.2', body=body)
-
-
-class FixedIpTestV2(FixedIpTestV21):
-
-    fixed_ips = fixed_ips_v2
-
-    def _assert_equal(self, ret, exp):
-        self.assertEqual(ret.status, '202 Accepted')
-
-    def _get_reserve_action(self):
-        return self.controller.action
-
-    def _get_unreserve_action(self):
-        return self.controller.action
 
 
 class FixedIpTestV24(FixedIpTestV21):

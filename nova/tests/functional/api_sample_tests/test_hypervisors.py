@@ -14,15 +14,13 @@
 #    under the License.
 
 import mock
-from oslo_config import cfg
 
 from nova.cells import utils as cells_utils
+import nova.conf
 from nova import objects
 from nova.tests.functional.api_sample_tests import api_sample_base
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class HypervisorsSampleJsonTests(api_sample_base.ApiSampleTestBaseV21):
@@ -155,7 +153,16 @@ class HypervisorsCellsSampleJsonTests(api_sample_base.ApiSampleTestBaseV21):
             'nova.compute.cells_api.HostAPI.get_host_uptime',
             fake_get_host_uptime)
 
-        hypervisor_id = fake_hypervisor['id']
+        hypervisor_id = fake_hypervisor.id
         response = self._do_get('os-hypervisors/%s/uptime' % hypervisor_id)
         subs = {'hypervisor_id': str(hypervisor_id)}
         self._verify_response('hypervisors-uptime-resp', subs, response, 200)
+
+
+class HypervisorsSampleJson228Tests(HypervisorsSampleJsonTests):
+    microversion = '2.28'
+    scenarios = [('v2_28', {'api_major_version': 'v2.1'})]
+
+    def setUp(self):
+        super(HypervisorsSampleJson228Tests, self).setUp()
+        self.api.microversion = self.microversion

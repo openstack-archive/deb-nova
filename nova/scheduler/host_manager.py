@@ -459,8 +459,7 @@ class HostManager(object):
             raise exception.SchedulerHostFilterNotFound(filter_name=msg)
         return good_filters
 
-    def get_filtered_hosts(self, hosts, spec_obj,
-            filter_class_names=None, index=0):
+    def get_filtered_hosts(self, hosts, spec_obj, index=0):
         """Filter hosts and return only ones passing all filters."""
 
         def _strip_ignore_hosts(host_map, hosts_to_ignore):
@@ -506,14 +505,33 @@ class HostManager(object):
                           "'force_nodes' value of '%s'")
             LOG.info(msg % forced_nodes_str)
 
-        if filter_class_names is None:
-            filters = self.default_filters
-        else:
-            filters = self._choose_host_filters(filter_class_names)
+        def _get_hosts_matching_request(hosts, requested_destination):
+            (host, node) = (requested_destination.host,
+                            requested_destination.node)
+            requested_nodes = [x for x in hosts
+                               if x.host == host and x.nodename == node]
+            if requested_nodes:
+                LOG.info(_LI('Host filter only checking host %(host)s and '
+                             'node %(node)s') % {'host': host, 'node': node})
+            else:
+                # NOTE(sbauza): The API level should prevent the user from
+                # providing a wrong destination but let's make sure a wrong
+                # destination doesn't trample the scheduler still.
+                LOG.info(_LI('No hosts matched due to not matching requested '
+                             'destination (%(host)s, %(node)s)'
+                             ) % {'host': host, 'node': node})
+            return iter(requested_nodes)
+
         ignore_hosts = spec_obj.ignore_hosts or []
         force_hosts = spec_obj.force_hosts or []
         force_nodes = spec_obj.force_nodes or []
+        requested_node = spec_obj.requested_destination
 
+        if requested_node is not None:
+            # NOTE(sbauza): Reduce a potentially long set of hosts as much as
+            # possible to any requested destination nodes before passing the
+            # list to the filters
+            hosts = _get_hosts_matching_request(hosts, requested_node)
         if ignore_hosts or force_hosts or force_nodes:
             # NOTE(deva): we can't assume "host" is unique because
             #             one host may have many nodes.
@@ -535,7 +553,7 @@ class HostManager(object):
                     return []
             hosts = six.itervalues(name_to_cls_map)
 
-        return self.filter_handler.get_filtered_objects(filters,
+        return self.filter_handler.get_filtered_objects(self.default_filters,
                 hosts, spec_obj, index)
 
     def get_weighed_hosts(self, hosts, spec_obj):

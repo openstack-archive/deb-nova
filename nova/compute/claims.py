@@ -75,16 +75,18 @@ class Claim(NopClaim):
     correct decisions with respect to host selection.
     """
 
-    def __init__(self, context, instance, tracker, resources, overhead=None,
-                 limits=None):
+    def __init__(self, context, instance, tracker, resources, pci_requests,
+                 overhead=None, limits=None):
         super(Claim, self).__init__()
         # Stash a copy of the instance at the current point of time
         self.instance = instance.obj_clone()
         self._numa_topology_loaded = False
         self.tracker = tracker
+        self._pci_requests = pci_requests
 
         if not overhead:
-            overhead = {'memory_mb': 0}
+            overhead = {'memory_mb': 0,
+                        'disk_gb': 0}
 
         self.overhead = overhead
         self.context = context
@@ -95,7 +97,8 @@ class Claim(NopClaim):
 
     @property
     def disk_gb(self):
-        return self.instance.root_gb + self.instance.ephemeral_gb
+        return (self.instance.root_gb + self.instance.ephemeral_gb +
+                self.overhead.get('disk_gb', 0))
 
     @property
     def memory_mb(self):
@@ -150,7 +153,6 @@ class Claim(NopClaim):
                    self._test_vcpus(resources, vcpus_limit),
                    self._test_numa_topology(resources, numa_topology_limit),
                    self._test_pci()]
-        reasons = reasons + self._test_ext_resources(limits)
         reasons = [r for r in reasons if r is not None]
         if len(reasons) > 0:
             raise exception.ComputeResourcesUnavailable(reason=
@@ -161,8 +163,8 @@ class Claim(NopClaim):
     def _test_memory(self, resources, limit):
         type_ = _("memory")
         unit = "MB"
-        total = resources['memory_mb']
-        used = resources['memory_mb_used']
+        total = resources.memory_mb
+        used = resources.memory_mb_used
         requested = self.memory_mb
 
         return self._test(type_, unit, total, used, requested, limit)
@@ -170,8 +172,8 @@ class Claim(NopClaim):
     def _test_disk(self, resources, limit):
         type_ = _("disk")
         unit = "GB"
-        total = resources['local_gb']
-        used = resources['local_gb_used']
+        total = resources.local_gb
+        used = resources.local_gb_used
         requested = self.disk_gb
 
         return self._test(type_, unit, total, used, requested, limit)
@@ -179,27 +181,22 @@ class Claim(NopClaim):
     def _test_vcpus(self, resources, limit):
         type_ = _("vcpu")
         unit = "VCPU"
-        total = resources['vcpus']
-        used = resources['vcpus_used']
+        total = resources.vcpus
+        used = resources.vcpus_used
         requested = self.vcpus
 
         return self._test(type_, unit, total, used, requested, limit)
 
     def _test_pci(self):
-        pci_requests = objects.InstancePCIRequests.get_by_instance_uuid(
-            self.context, self.instance.uuid)
-
+        pci_requests = self._pci_requests
         if pci_requests.requests:
             stats = self.tracker.pci_tracker.stats
             if not stats.support_requests(pci_requests.requests):
                 return _('Claim pci failed.')
 
-    def _test_ext_resources(self, limits):
-        return self.tracker.ext_resources_handler.test_resources(
-            self.instance, limits)
-
     def _test_numa_topology(self, resources, limit):
-        host_topology = resources.get('numa_topology')
+        host_topology = (resources.numa_topology
+                         if 'numa_topology' in resources else None)
         requested_topology = self.numa_topology
         if host_topology:
             host_topology = objects.NUMATopology.obj_from_db_obj(
@@ -265,19 +262,22 @@ class MoveClaim(Claim):
     Move can be either a migrate/resize, live-migrate or an evacuate operation.
     """
     def __init__(self, context, instance, instance_type, image_meta, tracker,
-                 resources, overhead=None, limits=None):
+                 resources, pci_requests, overhead=None, limits=None):
         self.context = context
         self.instance_type = instance_type
+        if isinstance(image_meta, dict):
+            image_meta = objects.ImageMeta.from_dict(image_meta)
         self.image_meta = image_meta
         super(MoveClaim, self).__init__(context, instance, tracker,
-                                         resources, overhead=overhead,
-                                         limits=limits)
+                                        resources, pci_requests,
+                                        overhead=overhead, limits=limits)
         self.migration = None
 
     @property
     def disk_gb(self):
         return (self.instance_type.root_gb +
-                self.instance_type.ephemeral_gb)
+                self.instance_type.ephemeral_gb +
+                self.overhead.get('disk_gb', 0))
 
     @property
     def memory_mb(self):
@@ -289,23 +289,8 @@ class MoveClaim(Claim):
 
     @property
     def numa_topology(self):
-        image_meta = objects.ImageMeta.from_dict(self.image_meta)
-        return hardware.numa_get_constraints(
-            self.instance_type, image_meta)
-
-    def _test_pci(self):
-        pci_requests = objects.InstancePCIRequests.\
-                       get_by_instance_uuid_and_newness(
-                           self.context, self.instance.uuid, True)
-        if pci_requests.requests:
-            claim = self.tracker.pci_tracker.stats.support_requests(
-                pci_requests.requests)
-            if not claim:
-                return _('Claim pci failed.')
-
-    def _test_ext_resources(self, limits):
-        return self.tracker.ext_resources_handler.test_resources(
-            self.instance_type, limits)
+        return hardware.numa_get_constraints(self.instance_type,
+                                             self.image_meta)
 
     def abort(self):
         """Compute operation requiring claimed resources has failed or
@@ -318,9 +303,10 @@ class MoveClaim(Claim):
 
     def create_migration_context(self):
         if not self.migration:
-            LOG.warn(_LW("Can't create a migration_context record without a "
-                         "migration object specified."),
-                     instance=self.instance)
+            LOG.warning(
+                _LW("Can't create a migration_context record without a "
+                    "migration object specified."),
+                instance=self.instance)
             return
 
         mig_context = objects.MigrationContext(

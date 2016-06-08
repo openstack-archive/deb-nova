@@ -23,7 +23,7 @@ from oslo_serialization import jsonutils
 from oslo_utils import encodeutils
 import webob
 
-from nova.api.openstack.compute.legacy_v2.contrib import security_groups
+from nova.api.openstack.compute import security_groups
 from nova import compute
 from nova import context
 import nova.db
@@ -412,12 +412,6 @@ class TestNeutronSecurityGroupsV21(
                            device_id=test_security_groups.FAKE_UUID1)
 
 
-class TestNeutronSecurityGroupsV2(TestNeutronSecurityGroupsV21):
-    secgrp_ctl_cls = security_groups.SecurityGroupController
-    server_secgrp_ctl_cls = security_groups.ServerSecurityGroupController
-    secgrp_act_ctl_cls = security_groups.SecurityGroupActionController
-
-
 class TestNeutronSecurityGroupRulesTestCase(TestNeutronSecurityGroupsTestCase):
     def setUp(self):
         super(TestNeutronSecurityGroupRulesTestCase, self).setUp()
@@ -478,13 +472,6 @@ class _TestNeutronSecurityGroupRulesBase(object):
         pass
 
 
-class TestNeutronSecurityGroupRulesV2(
-        _TestNeutronSecurityGroupRulesBase,
-        test_security_groups.TestSecurityGroupRulesV2,
-        TestNeutronSecurityGroupRulesTestCase):
-    pass
-
-
 class TestNeutronSecurityGroupRulesV21(
         _TestNeutronSecurityGroupRulesBase,
         test_security_groups.TestSecurityGroupRulesV21,
@@ -521,7 +508,11 @@ class TestNeutronSecurityGroupsOutputTest(TestNeutronSecurityGroupsTestCase):
             req.body = encodeutils.safe_encode(self._encode_body(body))
         req.content_type = self.content_type
         req.headers['Accept'] = self.content_type
-        res = req.get_response(fakes.wsgi_app(init_only=('servers',)))
+
+        # NOTE: This 'os-security-groups' is for enabling security_groups
+        #       attribute on response body.
+        res = req.get_response(fakes.wsgi_app_v21(
+            init_only=('servers', 'os-security-groups')))
         return res
 
     def _encode_body(self, body):

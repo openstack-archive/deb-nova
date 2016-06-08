@@ -13,17 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from nova.api.openstack.compute.legacy_v2 import limits
 from nova.api.openstack.compute.views import limits as limits_views
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import quota
 
-
-# NOTE(alex_xu): This is just for keeping backward compatible with v2 endpoint
-# in api-paste.ini. This will be removed after v2 API code deprecated in the
-# future.
-RateLimitingMiddleware = limits.RateLimitingMiddleware
 
 QUOTAS = quota.QUOTAS
 ALIAS = 'limits'
@@ -42,10 +36,12 @@ class LimitsController(wsgi.Controller):
         quotas = QUOTAS.get_project_quotas(context, project_id,
                                            usages=False)
         abs_limits = {k: v['limit'] for k, v in quotas.items()}
-        rate_limits = req.environ.get("nova.limits", [])
 
         builder = self._get_view_builder(req)
-        return builder.build(rate_limits, abs_limits)
+        # NOTE(sdague): rate_limits is vestigial, but their is common
+        # code between v2 legacy and v2.1 so we have to pass an empty
+        # list.
+        return builder.build([], abs_limits)
 
     def _get_view_builder(self, req):
         return limits_views.ViewBuilderV21()

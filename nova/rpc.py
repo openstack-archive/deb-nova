@@ -28,26 +28,17 @@ __all__ = [
 
 import functools
 
-from nova.i18n import _
-from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
 
+import nova.conf
 import nova.context
 import nova.exception
+from nova.i18n import _
 
 
-CONF = cfg.CONF
-notification_opts = [
-    cfg.StrOpt('notification_format',
-               choices=['unversioned', 'versioned', 'both'],
-               default='both',
-               help='Specifies which notification format shall be used by '
-                    'nova.'),
-]
-
-CONF.register_opts(notification_opts)
+CONF = nova.conf.CONF
 
 LOG = logging.getLogger(__name__)
 
@@ -74,6 +65,20 @@ TRANSPORT_ALIASES = {
 }
 
 
+def get_cell_client(context, default_client):
+    """Get a RPCClient object based on a RequestContext.
+
+    :param context: The RequestContext that can contain a Transport
+    :param default_client: The default RPCClient
+    """
+    if context.mq_connection:
+        return messaging.RPCClient(
+                context.mq_connection, default_client.target,
+                version_cap=default_client.version_cap,
+                serializer=default_client.serializer)
+    return default_client
+
+
 def init(conf):
     global TRANSPORT, NOTIFICATION_TRANSPORT, LEGACY_NOTIFIER, NOTIFIER
     exmods = get_allowed_exmods()
@@ -93,14 +98,14 @@ def init(conf):
                                              serializer=serializer)
         NOTIFIER = messaging.Notifier(NOTIFICATION_TRANSPORT,
                                       serializer=serializer,
-                                      topic='versioned_notifications')
+                                      topics=['versioned_notifications'])
     else:
         LEGACY_NOTIFIER = messaging.Notifier(NOTIFICATION_TRANSPORT,
                                              serializer=serializer,
                                              driver='noop')
         NOTIFIER = messaging.Notifier(NOTIFICATION_TRANSPORT,
                                       serializer=serializer,
-                                      topic='versioned_notifications')
+                                      topics=['versioned_notifications'])
 
 
 def cleanup():
@@ -192,6 +197,14 @@ def get_notifier(service, host=None, publisher_id=None):
 def get_versioned_notifier(publisher_id):
     assert NOTIFIER is not None
     return NOTIFIER.prepare(publisher_id=publisher_id)
+
+
+def create_transport(url):
+    exmods = get_allowed_exmods()
+    return messaging.get_transport(CONF,
+                                   url=url,
+                                   allowed_remote_exmods=exmods,
+                                   aliases=TRANSPORT_ALIASES)
 
 
 class LegacyValidatingNotifier(object):

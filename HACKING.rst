@@ -59,6 +59,7 @@ Nova Specific Commandments
 - [N346] Python 3: do not use dict.itervalues.
 - [N347] Provide enough help text for config options
 - [N348] Deprecated library function os.popen()
+- [N349] Check for closures in tests which are not used
 
 Creating Unit Tests
 -------------------
@@ -119,8 +120,8 @@ need with::
 
     apt-get install texlive-full imagemagick
 
-Then you can then use the ``build_latex_pdf.sh`` script in tools/ to take care
-of both the the sphinx latex generation and the latex compilation. For example::
+Then you can use the ``build_latex_pdf.sh`` script in tools/ to take care
+of both the sphinx latex generation and the latex compilation. For example::
 
     tools/build_latex_pdf.sh
 

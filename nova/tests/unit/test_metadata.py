@@ -49,6 +49,7 @@ from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_network
+from nova.tests import uuidsentinel as uuids
 from nova.virt import netutils
 
 CONF = cfg.CONF
@@ -71,7 +72,7 @@ def fake_inst_obj(context):
         launch_index=1,
         reservation_id='r-xxxxxxxx',
         user_data=ENCODE_USER_DATA_STRING,
-        image_ref=7,
+        image_ref=uuids.image_ref,
         kernel_id=None,
         ramdisk_id=None,
         vcpus=1,
@@ -85,6 +86,9 @@ def fake_inst_obj(context):
         system_metadata={},
         security_groups=objects.SecurityGroupList(),
         availability_zone=None)
+    inst.keypairs = objects.KeyPairList(objects=[
+            fake_keypair_obj(inst.key_name, inst.key_data)])
+
     nwinfo = network_model.NetworkInfo([])
     inst.info_cache = objects.InstanceInfoCache(context=context,
                                                 instance_uuid=inst.uuid,
@@ -275,7 +279,7 @@ class MetadataTestCase(test.TestCase):
 
     def test_image_type_ramdisk(self):
         inst = self.instance.obj_clone()
-        inst['ramdisk_id'] = 'ari-853667c0'
+        inst['ramdisk_id'] = uuids.ramdisk_id
         md = fake_InstanceMetadata(self.stubs, inst)
         data = md.lookup("/latest/meta-data/ramdisk-id")
 
@@ -284,7 +288,7 @@ class MetadataTestCase(test.TestCase):
 
     def test_image_type_kernel(self):
         inst = self.instance.obj_clone()
-        inst['kernel_id'] = 'aki-c2e26ff2'
+        inst['kernel_id'] = uuids.kernel_id
         md = fake_InstanceMetadata(self.stubs, inst)
         data = md.lookup("/2009-04-04/meta-data/kernel-id")
 
@@ -394,15 +398,13 @@ class MetadataTestCase(test.TestCase):
 
     @mock.patch.object(base64, 'b64encode', lambda data: FAKE_SEED)
     @mock.patch('nova.cells.rpcapi.CellsAPI.get_keypair_at_top')
-    @mock.patch.object(objects.KeyPair, 'get_by_name')
     @mock.patch.object(jsonutils, 'dump_as_bytes')
     def _test_as_json_with_options(self, mock_json_dump_as_bytes,
-                          mock_keypair, mock_cells_keypair,
+                          mock_cells_keypair,
                           is_cells=False, os_version=base.GRIZZLY):
         if is_cells:
             self.flags(enable=True, group='cells')
             self.flags(cell_type='compute', group='cells')
-            mock_keypair = mock_cells_keypair
 
         instance = self.instance
         keypair = self.keypair
@@ -435,14 +437,15 @@ class MetadataTestCase(test.TestCase):
         if md._check_os_version(base.LIBERTY, os_version):
             expected_metadata['project_id'] = instance.project_id
 
-        mock_keypair.return_value = keypair
+        mock_cells_keypair.return_value = keypair
         md._metadata_as_json(os_version, 'non useless path parameter')
         if instance.key_name:
-            mock_keypair.assert_called_once_with(mock.ANY,
-                                                 instance.user_id,
-                                                 instance.key_name)
-            self.assertIsInstance(mock_keypair.call_args[0][0],
-                                  context.RequestContext)
+            if is_cells:
+                mock_cells_keypair.assert_called_once_with(mock.ANY,
+                                                           instance.user_id,
+                                                           instance.key_name)
+                self.assertIsInstance(mock_cells_keypair.call_args[0][0],
+                                      context.RequestContext)
         self.assertEqual(md.md_mimetype, base.MIME_TYPE_APPLICATION_JSON)
         mock_json_dump_as_bytes.assert_called_once_with(expected_metadata)
 
@@ -552,18 +555,17 @@ class OpenStackMetadataTestCase(test.TestCase):
             self.assertEqual(found, content)
 
     def test_x509_keypair(self):
-        # check if the x509 content is set, if the keypair type is x509.
-        fakes.stub_out_key_pair_funcs(self.stubs, type='x509')
         inst = self.instance.obj_clone()
+        expected = {'name': self.instance['key_name'],
+                    'type': 'x509',
+                    'data': 'public_key'}
+        inst.keypairs[0].name = expected['name']
+        inst.keypairs[0].type = expected['type']
+        inst.keypairs[0].public_key = expected['data']
         mdinst = fake_InstanceMetadata(self.stubs, inst)
 
         mdjson = mdinst.lookup("/openstack/2012-08-10/meta_data.json")
         mddict = jsonutils.loads(mdjson)
-
-        # keypair is stubbed-out, so it's public_key is 'public_key'.
-        expected = {'name': self.instance['key_name'],
-                    'type': 'x509',
-                    'data': 'public_key'}
 
         self.assertEqual([expected], mddict['keys'])
 
@@ -1231,7 +1233,7 @@ class MetadataHandlerTestCase(test.TestCase):
                          "have been called, the context was given")
         mock_uuid.assert_called_once_with('CONTEXT', 'foo',
             expected_attrs=['ec2_ids', 'flavor', 'info_cache', 'metadata',
-                            'system_metadata', 'security_groups'])
+                            'system_metadata', 'security_groups', 'keypairs'])
         imd.assert_called_once_with(inst, 'bar')
 
     @mock.patch.object(context, 'get_admin_context')
@@ -1248,7 +1250,7 @@ class MetadataHandlerTestCase(test.TestCase):
         mock_context.assert_called_once_with()
         mock_uuid.assert_called_once_with('CONTEXT', 'foo',
             expected_attrs=['ec2_ids', 'flavor', 'info_cache', 'metadata',
-                            'system_metadata', 'security_groups'])
+                            'system_metadata', 'security_groups', 'keypairs'])
         imd.assert_called_once_with(inst, 'bar')
 
 

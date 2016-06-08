@@ -16,18 +16,19 @@
 
 import copy
 
+from oslo_config import cfg
 from oslo_log import log as logging
 import six
 
 from nova import exception
 from nova.i18n import _LE
-from nova import objects
 from nova.objects import fields
 from nova.objects import pci_device_pool
 from nova.pci import utils
 from nova.pci import whitelist
 
 
+CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
 
 
@@ -57,12 +58,14 @@ class PciDeviceStats(object):
 
     pool_keys = ['product_id', 'vendor_id', 'numa_node', 'dev_type']
 
-    def __init__(self, stats=None):
+    def __init__(self, stats=None, dev_filter=None):
         super(PciDeviceStats, self).__init__()
         # NOTE(sbauza): Stats are a PCIDevicePoolList object
         self.pools = [pci_pool.to_dict()
                       for pci_pool in stats] if stats else []
         self.pools.sort(key=lambda item: len(item))
+        self.dev_filter = dev_filter or whitelist.Whitelist(
+            CONF.pci_passthrough_whitelist)
 
     def _equal_properties(self, dev, entry, matching_keys):
         return all(dev.get(prop) == entry.get(prop)
@@ -86,7 +89,7 @@ class PciDeviceStats(object):
         """
         # Don't add a device that doesn't have a matching device spec.
         # This can happen during initial sync up with the controller
-        devspec = whitelist.get_pci_device_devspec(dev)
+        devspec = self.dev_filter.get_devspec(dev)
         if not devspec:
             return
         tags = devspec.get_tags()
@@ -188,18 +191,13 @@ class PciDeviceStats(object):
         decreased, unless it is no longer in a pool.
         """
         if pci_dev.dev_type == fields.PciDeviceType.SRIOV_PF:
-            vfs_list = objects.PciDeviceList.get_by_parent_address(
-                                       pci_dev._context,
-                                       pci_dev.compute_node_id,
-                                       pci_dev.address)
+            vfs_list = pci_dev.child_devices
             if vfs_list:
                 for vf in vfs_list:
                     self.remove_device(vf)
         elif pci_dev.dev_type == fields.PciDeviceType.SRIOV_VF:
             try:
-                parent = pci_dev.get_by_dev_addr(pci_dev._context,
-                                                 pci_dev.compute_node_id,
-                                                 pci_dev.parent_addr)
+                parent = pci_dev.parent_device
                 # Make sure not to decrease PF pool count if this parent has
                 # been already removed from pools
                 if parent in self.get_free_devs():

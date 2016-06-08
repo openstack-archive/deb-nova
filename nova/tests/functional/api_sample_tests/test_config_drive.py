@@ -13,15 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import test_servers
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit.image import fake
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class ConfigDriveSampleJsonTest(test_servers.ServersSampleBase):
@@ -44,7 +41,6 @@ class ConfigDriveSampleJsonTest(test_servers.ServersSampleBase):
     def setUp(self):
         super(ConfigDriveSampleJsonTest, self).setUp()
         fakes.stub_out_networking(self)
-        fakes.stub_out_rate_limiting(self.stubs)
         fake.stub_out_image_service(self)
 
     def test_config_drive_show(self):

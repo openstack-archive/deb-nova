@@ -13,14 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import test_servers
 from nova.tests.unit.api.openstack.compute import test_fping
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class FpingSampleJsonTests(test_servers.ServersSampleBase):
@@ -40,9 +37,6 @@ class FpingSampleJsonTests(test_servers.ServersSampleBase):
             pass
         self.stub_out("nova.utils.execute", test_fping.execute)
         self.stub_out("nova.api.openstack.compute.fping."
-                      "FpingController.check_fping",
-                      fake_check_fping)
-        self.stub_out("nova.api.openstack.compute.legacy_v2.contrib.fping."
                       "FpingController.check_fping",
                       fake_check_fping)
 

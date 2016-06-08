@@ -20,6 +20,7 @@ from oslo_config import cfg
 from nova.tests.unit import fake_instance
 from nova.tests.unit.virt.hyperv import test_base
 from nova.virt.hyperv import livemigrationops
+from nova.virt.hyperv import serialconsoleops
 
 CONF = cfg.CONF
 
@@ -34,13 +35,15 @@ class LiveMigrationOpsTestCase(test_base.HyperVBaseTestCase):
         self._livemigrops._livemigrutils = mock.MagicMock()
         self._livemigrops._pathutils = mock.MagicMock()
 
-    @mock.patch('nova.virt.hyperv.vmops.VMOps.copy_vm_console_logs')
+    @mock.patch.object(serialconsoleops.SerialConsoleOps,
+                       'stop_console_handler')
     @mock.patch('nova.virt.hyperv.vmops.VMOps.copy_vm_dvd_disks')
     def _test_live_migration(self, mock_get_vm_dvd_paths,
-                             mock_copy_logs, side_effect):
+                             mock_stop_console_handler, side_effect):
         mock_instance = fake_instance.fake_instance_obj(self.context)
         mock_post = mock.MagicMock()
         mock_recover = mock.MagicMock()
+        mock_copy_logs = self._livemigrops._pathutils.copy_vm_console_logs
         fake_dest = mock.sentinel.DESTINATION
         self._livemigrops._livemigrutils.live_migrate_vm.side_effect = [
             side_effect]
@@ -58,6 +61,8 @@ class LiveMigrationOpsTestCase(test_base.HyperVBaseTestCase):
                                              post_method=mock_post,
                                              recover_method=mock_recover)
 
+            mock_stop_console_handler.assert_called_once_with(
+                mock_instance.name)
             mock_copy_logs.assert_called_once_with(mock_instance.name,
                                                    fake_dest)
             mock_live_migr = self._livemigrops._livemigrutils.live_migrate_vm
@@ -72,17 +77,23 @@ class LiveMigrationOpsTestCase(test_base.HyperVBaseTestCase):
     def test_live_migration_exception(self):
         self._test_live_migration(side_effect=os_win_exc.HyperVException)
 
+    @mock.patch('nova.virt.hyperv.volumeops.VolumeOps.get_disk_path_mapping')
     @mock.patch('nova.virt.hyperv.volumeops.VolumeOps'
                 '.ebs_root_in_block_devices')
     @mock.patch('nova.virt.hyperv.imagecache.ImageCache.get_cached_image')
     @mock.patch('nova.virt.hyperv.volumeops.VolumeOps'
                 '.initialize_volumes_connection')
-    def test_pre_live_migration(self, mock_initialize_connection,
-                                mock_get_cached_image,
-                                mock_ebs_root_in_block_devices):
+    def _test_pre_live_migration(self, mock_initialize_connection,
+                                 mock_get_cached_image,
+                                 mock_ebs_root_in_block_devices,
+                                 mock_get_disk_path_mapping,
+                                 phys_disks_attached=True):
         mock_instance = fake_instance.fake_instance_obj(self.context)
         mock_instance.image_ref = "fake_image_ref"
         mock_ebs_root_in_block_devices.return_value = None
+        mock_get_disk_path_mapping.return_value = (
+            mock.sentinel.disk_path_mapping if phys_disks_attached
+            else None)
         CONF.set_override('use_cow_images', True)
         self._livemigrops.pre_live_migration(
             self.context, mock_instance,
@@ -98,6 +109,20 @@ class LiveMigrationOpsTestCase(test_base.HyperVBaseTestCase):
                                                       mock_instance)
         mock_initialize_connection.assert_called_once_with(
             mock.sentinel.BLOCK_INFO)
+        mock_get_disk_path_mapping.assert_called_once_with(
+            mock.sentinel.BLOCK_INFO)
+        if phys_disks_attached:
+            livemigrutils = self._livemigrops._livemigrutils
+            livemigrutils.create_planned_vm.assert_called_once_with(
+                mock_instance.name,
+                mock_instance.host,
+                mock.sentinel.disk_path_mapping)
+
+    def test_pre_live_migration(self):
+        self._test_pre_live_migration()
+
+    def test_pre_live_migration_invalid_disk_mapping(self):
+        self._test_pre_live_migration(phys_disks_attached=False)
 
     @mock.patch('nova.virt.hyperv.volumeops.VolumeOps.disconnect_volumes')
     def test_post_live_migration(self, mock_disconnect_volumes):
@@ -108,12 +133,3 @@ class LiveMigrationOpsTestCase(test_base.HyperVBaseTestCase):
             mock.sentinel.block_device_info)
         self._livemigrops._pathutils.get_instance_dir.assert_called_once_with(
             mock.sentinel.instance.name, create_dir=False, remove_dir=True)
-
-    @mock.patch('nova.virt.hyperv.vmops.VMOps.log_vm_serial_output')
-    def test_post_live_migration_at_destination(self, mock_log_vm):
-        mock_instance = fake_instance.fake_instance_obj(self.context)
-        self._livemigrops.post_live_migration_at_destination(
-            self.context, mock_instance, network_info=mock.sentinel.NET_INFO,
-            block_migration=mock.sentinel.BLOCK_INFO)
-        mock_log_vm.assert_called_once_with(mock_instance.name,
-                                            mock_instance.uuid)

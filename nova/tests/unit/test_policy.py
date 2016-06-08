@@ -21,6 +21,7 @@ from oslo_policy import policy as oslo_policy
 from oslo_serialization import jsonutils
 import requests_mock
 
+import nova.conf
 from nova import context
 from nova import exception
 from nova import policy
@@ -28,6 +29,8 @@ from nova import test
 from nova.tests.unit import fake_policy
 from nova.tests.unit import policy_fixture
 from nova import utils
+
+CONF = nova.conf.CONF
 
 
 class PolicyFileTestCase(test.NoDBTestCase):
@@ -247,6 +250,7 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute:unlock_override",
 "compute:get_all_tenants",
 "compute:create:forced_host",
+"compute:swap_volume",
 "compute_extension:accounts",
 "compute_extension:admin_actions",
 "compute_extension:admin_actions:resetNetwork",
@@ -296,6 +300,7 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute_extension:os-assisted-volume-snapshots:delete",
 "compute_extension:console_auth_tokens",
 "compute_extension:os-server-external-events:create",
+"compute_extension:volume_attachments:update",
 "os_compute_api:servers:create:forced_host",
 "os_compute_api:servers:detail:get_all_tenants",
 "os_compute_api:servers:index:get_all_tenants",
@@ -364,6 +369,7 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "os_compute_api:os-console-auth-tokens",
 "os_compute_api:os-quota-class-sets:update",
 "os_compute_api:os-server-external-events:create",
+"os_compute_api:os-volumes-attachments:update",
 "os_compute_api:servers:migrations:index",
 "os_compute_api:servers:migrations:show",
 )
@@ -456,7 +462,6 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute:set_admin_password",
 "compute:snapshot",
 "compute:suspend",
-"compute:swap_volume",
 "compute:unpause",
 "compute:unrescue",
 "compute:update",
@@ -528,7 +533,6 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "compute_extension:volume_attachments:index",
 "compute_extension:volume_attachments:show",
 "compute_extension:volume_attachments:create",
-"compute_extension:volume_attachments:update",
 "compute_extension:volume_attachments:delete",
 "compute_extension:volumetypes",
 "compute_extension:availability_zone:list",
@@ -617,7 +621,6 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "os_compute_api:os-volumes-attachments:index",
 "os_compute_api:os-volumes-attachments:show",
 "os_compute_api:os-volumes-attachments:create",
-"os_compute_api:os-volumes-attachments:update",
 "os_compute_api:os-volumes-attachments:delete",
 "os_compute_api:os-availability-zone:list",
 )
@@ -640,6 +643,7 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "os_compute_api:os-cells:discoverable",
 "os_compute_api:os-certificates:discoverable",
 "os_compute_api:os-cloudpipe:discoverable",
+"os_compute_api:os-config-drive:discoverable",
 "os_compute_api:os-consoles:discoverable",
 "os_compute_api:os-console-output:discoverable",
 "os_compute_api:os-remote-consoles:discoverable",
@@ -692,6 +696,12 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "os_compute_api:os-server-password:discoverable",
 "os_compute_api:os-server-usage:discoverable",
 "os_compute_api:os-server-groups:discoverable",
+"os_compute_api:os-server-tags:delete",
+"os_compute_api:os-server-tags:delete_all",
+"os_compute_api:os-server-tags:index",
+"os_compute_api:os-server-tags:show",
+"os_compute_api:os-server-tags:update",
+"os_compute_api:os-server-tags:update_all",
 "os_compute_api:os-services:discoverable",
 "os_compute_api:server-metadata:discoverable",
 "os_compute_api:servers:discoverable",
@@ -707,6 +717,8 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
 "os_compute_api:os-used-limits:discoverable",
 "os_compute_api:os-migrations:discoverable",
 "os_compute_api:os-assisted-volume-snapshots:discoverable",
+"os_compute_api:os-console-auth-tokens:discoverable",
+"os_compute_api:os-server-external-events:discoverable",
 )
 
     def test_all_rules_in_sample_file(self):
@@ -736,11 +748,17 @@ class RealRolePolicyTestCase(test.NoDBTestCase):
                            {'project_id': 'fake', 'user_id': 'fake'})
 
     def test_no_empty_rules(self):
-        rules = policy.get_rules()
-        for rule in rules:
+        # Parsed rules substitute '@' for '', so we need to look at the raw
+        # policy definitions
+        # CONF.oslo_policy.policy_file has been set to the sample file by
+        # the RealPolicyFixture used in setUp
+        with open(CONF.oslo_policy.policy_file, 'r') as policy_file:
+            policy_dict = jsonutils.loads(policy_file.read())
+
+        for rule_name, rule in policy_dict.items():
             self.assertNotEqual('', str(rule),
                     '%s should not be empty, use "@" instead if the policy '
-                    'should allow everything' % rule)
+                    'should allow everything' % rule_name)
 
     def test_allow_all_rules(self):
         for rule in self.allow_all_rules:

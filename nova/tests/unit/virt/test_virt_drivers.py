@@ -13,6 +13,7 @@
 #    under the License.
 
 import base64
+from collections import deque
 import sys
 import traceback
 
@@ -129,7 +130,8 @@ class _FakeDriverBackendTestCase(object):
         def fake_extend(image, size):
             pass
 
-        def fake_migrateToURI(*a):
+        def fake_migrate(_self, destination, params=None, flags=0,
+                         domain_xml=None, bandwidth=0):
             pass
 
         def fake_make_drive(_self, _path):
@@ -173,10 +175,8 @@ class _FakeDriverBackendTestCase(object):
                        'detach_device_with_retry',
                        fake_detach_device_with_retry)
 
-        # Like the existing fakelibvirt.migrateToURI, do nothing,
-        # but don't fail for these tests.
-        self.stubs.Set(nova.virt.libvirt.driver.libvirt.Domain,
-                       'migrateToURI', fake_migrateToURI)
+        self.stubs.Set(nova.virt.libvirt.guest.Guest,
+                       'migrate', fake_migrate)
 
         # We can't actually make a config drive v2 because ensure_tree has
         # been faked out
@@ -209,11 +209,7 @@ class VirtDriverLoaderTestCase(_FakeDriverBackendTestCase, test.TestCase):
     """
 
     # if your driver supports being tested in a fake way, it can go here
-    #
-    # both long form and short form drivers are supported
     new_drivers = {
-        'nova.virt.fake.FakeDriver': 'FakeDriver',
-        'nova.virt.libvirt.LibvirtDriver': 'LibvirtDriver',
         'fake.FakeDriver': 'FakeDriver',
         'libvirt.LibvirtDriver': 'LibvirtDriver'
         }
@@ -671,6 +667,7 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
     @catch_notimplementederror
     def test_live_migration_force_complete(self):
         instance_ref, network_info = self._get_running_instance()
+        self.connection.active_migrations[instance_ref.uuid] = deque()
         self.connection.live_migration_force_complete(instance_ref)
 
     @catch_notimplementederror

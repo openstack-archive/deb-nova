@@ -29,7 +29,6 @@ from xml.parsers import expat
 
 from eventlet import greenthread
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import importutils
@@ -62,66 +61,7 @@ from nova.virt.xenapi.image import utils as image_utils
 
 LOG = logging.getLogger(__name__)
 
-xenapi_vm_utils_opts = [
-    cfg.StrOpt('cache_images',
-               default='all',
-               choices=('all', 'some', 'none'),
-               help='Cache glance images locally. `all` will cache all'
-                    ' images, `some` will only cache images that have the'
-                    ' image_property `cache_in_nova=True`, and `none` turns'
-                    ' off caching entirely'),
-    cfg.IntOpt('image_compression_level',
-               min=1,
-               max=9,
-               help='Compression level for images, e.g., 9 for gzip -9.'
-                    ' Range is 1-9, 9 being most compressed but most CPU'
-                    ' intensive on dom0.'),
-    cfg.StrOpt('default_os_type',
-               default='linux',
-               help='Default OS type'),
-    cfg.IntOpt('block_device_creation_timeout',
-               default=10,
-               help='Time to wait for a block device to be created'),
-    cfg.IntOpt('max_kernel_ramdisk_size',
-               default=16 * units.Mi,
-               help='Maximum size in bytes of kernel or ramdisk images'),
-    cfg.StrOpt('sr_matching_filter',
-               default='default-sr:true',
-               help='Filter for finding the SR to be used to install guest '
-                    'instances on. To use the Local Storage in default '
-                    'XenServer/XCP installations set this flag to '
-                    'other-config:i18n-key=local-storage. To select an SR '
-                    'with a different matching criteria, you could set it to '
-                    'other-config:my_favorite_sr=true. On the other hand, to '
-                    'fall back on the Default SR, as displayed by XenCenter, '
-                    'set this flag to: default-sr:true'),
-    cfg.BoolOpt('sparse_copy',
-                default=True,
-                help='Whether to use sparse_copy for copying data on a '
-                     'resize down (False will use standard dd). This speeds '
-                     'up resizes down considerably since large runs of zeros '
-                     'won\'t have to be rsynced'),
-    cfg.IntOpt('num_vbd_unplug_retries',
-               default=10,
-               help='Maximum number of retries to unplug VBD. if <=0, '
-                    'should try once and no retry'),
-    cfg.StrOpt('torrent_images',
-               default='none',
-               choices=('all', 'some', 'none'),
-               help='Whether or not to download images via Bit Torrent.'),
-    cfg.StrOpt('ipxe_network_name',
-               help='Name of network to use for booting iPXE ISOs'),
-    cfg.StrOpt('ipxe_boot_menu_url',
-               help='URL to the iPXE boot menu'),
-    cfg.StrOpt('ipxe_mkisofs_cmd',
-               default='mkisofs',
-               help='Name and optionally path of the tool used for '
-                    'ISO image creation'),
-    ]
-
 CONF = nova.conf.CONF
-CONF.register_opts(xenapi_vm_utils_opts, 'xenserver')
-CONF.import_opt('use_ipv6', 'nova.netconf')
 
 XENAPI_POWER_STATE = {
     'Halted': power_state.SHUTDOWN,
@@ -137,6 +77,7 @@ MBR_SIZE_BYTES = MBR_SIZE_SECTORS * SECTOR_SIZE
 KERNEL_DIR = '/boot/guest'
 MAX_VDI_CHAIN_SIZE = 16
 PROGRESS_INTERVAL_SECONDS = 300
+DD_BLOCKSIZE = 65536
 
 # Fudge factor to allow for the VHD chain to be slightly larger than
 # the partitioned space. Otherwise, legitimate images near their
@@ -983,7 +924,7 @@ def try_auto_configure_disk(session, vdi_ref, new_gb):
         _auto_configure_disk(session, vdi_ref, new_gb)
     except exception.CannotResizeDisk as e:
         msg = _LW('Attempted auto_configure_disk failed because: %s')
-        LOG.warn(msg % e)
+        LOG.warning(msg % e)
 
 
 def _make_partition(session, dev, partition_start, partition_end):
@@ -1159,6 +1100,7 @@ def generate_configdrive(session, instance, vm_ref, userdevice,
                     utils.execute('dd',
                                   'if=%s' % tmp_file,
                                   'of=%s' % dev_path,
+                                  'bs=%d' % DD_BLOCKSIZE,
                                   'oflag=direct,sync',
                                   run_as_root=True)
 
@@ -1179,7 +1121,7 @@ def _create_kernel_image(context, session, instance, name_label, image_id,
     Returns: A list of dictionaries that describe VDIs
     """
     filename = ""
-    if CONF.xenserver.cache_images:
+    if CONF.xenserver.cache_images != 'none':
         args = {}
         args['cached-image'] = image_id
         args['new-image-uuid'] = str(uuid.uuid4())
@@ -1569,7 +1511,7 @@ def _fetch_disk_image(context, session, instance, name_label, image_id,
 
             # Let the plugin copy the correct number of bytes.
             args['image-size'] = str(vdi_size)
-            if CONF.xenserver.cache_images:
+            if CONF.xenserver.cache_images != 'none':
                 args['cached-image'] = image_id
             filename = session.call_plugin('kernel', 'copy_vdi', args)
 
@@ -2426,6 +2368,7 @@ def _copy_partition(session, src_ref, dst_ref, partition, virtual_size):
                 utils.execute('dd',
                               'if=%s' % src_path,
                               'of=%s' % dst_path,
+                              'bs=%d' % DD_BLOCKSIZE,
                               'count=%d' % num_blocks,
                               'iflag=direct,sync',
                               'oflag=direct,sync',

@@ -14,13 +14,10 @@
 
 import mock
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import api_sample_base
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class FakeNode(object):
@@ -61,22 +58,16 @@ class BareMetalNodesSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
 
     @mock.patch("nova.api.openstack.compute.baremetal_nodes"
                 "._get_ironic_client")
-    @mock.patch("nova.api.openstack.compute.legacy_v2.contrib.baremetal_nodes"
-                "._get_ironic_client")
-    def test_baremetal_nodes_list(self, mock_get_irc, v2_1_mock_get_irc):
+    def test_baremetal_nodes_list(self, mock_get_irc):
         mock_get_irc.return_value = fake_client()
-        v2_1_mock_get_irc.return_value = fake_client()
 
         response = self._do_get('os-baremetal-nodes')
         self._verify_response('baremetal-node-list-resp', {}, response, 200)
 
     @mock.patch("nova.api.openstack.compute.baremetal_nodes"
                 "._get_ironic_client")
-    @mock.patch("nova.api.openstack.compute.legacy_v2.contrib.baremetal_nodes"
-                "._get_ironic_client")
-    def test_baremetal_nodes_get(self, mock_get_irc, v2_1_mock_get_irc):
+    def test_baremetal_nodes_get(self, mock_get_irc):
         mock_get_irc.return_value = fake_client()
-        v2_1_mock_get_irc.return_value = fake_client()
 
         response = self._do_get('os-baremetal-nodes/'
                                 '058d27fa-241b-445a-a386-08c04f96db43')

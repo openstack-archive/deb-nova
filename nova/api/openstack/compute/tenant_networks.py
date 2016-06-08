@@ -16,7 +16,6 @@
 
 import netaddr
 import netaddr.core as netexc
-from oslo_config import cfg
 from oslo_log import log as logging
 import six
 from webob import exc
@@ -25,6 +24,7 @@ from nova.api.openstack.compute.schemas import tenant_networks as schema
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api import validation
+import nova.conf
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
@@ -33,16 +33,7 @@ import nova.network
 from nova import quota
 
 
-CONF = cfg.CONF
-CONF.import_opt('enable_network_quota', 'nova.api.openstack.compute.'
-                'legacy_v2.contrib.os_tenant_networks')
-CONF.import_opt('use_neutron_default_nets', 'nova.api.openstack.compute.'
-                'legacy_v2.contrib.os_tenant_networks')
-CONF.import_opt('neutron_default_tenant_id', 'nova.api.openstack.compute.'
-                'legacy_v2.contrib.os_tenant_networks')
-CONF.import_opt('quota_networks', 'nova.api.openstack.compute.'
-                'legacy_v2.contrib.os_tenant_networks')
-
+CONF = nova.conf.CONF
 
 ALIAS = 'os-tenant-networks'
 
@@ -67,7 +58,7 @@ class TenantNetworkController(wsgi.Controller):
 
     def _refresh_default_networks(self):
         self._default_networks = []
-        if CONF.use_neutron_default_nets == "True":
+        if CONF.use_neutron_default_nets:
             try:
                 self._default_networks = self._get_default_networks()
             except Exception:
@@ -162,13 +153,12 @@ class TenantNetworkController(wsgi.Controller):
                 msg = _("Address could not be converted.")
                 raise exc.HTTPBadRequest(explanation=msg)
 
-        networks = []
         try:
             if CONF.enable_network_quota:
                 reservation = QUOTAS.reserve(context, networks=1)
         except exception.OverQuota:
             msg = _("Quota exceeded, too many networks.")
-            raise exc.HTTPBadRequest(explanation=msg)
+            raise exc.HTTPForbidden(explanation=msg)
 
         kwargs['project_id'] = context.project_id
 

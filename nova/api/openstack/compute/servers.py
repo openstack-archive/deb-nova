@@ -17,7 +17,6 @@
 import base64
 import re
 
-from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_utils import strutils
@@ -37,6 +36,8 @@ from nova.api.openstack import wsgi
 from nova.api import validation
 from nova import compute
 from nova.compute import flavors
+from nova.compute import utils as compute_utils
+import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LW
@@ -45,15 +46,9 @@ from nova import objects
 from nova import utils
 
 ALIAS = 'servers'
+TAG_SEARCH_FILTERS = ('tags', 'tags-any', 'not-tags', 'not-tags-any')
 
-CONF = cfg.CONF
-CONF.import_opt('enable_instance_password',
-                'nova.api.openstack.compute.legacy_v2.servers')
-CONF.import_opt('reclaim_instance_interval', 'nova.compute.manager')
-CONF.import_opt('extensions_blacklist', 'nova.api.openstack',
-                group='osapi_v21')
-CONF.import_opt('extensions_whitelist', 'nova.api.openstack',
-                group='osapi_v21')
+CONF = nova.conf.CONF
 
 LOG = logging.getLogger(__name__)
 authorize = extensions.os_compute_authorizer(ALIAS)
@@ -353,6 +348,12 @@ class ServersController(wsgi.Controller):
                 msg = _("Only administrators may list deleted instances")
                 raise exc.HTTPForbidden(explanation=msg)
 
+        if api_version_request.is_supported(req, min_version='2.26'):
+            for tag_filter in TAG_SEARCH_FILTERS:
+                if tag_filter in search_opts:
+                    search_opts[tag_filter] = search_opts[
+                        tag_filter].split(',')
+
         # If tenant_id is passed as a search parameter this should
         # imply that all_tenants is also enabled unless explicitly
         # disabled. Note that the tenant_id parameter is filtered out
@@ -397,6 +398,9 @@ class ServersController(wsgi.Controller):
 
         expected_attrs = ['pci_devices']
         if is_detail:
+            if api_version_request.is_supported(req, '2.26'):
+                expected_attrs.append("tags")
+
             # merge our expected attrs with what the view builder needs for
             # showing details
             expected_attrs = self._view_builder.get_show_expected_attrs(
@@ -443,6 +447,35 @@ class ServersController(wsgi.Controller):
         req.cache_db_instance(instance)
         return instance
 
+    @staticmethod
+    def _validate_network_id(net_id, network_uuids):
+        """Validates that a requested network id.
+
+        This method performs two checks:
+
+        1. That the network id is in the proper uuid format.
+        2. That the network is not a duplicate when using nova-network.
+
+        :param net_id: The network id to validate.
+        :param network_uuids: A running list of requested network IDs that have
+            passed validation already.
+        :raises: webob.exc.HTTPBadRequest if validation fails
+        """
+        if not uuidutils.is_uuid_like(net_id):
+            # NOTE(mriedem): Neutron would allow a network id with a br- prefix
+            # back in Folsom so continue to honor that.
+            # TODO(mriedem): Need to figure out if this is still a valid case.
+            br_uuid = net_id.split('-', 1)[-1]
+            if not uuidutils.is_uuid_like(br_uuid):
+                msg = _("Bad networks format: network uuid is "
+                        "not in proper format (%s)") % net_id
+                raise exc.HTTPBadRequest(explanation=msg)
+
+        # duplicate networks are allowed only for neutron v2.0
+        if net_id in network_uuids and not utils.is_neutron():
+            expl = _("Duplicate networks (%s) are not allowed") % net_id
+            raise exc.HTTPBadRequest(explanation=expl)
+
     def _get_requested_networks(self, requested_networks):
         """Create a list of requested networks from the networks attribute."""
         networks = []
@@ -471,24 +504,10 @@ class ServersController(wsgi.Controller):
                         raise exc.HTTPBadRequest(explanation=msg)
                 else:
                     request.network_id = network['uuid']
+                    self._validate_network_id(
+                        request.network_id, network_uuids)
+                    network_uuids.append(request.network_id)
 
-                if (not request.port_id and
-                        not uuidutils.is_uuid_like(request.network_id)):
-                    br_uuid = request.network_id.split('-', 1)[-1]
-                    if not uuidutils.is_uuid_like(br_uuid):
-                        msg = _("Bad networks format: network uuid is "
-                                "not in proper format "
-                                "(%s)") % request.network_id
-                        raise exc.HTTPBadRequest(explanation=msg)
-
-                # duplicate networks are allowed only for neutron v2.0
-                if (not utils.is_neutron() and request.network_id and
-                        request.network_id in network_uuids):
-                    expl = (_("Duplicate networks"
-                              " (%s) are not allowed") %
-                            request.network_id)
-                    raise exc.HTTPBadRequest(explanation=expl)
-                network_uuids.append(request.network_id)
                 networks.append(request)
             except KeyError as key:
                 expl = _('Bad network format: missing %s') % key
@@ -571,7 +590,11 @@ class ServersController(wsgi.Controller):
         # TODO(Shao He, Feng) move this policy check to os-availabilty-zone
         # extension after refactor it.
         parse_az = self.compute_api.parse_availability_zone
-        availability_zone, host, node = parse_az(context, availability_zone)
+        try:
+            availability_zone, host, node = parse_az(context,
+                                                     availability_zone)
+        except exception.InvalidInput as err:
+            raise exc.HTTPBadRequest(explanation=six.text_type(err))
         if host or node:
             authorize(context, {}, 'create:forced_host')
 
@@ -943,17 +966,6 @@ class ServersController(wsgi.Controller):
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                     'delete', id)
 
-    def _image_uuid_from_href(self, image_href):
-        # If the image href was generated by nova api, strip image_href
-        # down to an id and use the default glance connection params
-        image_uuid = image_href.split('/').pop()
-
-        if not uuidutils.is_uuid_like(image_uuid):
-            msg = _("Invalid imageRef provided.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
-        return image_uuid
-
     def _image_from_req_data(self, server_dict, create_kwargs):
         """Get image data from the request or raise appropriate
         exceptions.
@@ -966,7 +978,8 @@ class ServersController(wsgi.Controller):
         if not image_href and create_kwargs.get('block_device_mapping'):
             return ''
         elif image_href:
-            return self._image_uuid_from_href(six.text_type(image_href))
+            return common.image_uuid_from_href(six.text_type(image_href),
+                                               'imageRef')
         else:
             msg = _("Missing imageRef attribute")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -1003,7 +1016,7 @@ class ServersController(wsgi.Controller):
         rebuild_dict = body['rebuild']
 
         image_href = rebuild_dict["imageRef"]
-        image_href = self._image_uuid_from_href(image_href)
+        image_href = common.image_uuid_from_href(image_href, 'imageRef')
 
         password = self._get_server_admin_password(rebuild_dict)
 
@@ -1097,7 +1110,7 @@ class ServersController(wsgi.Controller):
                     context, instance.uuid)
 
         try:
-            if self.compute_api.is_volume_backed_instance(context, instance,
+            if compute_utils.is_volume_backed_instance(context, instance,
                                                           bdms):
                 authorize(context, action="create_image:allow_volume_backed")
                 image = self.compute_api.snapshot_volume_backed(
@@ -1141,6 +1154,8 @@ class ServersController(wsgi.Controller):
                     'ip', 'changes-since', 'all_tenants')
         if api_version_request.is_supported(req, min_version='2.5'):
             opt_list += ('ip6',)
+        if api_version_request.is_supported(req, min_version='2.26'):
+            opt_list += TAG_SEARCH_FILTERS
         return opt_list
 
     def _get_instance(self, context, instance_uuid):

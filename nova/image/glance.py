@@ -18,6 +18,7 @@
 from __future__ import absolute_import
 
 import copy
+import inspect
 import itertools
 import random
 import sys
@@ -27,88 +28,31 @@ import cryptography
 import glanceclient
 from glanceclient.common import http
 import glanceclient.exc
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_service import sslutils
 from oslo_utils import excutils
-from oslo_utils import netutils
 from oslo_utils import timeutils
 import six
 from six.moves import range
 import six.moves.urllib.parse as urlparse
 
+import nova.conf
 from nova import exception
 from nova.i18n import _LE, _LI, _LW
 import nova.image.download as image_xfers
 from nova import objects
 from nova import signature_utils
 
-
-glance_opts = [
-    cfg.StrOpt('host',
-               default='$my_ip',
-               # TODO(sdague): remove in N
-               deprecated_for_removal=True,
-               help='DEPRECATED: Glance server hostname or IP address. '
-                    'Use the "api_servers" option instead.'),
-    cfg.IntOpt('port',
-               default=9292,
-               min=1,
-               max=65535,
-               # TODO(sdague): remove in N
-               deprecated_for_removal=True,
-               help='DEPRECATED: Glance server port. Use the "api_servers" '
-                    'option instead.'),
-    cfg.StrOpt('protocol',
-                default='http',
-                choices=('http', 'https'),
-                # TODO(sdague): remove in N
-                deprecated_for_removal=True,
-                help='DEPRECATED: Protocol to use when connecting to glance. '
-                     'Set to https for SSL. Use the "api_servers" option '
-                     'instead.'),
-    cfg.ListOpt('api_servers',
-                help='''
-A list of the glance api servers endpoints available to nova. These
-should be fully qualified urls of the form
-"scheme://hostname:port[/path]" (i.e. "http://10.0.1.0:9292" or
-"https://my.glance.server/image")'''),
-    cfg.BoolOpt('api_insecure',
-                default=False,
-                help='Allow to perform insecure SSL (https) requests to '
-                     'glance'),
-    cfg.IntOpt('num_retries',
-               default=0,
-               help='Number of retries when uploading / downloading an image '
-                    'to / from glance.'),
-    cfg.ListOpt('allowed_direct_url_schemes',
-                default=[],
-                help='A list of url scheme that can be downloaded directly '
-                     'via the direct_url.  Currently supported schemes: '
-                     '[file].'),
-    cfg.BoolOpt('verify_glance_signatures',
-                default=False,
-                help='Require Nova to perform signature verification on '
-                     'each image downloaded from Glance.'),
-    ]
-
 LOG = logging.getLogger(__name__)
-CONF = cfg.CONF
-CONF.register_opts(glance_opts, 'glance')
-CONF.import_opt('auth_strategy', 'nova.api.auth')
-CONF.import_opt('my_ip', 'nova.netconf')
+CONF = nova.conf.CONF
 
 supported_glance_versions = (1, 2)
 
 
 def generate_glance_url():
-    """Generate the URL to glance."""
-    glance_host = CONF.glance.host
-    if netutils.is_valid_ipv6(glance_host):
-        glance_host = '[%s]' % glance_host
-    return "%s://%s:%d" % (CONF.glance.protocol, glance_host,
-                           CONF.glance.port)
+    """Return a random glance url from the api servers we know about."""
+    return next(get_api_servers())
 
 
 def generate_image_url(image_ref):
@@ -186,14 +130,11 @@ def get_api_servers():
     """
     api_servers = []
 
-    configured_servers = ([generate_glance_url()]
-                          if CONF.glance.api_servers is None
-                          else CONF.glance.api_servers)
-    for api_server in configured_servers:
+    for api_server in CONF.glance.api_servers:
         if '//' not in api_server:
             api_server = 'http://' + api_server
-            # NOTE(sdague): remove in N.
-            LOG.warn(
+            # NOTE(sdague): remove in O.
+            LOG.warning(
                 _LW("No protocol specified in for api_server '%s', "
                     "please update [glance] api_servers with fully "
                     "qualified url including scheme (http / https)"),
@@ -246,7 +187,12 @@ class GlanceClientWrapper(object):
             client = self.client or self._create_onetime_client(context,
                                                                 version)
             try:
-                return getattr(client.images, method)(*args, **kwargs)
+                result = getattr(client.images, method)(*args, **kwargs)
+                if inspect.isgenerator(result):
+                    # Convert generator results to a list, so that we can
+                    # catch any potential exceptions now and retry the call.
+                    return list(result)
+                return result
             except retry_excs as e:
                 if attempt < num_attempts:
                     extra = "retrying"

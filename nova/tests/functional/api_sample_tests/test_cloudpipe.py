@@ -14,16 +14,12 @@
 
 import uuid as uuid_lib
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import api_sample_base
 from nova.tests.unit.image import fake
 
 
-CONF = cfg.CONF
-CONF.import_opt('vpn_image_id', 'nova.cloudpipe.pipelib')
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class CloudPipeSampleTest(api_sample_base.ApiSampleTestBaseV21):

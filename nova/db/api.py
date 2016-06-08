@@ -27,28 +27,15 @@ these objects be simple dictionaries.
 
 """
 
-from oslo_config import cfg
 from oslo_db import concurrency
 from oslo_log import log as logging
 
 from nova.cells import rpcapi as cells_rpcapi
+import nova.conf
 from nova.i18n import _LE
 
 
-db_opts = [
-    cfg.BoolOpt('enable_new_services',
-                default=True,
-                help='Services to be added to the available pool on create'),
-    cfg.StrOpt('instance_name_template',
-               default='instance-%08x',
-               help='Template string to be used to generate instance names'),
-    cfg.StrOpt('snapshot_name_template',
-               default='snapshot-%s',
-               help='Template string to be used to generate snapshot names'),
-]
-
-CONF = cfg.CONF
-CONF.register_opts(db_opts)
+CONF = nova.conf.CONF
 
 _BACKEND_MAPPING = {'sqlalchemy': 'nova.db.sqlalchemy.api'}
 
@@ -59,6 +46,15 @@ LOG = logging.getLogger(__name__)
 
 # The maximum value a signed INT type may have
 MAX_INT = 0x7FFFFFFF
+
+# NOTE(dosaboy): This is supposed to represent the maximum value that we can
+# place into a SQL single precision float so that we can check whether values
+# are oversize. Postgres and MySQL both define this as their max whereas Sqlite
+# uses dynamic typing so this would not apply. Different dbs react in different
+# ways to oversize values e.g. postgres will raise an exception while mysql
+# will round off the value. Nevertheless we may still want to know prior to
+# insert whether the value is oversize or not.
+SQL_SP_FLOAT_MAX = 3.40282e+38
 
 ###################
 
@@ -1082,6 +1078,13 @@ def quota_get_all_by_project(context, project_id):
     return IMPL.quota_get_all_by_project(context, project_id)
 
 
+def quota_get_per_project_resources():
+    """Retrieve the names of resources whose quotas are calculated on a
+       per-project rather than a per-user basis.
+    """
+    return IMPL.quota_get_per_project_resources()
+
+
 def quota_get_all(context, project_id):
     """Retrieve all user quotas associated with a given project."""
     return IMPL.quota_get_all(context, project_id)
@@ -1144,6 +1147,27 @@ def quota_usage_update(context, project_id, user_id, resource, **kwargs):
     """Update a quota usage or raise if it does not exist."""
     return IMPL.quota_usage_update(context, project_id, user_id, resource,
                                    **kwargs)
+
+
+def quota_usage_refresh(context, resources, keys, until_refresh, max_age,
+                        project_id=None, user_id=None):
+    """Refresh the quota usages.
+
+    :param context: The request context, for access checks.
+    :param resources: A dictionary of the registered resources.
+    :param keys: Names of the resources whose usage is to be refreshed.
+    :param until_refresh:  The until_refresh configuration value.
+    :param max_age:  The max_age configuration value.
+    :param project_id: (Optional) The project_id containing the usages
+                       to be refreshed.  Defaults to the project_id
+                       in the context.
+    :param user_id: (Optional) The user_id containing the usages
+                     to be refreshed.  Defaults to the user_id
+                     in the context.
+
+    """
+    return IMPL.quota_usage_refresh(context, resources, keys, until_refresh,
+                              max_age, project_id=project_id, user_id=user_id)
 
 
 ###################
@@ -1512,9 +1536,9 @@ def flavor_get_by_flavor_id(context, id, read_deleted=None):
     return IMPL.flavor_get_by_flavor_id(context, id, read_deleted)
 
 
-def flavor_destroy(context, name):
+def flavor_destroy(context, flavor_id):
     """Delete an instance type."""
-    return IMPL.flavor_destroy(context, name)
+    return IMPL.flavor_destroy(context, flavor_id)
 
 
 def flavor_access_get_by_flavor_id(context, flavor_id):

@@ -29,7 +29,6 @@ import base64
 import contextlib
 import functools
 import inspect
-import socket
 import sys
 import time
 import traceback
@@ -41,7 +40,6 @@ from eventlet import greenthread
 import eventlet.semaphore
 import eventlet.timeout
 from keystoneauth1 import exceptions as keystone_exception
-from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
@@ -86,7 +84,6 @@ from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import instance as obj_instance
 from nova.objects import migrate_data as migrate_data_obj
-from nova import paths
 from nova import rpc
 from nova import safe_utils
 from nova.scheduler import client as scheduler_client
@@ -100,181 +97,7 @@ from nova.virt import virtapi
 from nova import volume
 from nova.volume import encryptors
 
-
-compute_opts = [
-    cfg.StrOpt('console_host',
-               default=socket.gethostname(),
-               help='Console proxy host to use to connect '
-                    'to instances on this host.'),
-    cfg.StrOpt('default_access_ip_network_name',
-               help='Name of network to use to set access IPs for instances'),
-    cfg.BoolOpt('defer_iptables_apply',
-                default=False,
-                help='Whether to batch up the application of IPTables rules'
-                     ' during a host restart and apply all at the end of the'
-                     ' init phase'),
-    cfg.StrOpt('instances_path',
-               default=paths.state_path_def('instances'),
-               help='Where instances are stored on disk'),
-    cfg.BoolOpt('instance_usage_audit',
-                default=False,
-                help="Generate periodic compute.instance.exists"
-                     " notifications"),
-    cfg.IntOpt('live_migration_retry_count',
-               default=30,
-               help="Number of 1 second retries needed in live_migration"),
-    cfg.BoolOpt('resume_guests_state_on_host_boot',
-                default=False,
-                help='Whether to start guests that were running before the '
-                     'host rebooted'),
-    cfg.IntOpt('network_allocate_retries',
-               default=0,
-               help="Number of times to retry network allocation on failures"),
-    cfg.IntOpt('max_concurrent_builds',
-               default=10,
-               help='Maximum number of instance builds to run concurrently'),
-    cfg.IntOpt('max_concurrent_live_migrations',
-               default=1,
-               help='Maximum number of live migrations to run concurrently. '
-                    'This limit is enforced to avoid outbound live migrations '
-                    'overwhelming the host/network and causing failures. It '
-                    'is not recommended that you change this unless you are '
-                    'very sure that doing so is safe and stable in your '
-                    'environment.'),
-    cfg.IntOpt('block_device_allocate_retries',
-               default=60,
-               help='Number of times to retry block device '
-                    'allocation on failures.\n'
-                    'Starting with Liberty, Cinder can use image volume '
-                    'cache. This may help with block device allocation '
-                    'performance. Look at the cinder '
-                    'image_volume_cache_enabled configuration option.')
-    ]
-
-interval_opts = [
-    cfg.IntOpt('bandwidth_poll_interval',
-               default=600,
-               help='Interval to pull network bandwidth usage info. Not '
-                    'supported on all hypervisors. Set to -1 to disable. '
-                    'Setting this to 0 will run at the default rate.'),
-    cfg.IntOpt('sync_power_state_interval',
-               default=600,
-               help='Interval to sync power states between the database and '
-                    'the hypervisor. Set to -1 to disable. '
-                    'Setting this to 0 will run at the default rate.'),
-    cfg.IntOpt("heal_instance_info_cache_interval",
-               default=60,
-               help="Number of seconds between instance network information "
-                    "cache updates"),
-    cfg.IntOpt('reclaim_instance_interval',
-               min=0,
-               default=0,
-               help='Interval in seconds for reclaiming deleted instances. '
-                    'It takes effect only when value is greater than 0.'),
-    cfg.IntOpt('volume_usage_poll_interval',
-               default=0,
-               help='Interval in seconds for gathering volume usages'),
-    cfg.IntOpt('shelved_poll_interval',
-               default=3600,
-               help='Interval in seconds for polling shelved instances to '
-                    'offload. Set to -1 to disable.'
-                    'Setting this to 0 will run at the default rate.'),
-    cfg.IntOpt('shelved_offload_time',
-               default=0,
-               help='Time in seconds before a shelved instance is eligible '
-                    'for removing from a host. -1 never offload, 0 offload '
-                    'immediately when shelved'),
-    cfg.IntOpt('instance_delete_interval',
-               default=300,
-               help='Interval in seconds for retrying failed instance file '
-                    'deletes. Set to -1 to disable. '
-                    'Setting this to 0 will run at the default rate.'),
-    cfg.IntOpt('block_device_allocate_retries_interval',
-               default=3,
-               help='Waiting time interval (seconds) between block'
-                    ' device allocation retries on failures'),
-    cfg.IntOpt('scheduler_instance_sync_interval',
-               default=120,
-               help='Waiting time interval (seconds) between sending the '
-                    'scheduler a list of current instance UUIDs to verify '
-                    'that its view of instances is in sync with nova. If the '
-                    'CONF option `scheduler_tracks_instance_changes` is '
-                    'False, changing this option will have no effect.'),
-    cfg.IntOpt('update_resources_interval',
-               default=0,
-               help='Interval in seconds for updating compute resources. A '
-                    'number less than 0 means to disable the task completely. '
-                    'Leaving this at the default of 0 will cause this to run '
-                    'at the default periodic interval. Setting it to any '
-                    'positive value will cause it to run at approximately '
-                    'that number of seconds.'),
-]
-
-timeout_opts = [
-    cfg.IntOpt("reboot_timeout",
-               default=0,
-               help="Automatically hard reboot an instance if it has been "
-                    "stuck in a rebooting state longer than N seconds. "
-                    "Set to 0 to disable."),
-    cfg.IntOpt("instance_build_timeout",
-               default=0,
-               help="Amount of time in seconds an instance can be in BUILD "
-                    "before going into ERROR status. "
-                    "Set to 0 to disable."),
-    cfg.IntOpt("rescue_timeout",
-               default=0,
-               help="Automatically unrescue an instance after N seconds. "
-                    "Set to 0 to disable."),
-    cfg.IntOpt("resize_confirm_window",
-               default=0,
-               help="Automatically confirm resizes and cold migrations "
-                    "after N seconds. Set to 0 to disable."),
-    cfg.IntOpt("shutdown_timeout",
-               default=60,
-               help="Total amount of time to wait in seconds for an instance "
-                    "to perform a clean shutdown."),
-]
-
-running_deleted_opts = [
-    cfg.StrOpt("running_deleted_instance_action",
-               default="reap",
-               choices=('noop', 'log', 'shutdown', 'reap'),
-               help="Action to take if a running deleted instance is detected."
-                    "Set to 'noop' to take no action."),
-    cfg.IntOpt("running_deleted_instance_poll_interval",
-               default=1800,
-               help="Number of seconds to wait between runs of the cleanup "
-                    "task."),
-    cfg.IntOpt("running_deleted_instance_timeout",
-               default=0,
-               help="Number of seconds after being deleted when a running "
-                    "instance should be considered eligible for cleanup."),
-]
-
-instance_cleaning_opts = [
-    cfg.IntOpt('maximum_instance_delete_attempts',
-               default=5,
-               help='The number of times to attempt to reap an instance\'s '
-                    'files.'),
-]
-
 CONF = nova.conf.CONF
-CONF.register_opts(compute_opts)
-CONF.register_opts(interval_opts)
-CONF.register_opts(timeout_opts)
-CONF.register_opts(running_deleted_opts)
-CONF.register_opts(instance_cleaning_opts)
-CONF.import_opt('console_topic', 'nova.console.rpcapi')
-CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('enabled', 'nova.spice', group='spice')
-CONF.import_opt('image_cache_manager_interval', 'nova.virt.imagecache')
-CONF.import_opt('enabled', 'nova.rdp', group='rdp')
-CONF.import_opt('html5_proxy_base_url', 'nova.rdp', group='rdp')
-CONF.import_opt('enabled', 'nova.mks', group='mks')
-CONF.import_opt('mksproxy_base_url', 'nova.mks', group='mks')
-CONF.import_opt('destroy_after_evacuate', 'nova.utils', group='workarounds')
-CONF.import_opt('scheduler_tracks_instance_changes',
-                'nova.scheduler.host_manager')
 
 LOG = logging.getLogger(__name__)
 
@@ -676,7 +499,7 @@ class ComputeVirtAPI(virtapi.VirtAPI):
 class ComputeManager(manager.Manager):
     """Manages the running instances from creation to destruction."""
 
-    target = messaging.Target(version='4.11')
+    target = messaging.Target(version='4.12')
 
     # How long to wait in seconds before re-issuing a shutdown
     # signal to an instance during power off.  The overall
@@ -2366,12 +2189,20 @@ class ComputeManager(manager.Manager):
                           instance=instance)
             except (cinder_exception.EndpointNotFound,
                     keystone_exception.EndpointNotFound) as exc:
-                LOG.warning(_LW('Ignoring EndpointNotFound: %s'), exc,
+                LOG.warning(_LW('Ignoring EndpointNotFound for '
+                                'volume %(volume_id)s: %(exc)s'),
+                            {'exc': exc, 'volume_id': bdm.volume_id},
                             instance=instance)
             except cinder_exception.ClientException as exc:
-                LOG.warning(_LW('Ignoring Unknown cinder exception: %s'), exc,
+                LOG.warning(_LW('Ignoring unknown cinder exception for '
+                                'volume %(volume_id)s: %(exc)s'),
+                            {'exc': exc, 'volume_id': bdm.volume_id},
                             instance=instance)
-
+            except Exception as exc:
+                LOG.warning(_LW('Ignoring unknown exception for '
+                                'volume %(volume_id)s: %(exc)s'),
+                            {'exc': exc, 'volume_id': bdm.volume_id},
+                            instance=instance)
         if vol_bdms:
             LOG.info(_LI('Took %(time).2f seconds to detach %(num)s volumes '
                          'for instance.'),
@@ -2889,7 +2720,7 @@ class ComputeManager(manager.Manager):
             image_meta = objects.ImageMeta.from_image_ref(
                 context, self.image_api, image_ref)
         else:
-            image_meta = objects.ImageMeta.from_dict({})
+            image_meta = instance.image_meta
 
         # This instance.exists message should contain the original
         # image_ref, not the new one.  Since the DB has been updated
@@ -3098,7 +2929,7 @@ class ComputeManager(manager.Manager):
         self._notify_about_instance_usage(context, instance, "reboot.end")
 
     @delete_image_on_error
-    def _do_snapshot_instance(self, context, image_id, instance, rotation):
+    def _do_snapshot_instance(self, context, image_id, instance):
         self._snapshot_instance(context, image_id, instance,
                                 task_states.IMAGE_BACKUP)
 
@@ -3112,7 +2943,7 @@ class ComputeManager(manager.Manager):
         :param backup_type: daily | weekly
         :param rotation: int representing how many backups to keep around
         """
-        self._do_snapshot_instance(context, image_id, instance, rotation)
+        self._do_snapshot_instance(context, image_id, instance)
         self._rotate_backups(context, instance, backup_type, rotation)
 
     @wrap_exception()
@@ -3202,7 +3033,7 @@ class ComputeManager(manager.Manager):
             instance.task_state = None
             instance.save()
             msg = _LW("Image not found during snapshot")
-            LOG.warn(msg, instance=instance)
+            LOG.warning(msg, instance=instance)
 
     def _post_interrupted_snapshot_cleanup(self, context, instance):
         self.driver.post_interrupted_snapshot_cleanup(context, instance)
@@ -4987,7 +4818,6 @@ class ComputeManager(manager.Manager):
         # Update bdm
         values = {
             'connection_info': jsonutils.dumps(new_cinfo),
-            'delete_on_termination': False,
             'source_type': 'volume',
             'destination_type': 'volume',
             'snapshot_id': None,
@@ -5025,6 +4855,9 @@ class ComputeManager(manager.Manager):
     def attach_interface(self, context, instance, network_id, port_id,
                          requested_ip):
         """Use hotplug to add an network adapter to an instance."""
+        if not self.driver.capabilities['supports_attach_interface']:
+            raise exception.AttachInterfaceNotSupported(
+                instance_id=instance.uuid)
         bind_host_id = self.driver.network_binding_host_id(context, instance)
         network_info = self.network_api.allocate_port_for_instance(
             context, instance, port_id, network_id, requested_ip,
@@ -5040,7 +4873,7 @@ class ComputeManager(manager.Manager):
             self.driver.attach_interface(instance, image_meta, network_info[0])
         except exception.NovaException as ex:
             port_id = network_info[0].get('id')
-            LOG.warn(_LW("attach interface failed , try to deallocate "
+            LOG.warning(_LW("attach interface failed , try to deallocate "
                          "port %(port_id)s, reason: %(msg)s"),
                      {'port_id': port_id, 'msg': ex},
                      instance=instance)
@@ -5048,7 +4881,7 @@ class ComputeManager(manager.Manager):
                 self.network_api.deallocate_port_for_instance(
                     context, instance, port_id)
             except Exception:
-                LOG.warn(_LW("deallocate port %(port_id)s failed"),
+                LOG.warning(_LW("deallocate port %(port_id)s failed"),
                              {'port_id': port_id}, instance=instance)
             raise exception.InterfaceAttachFailed(
                 instance_uuid=instance.uuid)
@@ -5161,7 +4994,7 @@ class ComputeManager(manager.Manager):
         :param dest_check_data: result of check_can_live_migrate_destination
         :returns: a dict containing migration info
         """
-        is_volume_backed = self.compute_api.is_volume_backed_instance(ctxt,
+        is_volume_backed = compute_utils.is_volume_backed_instance(ctxt,
                                                                       instance)
         got_migrate_data_object = isinstance(dest_check_data,
                                              migrate_data_obj.LiveMigrateData)
@@ -5170,8 +5003,13 @@ class ComputeManager(manager.Manager):
                 migrate_data_obj.LiveMigrateData.detect_implementation(
                     dest_check_data)
         dest_check_data.is_volume_backed = is_volume_backed
-        block_device_info = self._get_instance_block_device_info(
+        try:
+            block_device_info = self._get_instance_block_device_info(
                             ctxt, instance, refresh_conn_info=True)
+        except cinder_exception.ClientException as exc:
+            raise exception.MigrationPreCheckClientException(
+                                 reason=six.text_type(exc))
+
         result = self.driver.check_can_live_migrate_source(ctxt, instance,
                                                            dest_check_data,
                                                            block_device_info)
@@ -5325,23 +5163,21 @@ class ComputeManager(manager.Manager):
                       block_migration, migration,
                       migrate_data)
 
+    # TODO(tdurakov): migration_id is used since 4.12 rpc api version
+    # remove migration_id parameter when the compute RPC version
+    # is bumped to 5.x.
     @wrap_exception()
     @wrap_instance_event
     @wrap_instance_fault
-    def live_migration_force_complete(self, context, instance, migration_id):
+    def live_migration_force_complete(self, context, instance,
+                                      migration_id=None):
         """Force live migration to complete.
 
         :param context: Security context
         :param instance: The instance that is being migrated
-        :param migration_id: ID of ongoing migration
-
+        :param migration_id: ID of ongoing migration; is currently not used,
+        and isn't removed for backward compatibility
         """
-        migration = objects.Migration.get_by_id(context, migration_id)
-        if migration.status != 'running':
-            raise exception.InvalidMigrationState(migration_id=migration_id,
-                                                  instance_uuid=instance.uuid,
-                                                  state=migration.status,
-                                                  method='force complete')
 
         self._notify_about_instance_usage(
             context, instance, 'live.migration.force.complete.start')
@@ -6432,6 +6268,32 @@ class ComputeManager(manager.Manager):
                                     "instance: %s"),
                                 e, instance=instance)
 
+    def update_available_resource_for_node(self, context, nodename):
+
+        rt = self._get_resource_tracker(nodename)
+        try:
+            rt.update_available_resource(context)
+        except exception.ComputeHostNotFound:
+            # NOTE(comstud): We can get to this case if a node was
+            # marked 'deleted' in the DB and then re-added with a
+            # different auto-increment id. The cached resource
+            # tracker tried to update a deleted record and failed.
+            # Don't add this resource tracker to the new dict, so
+            # that this will resolve itself on the next run.
+            LOG.info(_LI("Compute node '%s' not found in "
+                         "update_available_resource."), nodename)
+            self._resource_tracker_dict.pop(nodename, None)
+            return
+        except Exception:
+            LOG.exception(_LE("Error updating resources for node "
+                          "%(node)s."), {'node': nodename})
+
+        # NOTE(comstud): Replace the RT cache before looping through
+        # compute nodes to delete below, as we can end up doing greenthread
+        # switches there. Best to have everyone using the newest cache
+        # ASAP.
+        self._resource_tracker_dict[nodename] = rt
+
     @periodic_task.periodic_task(spacing=CONF.update_resources_interval)
     def update_available_resource(self, context):
         """See driver.get_available_resource()
@@ -6441,35 +6303,16 @@ class ComputeManager(manager.Manager):
 
         :param context: security context
         """
-        new_resource_tracker_dict = {}
 
         compute_nodes_in_db = self._get_compute_nodes_in_db(context,
                                                             use_slave=True)
         nodenames = set(self.driver.get_available_nodes())
         for nodename in nodenames:
-            rt = self._get_resource_tracker(nodename)
-            try:
-                rt.update_available_resource(context)
-            except exception.ComputeHostNotFound:
-                # NOTE(comstud): We can get to this case if a node was
-                # marked 'deleted' in the DB and then re-added with a
-                # different auto-increment id. The cached resource
-                # tracker tried to update a deleted record and failed.
-                # Don't add this resource tracker to the new dict, so
-                # that this will resolve itself on the next run.
-                LOG.info(_LI("Compute node '%s' not found in "
-                             "update_available_resource."), nodename)
-                continue
-            except Exception:
-                LOG.exception(_LE("Error updating resources for node "
-                              "%(node)s."), {'node': nodename})
-            new_resource_tracker_dict[nodename] = rt
+            self.update_available_resource_for_node(context, nodename)
 
-        # NOTE(comstud): Replace the RT cache before looping through
-        # compute nodes to delete below, as we can end up doing greenthread
-        # switches there. Best to have everyone using the newest cache
-        # ASAP.
-        self._resource_tracker_dict = new_resource_tracker_dict
+        self._resource_tracker_dict = {
+            k: v for k, v in self._resource_tracker_dict.items()
+            if k in nodenames}
 
         # Delete orphan compute node not reported by driver but still in db
         for cn in compute_nodes_in_db:
@@ -6539,7 +6382,7 @@ class ComputeManager(manager.Manager):
                         self.driver.power_off(instance)
                     except Exception:
                         msg = _LW("Failed to power off instance")
-                        LOG.warn(msg, instance=instance, exc_info=True)
+                        LOG.warning(msg, instance=instance, exc_info=True)
 
                 elif action == 'reap':
                     LOG.info(_LI("Destroying instance with name label "

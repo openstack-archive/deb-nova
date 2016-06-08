@@ -32,6 +32,7 @@ from nova.objects import base as obj_base
 from nova import test
 from nova.tests.unit import fake_network
 from nova.tests.unit import fake_notifier
+from nova.tests import uuidsentinel as uuids
 
 
 class NotificationsTestCase(test.TestCase):
@@ -54,10 +55,11 @@ class NotificationsTestCase(test.TestCase):
         fake_notifier.stub_notifier(self.stubs)
         self.addCleanup(fake_notifier.reset)
 
-        self.flags(compute_driver='nova.virt.fake.FakeDriver',
-                   network_manager='nova.network.manager.FlatManager',
+        self.flags(network_manager='nova.network.manager.FlatManager',
                    notify_on_state_change="vm_and_task_state",
                    host='testhost')
+
+        self.flags(api_servers=['http://localhost:9292'], group='glance')
 
         self.user_id = 'fake'
         self.project_id = 'fake'
@@ -69,7 +71,7 @@ class NotificationsTestCase(test.TestCase):
 
     def _wrapped_create(self, params=None):
         instance_type = flavors.get_flavor_by_name('m1.tiny')
-        inst = objects.Instance(image_ref=1,
+        inst = objects.Instance(image_ref=uuids.image_ref,
                                 user_id=self.user_id,
                                 project_id=self.project_id,
                                 instance_type_id=instance_type['id'],
@@ -479,6 +481,31 @@ class NotificationsTestCase(test.TestCase):
         self.assertEqual(n.event_type, func_name)
         self.assertEqual(n.context, ctxt)
         self.assertTrue(self.decorated_function_called)
+
+    def test_notify_decorator_wrong_default_notification_level(self):
+        func_name = self._decorated_function.__name__
+
+        self.flags(default_notification_level='fake_level')
+        self._decorated_function = notifications.notify_decorator(
+            func_name,
+            self._decorated_function)
+
+        mock_info = mock.Mock()
+
+        class FakeNotifier(object):
+
+            info = mock_info
+
+        mock_notifier_p = mock.patch.object(
+            notifications.rpc,
+            'get_notifier',
+            mock.Mock(return_value=FakeNotifier)
+        )
+        with mock_notifier_p:
+            self._decorated_function(1, 2)
+
+        self.assertTrue(self.decorated_function_called)
+        self.assertTrue(mock_info.called)
 
 
 class NotificationsFormatTestCase(test.NoDBTestCase):

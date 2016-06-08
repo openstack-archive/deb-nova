@@ -17,12 +17,15 @@ from cinderclient import exceptions as cinder_exception
 from keystoneclient import exceptions as keystone_exception
 import mock
 
+import nova.conf
 from nova import context
 from nova import exception
 from nova import test
 from nova.tests.unit.fake_instance import fake_instance_obj
 from nova.tests import uuidsentinel as uuids
 from nova.volume import cinder
+
+CONF = nova.conf.CONF
 
 
 class FakeCinderClient(object):
@@ -147,7 +150,7 @@ class CinderApiTestCase(test.NoDBTestCase):
                                side_effect=lambda context,
                                instance: 'zone1') as mock_get_instance_az:
 
-            cinder.CONF.set_override('cross_az_attach', False, group='cinder')
+            CONF.set_override('cross_az_attach', False, group='cinder')
             volume['availability_zone'] = 'zone1'
             self.assertIsNone(self.api.check_attach(self.ctx,
                                                     volume, instance))
@@ -168,7 +171,7 @@ class CinderApiTestCase(test.NoDBTestCase):
             self.assertRaises(exception.InvalidVolume,
                             self.api.check_attach, self.ctx, volume, instance)
             mock_get_instance_az.assert_called_once_with(self.ctx, instance)
-            cinder.CONF.reset()
+            CONF.reset()
 
     def test_check_attach(self):
         volume = {'status': 'available'}
@@ -176,14 +179,14 @@ class CinderApiTestCase(test.NoDBTestCase):
         volume['availability_zone'] = 'zone1'
         volume['multiattach'] = False
         instance = {'availability_zone': 'zone1', 'host': 'fakehost'}
-        cinder.CONF.set_override('cross_az_attach', False, group='cinder')
+        CONF.set_override('cross_az_attach', False, group='cinder')
 
         with mock.patch.object(cinder.az, 'get_instance_availability_zone',
                                side_effect=lambda context, instance: 'zone1'):
             self.assertIsNone(self.api.check_attach(
                 self.ctx, volume, instance))
 
-        cinder.CONF.reset()
+        CONF.reset()
 
     def test_check_detach(self):
         volume = {'id': 'fake', 'status': 'in-use',
@@ -306,6 +309,25 @@ class CinderApiTestCase(test.NoDBTestCase):
 
         mock_cinderclient.return_value.volumes. \
             initialize_connection.assert_called_once_with(volume_id, connector)
+
+    @mock.patch('nova.volume.cinder.LOG')
+    @mock.patch('nova.volume.cinder.cinderclient')
+    def test_initialize_connection_exception_no_code(
+                                self, mock_cinderclient, mock_log):
+        mock_cinderclient.return_value.volumes. \
+            initialize_connection.side_effect = (
+                cinder_exception.ClientException(500, "500"))
+        mock_cinderclient.return_value.volumes. \
+            terminate_connection.side_effect = (
+                test.TestingException)
+
+        connector = {'host': 'fakehost1'}
+        self.assertRaises(cinder_exception.ClientException,
+                          self.api.initialize_connection,
+                          self.ctx,
+                          'id1',
+                          connector)
+        self.assertIsNone(mock_log.error.call_args_list[1][0][1]['code'])
 
     @mock.patch('nova.volume.cinder.cinderclient')
     def test_initialize_connection_rollback(self, mock_cinderclient):
@@ -482,11 +504,32 @@ class CinderApiTestCase(test.NoDBTestCase):
             keystone_exception.Forbidden,
             exception.Forbidden)
 
+    def test_translate_mixed_exception_over_limit(self):
+        self._do_translate_mixed_exception_test(
+            cinder_exception.OverLimit(''),
+            exception.OverQuota)
+
+    def test_translate_mixed_exception_volume_not_found(self):
+        self._do_translate_mixed_exception_test(
+            cinder_exception.NotFound(''),
+            exception.VolumeNotFound)
+
+    def test_translate_mixed_exception_keystone_not_found(self):
+        self._do_translate_mixed_exception_test(
+            keystone_exception.NotFound,
+            exception.VolumeNotFound)
+
     def _do_translate_cinder_exception_test(self, raised_exc, expected_exc):
+        self._do_translate_exception_test(raised_exc, expected_exc,
+                                          cinder.translate_cinder_exception)
+
+    def _do_translate_mixed_exception_test(self, raised_exc, expected_exc):
+        self._do_translate_exception_test(raised_exc, expected_exc,
+                                          cinder.translate_mixed_exceptions)
+
+    def _do_translate_exception_test(self, raised_exc, expected_exc, wrapper):
         my_func = mock.Mock()
         my_func.__name__ = 'my_func'
         my_func.side_effect = raised_exc
 
-        self.assertRaises(expected_exc,
-                          cinder.translate_cinder_exception(my_func),
-                          'foo', 'bar', 'baz')
+        self.assertRaises(expected_exc, wrapper(my_func), 'foo', 'bar', 'baz')

@@ -25,7 +25,6 @@ import zlib
 import eventlet
 from eventlet import greenthread
 import netaddr
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
@@ -63,22 +62,8 @@ from nova.virt.xenapi import volumeops
 
 LOG = logging.getLogger(__name__)
 
-xenapi_vmops_opts = [
-    cfg.IntOpt('running_timeout',
-               default=60,
-               help='Number of seconds to wait for instance '
-                    'to go to running state'),
-    cfg.StrOpt('vif_driver',
-               default='nova.virt.xenapi.vif.XenAPIBridgeDriver',
-               help='The XenAPI VIF driver using XenServer Network APIs.'),
-    cfg.StrOpt('image_upload_handler',
-                default='nova.virt.xenapi.image.glance.GlanceStore',
-               help='Dom0 plugin driver used to handle image uploads.'),
-    ]
 
 CONF = nova.conf.CONF
-CONF.register_opts(xenapi_vmops_opts, 'xenserver')
-CONF.import_opt('host', 'nova.netconf')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     firewall.__name__,
@@ -2499,7 +2484,7 @@ class VMOps(object):
         except Exception:
             with excutils.save_and_reraise_exception():
                 # Disconnect the volumes we just connected
-                for sr in sr_uuid_map:
-                    volume_utils.forget_sr(self._session, sr_uuid_map[sr_ref])
+                for sr_ref in six.itervalues(sr_uuid_map):
+                    volume_utils.forget_sr(self._session, sr_ref)
 
         return sr_uuid_map

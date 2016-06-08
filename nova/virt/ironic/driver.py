@@ -22,7 +22,6 @@ bare metal resources.
 """
 import base64
 import gzip
-import logging as py_logging
 import shutil
 import tempfile
 import time
@@ -124,7 +123,9 @@ class IronicDriver(virt_driver.ComputeDriver):
 
     capabilities = {"has_imagecache": False,
                     "supports_recreate": False,
-                    "supports_migrate_to_same_host": False}
+                    "supports_migrate_to_same_host": False,
+                    "supports_attach_interface": False
+                    }
 
     def __init__(self, virtapi, read_only=False):
         super(IronicDriver, self).__init__(virtapi)
@@ -142,12 +143,6 @@ class IronicDriver(virt_driver.ComputeDriver):
             default='nova.virt.firewall.NoopFirewallDriver')
         self.node_cache = {}
         self.node_cache_time = 0
-
-        ironicclient_log_level = CONF.ironic.client_log_level
-        if ironicclient_log_level:
-            level = py_logging.getLevelName(ironicclient_log_level)
-            logger = py_logging.getLogger('ironicclient')
-            logger.setLevel(level)
 
         self.ironicclient = client_wrapper.IronicClientWrapper()
 
@@ -184,7 +179,9 @@ class IronicDriver(virt_driver.ComputeDriver):
             ironic_states.AVAILABLE, ironic_states.NOSTATE]
         return (node_obj.maintenance or
                 node_obj.power_state in bad_power_states or
-                node_obj.provision_state not in good_provision_states)
+                node_obj.provision_state not in good_provision_states or
+                (node_obj.provision_state in good_provision_states and
+                 node_obj.instance_uuid is not None))
 
     def _node_resources_used(self, node_obj):
         """Determine whether the node's resources are currently used.
@@ -310,7 +307,11 @@ class IronicDriver(virt_driver.ComputeDriver):
             vcpus_used = vcpus = instance_info['vcpus']
             memory_mb_used = memory_mb = instance_info['memory_mb']
             local_gb_used = local_gb = instance_info['local_gb']
-        elif self._node_resources_unavailable(node):
+
+        # Always checking allows us to catch the case where Nova thinks there
+        # are available resources on the Node, but Ironic does not (because it
+        # is not in a usable state): https://launchpad.net/bugs/1503453
+        if self._node_resources_unavailable(node):
             # The node's current state is such that it should not present any
             # of its resources to Nova
             vcpus = 0
@@ -706,7 +707,8 @@ class IronicDriver(virt_driver.ComputeDriver):
 
         # validate we are ready to do the deploy
         validate_chk = self.ironicclient.call("node.validate", node_uuid)
-        if not validate_chk.deploy or not validate_chk.power:
+        if (not validate_chk.deploy.get('result')
+                or not validate_chk.power.get('result')):
             # something is wrong. undo what we have done
             self._cleanup_deploy(node, instance, network_info)
             raise exception.ValidationError(_(
@@ -744,8 +746,7 @@ class IronicDriver(virt_driver.ComputeDriver):
                     msg = (_LE("Failed to build configdrive: %s") %
                            six.text_type(e))
                     LOG.error(msg, instance=instance)
-                    self._cleanup_deploy(context, node, instance, network_info,
-                                         flavor=flavor)
+                    self._cleanup_deploy(node, instance, network_info)
 
             LOG.info(_LI("Config drive for instance %(instance)s on "
                          "baremetal node %(node)s created."),

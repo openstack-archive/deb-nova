@@ -13,13 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import api_sample_base
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class UsedLimitsSamplesJsonTest(api_sample_base.ApiSampleTestBaseV21):
@@ -32,25 +29,6 @@ class UsedLimitsSamplesJsonTest(api_sample_base.ApiSampleTestBaseV21):
         # NOTE(park): We have to separate the template files between V2
         # and V2.1 as the response are different.
         self.template = 'usedlimits-get-resp'
-        if self._legacy_v2_code:
-            self.template = 'v2-usedlimits-get-resp'
-
-    def _get_flags(self):
-        f = super(UsedLimitsSamplesJsonTest, self)._get_flags()
-        if self._legacy_v2_code:
-            f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-            f['osapi_compute_extension'].append(
-                "nova.api.openstack.compute."
-                "legacy_v2.contrib.server_group_quotas."
-                "Server_group_quotas")
-            f['osapi_compute_extension'].append(
-                "nova.api.openstack.compute."
-                "legacy_v2.contrib.used_limits.Used_limits")
-            f['osapi_compute_extension'].append(
-                "nova.api.openstack.compute."
-                "legacy_v2.contrib.used_limits_for_admin."
-                "Used_limits_for_admin")
-        return f
 
     def test_get_used_limits(self):
         # Get api sample to used limits.

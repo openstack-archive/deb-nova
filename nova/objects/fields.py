@@ -12,10 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from collections import OrderedDict
-
-import netaddr
 from oslo_versionedobjects import fields
+import re
 import six
 
 # TODO(berrange) Temporary import for Arch class
@@ -59,6 +57,15 @@ ListOfObjectsField = fields.ListOfObjectsField
 VersionPredicateField = fields.VersionPredicateField
 FlexibleBooleanField = fields.FlexibleBooleanField
 DictOfListOfStringsField = fields.DictOfListOfStringsField
+IPAddressField = fields.IPAddressField
+IPV4AddressField = fields.IPV4AddressField
+IPV6AddressField = fields.IPV6AddressField
+IPNetworkField = fields.IPNetworkField
+IPV4NetworkField = fields.IPV4NetworkField
+IPV6NetworkField = fields.IPV6NetworkField
+AutoTypedField = fields.AutoTypedField
+BaseEnumField = fields.BaseEnumField
+MACAddressField = fields.MACAddressField
 
 
 # NOTE(danms): These are things we need to import for some of our
@@ -72,6 +79,12 @@ Set = fields.Set
 Dict = fields.Dict
 List = fields.List
 Object = fields.Object
+IPAddress = fields.IPAddress
+IPV4Address = fields.IPV4Address
+IPV6Address = fields.IPV6Address
+IPNetwork = fields.IPNetwork
+IPV4Network = fields.IPV4Network
+IPV6Network = fields.IPV6Network
 
 
 class Architecture(Enum):
@@ -365,6 +378,18 @@ class SCSIModel(Enum):
         return super(SCSIModel, self).coerce(obj, attr, value)
 
 
+class SecureBoot(Enum):
+
+    REQUIRED = "required"
+    DISABLED = "disabled"
+    OPTIONAL = "optional"
+
+    ALL = (REQUIRED, DISABLED, OPTIONAL)
+
+    def __init__(self):
+        super(SecureBoot, self).__init__(valid_values=SecureBoot.ALL)
+
+
 class VideoModel(Enum):
 
     CIRRUS = "cirrus"
@@ -580,44 +605,6 @@ class NotificationAction(Enum):
             valid_values=NotificationAction.ALL)
 
 
-class IPAddress(FieldType):
-    @staticmethod
-    def coerce(obj, attr, value):
-        try:
-            return netaddr.IPAddress(value)
-        except netaddr.AddrFormatError as e:
-            raise ValueError(six.text_type(e))
-
-    def from_primitive(self, obj, attr, value):
-        return self.coerce(obj, attr, value)
-
-    @staticmethod
-    def to_primitive(obj, attr, value):
-        return str(value)
-
-
-class IPV4Address(IPAddress):
-    @staticmethod
-    def coerce(obj, attr, value):
-        result = IPAddress.coerce(obj, attr, value)
-        if result.version != 4:
-            raise ValueError(_('Network "%(val)s" is not valid '
-                               'in field %(attr)s') %
-                             {'val': value, 'attr': attr})
-        return result
-
-
-class IPV6Address(IPAddress):
-    @staticmethod
-    def coerce(obj, attr, value):
-        result = IPAddress.coerce(obj, attr, value)
-        if result.version != 6:
-            raise ValueError(_('Network "%(val)s" is not valid '
-                               'in field %(attr)s') %
-                             {'val': value, 'attr': attr})
-        return result
-
-
 class IPV4AndV6Address(IPAddress):
     @staticmethod
     def coerce(obj, attr, value):
@@ -627,33 +614,6 @@ class IPV4AndV6Address(IPAddress):
                                'in field %(attr)s') %
                              {'val': value, 'attr': attr})
         return result
-
-
-class IPNetwork(IPAddress):
-    @staticmethod
-    def coerce(obj, attr, value):
-        try:
-            return netaddr.IPNetwork(value)
-        except netaddr.AddrFormatError as e:
-            raise ValueError(six.text_type(e))
-
-
-class IPV4Network(IPNetwork):
-    @staticmethod
-    def coerce(obj, attr, value):
-        try:
-            return netaddr.IPNetwork(value, version=4)
-        except netaddr.AddrFormatError as e:
-            raise ValueError(six.text_type(e))
-
-
-class IPV6Network(IPNetwork):
-    @staticmethod
-    def coerce(obj, attr, value):
-        try:
-            return netaddr.IPNetwork(value, version=6)
-        except netaddr.AddrFormatError as e:
-            raise ValueError(six.text_type(e))
 
 
 class NetworkModel(FieldType):
@@ -699,43 +659,61 @@ class NonNegativeInteger(FieldType):
         return v
 
 
-class AutoTypedField(fields.Field):
-    AUTO_TYPE = None
+class AddressBase(FieldType):
+    @staticmethod
+    def coerce(obj, attr, value):
+        if re.match(obj.PATTERN, str(value)):
+            return str(value)
+        else:
+            raise ValueError(_('Value must match %s') % obj.PATTERN)
 
-    def __init__(self, **kwargs):
-        super(AutoTypedField, self).__init__(self.AUTO_TYPE, **kwargs)
+
+class PCIAddress(AddressBase):
+    PATTERN = '[a-f0-9]{4}:[a-f0-9]{2}:[a-f0-9]{2}.[a-f0-9]'
+
+    @staticmethod
+    def coerce(obj, attr, value):
+        return AddressBase.coerce(PCIAddress, attr, value)
 
 
-# FIXME(danms): Remove this after oslo.versionedobjects gets it
-class BaseEnumField(AutoTypedField):
-    '''This class should not be directly instantiated. Instead
-    subclass it and set AUTO_TYPE to be a SomeEnum()
-    where SomeEnum is a subclass of Enum.
-    '''
-    def __init__(self, **kwargs):
-        if self.AUTO_TYPE is None:
-            raise exception.EnumFieldUnset(
-                fieldname=self.__class__.__name__)
+class USBAddress(AddressBase):
+    PATTERN = '[a-f0-9]+:[a-f0-9]+'
 
-        if not isinstance(self.AUTO_TYPE, Enum):
-            raise exception.EnumFieldInvalid(
-                typename=self.AUTO_TYPE.__class__.__name,
-                fieldname=self.__class__.__name__)
+    @staticmethod
+    def coerce(obj, attr, value):
+        return AddressBase.coerce(USBAddress, attr, value)
 
-        super(BaseEnumField, self).__init__(**kwargs)
 
-    def __repr__(self):
-        valid_values = self._type._valid_values
-        args = {
-            'nullable': self._nullable,
-            'default': self._default,
-            }
-        if valid_values:
-            args.update({'valid_values': valid_values})
-        args = OrderedDict(sorted(args.items()))
-        return '%s(%s)' % (self._type.__class__.__name__,
-                           ','.join(['%s=%s' % (k, v)
-                                     for k, v in args.items()]))
+class SCSIAddress(AddressBase):
+    PATTERN = '[a-f0-9]+:[a-f0-9]+:[a-f0-9]+:[a-f0-9]+'
+
+    @staticmethod
+    def coerce(obj, attr, value):
+        return AddressBase.coerce(SCSIAddress, attr, value)
+
+
+class IDEAddress(AddressBase):
+    PATTERN = '[0-1]:[0-1]'
+
+    @staticmethod
+    def coerce(obj, attr, value):
+        return AddressBase.coerce(IDEAddress, attr, value)
+
+
+class PCIAddressField(AutoTypedField):
+    AUTO_TYPE = PCIAddress()
+
+
+class USBAddressField(AutoTypedField):
+    AUTO_TYPE = USBAddress()
+
+
+class SCSIAddressField(AutoTypedField):
+    AUTO_TYPE = SCSIAddress()
+
+
+class IDEAddressField(AutoTypedField):
+    AUTO_TYPE = IDEAddress()
 
 
 class ArchitectureField(BaseEnumField):
@@ -822,6 +800,10 @@ class SCSIModelField(BaseEnumField):
     AUTO_TYPE = SCSIModel()
 
 
+class SecureBootField(BaseEnumField):
+    AUTO_TYPE = SecureBoot()
+
+
 class VideoModelField(BaseEnumField):
     AUTO_TYPE = VideoModel()
 
@@ -866,32 +848,8 @@ class NotificationActionField(BaseEnumField):
     AUTO_TYPE = NotificationAction()
 
 
-class IPAddressField(AutoTypedField):
-    AUTO_TYPE = IPAddress()
-
-
-class IPV4AddressField(AutoTypedField):
-    AUTO_TYPE = IPV4Address()
-
-
-class IPV6AddressField(AutoTypedField):
-    AUTO_TYPE = IPV6Address()
-
-
 class IPV4AndV6AddressField(AutoTypedField):
     AUTO_TYPE = IPV4AndV6Address()
-
-
-class IPNetworkField(AutoTypedField):
-    AUTO_TYPE = IPNetwork()
-
-
-class IPV4NetworkField(AutoTypedField):
-    AUTO_TYPE = IPV4Network()
-
-
-class IPV6NetworkField(AutoTypedField):
-    AUTO_TYPE = IPV6Network()
 
 
 class ListOfIntegersField(AutoTypedField):

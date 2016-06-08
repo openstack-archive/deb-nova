@@ -17,7 +17,6 @@
 import datetime
 
 import mock
-from oslo_config import cfg
 from oslo_serialization import jsonutils
 from six.moves import urllib
 import webob
@@ -26,31 +25,27 @@ from webob import exc
 from nova.api.openstack import common
 from nova.api.openstack.compute import assisted_volume_snapshots \
         as assisted_snaps_v21
-from nova.api.openstack.compute.legacy_v2.contrib import \
-        assisted_volume_snapshots as assisted_snaps_v2
-from nova.api.openstack.compute.legacy_v2.contrib import volumes
 from nova.api.openstack.compute import volumes as volumes_v21
-from nova.api.openstack import extensions
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova.compute import vm_states
+import nova.conf
 from nova import context
 from nova import exception
 from nova import objects
+from nova.objects import base
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_instance
 from nova.volume import cinder
 
-CONF = cfg.CONF
-CONF.import_opt('password_length', 'nova.utils')
+CONF = nova.conf.CONF
 
 FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
 FAKE_UUID_A = '00000000-aaaa-aaaa-aaaa-000000000000'
 FAKE_UUID_B = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 FAKE_UUID_C = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
-FAKE_UUID_D = 'dddddddd-dddd-dddd-dddd-dddddddddddd'
 
 IMAGE_UUID = 'c905cedb-7281-47e4-8a62-f26bc5fc4c77'
 
@@ -104,8 +99,9 @@ def fake_compute_volume_snapshot_create(self, context, volume_id,
     pass
 
 
-def fake_bdms_get_all_by_instance(context, instance_uuid, use_slave=False):
-    return [fake_block_device.FakeDbBlockDeviceDict(
+@classmethod
+def fake_bdm_list_get_by_instance_uuid(cls, context, instance_uuid):
+    db_list = [fake_block_device.FakeDbBlockDeviceDict(
             {'id': 1,
              'instance_uuid': instance_uuid,
              'device_name': '/dev/fake0',
@@ -125,6 +121,8 @@ def fake_bdms_get_all_by_instance(context, instance_uuid, use_slave=False):
              'snapshot_id': None,
              'volume_id': FAKE_UUID_B,
              'volume_size': 1})]
+    item_cls = objects.BlockDeviceMapping
+    return base.obj_make_list(context, cls(), item_cls, db_list)
 
 
 class BootFromVolumeTest(test.TestCase):
@@ -171,9 +169,8 @@ class BootFromVolumeTest(test.TestCase):
                 name='test_server', imageRef=IMAGE_UUID,
                 flavorRef=2, min_count=1, max_count=1,
                 block_device_mapping=[dict(
-                        volume_id='1',
+                        volume_id='ca9fe3f5-cede-43cb-8050-1672acabe348',
                         device_name='/dev/vda',
-                        virtual='root',
                         delete_on_termination=False,
                         )]
                 ))
@@ -181,15 +178,16 @@ class BootFromVolumeTest(test.TestCase):
         req.method = 'POST'
         req.body = jsonutils.dump_as_bytes(body)
         req.headers['content-type'] = 'application/json'
-        res = req.get_response(fakes.wsgi_app(
-            init_only=('os-volumes_boot', 'servers')))
+        res = req.get_response(fakes.wsgi_app_v21(
+            init_only=('os-volumes', 'servers')))
         self.assertEqual(202, res.status_int)
         server = jsonutils.loads(res.body)['server']
         self.assertEqual(FAKE_UUID, server['id'])
         self.assertEqual(CONF.password_length, len(server['adminPass']))
         self.assertEqual(1, len(self._block_device_mapping_seen))
         self.assertTrue(self._legacy_bdm_seen)
-        self.assertEqual('1', self._block_device_mapping_seen[0]['volume_id'])
+        self.assertEqual('ca9fe3f5-cede-43cb-8050-1672acabe348',
+                         self._block_device_mapping_seen[0]['volume_id'])
         self.assertEqual('/dev/vda',
                          self._block_device_mapping_seen[0]['device_name'])
 
@@ -209,8 +207,8 @@ class BootFromVolumeTest(test.TestCase):
         req.method = 'POST'
         req.body = jsonutils.dump_as_bytes(body)
         req.headers['content-type'] = 'application/json'
-        res = req.get_response(fakes.wsgi_app(
-            init_only=('os-volumes_boot', 'servers')))
+        res = req.get_response(fakes.wsgi_app_v21(
+            init_only=('os-volumes', 'servers')))
         self.assertEqual(202, res.status_int)
         server = jsonutils.loads(res.body)['server']
         self.assertEqual(FAKE_UUID, server['id'])
@@ -229,7 +227,6 @@ class VolumeApiTestV21(test.NoDBTestCase):
     def setUp(self):
         super(VolumeApiTestV21, self).setUp()
         fakes.stub_out_networking(self)
-        fakes.stub_out_rate_limiting(self.stubs)
 
         self.stubs.Set(cinder.API, "delete", fakes.stub_volume_delete)
         self.stubs.Set(cinder.API, "get", fakes.stub_volume_get)
@@ -271,14 +268,15 @@ class VolumeApiTestV21(test.NoDBTestCase):
         self.assertEqual(vol['availability_zone'],
                          resp_dict['volume']['availabilityZone'])
 
-    def _test_volume_create_bad(self, cinder_exc, api_exc):
+    def _test_volume_translate_exception(self, cinder_exc, api_exc):
+        """Tests that cinder exceptions are correctly translated"""
         def fake_volume_create(self, context, size, name, description,
                                snapshot, **param):
             raise cinder_exc
 
         self.stubs.Set(cinder.API, "create", fake_volume_create)
 
-        vol = {"size": '#$?',
+        vol = {"size": '10',
                "display_name": "Volume Test Name",
                "display_description": "Volume Test Desc",
                "availability_zone": "zone1:host1"}
@@ -286,26 +284,28 @@ class VolumeApiTestV21(test.NoDBTestCase):
 
         req = fakes.HTTPRequest.blank(self.url_prefix + '/os-volumes')
         self.assertRaises(api_exc,
-                          volumes.VolumeController().create, req, body=body)
+                          volumes_v21.VolumeController().create, req,
+                          body=body)
 
     @mock.patch.object(cinder.API, 'get_snapshot')
     @mock.patch.object(cinder.API, 'create')
     def test_volume_create_bad_snapshot_id(self, mock_create, mock_get):
-        vol = {"snapshot_id": '1'}
+        vol = {"snapshot_id": '1', "size": 10}
         body = {"volume": vol}
         mock_get.side_effect = exception.SnapshotNotFound(snapshot_id='1')
 
         req = fakes.HTTPRequest.blank(self.url_prefix + '/os-volumes')
         self.assertRaises(webob.exc.HTTPNotFound,
-                          volumes.VolumeController().create, req, body=body)
+                          volumes_v21.VolumeController().create, req,
+                          body=body)
 
     def test_volume_create_bad_input(self):
-        self._test_volume_create_bad(exception.InvalidInput(reason='fake'),
-                                     webob.exc.HTTPBadRequest)
+        self._test_volume_translate_exception(
+            exception.InvalidInput(reason='fake'), webob.exc.HTTPBadRequest)
 
     def test_volume_create_bad_quota(self):
-        self._test_volume_create_bad(exception.OverQuota(overs='fake'),
-                                     webob.exc.HTTPForbidden)
+        self._test_volume_translate_exception(
+            exception.OverQuota(overs='fake'), webob.exc.HTTPForbidden)
 
     def test_volume_index(self):
         req = fakes.HTTPRequest.blank(self.url_prefix + '/os-volumes')
@@ -346,20 +346,14 @@ class VolumeApiTestV21(test.NoDBTestCase):
         self.assertIn('Volume 456 could not be found.', resp.body)
 
 
-class VolumeApiTestV2(VolumeApiTestV21):
-
-    @property
-    def app(self):
-        return fakes.wsgi_app(init_only=('os-volumes', 'servers'))
-
-
 class VolumeAttachTestsV21(test.NoDBTestCase):
     validation_error = exception.ValidationError
 
     def setUp(self):
         super(VolumeAttachTestsV21, self).setUp()
-        self.stub_out('nova.db.block_device_mapping_get_all_by_instance',
-                      fake_bdms_get_all_by_instance)
+        self.stub_out('nova.objects.BlockDeviceMappingList'
+                      '.get_by_instance_uuid',
+                      fake_bdm_list_get_by_instance_uuid)
         self.stubs.Set(compute_api.API, 'get', fake_get_instance)
         self.stubs.Set(cinder.API, 'get', fake_get_volume)
         self.context = context.get_admin_context()
@@ -742,47 +736,6 @@ class VolumeAttachTestsV21(test.NoDBTestCase):
                           body=body)
 
 
-class VolumeAttachTestsV2(VolumeAttachTestsV21):
-    validation_error = webob.exc.HTTPBadRequest
-
-    def _set_up_controller(self):
-        ext_mgr = extensions.ExtensionManager()
-        ext_mgr.extensions = {'os-volume-attachment-update'}
-        self.attachments = volumes.VolumeAttachmentController(ext_mgr)
-        ext_mgr_no_update = extensions.ExtensionManager()
-        ext_mgr_no_update.extensions = {}
-        self.attachments_no_update = volumes.VolumeAttachmentController(
-                                                 ext_mgr_no_update)
-
-    def test_swap_volume_no_extension(self):
-        self.assertRaises(webob.exc.HTTPBadRequest, self._test_swap,
-                          self.attachments_no_update)
-
-    @mock.patch.object(compute_api.API, 'attach_volume',
-                       return_value=[])
-    def test_attach_volume_with_extra_arg(self, mock_attach):
-        # NOTE(gmann): V2 does not perform strong input validation
-        # so volume is attached successfully even with extra arg in
-        # request body.
-        body = {'volumeAttachment': {'volumeId': FAKE_UUID_A,
-                                    'device': '/dev/fake',
-                                    'extra': 'extra_arg'}}
-        req = fakes.HTTPRequest.blank('/v2/servers/id/os-volume_attachments')
-        req.method = 'POST'
-        req.body = jsonutils.dump_as_bytes({})
-        req.headers['content-type'] = 'application/json'
-        req.environ['nova.context'] = self.context
-        result = self.attachments.create(req, FAKE_UUID, body=body)
-        self.assertEqual('00000000-aaaa-aaaa-aaaa-000000000000',
-                         result['volumeAttachment']['id'])
-
-    def test_swap_volume_with_extra_arg(self):
-        # NOTE(gmann): V2 does not perform strong input validation.
-        # Volume is swapped successfully even with extra arg in
-        # request body. So 'pass' this test for V2.
-        pass
-
-
 class CommonBadRequestTestCase(object):
 
     resource = None
@@ -829,19 +782,6 @@ class BadRequestVolumeTestCaseV21(CommonBadRequestTestCase,
     bad_request = exception.ValidationError
 
 
-class BadRequestVolumeTestCaseV2(BadRequestVolumeTestCaseV21):
-    controller_cls = volumes.VolumeController
-    bad_request = exc.HTTPBadRequest
-
-
-class BadRequestAttachmentTestCase(CommonBadRequestTestCase,
-                                   test.NoDBTestCase):
-    resource = 'servers/' + FAKE_UUID + '/os-volume_attachments'
-    entity_name = 'volumeAttachment'
-    controller_cls = volumes.VolumeAttachmentController
-    kwargs = {'server_id': FAKE_UUID}
-
-
 class BadRequestSnapshotTestCaseV21(CommonBadRequestTestCase,
                                     test.NoDBTestCase):
 
@@ -849,11 +789,6 @@ class BadRequestSnapshotTestCaseV21(CommonBadRequestTestCase,
     entity_name = 'snapshot'
     controller_cls = volumes_v21.SnapshotController
     bad_request = exception.ValidationError
-
-
-class BadRequestSnapshotTestCaseV2(BadRequestSnapshotTestCaseV21):
-    controller_cls = volumes.SnapshotController
-    bad_request = exc.HTTPBadRequest
 
 
 class AssistedSnapshotCreateTestCaseV21(test.NoDBTestCase):
@@ -885,10 +820,22 @@ class AssistedSnapshotCreateTestCaseV21(test.NoDBTestCase):
         self.assertRaises(self.bad_request, self.controller.create,
                 req, body=body)
 
-
-class AssistedSnapshotCreateTestCaseV2(AssistedSnapshotCreateTestCaseV21):
-    assisted_snaps = assisted_snaps_v2
-    bad_request = webob.exc.HTTPBadRequest
+    def test_assisted_create_with_unexpected_attr(self):
+        req = fakes.HTTPRequest.blank('/v2/fake/os-assisted-volume-snapshots')
+        body = {
+            'snapshot': {
+                'volume_id': '1',
+                'create_info': {
+                    'type': 'qcow2',
+                    'new_file': 'new_file',
+                    'snapshot_id': 'snapshot_id'
+                }
+            },
+            'unexpected': 0,
+        }
+        req.method = 'POST'
+        self.assertRaises(self.bad_request, self.controller.create,
+                req, body=body)
 
 
 class AssistedSnapshotDeleteTestCaseV21(test.NoDBTestCase):
@@ -921,13 +868,6 @@ class AssistedSnapshotDeleteTestCaseV21(test.NoDBTestCase):
         req.method = 'DELETE'
         self.assertRaises(webob.exc.HTTPBadRequest, self.controller.delete,
                 req, '5')
-
-
-class AssistedSnapshotDeleteTestCaseV2(AssistedSnapshotDeleteTestCaseV21):
-    assisted_snaps = assisted_snaps_v2
-
-    def _check_status(self, expected_status, res, controller_method):
-        self.assertEqual(expected_status, res.status_int)
 
 
 class TestAssistedVolumeSnapshotsPolicyEnforcementV21(test.NoDBTestCase):

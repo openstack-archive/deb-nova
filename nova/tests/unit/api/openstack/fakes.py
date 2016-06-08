@@ -28,19 +28,17 @@ import webob.request
 from nova.api import auth as api_auth
 from nova.api import openstack as openstack_api
 from nova.api.openstack import api_version_request as api_version
-from nova.api.openstack import auth
 from nova.api.openstack import compute
-from nova.api.openstack.compute.legacy_v2 import limits
 from nova.api.openstack.compute import versions
 from nova.api.openstack import urlmap
 from nova.api.openstack import wsgi as os_wsgi
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova.compute import vm_states
+import nova.conf
 from nova import context
 from nova.db.sqlalchemy import models
 from nova import exception as exc
-import nova.netconf
 from nova import objects
 from nova.objects import base
 from nova import quota
@@ -55,6 +53,8 @@ QUOTAS = quota.QUOTAS
 
 
 FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
+FAKE_PROJECT_ID = '6a6a9c9eee154e9cb8cec487b98d36ab'
+FAKE_USER_ID = '5fae60f5cf4642609ddd31f71748beac'
 FAKE_UUIDS = {}
 
 
@@ -63,47 +63,19 @@ def fake_wsgi(self, req):
     return self.application
 
 
-def wsgi_app(inner_app_v2=None, fake_auth_context=None,
-        use_no_auth=False, ext_mgr=None, init_only=None):
-    if not inner_app_v2:
-        inner_app_v2 = compute.APIRouter(ext_mgr, init_only)
+def wsgi_app_v21(fake_auth_context=None, init_only=None, v2_compatible=False):
 
-    if use_no_auth:
-        api_v2 = openstack_api.FaultWrapper(auth.NoAuthMiddleware(
-              limits.RateLimitingMiddleware(inner_app_v2)))
-    else:
-        if fake_auth_context is not None:
-            ctxt = fake_auth_context
-        else:
-            ctxt = context.RequestContext('fake', 'fake', auth_token=True)
-        api_v2 = openstack_api.FaultWrapper(api_auth.InjectContext(ctxt,
-              limits.RateLimitingMiddleware(inner_app_v2)))
-
-    mapper = urlmap.URLMap()
-    mapper['/v2'] = api_v2
-    mapper['/'] = openstack_api.FaultWrapper(versions.Versions())
-    return mapper
-
-
-def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
-        use_no_auth=False, ext_mgr=None, init_only=None, v2_compatible=False):
-    if not inner_app_v21:
-        inner_app_v21 = compute.APIRouterV21(init_only)
+    inner_app_v21 = compute.APIRouterV21(init_only)
 
     if v2_compatible:
         inner_app_v21 = openstack_api.LegacyV2CompatibleWrapper(inner_app_v21)
 
-    if use_no_auth:
-        api_v21 = openstack_api.FaultWrapper(auth.NoAuthMiddleware(
-              limits.RateLimitingMiddleware(inner_app_v21)))
+    if fake_auth_context is not None:
+        ctxt = fake_auth_context
     else:
-        if fake_auth_context is not None:
-            ctxt = fake_auth_context
-        else:
-            ctxt = context.RequestContext('fake', 'fake', auth_token=True)
-        api_v21 = openstack_api.FaultWrapper(api_auth.InjectContext(ctxt,
-              limits.RateLimitingMiddleware(inner_app_v21)))
-
+        ctxt = context.RequestContext('fake', 'fake', auth_token=True)
+    api_v21 = openstack_api.FaultWrapper(
+          api_auth.InjectContext(ctxt, inner_app_v21))
     mapper = urlmap.URLMap()
     mapper['/v2'] = api_v21
     mapper['/v2.1'] = api_v21
@@ -131,16 +103,6 @@ def stub_out_key_pair_funcs(stubs, have_key_pair=True, **kwargs):
         stubs.Set(nova.db, 'key_pair_get', one_key_pair)
     else:
         stubs.Set(nova.db, 'key_pair_get_all_by_user', no_key_pair)
-
-
-def stub_out_rate_limiting(stubs):
-    def fake_rate_init(self, app):
-        super(limits.RateLimitingMiddleware, self).__init__(app)
-        self.application = app
-
-    v2_limits = nova.api.openstack.compute.legacy_v2.limits
-    stubs.Set(v2_limits.RateLimitingMiddleware, '__init__', fake_rate_init)
-    stubs.Set(v2_limits.RateLimitingMiddleware, '__call__', fake_wsgi)
 
 
 def stub_out_instance_quota(test, allowed, quota, resource='instances'):
@@ -252,10 +214,13 @@ class HTTPRequest(os_wsgi.Request):
     def blank(*args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
+        project_id = kwargs.pop('project_id', 'fake')
         version = kwargs.pop('version', os_wsgi.DEFAULT_API_VERSION)
         out = os_wsgi.Request.blank(*args, **kwargs)
-        out.environ['nova.context'] = FakeRequestContext('fake_user', 'fake',
-                is_admin=use_admin_context)
+        out.environ['nova.context'] = FakeRequestContext(
+            user_id='fake_user',
+            project_id=project_id,
+            is_admin=use_admin_context)
         out.api_version_request = api_version.APIVersionRequest(version)
         return out
 
@@ -266,11 +231,14 @@ class HTTPRequestV21(os_wsgi.Request):
     def blank(*args, **kwargs):
         kwargs['base_url'] = 'http://localhost/v2'
         use_admin_context = kwargs.pop('use_admin_context', False)
+        project_id = kwargs.pop('project_id', 'fake')
         version = kwargs.pop('version', os_wsgi.DEFAULT_API_VERSION)
         out = os_wsgi.Request.blank(*args, **kwargs)
         out.api_version_request = api_version.APIVersionRequest(version)
-        out.environ['nova.context'] = FakeRequestContext('fake_user', 'fake',
-                is_admin=use_admin_context)
+        out.environ['nova.context'] = FakeRequestContext(
+            user_id='fake_user',
+            project_id=project_id,
+            is_admin=use_admin_context)
         return out
 
 

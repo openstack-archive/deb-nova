@@ -20,7 +20,6 @@ import collections
 import datetime
 
 import mock
-from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import versionutils
 import six
@@ -28,6 +27,7 @@ import six
 import nova
 from nova.compute import task_states
 from nova.compute import vm_states
+import nova.conf
 from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
@@ -41,9 +41,7 @@ from nova.tests.unit import matchers
 from nova.tests.unit.scheduler import fakes
 from nova.tests import uuidsentinel as uuids
 
-CONF = cfg.CONF
-CONF.import_opt('scheduler_tracks_instance_changes',
-                'nova.scheduler.host_manager')
+CONF = nova.conf.CONF
 
 
 class FakeFilterClass1(filters.BaseHostFilter):
@@ -97,9 +95,9 @@ class HostManagerTestCase(test.NoDBTestCase):
                                 mock_get_by_filters):
         cn1 = objects.ComputeNode(host='host1')
         cn2 = objects.ComputeNode(host='host2')
-        inst1 = objects.Instance(host='host1', uuid='uuid1')
-        inst2 = objects.Instance(host='host1', uuid='uuid2')
-        inst3 = objects.Instance(host='host2', uuid='uuid3')
+        inst1 = objects.Instance(host='host1', uuid=uuids.instance_1)
+        inst2 = objects.Instance(host='host1', uuid=uuids.instance_2)
+        inst3 = objects.Instance(host='host2', uuid=uuids.instance_3)
         mock_get_all.return_value = objects.ComputeNodeList(objects=[cn1, cn2])
         mock_get_by_filters.return_value = objects.InstanceList(
                 objects=[inst1, inst2, inst3])
@@ -108,9 +106,9 @@ class HostManagerTestCase(test.NoDBTestCase):
         hm._init_instance_info()
         self.assertEqual(len(hm._instance_info), 2)
         fake_info = hm._instance_info['host1']
-        self.assertIn('uuid1', fake_info['instances'])
-        self.assertIn('uuid2', fake_info['instances'])
-        self.assertNotIn('uuid3', fake_info['instances'])
+        self.assertIn(uuids.instance_1, fake_info['instances'])
+        self.assertIn(uuids.instance_2, fake_info['instances'])
+        self.assertNotIn(uuids.instance_3, fake_info['instances'])
         exp_filters = {'deleted': False, 'host': [u'host1', u'host2']}
         mock_get_by_filters.assert_called_once_with(mock.ANY, exp_filters)
 
@@ -211,7 +209,7 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts(self):
         fake_properties = objects.RequestSpec(ignore_hosts=[],
-                                              instance_uuid='fake-uuid1',
+                                              instance_uuid=uuids.instance,
                                               force_hosts=[],
                                               force_nodes=[])
 
@@ -224,25 +222,43 @@ class HostManagerTestCase(test.NoDBTestCase):
                 fake_properties)
         self._verify_result(info, result)
 
-    @mock.patch.object(FakeFilterClass2, '_filter_one', return_value=True)
-    def test_get_filtered_hosts_with_specified_filters(self, mock_filter_one):
-        fake_properties = objects.RequestSpec(ignore_hosts=[],
+    def test_get_filtered_hosts_with_requested_destination(self):
+        dest = objects.Destination(host='fake_host1', node='fake-node')
+        fake_properties = objects.RequestSpec(requested_destination=dest,
+                                              ignore_hosts=[],
                                               instance_uuid='fake-uuid1',
                                               force_hosts=[],
                                               force_nodes=[])
 
-        specified_filters = ['FakeFilterClass1', 'FakeFilterClass2']
-        info = {'expected_objs': self.fake_hosts,
+        info = {'expected_objs': [self.fake_hosts[0]],
                 'expected_fprops': fake_properties}
+
         self._mock_get_filtered_hosts(info)
 
         result = self.host_manager.get_filtered_hosts(self.fake_hosts,
-                fake_properties, filter_class_names=specified_filters)
+                fake_properties)
+        self._verify_result(info, result)
+
+    def test_get_filtered_hosts_with_wrong_requested_destination(self):
+        dest = objects.Destination(host='dummy', node='fake-node')
+        fake_properties = objects.RequestSpec(requested_destination=dest,
+                                              ignore_hosts=[],
+                                              instance_uuid='fake-uuid1',
+                                              force_hosts=[],
+                                              force_nodes=[])
+
+        info = {'expected_objs': [],
+                'expected_fprops': fake_properties}
+
+        self._mock_get_filtered_hosts(info)
+
+        result = self.host_manager.get_filtered_hosts(self.fake_hosts,
+                fake_properties)
         self._verify_result(info, result)
 
     def test_get_filtered_hosts_with_ignore(self):
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=['fake_host1', 'fake_host3',
                           'fake_host5', 'fake_multihost'],
             force_hosts=[],
@@ -275,7 +291,7 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_force_hosts(self):
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=[],
             force_hosts=['fake_host1', 'fake_host3', 'fake_host5'],
             force_nodes=[])
@@ -309,7 +325,7 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_no_matching_force_hosts(self):
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=[],
             force_hosts=['fake_host5', 'fake_host6'],
             force_nodes=[])
@@ -329,7 +345,7 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_get_filtered_hosts_with_ignore_and_force_hosts(self):
         # Ensure ignore_hosts processed before force_hosts in host filters.
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=['fake_host1'],
             force_hosts=['fake_host3', 'fake_host1'],
             force_nodes=[])
@@ -346,7 +362,7 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_get_filtered_hosts_with_force_host_and_many_nodes(self):
         # Ensure all nodes returned for a host with many nodes
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=[],
             force_hosts=['fake_multihost'],
             force_nodes=[])
@@ -362,7 +378,7 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_get_filtered_hosts_with_force_nodes(self):
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=[],
             force_hosts=[],
             force_nodes=['fake-node2', 'fake-node4', 'fake-node9'])
@@ -379,7 +395,7 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_get_filtered_hosts_with_force_hosts_and_nodes(self):
         # Ensure only overlapping results if both force host and node
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=[],
             force_hosts=['fake-host1', 'fake_multihost'],
             force_nodes=['fake-node2', 'fake-node9'])
@@ -396,7 +412,7 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_get_filtered_hosts_with_force_hosts_and_wrong_nodes(self):
         # Ensure non-overlapping force_node and force_host yield no result
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=[],
             force_hosts=['fake_multihost'],
             force_nodes=['fake-node'])
@@ -412,7 +428,7 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_get_filtered_hosts_with_ignore_hosts_and_force_nodes(self):
         # Ensure ignore_hosts can coexist with force_nodes
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=['fake_host1', 'fake_host2'],
             force_hosts=[],
             force_nodes=['fake-node4', 'fake-node2'])
@@ -428,7 +444,7 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_get_filtered_hosts_with_ignore_hosts_and_force_same_nodes(self):
         # Ensure ignore_hosts is processed before force_nodes
         fake_properties = objects.RequestSpec(
-            instance_uuid='fake-uuid1',
+            instance_uuid=uuids.instance,
             ignore_hosts=['fake_multihost'],
             force_hosts=[],
             force_nodes=['fake_node4', 'fake_node2'])
@@ -472,8 +488,8 @@ class HostManagerTestCase(test.NoDBTestCase):
         # Check that .service is set properly
         for i in range(4):
             compute_node = fakes.COMPUTE_NODES[i]
-            host = compute_node['host']
-            node = compute_node['hypervisor_hostname']
+            host = compute_node.host
+            node = compute_node.hypervisor_hostname
             state_key = (host, node)
             self.assertEqual(host_states_map[state_key].service,
                     obj_base.obj_to_primitive(fakes.get_service_by_host(host)))
@@ -576,9 +592,9 @@ class HostManagerTestCase(test.NoDBTestCase):
         mock_get_svc_by_binary.return_value = fakes.SERVICES
         context = 'fake_context'
         hm = self.host_manager
-        inst1 = objects.Instance(uuid='uuid1')
+        inst1 = objects.Instance(uuid=uuids.instance)
         cn1 = objects.ComputeNode(host='host1')
-        hm._instance_info = {'host1': {'instances': {'uuid1': inst1},
+        hm._instance_info = {'host1': {'instances': {uuids.instance: inst1},
                                        'updated': True}}
         host_state = host_manager.HostState('host1', cn1)
         self.assertFalse(host_state.instances)
@@ -587,7 +603,7 @@ class HostManagerTestCase(test.NoDBTestCase):
                 inst_dict=hm._get_instance_info(context, cn1))
         self.assertFalse(mock_get_by_host.called)
         self.assertTrue(host_state.instances)
-        self.assertEqual(host_state.instances['uuid1'], inst1)
+        self.assertEqual(host_state.instances[uuids.instance], inst1)
 
     @mock.patch('nova.objects.ServiceList.get_by_binary')
     @mock.patch('nova.objects.ComputeNodeList.get_all')
@@ -599,9 +615,9 @@ class HostManagerTestCase(test.NoDBTestCase):
         mock_get_svc_by_binary.return_value = fakes.SERVICES
         context = 'fake_context'
         hm = self.host_manager
-        inst1 = objects.Instance(uuid='uuid1')
+        inst1 = objects.Instance(uuid=uuids.instance)
         cn1 = objects.ComputeNode(host='host1')
-        hm._instance_info = {'host1': {'instances': {'uuid1': inst1},
+        hm._instance_info = {'host1': {'instances': {uuids.instance: inst1},
                                        'updated': False}}
         host_state = host_manager.HostState('host1', cn1)
         self.assertFalse(host_state.instances)
@@ -610,14 +626,16 @@ class HostManagerTestCase(test.NoDBTestCase):
                 inst_dict=hm._get_instance_info(context, cn1))
         mock_get_by_host.assert_called_once_with(context, cn1.host)
         self.assertTrue(host_state.instances)
-        self.assertEqual(host_state.instances['uuid1'], inst1)
+        self.assertEqual(host_state.instances[uuids.instance], inst1)
 
     @mock.patch('nova.objects.InstanceList.get_by_host')
     def test_recreate_instance_info(self, mock_get_by_host):
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         new_inst_list = objects.InstanceList(objects=[inst1, inst2])
@@ -634,9 +652,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_update_instance_info(self):
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         self.host_manager._instance_info = {
@@ -644,9 +664,11 @@ class HostManagerTestCase(test.NoDBTestCase):
                     'instances': orig_inst_dict,
                     'updated': False,
                 }}
-        inst3 = fake_instance.fake_instance_obj('fake_context', uuid='ccc',
+        inst3 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_3,
                                                 host=host_name)
-        inst4 = fake_instance.fake_instance_obj('fake_context', uuid='ddd',
+        inst4 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_4,
                                                 host=host_name)
         update = objects.InstanceList(objects=[inst3, inst4])
         self.host_manager.update_instance_info('fake_context', host_name,
@@ -658,9 +680,11 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_update_instance_info_unknown_host(self):
         self.host_manager._recreate_instance_info = mock.MagicMock()
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         self.host_manager._instance_info = {
@@ -669,7 +693,8 @@ class HostManagerTestCase(test.NoDBTestCase):
                     'updated': False,
                 }}
         bad_host = 'bad_host'
-        inst3 = fake_instance.fake_instance_obj('fake_context', uuid='ccc',
+        inst3 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_3,
                                                 host=bad_host)
         inst_list3 = objects.InstanceList(objects=[inst3])
         self.host_manager.update_instance_info('fake_context', bad_host,
@@ -682,9 +707,11 @@ class HostManagerTestCase(test.NoDBTestCase):
 
     def test_delete_instance_info(self):
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         self.host_manager._instance_info = {
@@ -701,9 +728,11 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_delete_instance_info_unknown_host(self):
         self.host_manager._recreate_instance_info = mock.MagicMock()
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         self.host_manager._instance_info = {
@@ -712,7 +741,8 @@ class HostManagerTestCase(test.NoDBTestCase):
                     'updated': False,
                 }}
         bad_host = 'bad_host'
-        self.host_manager.delete_instance_info('fake_context', bad_host, 'aaa')
+        self.host_manager.delete_instance_info('fake_context', bad_host,
+                                               uuids.instance_1)
         new_info = self.host_manager._instance_info[host_name]
         self.host_manager._recreate_instance_info.assert_called_once_with(
                 'fake_context', bad_host)
@@ -722,9 +752,11 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_sync_instance_info(self):
         self.host_manager._recreate_instance_info = mock.MagicMock()
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         self.host_manager._instance_info = {
@@ -733,7 +765,8 @@ class HostManagerTestCase(test.NoDBTestCase):
                     'updated': False,
                 }}
         self.host_manager.sync_instance_info('fake_context', host_name,
-                                             ['bbb', 'aaa'])
+                                             [uuids.instance_2,
+                                              uuids.instance_1])
         new_info = self.host_manager._instance_info[host_name]
         self.assertFalse(self.host_manager._recreate_instance_info.called)
         self.assertTrue(new_info['updated'])
@@ -741,9 +774,11 @@ class HostManagerTestCase(test.NoDBTestCase):
     def test_sync_instance_info_fail(self):
         self.host_manager._recreate_instance_info = mock.MagicMock()
         host_name = 'fake_host'
-        inst1 = fake_instance.fake_instance_obj('fake_context', uuid='aaa',
+        inst1 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_1,
                                                 host=host_name)
-        inst2 = fake_instance.fake_instance_obj('fake_context', uuid='bbb',
+        inst2 = fake_instance.fake_instance_obj('fake_context',
+                                                uuid=uuids.instance_2,
                                                 host=host_name)
         orig_inst_dict = {inst1.uuid: inst1, inst2.uuid: inst2}
         self.host_manager._instance_info = {
@@ -752,7 +787,8 @@ class HostManagerTestCase(test.NoDBTestCase):
                     'updated': False,
                 }}
         self.host_manager.sync_instance_info('fake_context', host_name,
-                                             ['bbb', 'aaa', 'new'])
+                                             [uuids.instance_2,
+                                              uuids.instance_1, 'new'])
         new_info = self.host_manager._instance_info[host_name]
         self.host_manager._recreate_instance_info.assert_called_once_with(
                 'fake_context', host_name)
@@ -794,8 +830,10 @@ class HostManagerChangedNodesTestCase(test.NoDBTestCase):
     def test_get_all_host_states_after_delete_one(self, mock_get_by_host,
                                                   mock_get_all,
                                                   mock_get_by_binary):
+        getter = (lambda n: n.hypervisor_hostname
+                  if 'hypervisor_hostname' in n else None)
         running_nodes = [n for n in fakes.COMPUTE_NODES
-                         if n.get('hypervisor_hostname') != 'node4']
+                         if getter(n) != 'node4']
 
         mock_get_by_host.return_value = objects.InstanceList()
         mock_get_all.side_effect = [fakes.COMPUTE_NODES, running_nodes]
@@ -976,7 +1014,7 @@ class HostStateTestCase(test.NoDBTestCase):
         numa_fit_mock.return_value = fake_numa_topology
         instance_init_mock.return_value = fake_instance
         spec_obj = objects.RequestSpec(
-            instance_uuid='fake-uuid',
+            instance_uuid=uuids.instance,
             flavor=objects.Flavor(root_gb=0, ephemeral_gb=0, memory_mb=0,
                                   vcpus=0),
             numa_topology=fake_numa_topology,
@@ -997,7 +1035,7 @@ class HostStateTestCase(test.NoDBTestCase):
         second_numa_topology = objects.InstanceNUMATopology(
             cells=[objects.InstanceNUMACell()])
         spec_obj = objects.RequestSpec(
-            instance_uuid='fake-uuid',
+            instance_uuid=uuids.instance,
             flavor=objects.Flavor(root_gb=0, ephemeral_gb=0, memory_mb=0,
                                   vcpus=0),
             numa_topology=second_numa_topology,
@@ -1021,14 +1059,14 @@ class HostStateTestCase(test.NoDBTestCase):
                                                       cpuset=set([0]),
                                                       memory=512, id=0)])
 
-        fake_requests = [{'request_id': 'fake_request1', 'count': 1,
+        fake_requests = [{'request_id': uuids.request_id, 'count': 1,
                           'spec': [{'vendor_id': '8086'}]}]
         fake_requests_obj = objects.InstancePCIRequests(
                                 requests=[objects.InstancePCIRequest(**r)
                                           for r in fake_requests],
-                                instance_uuid='fake-uuid')
+                                instance_uuid=uuids.instance)
         req_spec = objects.RequestSpec(
-            instance_uuid='fake-uuid',
+            instance_uuid=uuids.instance,
             project_id='12345',
             numa_topology=inst_topology,
             pci_requests=fake_requests_obj,
@@ -1054,14 +1092,14 @@ class HostStateTestCase(test.NoDBTestCase):
         self.assertIsNotNone(host.updated)
 
     def test_stat_consumption_from_instance_with_pci_exception(self):
-        fake_requests = [{'request_id': 'fake_request1', 'count': 3,
+        fake_requests = [{'request_id': uuids.request_id, 'count': 3,
                           'spec': [{'vendor_id': '8086'}]}]
         fake_requests_obj = objects.InstancePCIRequests(
                                 requests=[objects.InstancePCIRequest(**r)
                                           for r in fake_requests],
-                                instance_uuid='fake-uuid')
+                                instance_uuid=uuids.instance)
         req_spec = objects.RequestSpec(
-            instance_uuid='fake-uuid',
+            instance_uuid=uuids.instance,
             project_id='12345',
             numa_topology=None,
             pci_requests=fake_requests_obj,

@@ -12,30 +12,18 @@
 
 
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_log import log as logging
 import six
 
+import nova.conf
 from nova.i18n import _LE, _LW
-from nova import paths
 from nova import utils
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt.libvirt.volume import fs
 
 LOG = logging.getLogger(__name__)
 
-volume_opts = [
-    cfg.StrOpt('nfs_mount_point_base',
-               default=paths.state_path_def('mnt'),
-               help='Directory where the NFS volume is mounted on the'
-               ' compute node'),
-    cfg.StrOpt('nfs_mount_options',
-               help='Mount options passed to the NFS client. See section '
-                    'of the nfs man page for details'),
-    ]
-
-CONF = cfg.CONF
-CONF.register_opts(volume_opts, 'libvirt')
+CONF = nova.conf.CONF
 
 
 class LibvirtNFSVolumeDriver(fs.LibvirtBaseFileSystemVolumeDriver):
@@ -106,6 +94,6 @@ class LibvirtNFSVolumeDriver(fs.LibvirtBaseFileSystemVolumeDriver):
             utils.execute(*nfs_cmd, run_as_root=True)
         except processutils.ProcessExecutionError as exc:
             if ensure and 'already mounted' in six.text_type(exc):
-                LOG.warn(_LW("%s is already mounted"), nfs_share)
+                LOG.warning(_LW("%s is already mounted"), nfs_share)
             else:
                 raise

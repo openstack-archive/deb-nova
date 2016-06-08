@@ -42,7 +42,6 @@ class FakeResourceHandler(object):
 class DummyTracker(object):
     icalled = False
     rcalled = False
-    ext_resources_handler = FakeResourceHandler()
 
     def __init__(self):
         self.new_pci_tracker()
@@ -85,13 +84,13 @@ class ClaimTestCase(test.NoDBTestCase):
         if overhead is None:
             overhead = {'memory_mb': 0}
 
-        @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                    return_value=requests or self.empty_requests)
+        requests = requests or self.empty_requests
+
         @mock.patch('nova.db.instance_extra_get_by_instance_uuid',
                     return_value=db_numa_topology)
-        def get_claim(mock_extra_get, mock_pci_get):
+        def get_claim(mock_extra_get):
             return claims.Claim(self.context, instance, self.tracker,
-                                self.resources, overhead=overhead,
+                                self.resources, requests, overhead=overhead,
                                 limits=limits)
         return get_claim()
 
@@ -143,7 +142,7 @@ class ClaimTestCase(test.NoDBTestCase):
         }
         if values:
             resources.update(values)
-        return resources
+        return objects.ComputeNode(**resources)
 
     def test_memory_unlimited(self):
         self._claim(memory_mb=99999999)
@@ -170,6 +169,33 @@ class ClaimTestCase(test.NoDBTestCase):
 
     def test_memory_oversubscription(self):
         self._claim(memory_mb=4096)
+
+    def test_disk_with_overhead(self):
+        overhead = {'memory_mb': 0,
+                    'disk_gb': 1}
+        limits = {'disk_gb': 100}
+        claim_obj = self._claim(root_gb=99, ephemeral_gb=0, limits=limits,
+                                overhead=overhead)
+
+        self.assertEqual(100, claim_obj.disk_gb)
+
+    def test_disk_with_overhead_insufficient(self):
+        overhead = {'memory_mb': 0,
+                    'disk_gb': 2}
+        limits = {'disk_gb': 100}
+
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                          self._claim, limits=limits, overhead=overhead,
+                          root_gb=99, ephemeral_gb=0)
+
+    def test_disk_with_overhead_insufficient_no_root(self):
+        overhead = {'memory_mb': 0,
+                    'disk_gb': 2}
+        limits = {'disk_gb': 1}
+
+        self.assertRaises(exception.ComputeResourcesUnavailable,
+                          self._claim, limits=limits, overhead=overhead,
+                          root_gb=0, ephemeral_gb=0)
 
     def test_memory_insufficient(self):
         limits = {'memory_mb': 8192}
@@ -226,11 +252,6 @@ class ClaimTestCase(test.NoDBTestCase):
         # if Claim._test_pci() did not return None.
         self._claim()
         self.assertFalse(mock_supports.called)
-
-    def test_ext_resources(self):
-        self._claim()
-        self.assertTrue(self.tracker.ext_resources_handler.test_called)
-        self.assertFalse(self.tracker.ext_resources_handler.usage_is_itype)
 
     def test_numa_topology_no_limit(self):
         huge_instance = objects.InstanceNUMATopology(
@@ -364,9 +385,11 @@ class ClaimTestCase(test.NoDBTestCase):
 
 class MoveClaimTestCase(ClaimTestCase):
 
-    def _claim(self, limits=None, overhead=None, requests=None, **kwargs):
+    def _claim(self, limits=None, overhead=None, requests=None,
+               image_meta=None, **kwargs):
         instance_type = self._fake_instance_type(**kwargs)
         numa_topology = kwargs.pop('numa_topology', None)
+        image_meta = image_meta or {}
         self.instance = self._fake_instance(**kwargs)
         self.instance.numa_topology = None
         if numa_topology:
@@ -382,23 +405,18 @@ class MoveClaimTestCase(ClaimTestCase):
         if overhead is None:
             overhead = {'memory_mb': 0}
 
-        @mock.patch('nova.objects.InstancePCIRequests.'
-                    'get_by_instance_uuid_and_newness',
-                    return_value=requests or self.empty_requests)
+        requests = requests or self.empty_requests
+
         @mock.patch('nova.virt.hardware.numa_get_constraints',
                     return_value=numa_topology)
         @mock.patch('nova.db.instance_extra_get_by_instance_uuid',
                     return_value=self.db_numa_topology)
-        def get_claim(mock_extra_get, mock_numa_get, mock_pci_get):
+        def get_claim(mock_extra_get, mock_numa_get):
             return claims.MoveClaim(self.context, self.instance, instance_type,
-                                     {}, self.tracker, self.resources,
-                                     overhead=overhead, limits=limits)
+                                     image_meta, self.tracker, self.resources,
+                                     requests, overhead=overhead,
+                                     limits=limits)
         return get_claim()
-
-    def test_ext_resources(self):
-        self._claim()
-        self.assertTrue(self.tracker.ext_resources_handler.test_called)
-        self.assertTrue(self.tracker.ext_resources_handler.usage_is_itype)
 
     def test_abort(self):
         claim = self._abort()
@@ -427,3 +445,12 @@ class MoveClaimTestCase(ClaimTestCase):
                                   objects.InstanceNUMATopology)
             self.assertEqual(migration, claim.migration)
         _test()
+
+    def test_image_meta(self):
+        claim = self._claim()
+        self.assertIsInstance(claim.image_meta, objects.ImageMeta)
+
+    def test_image_meta_object_passed(self):
+        image_meta = objects.ImageMeta()
+        claim = self._claim(image_meta=image_meta)
+        self.assertIsInstance(claim.image_meta, objects.ImageMeta)

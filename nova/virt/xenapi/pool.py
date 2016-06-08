@@ -17,13 +17,13 @@
 Management class for Pool-related functions (join, eject, etc).
 """
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 import six
 import six.moves.urllib.parse as urlparse
 
 from nova.compute import rpcapi as compute_rpcapi
+import nova.conf
 from nova import exception
 from nova.i18n import _, _LE
 from nova.virt.xenapi import pool_states
@@ -31,15 +31,7 @@ from nova.virt.xenapi import vm_utils
 
 LOG = logging.getLogger(__name__)
 
-xenapi_pool_opts = [
-    cfg.BoolOpt('use_join_force',
-                default=True,
-                help='To use for hosts with different CPUs'),
-    ]
-
-CONF = cfg.CONF
-CONF.register_opts(xenapi_pool_opts, 'xenserver')
-CONF.import_opt('host', 'nova.netconf')
+CONF = nova.conf.CONF
 
 
 class ResourcePool(object):

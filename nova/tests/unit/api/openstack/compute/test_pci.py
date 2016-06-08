@@ -25,6 +25,7 @@ from nova.objects import pci_device_pool
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit.objects import test_pci_device
+from nova.tests import uuidsentinel as uuids
 
 
 pci_stats = [{"count": 3,
@@ -60,12 +61,12 @@ class PciServerControllerTestV21(test.NoDBTestCase):
                                        }]}
         self._create_fake_instance()
         self._create_fake_pci_device()
-        self.pci_device.claim(self.inst)
+        self.pci_device.claim(self.inst.uuid)
         self.pci_device.allocate(self.inst)
 
     def _create_fake_instance(self):
         self.inst = objects.Instance()
-        self.inst.uuid = 'fake-inst-uuid'
+        self.inst.uuid = uuids.instance
         self.inst.pci_devices = objects.PciDeviceList()
 
     def _create_fake_pci_device(self):

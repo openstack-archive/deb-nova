@@ -927,6 +927,44 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
               <blockio logical_block_size="4096" physical_block_size="4096"/>
             </disk>""", xml)
 
+    def test_config_disk_device_address(self):
+        xml = """
+            <disk type='file' device='disk'>
+              <driver name='qemu' type='qcow2'/>
+              <source file='/var/lib/libvirt/images/centos.qcow2'/>
+              <target dev='vda' bus='virtio'/>
+              <address type='pci' domain='0x0000' bus='0x00' slot='0x09'
+                       function='0x0'/>
+            </disk>"""
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_str(xml)
+
+        self.assertIsInstance(obj.device_addr,
+                              config.LibvirtConfigGuestDeviceAddressPCI)
+        self.assertEqual('0000:00:09.0', obj.device_addr.format_address())
+
+    def test_config_disk_device_address_no_format(self):
+        xml = """
+            <disk type='file' device='disk'>
+              <driver name='qemu' type='qcow2'/>
+              <source file='/var/lib/libvirt/images/generic.qcow2'/>
+              <target dev='sda' bus='scsi'/>
+              <address type='drive' controller='0' bus='0'
+                       target='0' unit='1'/>
+            </disk>"""
+
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_str(xml)
+
+        self.assertIsInstance(obj.device_addr,
+                              config.LibvirtConfigGuestDeviceAddressDrive)
+        self.assertEqual(('0', '0', '0', '1'), (obj.device_addr.controller,
+                                                obj.device_addr.bus,
+                                                obj.device_addr.target,
+                                                obj.device_addr.unit))
+        self.assertIsNone(obj.device_addr.format_address())
+
 
 class LibvirtConfigGuestSnapshotDiskTest(LibvirtConfigBaseTest):
 
@@ -1541,6 +1579,23 @@ class LibvirtConfigGuestInterfaceTest(LibvirtConfigBaseTest):
         obj2.parse_str(xml)
         self.assertXmlEqual(xml, obj2.to_xml())
 
+    def test_config_interface_address(self):
+        xml = """
+            <interface type='network'>
+              <mac address='52:54:00:f6:35:8f'/>
+              <source network='default'/>
+              <model type='virtio'/>
+              <address type='pci' domain='0x0000' bus='0x00'
+               slot='0x03' function='0x0'/>
+            </interface>"""
+
+        obj = config.LibvirtConfigGuestInterface()
+        obj.parse_str(xml)
+
+        self.assertIsInstance(obj.device_addr,
+                              config.LibvirtConfigGuestDeviceAddressPCI)
+        self.assertEqual('0000:00:03.0', obj.device_addr.format_address())
+
 
 class LibvirtConfigGuestFeatureTest(LibvirtConfigBaseTest):
 
@@ -1896,7 +1951,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.name = "uefi"
         obj.uuid = "f01cf68d-515c-4daf-b85f-ef1424d93bfc"
         obj.os_type = "x86_64"
-        obj.os_loader = '/tmp/OVMF.fd'
+        obj.os_loader = '/tmp/OVMF_CODE.fd'
         obj.os_loader_type = 'pflash'
         xml = obj.to_xml()
 
@@ -1908,8 +1963,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               <vcpu>1</vcpu>
               <os>
                 <type>x86_64</type>
-                <loader readonly='yes' type='pflash'>/tmp/OVMF.fd</loader>
-                <nvram template="/tmp/OVMF.fd"></nvram>
+                <loader readonly='yes' type='pflash'>/tmp/OVMF_CODE.fd</loader>
               </os>
             </domain>""")
 

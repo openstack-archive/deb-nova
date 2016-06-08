@@ -39,21 +39,6 @@ node_ext_fields = ['uuid', 'task_state', 'updated_at', 'pxe_config_path']
 interface_fields = ['id', 'address', 'datapath_id', 'port_no']
 
 CONF = nova.conf.CONF
-CONF.import_opt('api_version',
-                'nova.virt.ironic.driver',
-                group='ironic')
-CONF.import_opt('api_endpoint',
-                'nova.virt.ironic.driver',
-                group='ironic')
-CONF.import_opt('admin_username',
-                'nova.virt.ironic.driver',
-                group='ironic')
-CONF.import_opt('admin_password',
-                'nova.virt.ironic.driver',
-                group='ironic')
-CONF.import_opt('admin_tenant_name',
-                'nova.virt.ironic.driver',
-                group='ironic')
 
 
 def _check_ironic_client_enabled():
@@ -142,11 +127,11 @@ class BareMetalNodeController(wsgi.Controller):
 
     @extensions.expected_errors(400)
     def create(self, req, body):
-        _no_ironic_proxy("port-create")
+        _no_ironic_proxy("node-create")
 
     @extensions.expected_errors(400)
     def delete(self, req, id):
-        _no_ironic_proxy("port-create")
+        _no_ironic_proxy("node-delete")
 
     @wsgi.action('add_interface')
     @extensions.expected_errors(400)

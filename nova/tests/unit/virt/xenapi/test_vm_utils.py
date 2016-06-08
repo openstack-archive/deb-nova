@@ -22,7 +22,6 @@ import mock
 from mox3 import mox
 from oslo_concurrency import lockutils
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_config import fixture as config_fixture
 from oslo_utils import fixture as utils_fixture
 from oslo_utils import timeutils
@@ -33,6 +32,7 @@ import six
 from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import vm_mode
+import nova.conf
 from nova import context
 from nova import exception
 from nova import objects
@@ -49,7 +49,7 @@ from nova.virt.xenapi import driver as xenapi_conn
 from nova.virt.xenapi import fake
 from nova.virt.xenapi import vm_utils
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 XENSM_TYPE = 'xensm'
 ISCSI_TYPE = 'iscsi'
 
@@ -190,7 +190,7 @@ class GenerateConfigDriveTestCase(VMUtilsTestBase):
                       '-publisher', mox.IgnoreArg(), '-quiet',
                       '-J', '-r', '-V', 'config-2', mox.IgnoreArg(),
                       attempts=1, run_as_root=False).AndReturn(None)
-        utils.execute('dd', mox.IgnoreArg(), mox.IgnoreArg(),
+        utils.execute('dd', mox.IgnoreArg(), mox.IgnoreArg(), mox.IgnoreArg(),
                       mox.IgnoreArg(), run_as_root=True).AndReturn(None)
 
         self.mox.StubOutWithMock(vm_utils, 'create_vbd')
@@ -273,6 +273,7 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
         self.context.auth_token = 'auth_token'
         self.session = FakeSession()
         self.instance = {"uuid": "uuid"}
+        self.flags(group='glance', api_servers=['http://localhost:9292'])
 
         self.mox.StubOutWithMock(vm_utils, '_make_uuid_stack')
         vm_utils._make_uuid_stack().AndReturn(["uuid_stack"])
@@ -346,9 +347,6 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
         self.mox.VerifyAll()
 
     def test_fetch_vhd_image_works_with_bittorrent(self):
-        cfg.CONF.import_opt('torrent_base_url',
-                            'nova.virt.xenapi.image.bittorrent',
-                            group='xenserver')
         self.flags(torrent_base_url='http://foo', group='xenserver')
 
         self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
@@ -408,9 +406,6 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
         self.mox.VerifyAll()
 
     def test_fallback_to_default_handler(self):
-        cfg.CONF.import_opt('torrent_base_url',
-                            'nova.virt.xenapi.image.bittorrent',
-                            group='xenserver')
         self.flags(torrent_base_url='http://foo', group='xenserver')
 
         self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
@@ -442,9 +437,6 @@ class FetchVhdImageTestCase(VMUtilsTestBase):
         self.mox.VerifyAll()
 
     def test_default_handler_does_not_fallback_to_itself(self):
-        cfg.CONF.import_opt('torrent_base_url',
-                            'nova.virt.xenapi.image.bittorrent',
-                            group='xenserver')
         self.flags(torrent_base_url='http://foo', group='xenserver')
 
         self.mox.StubOutWithMock(vm_utils, '_image_uses_bittorrent')
@@ -1454,6 +1446,46 @@ class CreateKernelRamdiskTestCase(VMUtilsTestBase):
         result = vm_utils.create_kernel_and_ramdisk(self.context,
                     self.session, self.instance, self.name_label)
         self.assertEqual(("k", None), result)
+
+    def _test_create_kernel_image(self, cache_images):
+        kernel_id = "kernel"
+        self.instance["kernel_id"] = kernel_id
+
+        args_kernel = {}
+        args_kernel['cached-image'] = kernel_id
+        args_kernel['new-image-uuid'] = "fake_uuid1"
+        self.flags(cache_images=cache_images, group='xenserver')
+
+        if cache_images == 'all':
+            uuid.uuid4().AndReturn("fake_uuid1")
+            self.session.call_plugin('kernel', 'create_kernel_ramdisk',
+                                     args_kernel).AndReturn("cached_image")
+        else:
+            kernel = {"kernel": {"file": "new_image", "uuid": None}}
+            vm_utils._fetch_disk_image(self.context, self.session,
+                                       self.instance, self.name_label,
+                                       kernel_id, 0).AndReturn(kernel)
+
+        self.mox.ReplayAll()
+
+        result = vm_utils._create_kernel_image(self.context,
+                                               self.session,
+                                               self.instance,
+                                               self.name_label,
+                                               kernel_id, 0)
+
+        if cache_images == 'all':
+            self.assertEqual(result, {"kernel":
+                                      {"file": "cached_image", "uuid": None}})
+        else:
+            self.assertEqual(result, {"kernel":
+                                      {"file": "new_image", "uuid": None}})
+
+    def test_create_kernel_image_cached_config(self):
+        self._test_create_kernel_image('all')
+
+    def test_create_kernel_image_uncached_config(self):
+        self._test_create_kernel_image('none')
 
 
 class ScanSrTestCase(VMUtilsTestBase):

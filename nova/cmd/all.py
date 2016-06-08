@@ -30,7 +30,7 @@ from oslo_log import log as logging
 
 import nova.conf
 from nova import config
-from nova.i18n import _LE
+from nova.i18n import _LE, _LW
 from nova import objects
 from nova import service
 from nova import utils
@@ -38,8 +38,6 @@ from nova.vnc import xvp_proxy
 
 
 CONF = nova.conf.CONF
-CONF.import_opt('enabled_apis', 'nova.service')
-CONF.import_opt('enabled_ssl_apis', 'nova.service')
 
 
 def main():
@@ -50,6 +48,9 @@ def main():
     objects.register_all()
     launcher = service.process_launcher()
 
+    # TODO(sdague): Remove in O
+    LOG.warning(_LW('The nova-all entrypoint is deprecated and will '
+                    'be removed in a future release'))
     # nova-api
     for api in CONF.enabled_apis:
         try:

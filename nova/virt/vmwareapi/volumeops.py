@@ -17,17 +17,17 @@
 Management class for Storage-related functions (attach, detach, etc).
 """
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_vmware import exceptions as oslo_vmw_exceptions
 from oslo_vmware import vim_util as vutil
 
+import nova.conf
 from nova import exception
 from nova.i18n import _, _LI, _LW
 from nova.virt.vmwareapi import constants
 from nova.virt.vmwareapi import vm_util
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 
@@ -479,7 +479,7 @@ class VMwareVolumeOps(object):
         except oslo_vmw_exceptions.FileNotFoundException:
             # Volume's vmdk was moved; remove the device so that we can
             # relocate the volume.
-            LOG.warn(_LW("Virtual disk: %s of volume's backing not found."),
+            LOG.warning(_LW("Virtual disk: %s of volume's backing not found."),
                      original_device_path, exc_info=True)
             LOG.debug("Removing disk device of volume's backing and "
                       "reattempting relocate.")

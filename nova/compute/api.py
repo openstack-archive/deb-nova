@@ -27,6 +27,7 @@ import string
 import uuid
 
 from oslo_log import log as logging
+from oslo_messaging import exceptions as oslo_exceptions
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
 from oslo_utils import strutils
@@ -88,7 +89,6 @@ wrap_exception = functools.partial(exception.wrap_exception,
                                    get_notifier=get_notifier)
 
 CONF = nova.conf.CONF
-CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 
 MAX_USERDATA_SIZE = 65535
 RO_SECURITY_GROUPS = ['default']
@@ -291,19 +291,19 @@ class API(base.Base):
         # - set cores headroom based on instances headroom:
         if quotas.get('cores') == -1:
             if deltas.get('cores'):
-                hc = headroom['instances'] * deltas['cores']
+                hc = headroom.get('instances', 1) * deltas['cores']
                 headroom['cores'] = hc / deltas.get('instances', 1)
             else:
-                headroom['cores'] = headroom['instances']
+                headroom['cores'] = headroom.get('instances', 1)
 
         # If quota_ram is unlimited [-1]:
         # - set ram headroom based on instances headroom:
         if quotas.get('ram') == -1:
             if deltas.get('ram'):
-                hr = headroom['instances'] * deltas['ram']
+                hr = headroom.get('instances', 1) * deltas['ram']
                 headroom['ram'] = hr / deltas.get('instances', 1)
             else:
-                headroom['ram'] = headroom['instances']
+                headroom['ram'] = headroom.get('instances', 1)
 
         return headroom
 
@@ -331,7 +331,7 @@ class API(base.Base):
                       'cores': req_cores, 'ram': req_ram}
             headroom = self._get_headroom(quotas, usages, deltas)
 
-            allowed = headroom['instances']
+            allowed = headroom.get('instances', 1)
             # Reduce 'allowed' instances in line with the cores & ram headroom
             if instance_type['vcpus']:
                 allowed = min(allowed,
@@ -570,7 +570,6 @@ class API(base.Base):
                 instance.hostname = self._default_host_name(instance.uuid)
             else:
                 instance.hostname = utils.sanitize_hostname(new_name)
-        instance.save()
         return instance
 
     def _check_config_drive(self, config_drive):
@@ -665,7 +664,7 @@ class API(base.Base):
                     raise exception.FlavorDiskSmallerThanMinDisk(
                         flavor_size=dest_size, image_min_disk=image_min_disk)
 
-    def _get_image_defined_bdms(self, base_options, instance_type, image_meta,
+    def _get_image_defined_bdms(self, instance_type, image_meta,
                                 root_device_name):
         image_properties = image_meta.get('properties', {})
 
@@ -740,7 +739,7 @@ class API(base.Base):
                     raise exception.InvalidRequest(msg)
 
         image_defined_bdms = self._get_image_defined_bdms(
-            base_options, instance_type, image_meta, root_device_name)
+            instance_type, image_meta, root_device_name)
         root_in_image_bdms = (
             block_device.get_root_bdm(image_defined_bdms) is not None)
 
@@ -843,12 +842,20 @@ class API(base.Base):
                                                    context.user_id,
                                                    key_name)
             key_data = key_pair.public_key
+        else:
+            key_pair = None
 
         root_device_name = block_device.prepend_dev(
                 block_device.properties_root_device_name(
                     boot_meta.get('properties', {})))
 
-        image_meta = objects.ImageMeta.from_dict(boot_meta)
+        try:
+            image_meta = objects.ImageMeta.from_dict(boot_meta)
+        except ValueError as e:
+            # there must be invalid values in the image meta properties so
+            # consider this an invalid request
+            msg = _('Invalid image metadata. Error: %s') % six.text_type(e)
+            raise exception.InvalidRequest(msg)
         numa_topology = hardware.numa_get_constraints(
                 instance_type, image_meta)
 
@@ -903,56 +910,19 @@ class API(base.Base):
 
         # return the validated options and maximum number of instances allowed
         # by the network quotas
-        return base_options, max_network_count
-
-    def _create_build_request(self, context, instance_uuid, base_options,
-            request_spec, security_groups, num_instances, index):
-        # Store the BuildRequest that will help populate an instance
-        # object for a list/show request
-        info_cache = objects.InstanceInfoCache()
-        info_cache.instance_uuid = instance_uuid
-        info_cache.network_info = network_model.NetworkInfo()
-        # NOTE: base_options['config_drive'] is either True or '' due
-        # to how it's represented in the instances table in the db.
-        # BuildRequest needs a boolean.
-        bool_config_drive = strutils.bool_from_string(
-                base_options['config_drive'], default=False)
-        # display_name follows a whole set of rules
-        display_name = base_options['display_name']
-        if display_name is None:
-            display_name = self._default_display_name(instance_uuid)
-        if num_instances > 1:
-            display_name = self._new_instance_name_from_template(instance_uuid,
-                    display_name, index)
-        build_request = objects.BuildRequest(context,
-                request_spec=request_spec,
-                project_id=context.project_id,
-                user_id=context.user_id,
-                display_name=display_name,
-                instance_metadata=base_options['metadata'],
-                progress=0,
-                vm_state=vm_states.BUILDING,
-                task_state=task_states.SCHEDULING,
-                image_ref=base_options['image_ref'],
-                access_ip_v4=base_options['access_ip_v4'],
-                access_ip_v6=base_options['access_ip_v6'],
-                info_cache=info_cache,
-                security_groups=security_groups,
-                config_drive=bool_config_drive,
-                key_name=base_options['key_name'],
-                locked_by=None)
-        build_request.create()
-        return build_request
+        return base_options, max_network_count, key_pair
 
     def _provision_instances(self, context, instance_type, min_count,
             max_count, base_options, boot_meta, security_groups,
             block_device_mapping, shutdown_terminate,
-            instance_group, check_server_group_quota, filter_properties):
+            instance_group, check_server_group_quota, filter_properties,
+            key_pair):
         # Reserve quotas
         num_instances, quotas = self._check_num_instances_quota(
                 context, instance_type, min_count, max_count)
         security_groups = self.security_group_api.populate_security_groups(
                 security_groups)
+        self.security_group_api.ensure_default(context)
         LOG.debug("Going to run %s instances...", num_instances)
         instances = []
         try:
@@ -967,28 +937,45 @@ class API(base.Base):
                         base_options['pci_requests'], filter_properties,
                         instance_group, base_options['availability_zone'])
                 req_spec.create()
-                build_request = self._create_build_request(context,
-                        instance_uuid, base_options, req_spec, security_groups,
-                        num_instances, i)
-                # TODO(alaski): Cast to conductor here which will call the
-                # scheduler and defer instance creation until the scheduler
-                # has picked a cell/host.
+
+                # Create an instance object, but do not store in db yet.
                 instance = objects.Instance(context=context)
                 instance.uuid = instance_uuid
                 instance.update(base_options)
-                instance = self.create_db_entry_for_new_instance(
-                        context, instance_type, boot_meta, instance,
-                        security_groups, block_device_mapping,
-                        num_instances, i, shutdown_terminate)
+                instance.keypairs = objects.KeyPairList(objects=[])
+                if key_pair:
+                    instance.keypairs.objects.append(key_pair)
+                instance = self.create_db_entry_for_new_instance(context,
+                        instance_type, boot_meta, instance, security_groups,
+                        block_device_mapping, num_instances, i,
+                        shutdown_terminate, create_instance=False)
+
+                build_request = objects.BuildRequest(context,
+                        instance=instance, instance_uuid=instance.uuid,
+                        project_id=instance.project_id)
+                build_request.create()
+                # Create an instance_mapping.  The null cell_mapping indicates
+                # that the instance doesn't yet exist in a cell, and lookups
+                # for it need to instead look for the RequestSpec.
+                # cell_mapping will be populated after scheduling, with a
+                # scheduling failure using the cell_mapping for the special
+                # cell0.
+                inst_mapping = objects.InstanceMapping(context=context)
+                inst_mapping.instance_uuid = instance_uuid
+                inst_mapping.project_id = context.project_id
+                inst_mapping.cell_mapping = None
+                inst_mapping.create()
+                # TODO(alaski): Cast to conductor here which will call the
+                # scheduler and defer instance creation until the scheduler
+                # has picked a cell/host. Set the instance_mapping to the cell
+                # that the instance is scheduled to.
+                # NOTE(alaski): Instance and block device creation are going
+                # to move to the conductor.
+                instance.create()
                 instances.append(instance)
-                # The BuildRequest needs to be stored until the instance is in
-                # an instance table. At that point it will never be used again
-                # and should be deleted. As instance creation is pushed back,
-                # as noted above, this will move with it.
-                # TODO(alaski): Sync API updates to the build_request to the
-                # instance before it is destroyed. Right now only locked_by can
-                # be updated before this is destroyed.
-                build_request.destroy()
+
+                self._create_block_device_mapping(
+                        instance_type, instance.uuid, block_device_mapping)
 
                 if instance_group:
                     if check_server_group_quota:
@@ -1078,8 +1065,7 @@ class API(base.Base):
         return {}
 
     @staticmethod
-    def _get_requested_instance_group(context, filter_properties,
-                                      check_quota):
+    def _get_requested_instance_group(context, filter_properties):
         if (not filter_properties or
                 not filter_properties.get('scheduler_hints')):
             return
@@ -1130,13 +1116,14 @@ class API(base.Base):
         self._check_auto_disk_config(image=boot_meta,
                                      auto_disk_config=auto_disk_config)
 
-        base_options, max_net_count = self._validate_and_build_base_options(
-                context, instance_type, boot_meta, image_href, image_id,
-                kernel_id, ramdisk_id, display_name, display_description,
-                key_name, key_data, security_groups, availability_zone,
-                user_data, metadata, access_ip_v4, access_ip_v6,
-                requested_networks, config_drive, auto_disk_config,
-                reservation_id, max_count)
+        base_options, max_net_count, key_pair = \
+                self._validate_and_build_base_options(
+                    context, instance_type, boot_meta, image_href, image_id,
+                    kernel_id, ramdisk_id, display_name, display_description,
+                    key_name, key_data, security_groups, availability_zone,
+                    user_data, metadata, access_ip_v4, access_ip_v6,
+                    requested_networks, config_drive, auto_disk_config,
+                    reservation_id, max_count)
 
         # max_net_count is the maximum number of instances requested by the
         # user adjusted for any network quota constraints, including
@@ -1161,12 +1148,13 @@ class API(base.Base):
                 block_device_mapping.root_bdm())
 
         instance_group = self._get_requested_instance_group(context,
-                                   filter_properties, check_server_group_quota)
+                                   filter_properties)
 
         instances = self._provision_instances(context, instance_type,
                 min_count, max_count, base_options, boot_meta, security_groups,
                 block_device_mapping, shutdown_terminate,
-                instance_group, check_server_group_quota, filter_properties)
+                instance_group, check_server_group_quota, filter_properties,
+                key_pair)
 
         for instance in instances:
             self._record_action_start(context, instance,
@@ -1377,7 +1365,8 @@ class API(base.Base):
         return "Server-%s" % instance_uuid
 
     def _populate_instance_for_create(self, context, instance, image,
-                                      index, security_groups, instance_type):
+                                      index, security_groups, instance_type,
+                                      num_instances, shutdown_terminate):
         """Build the beginning of a new instance."""
 
         instance.launch_index = index
@@ -1414,36 +1403,37 @@ class API(base.Base):
 
         instance.security_groups = security_groups
 
+        self._populate_instance_names(instance, num_instances)
+        instance.shutdown_terminate = shutdown_terminate
+        if num_instances > 1:
+            instance = self._apply_instance_name_template(context, instance,
+                                                          index)
+
         return instance
 
-    # NOTE(bcwaldon): No policy check since this is only used by scheduler and
-    # the compute api. That should probably be cleaned up, though.
+    # This method remains because cellsv1 uses it in the scheduler
     def create_db_entry_for_new_instance(self, context, instance_type, image,
             instance, security_group, block_device_mapping, num_instances,
-            index, shutdown_terminate=False):
+            index, shutdown_terminate=False, create_instance=True):
         """Create an entry in the DB for this new instance,
         including any related table updates (such as security group,
         etc).
 
         This is called by the scheduler after a location for the
         instance has been determined.
+
+        :param create_instance: Determines if the instance is created here or
+            just populated for later creation. This is done so that this code
+            can be shared with cellsv1 which needs the instance creation to
+            happen here. It should be removed and this method cleaned up when
+            cellsv1 is a distant memory.
         """
         self._populate_instance_for_create(context, instance, image, index,
-                                           security_group, instance_type)
+                                           security_group, instance_type,
+                                           num_instances, shutdown_terminate)
 
-        self._populate_instance_names(instance, num_instances)
-
-        instance.shutdown_terminate = shutdown_terminate
-
-        self.security_group_api.ensure_default(context)
-        instance.create()
-
-        if num_instances > 1:
-            # NOTE(russellb) We wait until this spot to handle
-            # multi_instance_display_name_template, because we need
-            # the UUID from the instance.
-            instance = self._apply_instance_name_template(context, instance,
-                                                          index)
+        if create_instance:
+            instance.create()
 
         # NOTE (ndipanov): This can now raise exceptions but the instance
         #                  has been created, so delete it and re-raise so
@@ -1454,10 +1444,14 @@ class API(base.Base):
         except (exception.CinderConnectionFailed, exception.InvalidBDM,
                 exception.InvalidVolume):
             with excutils.save_and_reraise_exception():
-                instance.destroy()
+                if create_instance:
+                    instance.destroy()
 
-        self._create_block_device_mapping(
-                instance_type, instance.uuid, block_device_mapping)
+        if create_instance:
+            # Because of the foreign key the bdm can't be created unless the
+            # instance is.
+            self._create_block_device_mapping(
+                    instance_type, instance.uuid, block_device_mapping)
 
         return instance
 
@@ -1480,7 +1474,8 @@ class API(base.Base):
             if forced_host or forced_node:
                 check_policy(context, 'create:forced_host', {})
 
-    def _check_multiple_instances_neutron_ports(self, requested_networks):
+    def _check_multiple_instances_with_neutron_ports(self,
+                                                     requested_networks):
         """Check whether multiple instances are created from port id(s)."""
         for requested_net in requested_networks:
             if requested_net.port_id:
@@ -1489,7 +1484,7 @@ class API(base.Base):
                         " instance one by one with different ports.")
                 raise exception.MultiplePortsNotApplicable(reason=msg)
 
-    def _check_multiple_instances_and_specified_ip(self, requested_networks):
+    def _check_multiple_instances_with_specified_ip(self, requested_networks):
         """Check whether multiple instances are created with specified ip."""
 
         for requested_net in requested_networks:
@@ -1523,9 +1518,10 @@ class API(base.Base):
                 forced_node)
 
         if requested_networks and max_count > 1:
-            self._check_multiple_instances_and_specified_ip(requested_networks)
+            self._check_multiple_instances_with_specified_ip(
+                requested_networks)
             if utils.is_neutron():
-                self._check_multiple_instances_neutron_ports(
+                self._check_multiple_instances_with_neutron_ports(
                     requested_networks)
 
         if availability_zone:
@@ -2192,7 +2188,7 @@ class API(base.Base):
         """
         props_copy = dict(extra_properties, backup_type=backup_type)
 
-        if self.is_volume_backed_instance(context, instance):
+        if compute_utils.is_volume_backed_instance(context, instance):
             LOG.info(_LI("It's not supported to backup volume backed "
                          "instance."), context=context, instance=instance)
             raise exception.InvalidRequest()
@@ -2264,6 +2260,13 @@ class API(base.Base):
 
         image_meta = self._initialize_instance_snapshot_metadata(
             instance, name, properties)
+        # if we're making a snapshot, omit the disk and container formats,
+        # since the image may have been converted to another format, and the
+        # original values won't be accurate.  The driver will populate these
+        # with the correct values later, on image upload.
+        if image_type == 'snapshot':
+            image_meta.pop('disk_format', None)
+            image_meta.pop('container_format', None)
         return self.image_api.create(context, image_meta)
 
     def _initialize_instance_snapshot_metadata(self, instance, name,
@@ -2293,7 +2296,8 @@ class API(base.Base):
 
     # NOTE(melwitt): We don't check instance lock for snapshot because lock is
     #                intended to prevent accidental change/delete of instances
-    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED])
+    @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
+                                    vm_states.SUSPENDED])
     def snapshot_volume_backed(self, context, instance, name,
                                extra_properties=None):
         """Snapshot the given volume-backed instance.
@@ -2431,7 +2435,7 @@ class API(base.Base):
         self._check_auto_disk_config(image=image, **kwargs)
 
         flavor = instance.get_flavor()
-        root_bdm = self._get_root_bdm(context, instance)
+        root_bdm = compute_utils.get_root_bdm(context, instance)
         self._checks_for_create_and_rebuild(context, image_id, image,
                 flavor, metadata, files_to_inject, root_bdm)
 
@@ -2488,11 +2492,24 @@ class API(base.Base):
 
         self._record_action_start(context, instance, instance_actions.REBUILD)
 
+        # NOTE(sbauza): The migration script we provided in Newton should make
+        # sure that all our instances are currently migrated to have an
+        # attached RequestSpec object but let's consider that the operator only
+        # half migrated all their instances in the meantime.
+        try:
+            request_spec = objects.RequestSpec.get_by_instance_uuid(
+                context, instance.uuid)
+        except exception.RequestSpecNotFound:
+            # Some old instances can still have no RequestSpec object attached
+            # to them, we need to support the old way
+            request_spec = None
+
         self.compute_task_api.rebuild_instance(context, instance=instance,
                 new_pass=admin_password, injected_files=files_to_inject,
                 image_ref=image_href, orig_image_ref=orig_image_ref,
                 orig_sys_metadata=orig_sys_metadata, bdms=bdms,
                 preserve_ephemeral=preserve_ephemeral, host=instance.host,
+                request_spec=request_spec,
                 kwargs=kwargs)
 
     @wrap_check_policy
@@ -2506,7 +2523,7 @@ class API(base.Base):
             elevated, instance.uuid, 'finished')
 
         # reverse quota reservation for increased resource usage
-        deltas = compute_utils.reverse_upsize_quota_delta(context, migration)
+        deltas = compute_utils.reverse_upsize_quota_delta(context, instance)
         quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         instance.task_state = task_states.RESIZE_REVERTING
@@ -2611,7 +2628,8 @@ class API(base.Base):
                     flavor_id, read_deleted="no")
             if (new_instance_type.get('root_gb') == 0 and
                 current_instance_type.get('root_gb') != 0 and
-                not self.is_volume_backed_instance(context, instance)):
+                not compute_utils.is_volume_backed_instance(context,
+                    instance)):
                 reason = _('Resize to zero disk flavor is not allowed.')
                 raise exception.CannotResizeDisk(reason=reason)
 
@@ -2686,12 +2704,26 @@ class API(base.Base):
             self._record_action_start(context, instance,
                                       instance_actions.RESIZE)
 
+        # NOTE(sbauza): The migration script we provided in Newton should make
+        # sure that all our instances are currently migrated to have an
+        # attached RequestSpec object but let's consider that the operator only
+        # half migrated all their instances in the meantime.
+        try:
+            request_spec = objects.RequestSpec.get_by_instance_uuid(
+                context, instance.uuid)
+            request_spec.ignore_hosts = filter_properties['ignore_hosts']
+        except exception.RequestSpecNotFound:
+            # Some old instances can still have no RequestSpec object attached
+            # to them, we need to support the old way
+            request_spec = None
+
         scheduler_hint = {'filter_properties': filter_properties}
         self.compute_task_api.resize_instance(context, instance,
                 extra_instance_updates, scheduler_hint=scheduler_hint,
                 flavor=new_instance_type,
                 reservations=quotas.reservations or [],
-                clean_shutdown=clean_shutdown)
+                clean_shutdown=clean_shutdown,
+                request_spec=request_spec)
 
     @wrap_check_policy
     @check_instance_lock
@@ -2708,7 +2740,7 @@ class API(base.Base):
 
         self._record_action_start(context, instance, instance_actions.SHELVE)
 
-        if not self.is_volume_backed_instance(context, instance):
+        if not compute_utils.is_volume_backed_instance(context, instance):
             name = '%s-shelved' % instance.display_name
             image_meta = self._create_image(context, instance, name,
                     'snapshot')
@@ -2834,7 +2866,7 @@ class API(base.Base):
             if bdm.volume_id:
                 vol = self.volume_api.get(context, bdm.volume_id)
                 self.volume_api.check_attached(context, vol)
-        if self.is_volume_backed_instance(context, instance, bdms):
+        if compute_utils.is_volume_backed_instance(context, instance, bdms):
             reason = _("Cannot rescue a volume-backed instance")
             raise exception.InstanceNotRescuable(instance_id=instance.uuid,
                                                  reason=reason)
@@ -3316,21 +3348,6 @@ class API(base.Base):
                                                      diff=diff)
         return _metadata
 
-    def _get_root_bdm(self, context, instance, bdms=None):
-        if bdms is None:
-            bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                    context, instance.uuid)
-
-        return bdms.root_bdm()
-
-    def is_volume_backed_instance(self, context, instance, bdms=None):
-        root_bdm = self._get_root_bdm(context, instance, bdms)
-        if root_bdm is not None:
-            return root_bdm.is_volume
-        # in case we hit a very old instance without root bdm, we _assume_ that
-        # instance is backed by a volume, if and only if image_ref is not set
-        return not instance.image_ref
-
     @check_instance_lock
     @check_instance_cell
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.PAUSED])
@@ -3352,10 +3369,19 @@ class API(base.Base):
             # Some old instances can still have no RequestSpec object attached
             # to them, we need to support the old way
             request_spec = None
-        self.compute_task_api.live_migrate_instance(context, instance,
+        try:
+            self.compute_task_api.live_migrate_instance(context, instance,
                 host_name, block_migration=block_migration,
                 disk_over_commit=disk_over_commit,
                 request_spec=request_spec)
+        except oslo_exceptions.MessagingTimeout as messaging_timeout:
+            with excutils.save_and_reraise_exception():
+                # NOTE(pkoniszewski): It is possible that MessagingTimeout
+                # occurs, but LM will still be in progress, so write
+                # instance fault to database
+                compute_utils.add_instance_fault_from_exc(context,
+                                                          instance,
+                                                          messaging_timeout)
 
     @check_instance_lock
     @check_instance_cell
@@ -3387,7 +3413,7 @@ class API(base.Base):
             context, instance, instance_actions.LIVE_MIGRATION_FORCE_COMPLETE)
 
         self.compute_rpcapi.live_migration_force_complete(
-            context, instance, migration.id)
+            context, instance, migration)
 
     @check_instance_lock
     @check_instance_cell

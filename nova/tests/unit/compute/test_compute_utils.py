@@ -36,6 +36,7 @@ from nova.image import glance
 from nova.network import api as network_api
 from nova.network import model
 from nova import objects
+from nova.objects import base
 from nova.objects import block_device as block_device_obj
 from nova import rpc
 from nova import test
@@ -46,12 +47,12 @@ from nova.tests.unit import fake_notifier
 from nova.tests.unit import fake_server_actions
 import nova.tests.unit.image.fake
 from nova.tests.unit.objects import test_flavor
-from nova.tests.unit.objects import test_migration
 from nova.tests import uuidsentinel as uuids
 
 
 CONF = nova.conf.CONF
-CONF.import_opt('compute_manager', 'nova.service')
+
+FAKE_IMAGE_REF = uuids.image_ref
 
 
 def create_instance(context, user_id='fake', project_id='fake', params=None):
@@ -60,7 +61,7 @@ def create_instance(context, user_id='fake', project_id='fake', params=None):
     net_info = model.NetworkInfo([])
     info_cache = objects.InstanceInfoCache(network_info=net_info)
     inst = objects.Instance(context=context,
-                            image_ref=1,
+                            image_ref=uuids.fake_image_ref,
                             reservation_id='r-fakeres',
                             user_id=user_id,
                             project_id=project_id,
@@ -101,12 +102,10 @@ class ComputeValidateDeviceTestCase(test.NoDBTestCase):
 
         self.data = []
 
-        self.stub_out('nova.db.block_device_mapping_get_all_by_instance',
-                      lambda context, instance: self.data)
-
     def _validate_device(self, device=None):
-        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                self.context, self.instance['uuid'])
+        bdms = base.obj_make_list(self.context,
+            objects.BlockDeviceMappingList(), objects.BlockDeviceMapping,
+            self.data)
         return compute_utils.get_device_name_for_instance(
             self.instance, bdms, device)
 
@@ -399,7 +398,7 @@ class UsageInfoTestCase(test.TestCase):
         self.addCleanup(fake_notifier.reset)
 
         self.flags(use_local=True, group='conductor')
-        self.flags(compute_driver='nova.virt.fake.FakeDriver',
+        self.flags(compute_driver='fake.FakeDriver',
                    network_manager='nova.network.manager.FlatManager')
         self.compute = importutils.import_object(CONF.compute_manager)
         self.user_id = 'fake'
@@ -409,6 +408,7 @@ class UsageInfoTestCase(test.TestCase):
         def fake_show(meh, context, id, **kwargs):
             return {'id': 1, 'properties': {'kernel_id': 1, 'ramdisk_id': 1}}
 
+        self.flags(group='glance', api_servers=['http://localhost:9292'])
         self.stubs.Set(nova.tests.unit.image.fake._FakeImageService,
                        'show', fake_show)
         fake_network.set_stub_network_methods(self)
@@ -446,7 +446,8 @@ class UsageInfoTestCase(test.TestCase):
                           "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'],
                 {'md_key1': 'val1', 'md_key2': 'val2'})
-        image_ref_url = "%s/images/1" % glance.generate_glance_url()
+        image_ref_url = "%s/images/%s" % (glance.generate_glance_url(),
+                                          uuids.fake_image_ref)
         self.assertEqual(payload['image_ref_url'], image_ref_url)
         self.compute.terminate_instance(self.context, instance, [], [])
 
@@ -481,7 +482,8 @@ class UsageInfoTestCase(test.TestCase):
             self.assertIn(attr, payload, "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'],
                 {'md_key1': 'val1', 'md_key2': 'val2'})
-        image_ref_url = "%s/images/1" % glance.generate_glance_url()
+        image_ref_url = "%s/images/%s" % (glance.generate_glance_url(),
+                                          uuids.fake_image_ref)
         self.assertEqual(payload['image_ref_url'], image_ref_url)
 
     def test_notify_usage_exists_instance_not_found(self):
@@ -508,7 +510,8 @@ class UsageInfoTestCase(test.TestCase):
                      'audit_period_ending', 'image_meta'):
             self.assertIn(attr, payload, "Key %s not in payload" % attr)
         self.assertEqual(payload['image_meta'], {})
-        image_ref_url = "%s/images/1" % glance.generate_glance_url()
+        image_ref_url = "%s/images/%s" % (glance.generate_glance_url(),
+                                          uuids.fake_image_ref)
         self.assertEqual(payload['image_ref_url'], image_ref_url)
 
     def test_notify_about_instance_usage(self):
@@ -543,7 +546,8 @@ class UsageInfoTestCase(test.TestCase):
         self.assertEqual(payload['image_meta'],
                 {'md_key1': 'val1', 'md_key2': 'val2'})
         self.assertEqual(payload['image_name'], 'fake_name')
-        image_ref_url = "%s/images/1" % glance.generate_glance_url()
+        image_ref_url = "%s/images/%s" % (glance.generate_glance_url(),
+                                          uuids.fake_image_ref)
         self.assertEqual(payload['image_ref_url'], image_ref_url)
         self.compute.terminate_instance(self.context, instance, [], [])
 
@@ -684,8 +688,7 @@ class ComputeUtilsQuotaDeltaTestCase(test.TestCase):
         deltas = compute_utils.downsize_quota_delta(self.context, inst)
         self.assertEqual(expected_deltas, deltas)
 
-    @mock.patch.object(objects.Flavor, 'get_by_id')
-    def test_reverse_quota_delta(self, mock_get_flavor):
+    def test_reverse_quota_delta(self):
         inst = create_instance(self.context, params=None)
         inst.old_flavor = flavors.get_flavor_by_name('m1.tiny')
         inst.new_flavor = flavors.get_flavor_by_name('m1.medium')
@@ -696,20 +699,8 @@ class ComputeUtilsQuotaDeltaTestCase(test.TestCase):
             'ram': -1 * (inst.new_flavor['memory_mb'] -
                          inst.old_flavor['memory_mb'])
         }
-        updates = {'old_instance_type_id': inst.old_flavor['id'],
-                   'new_instance_type_id': inst.new_flavor['id']}
 
-        fake_migration = test_migration.fake_db_migration(**updates)
-
-        def _flavor_get_by_id(context, type_id):
-            if type_id == updates['old_instance_type_id']:
-                return inst.old_flavor
-            else:
-                return inst.new_flavor
-
-        mock_get_flavor.side_effect = _flavor_get_by_id
-        deltas = compute_utils.reverse_upsize_quota_delta(self.context,
-                                                          fake_migration)
+        deltas = compute_utils.reverse_upsize_quota_delta(self.context, inst)
         self.assertEqual(expected_deltas, deltas)
 
     @mock.patch.object(objects.Quotas, 'reserve')
@@ -730,3 +721,119 @@ class ComputeUtilsQuotaDeltaTestCase(test.TestCase):
         compute_utils.reserve_quota_delta(self.context, deltas, inst)
         mock_reserve.assert_called_once_with(project_id=inst.project_id,
                                              user_id=inst.user_id, **deltas)
+
+
+class IsVolumeBackedInstanceTestCase(test.TestCase):
+    def setUp(self):
+        super(IsVolumeBackedInstanceTestCase, self).setUp()
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+        self.context = context.RequestContext(self.user_id,
+                                            self.project_id)
+
+    def test_is_volume_backed_instance_no_bdm_no_image(self):
+        ctxt = self.context
+
+        instance = create_instance(ctxt, params={'image_ref': ''})
+        self.assertTrue(
+            compute_utils.is_volume_backed_instance(ctxt, instance, None))
+
+    def test_is_volume_backed_instance_empty_bdm_with_image(self):
+        ctxt = self.context
+        instance = create_instance(ctxt, params={
+            'root_device_name': 'vda',
+            'image_ref': FAKE_IMAGE_REF
+        })
+        self.assertFalse(
+            compute_utils.is_volume_backed_instance(
+                ctxt, instance,
+                block_device_obj.block_device_make_list(ctxt, [])))
+
+    def test_is_volume_backed_instance_bdm_volume_no_image(self):
+        ctxt = self.context
+        instance = create_instance(ctxt, params={
+            'root_device_name': 'vda',
+            'image_ref': ''
+        })
+        bdms = block_device_obj.block_device_make_list(ctxt,
+                            [fake_block_device.FakeDbBlockDeviceDict(
+                                {'source_type': 'volume',
+                                 'device_name': '/dev/vda',
+                                 'volume_id': uuids.volume_id,
+                                 'instance_uuid':
+                                     'f8000000-0000-0000-0000-000000000000',
+                                 'boot_index': 0,
+                                 'destination_type': 'volume'})])
+        self.assertTrue(
+            compute_utils.is_volume_backed_instance(ctxt, instance, bdms))
+
+    def test_is_volume_backed_instance_bdm_local_no_image(self):
+        # if the root device is local the instance is not volume backed, even
+        # if no image_ref is set.
+        ctxt = self.context
+        instance = create_instance(ctxt, params={
+            'root_device_name': 'vda',
+            'image_ref': ''
+        })
+        bdms = block_device_obj.block_device_make_list(ctxt,
+               [fake_block_device.FakeDbBlockDeviceDict(
+                {'source_type': 'volume',
+                 'device_name': '/dev/vda',
+                 'volume_id': uuids.volume_id,
+                 'destination_type': 'local',
+                 'instance_uuid': 'f8000000-0000-0000-0000-000000000000',
+                 'boot_index': 0,
+                 'snapshot_id': None}),
+                fake_block_device.FakeDbBlockDeviceDict(
+                {'source_type': 'volume',
+                 'device_name': '/dev/vdb',
+                 'instance_uuid': 'f8000000-0000-0000-0000-000000000000',
+                 'boot_index': 1,
+                 'destination_type': 'volume',
+                 'volume_id': 'c2ec2156-d75e-11e2-985b-5254009297d6',
+                 'snapshot_id': None})])
+        self.assertFalse(
+            compute_utils.is_volume_backed_instance(ctxt, instance, bdms))
+
+    def test_is_volume_backed_instance_bdm_volume_with_image(self):
+        ctxt = self.context
+        instance = create_instance(ctxt, params={
+            'root_device_name': 'vda',
+            'image_ref': FAKE_IMAGE_REF
+        })
+        bdms = block_device_obj.block_device_make_list(ctxt,
+                            [fake_block_device.FakeDbBlockDeviceDict(
+                                {'source_type': 'volume',
+                                 'device_name': '/dev/vda',
+                                 'volume_id': uuids.volume_id,
+                                 'boot_index': 0,
+                                 'destination_type': 'volume'})])
+        self.assertTrue(
+            compute_utils.is_volume_backed_instance(ctxt, instance, bdms))
+
+    def test_is_volume_backed_instance_bdm_snapshot(self):
+        ctxt = self.context
+        instance = create_instance(ctxt, params={
+            'root_device_name': 'vda'
+        })
+        bdms = block_device_obj.block_device_make_list(ctxt,
+               [fake_block_device.FakeDbBlockDeviceDict(
+                {'source_type': 'volume',
+                 'device_name': '/dev/vda',
+                 'snapshot_id': 'de8836ac-d75e-11e2-8271-5254009297d6',
+                 'instance_uuid': 'f8000000-0000-0000-0000-000000000000',
+                 'destination_type': 'volume',
+                 'boot_index': 0,
+                 'volume_id': None})])
+        self.assertTrue(
+            compute_utils.is_volume_backed_instance(ctxt, instance, bdms))
+
+    @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
+    def test_is_volume_backed_instance_empty_bdm_by_uuid(self, mock_bdms):
+        ctxt = self.context
+        instance = create_instance(ctxt)
+        mock_bdms.return_value = block_device_obj.block_device_make_list(
+            ctxt, [])
+        self.assertFalse(
+            compute_utils.is_volume_backed_instance(ctxt, instance, None))
+        mock_bdms.assert_called_with(ctxt, instance.uuid)

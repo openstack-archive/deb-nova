@@ -16,21 +16,20 @@ import functools
 import itertools
 import operator
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import excutils
 import six
 
 from nova import block_device
+import nova.conf
 from nova import exception
 from nova.i18n import _LE
 from nova.i18n import _LI
 from nova.i18n import _LW
 from nova.volume import encryptors
 
-CONF = cfg.CONF
-CONF.import_opt('cross_az_attach', 'nova.volume.cinder', group='cinder')
+CONF = nova.conf.CONF
 
 LOG = logging.getLogger(__name__)
 
@@ -311,7 +310,7 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
                                                       self['mount_device'],
                                                       encryption=encryption)
                         except Exception:
-                            LOG.warn(_LW("Driver failed to detach volume "
+                            LOG.warning(_LW("Driver failed to detach volume "
                                          "%(volume_id)s at %(mount_point)s."),
                                      {'volume_id': volume_id,
                                       'mount_point': self['mount_device']},
@@ -362,9 +361,10 @@ class DriverVolumeBlockDevice(DriverBlockDevice):
                     try:
                         volume_api.delete(context, volume_id)
                     except Exception as exc:
-                        LOG.warn(_LW('Failed to delete volume: %(volume_id)s '
-                                     'due to %(exc)s'),
-                                 {'volume_id': volume_id, 'exc': exc})
+                        LOG.warning(
+                            _LW('Failed to delete volume: %(volume_id)s '
+                                'due to %(exc)s'),
+                            {'volume_id': volume_id, 'exc': exc})
 
 
 class DriverSnapshotBlockDevice(DriverVolumeBlockDevice):

@@ -31,9 +31,12 @@ DISK_INVENTORY = dict(
 class ResourceProviderTestCase(test.NoDBTestCase):
     """Test resource-provider objects' lifecycles."""
 
+    USES_DB_SELF = True
+
     def setUp(self):
         super(ResourceProviderTestCase, self).setUp()
         self.useFixture(fixtures.Database())
+        self.useFixture(fixtures.Database(database='api'))
         self.context = context.RequestContext('fake-user', 'fake-project')
 
     def test_create_resource_provider_requires_uuid(self):

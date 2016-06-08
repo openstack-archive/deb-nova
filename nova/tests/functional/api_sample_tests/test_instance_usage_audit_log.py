@@ -13,15 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urllib
+from six.moves import urllib
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import api_sample_base
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class InstanceUsageAuditLogJsonTest(api_sample_base.ApiSampleTestBaseV21):
@@ -38,7 +35,7 @@ class InstanceUsageAuditLogJsonTest(api_sample_base.ApiSampleTestBaseV21):
 
     def test_show_instance_usage_audit_log(self):
         response = self._do_get('os-instance_usage_audit_log/%s' %
-                                urllib.quote('2012-07-05 10:00:00'))
+                                urllib.parse.quote('2012-07-05 10:00:00'))
         self._verify_response('inst-usage-audit-log-show-get-resp',
                               {}, response, 200)
 

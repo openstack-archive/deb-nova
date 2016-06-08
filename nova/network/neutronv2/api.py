@@ -15,14 +15,12 @@
 #    under the License.
 #
 
-import copy
 import time
 import uuid
 
 from keystoneauth1 import loading as ks_loading
 from neutronclient.common import exceptions as neutron_client_exc
 from neutronclient.v2_0 import client as clientv20
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import uuidutils
@@ -30,51 +28,21 @@ import six
 
 from nova.api.openstack import extensions
 from nova.compute import utils as compute_utils
+import nova.conf
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova.network import base_api
 from nova.network import model as network_model
 from nova.network.neutronv2 import constants
 from nova import objects
+from nova.objects import fields as obj_fields
 from nova.pci import manager as pci_manager
 from nova.pci import request as pci_request
+from nova.pci import utils as pci_utils
 from nova.pci import whitelist as pci_whitelist
 
-neutron_opts = [
-    cfg.StrOpt('url',
-               default='http://127.0.0.1:9696',
-               help='URL for connecting to neutron'),
-    cfg.StrOpt('region_name',
-               help='Region name for connecting to neutron in admin context'),
-    cfg.StrOpt('ovs_bridge',
-               default='br-int',
-               help='Default OVS bridge name to use if not specified '
-                    'by Neutron'),
-    cfg.IntOpt('extension_sync_interval',
-                default=600,
-                help='Number of seconds before querying neutron for'
-                     ' extensions'),
-   ]
+CONF = nova.conf.CONF
 
-NEUTRON_GROUP = 'neutron'
-
-CONF = cfg.CONF
-CONF.register_opts(neutron_opts, NEUTRON_GROUP)
-
-deprecations = {'cafile': [cfg.DeprecatedOpt('ca_certificates_file',
-                                             group=NEUTRON_GROUP)],
-                'insecure': [cfg.DeprecatedOpt('api_insecure',
-                                               group=NEUTRON_GROUP)],
-                'timeout': [cfg.DeprecatedOpt('url_timeout',
-                                              group=NEUTRON_GROUP)]}
-
-_neutron_options = ks_loading.register_session_conf_options(
-    CONF, NEUTRON_GROUP, deprecated_opts=deprecations)
-ks_loading.register_auth_conf_options(CONF, NEUTRON_GROUP)
-
-
-CONF.import_opt('default_floating_pool', 'nova.network.floating_ips')
-CONF.import_opt('flat_injected', 'nova.network.manager')
 LOG = logging.getLogger(__name__)
 
 soft_external_network_attach_authorize = extensions.soft_core_authorizer(
@@ -83,23 +51,7 @@ soft_external_network_attach_authorize = extensions.soft_core_authorizer(
 _SESSION = None
 _ADMIN_AUTH = None
 
-
-def list_opts():
-    opts = copy.deepcopy(_neutron_options)
-    opts.insert(0, ks_loading.get_auth_common_conf_options()[0])
-    # NOTE(dims): There are a lot of auth plugins, we just generate
-    # the config options for a few common ones
-    plugins = ['password', 'v2password', 'v3password']
-    for name in plugins:
-        plugin = ks_loading.get_plugin_loader(name)
-        for plugin_option in ks_loading.get_auth_plugin_conf_options(plugin):
-            for option in opts:
-                if option.name == plugin_option.name:
-                    break
-            else:
-                opts.append(plugin_option)
-    opts.sort(key=lambda x: x.name)
-    return [(NEUTRON_GROUP, opts)]
+DEFAULT_SECGROUP = 'default'
 
 
 def reset_state():
@@ -111,12 +63,13 @@ def reset_state():
 
 
 def _load_auth_plugin(conf):
-    auth_plugin = ks_loading.load_auth_from_conf_options(conf, NEUTRON_GROUP)
+    auth_plugin = ks_loading.load_auth_from_conf_options(conf,
+                                    nova.conf.neutron.NEUTRON_GROUP)
 
     if auth_plugin:
         return auth_plugin
 
-    err_msg = _('Unknown auth plugin: %s') % conf.neutron.auth_plugin
+    err_msg = _('Unknown auth type: %s') % conf.neutron.auth_type
     raise neutron_client_exc.Unauthorized(message=err_msg)
 
 
@@ -132,7 +85,7 @@ def get_client(context, admin=False):
 
     if not _SESSION:
         _SESSION = ks_loading.load_session_from_conf_options(
-            CONF, NEUTRON_GROUP)
+            CONF, nova.conf.neutron.NEUTRON_GROUP)
 
     if admin or (context.is_admin and not context.auth_token):
         if not _ADMIN_AUTH:
@@ -331,6 +284,8 @@ class API(base_api.NetworkAPI):
             if port_binding:
                 port_req_body['port']['binding:host_id'] = None
                 port_req_body['port']['binding:profile'] = {}
+            if constants.DNS_INTEGRATION in self.extensions:
+                port_req_body['port']['dns_name'] = ''
             try:
                 port_client.update_port(port_id, port_req_body)
             except Exception:
@@ -455,6 +410,17 @@ class API(base_api.NetworkAPI):
                     ordered_networks.append(request)
 
         return ports, net_ids, ordered_networks, available_macs
+
+    def _clean_security_groups(self, security_groups):
+        """Cleans security groups requested from Nova API
+
+        Neutron already passes a 'default' security group when
+        creating ports so it's not necessary to specify it to the
+        request.
+        """
+        if security_groups == [DEFAULT_SECGROUP]:
+            security_groups = []
+        return security_groups
 
     def _process_security_groups(self, instance, neutron, security_groups):
         """Processes and validates requested security groups for allocation.
@@ -603,7 +569,8 @@ class API(base_api.NetworkAPI):
         #                available net which is permitted bug/1364344
         self._check_external_network_attach(context, nets)
 
-        security_groups = kwargs.get('security_groups', [])
+        security_groups = self._clean_security_groups(
+            kwargs.get('security_groups', []))
         security_group_ids = self._process_security_groups(
                                     instance, neutron, security_groups)
 
@@ -624,17 +591,20 @@ class API(base_api.NetworkAPI):
                 continue
 
             nets_in_requested_order.append(network)
-            # If security groups are requested on an instance then the
-            # network must has a subnet associated with it. Some plugins
-            # implement the port-security extension which requires
-            # 'port_security_enabled' to be True for security groups.
-            # That is why True is returned if 'port_security_enabled'
-            # is not found.
-            if (security_groups and not (
-                    network['subnets']
-                    and network.get('port_security_enabled', True))):
 
-                raise exception.SecurityGroupCannotBeApplied()
+            port_security_enabled = network.get('port_security_enabled', True)
+            if port_security_enabled:
+                if not network.get('subnets'):
+                    # Neutron can't apply security groups to a port
+                    # for a network without L3 assignements.
+                    raise exception.SecurityGroupCannotBeApplied()
+            else:
+                if security_group_ids:
+                    # We don't want to apply security groups on port
+                    # for a network defined with
+                    # 'port_security_enabled=False'.
+                    raise exception.SecurityGroupCannotBeApplied()
+
             zone = 'compute:%s' % instance.availability_zone
             port_req_body = {'port': {'device_id': instance.uuid,
                                       'device_owner': zone}}
@@ -643,6 +613,8 @@ class API(base_api.NetworkAPI):
                     context, instance, request.pci_request_id, port_req_body,
                     network=network, neutron=neutron,
                     bind_host_id=bind_host_id)
+                self._populate_mac_address(instance, request.pci_request_id,
+                                           port_req_body)
                 if request.port_id:
                     port = ports[request.port_id]
                     port_client.update_port(port['id'], port_req_body)
@@ -715,6 +687,38 @@ class API(base_api.NetworkAPI):
                            devspec.get_tags().get('physical_network')
                       }
             port_req_body['port']['binding:profile'] = profile
+
+    @staticmethod
+    def _populate_mac_address(instance, pci_request_id, port_req_body):
+        """Add the updated MAC address value to the update_port request body.
+
+        Currently this is done only for PF passthrough.
+        """
+        if pci_request_id is not None:
+            pci_devs = pci_manager.get_instance_pci_devs(
+                instance, pci_request_id)
+            if len(pci_devs) != 1:
+                # NOTE(ndipanov): We shouldn't ever get here since
+                # InstancePCIRequest instances built from network requests
+                # only ever index a single device, which needs to be
+                # successfully claimed for this to be called as part of
+                # allocate_networks method
+                LOG.error(_LE("PCI request %s does not have a "
+                              "unique device associated with it. Unable to "
+                              "determine MAC address"),
+                          pci_request, instance=instance)
+                return
+            pci_dev = pci_devs[0]
+            if pci_dev.dev_type == obj_fields.PciDeviceType.SRIOV_PF:
+                try:
+                    mac = pci_utils.get_mac_by_pci_address(pci_dev.address)
+                except exception.PciDeviceNotFoundById as e:
+                    LOG.error(
+                        _LE("Could not determine MAC address for %(addr)s, "
+                            "error: %(e)s"),
+                        {"addr": pci_dev.address, "e": e}, instance=instance)
+                else:
+                    port_req_body['port']['mac_address'] = mac
 
     def _populate_neutron_extension_values(self, context, instance,
                                            pci_request_id, port_req_body,
@@ -1069,9 +1073,13 @@ class API(base_api.NetworkAPI):
                     context, neutron, request_net.port_id)
             pci_request_id = None
             if vnic_type in network_model.VNIC_TYPES_SRIOV:
+                spec = {pci_request.PCI_NET_TAG: phynet_name}
+                dev_type = pci_request.DEVICE_TYPE_FOR_VNIC_TYPE.get(vnic_type)
+                if dev_type:
+                    spec[pci_request.PCI_DEVICE_TYPE_TAG] = dev_type
                 request = objects.InstancePCIRequest(
                     count=1,
-                    spec=[{pci_request.PCI_NET_TAG: phynet_name}],
+                    spec=[spec],
                     request_id=str(uuid.uuid4()))
                 pci_requests.requests.append(request)
                 pci_request_id = request.request_id
@@ -1098,9 +1106,8 @@ class API(base_api.NetworkAPI):
 
             # TODO(danms): Remove me when all callers pass an object
             if isinstance(requested_networks[0], tuple):
-                requested_networks = objects.NetworkRequestList(
-                    objects=[objects.NetworkRequest.from_tuple(t)
-                             for t in requested_networks])
+                requested_networks = objects.NetworkRequestList.from_tuples(
+                    requested_networks)
 
             for request in requested_networks:
                 if request.port_id:
@@ -1354,7 +1361,7 @@ class API(base_api.NetworkAPI):
         pool_dict = self._setup_net_dict(client,
                                          fip['floating_network_id'])
         port_dict = self._setup_port_dict(context, client, fip['port_id'])
-        return self._format_floating_ip_model(fip, pool_dict, port_dict)
+        return self._make_floating_ip_obj(context, fip, pool_dict, port_dict)
 
     def _get_floating_ip_pools(self, client, project_id=None):
         search_opts = {constants.NET_EXTERNAL: True}
@@ -1371,27 +1378,31 @@ class API(base_api.NetworkAPI):
         # nova.network.api.get_floating_ip_pools
         return [n['name'] or n['id'] for n in pools]
 
-    def _format_floating_ip_model(self, fip, pool_dict, port_dict):
+    def _make_floating_ip_obj(self, context, fip, pool_dict, port_dict):
         pool = pool_dict[fip['floating_network_id']]
-        result = {'id': fip['id'],
-                  'address': fip['floating_ip_address'],
-                  'pool': pool['name'] or pool['id'],
-                  'project_id': fip['tenant_id'],
-                  # In Neutron v2, an exact fixed_ip_id does not exist.
-                  'fixed_ip_id': fip['port_id'],
-                  }
+        # NOTE(danms): Don't give these objects a context, since they're
+        # not lazy-loadable anyway
+        floating = objects.floating_ip.NeutronFloatingIP(
+            id=fip['id'], address=fip['floating_ip_address'],
+            pool=(pool['name'] or pool['id']), project_id=fip['tenant_id'],
+            fixed_ip_id=fip['port_id'])
         # In Neutron v2 API fixed_ip_address and instance uuid
         # (= device_id) are known here, so pass it as a result.
-        result['fixed_ip'] = {'address': fip['fixed_ip_address']}
+        if fip['fixed_ip_address']:
+            floating.fixed_ip = objects.FixedIP(
+                address=fip['fixed_ip_address'])
+        else:
+            floating.fixed_ip = None
         if fip['port_id']:
             instance_uuid = port_dict[fip['port_id']]['device_id']
-            result['instance'] = {'uuid': instance_uuid}
-            # TODO(mriedem): remove this workaround once the get_floating_ip*
-            # API methods are converted to use nova objects.
-            result['fixed_ip']['instance_uuid'] = instance_uuid
+            # NOTE(danms): This could be .refresh()d, so give it context
+            floating.instance = objects.Instance(context=context,
+                                                 uuid=instance_uuid)
+            if floating.fixed_ip:
+                floating.fixed_ip.instance_uuid = instance_uuid
         else:
-            result['instance'] = None
-        return result
+            floating.instance = None
+        return floating
 
     def get_floating_ip_by_address(self, context, address):
         """Return a floating IP given an address."""
@@ -1400,7 +1411,7 @@ class API(base_api.NetworkAPI):
         pool_dict = self._setup_net_dict(client,
                                          fip['floating_network_id'])
         port_dict = self._setup_port_dict(context, client, fip['port_id'])
-        return self._format_floating_ip_model(fip, pool_dict, port_dict)
+        return self._make_floating_ip_obj(context, fip, pool_dict, port_dict)
 
     def get_floating_ips_by_project(self, context):
         client = get_client(context)
@@ -1410,7 +1421,7 @@ class API(base_api.NetworkAPI):
             return []
         pool_dict = self._setup_pools_dict(client)
         port_dict = self._setup_ports_dict(client, project_id)
-        return [self._format_floating_ip_model(fip, pool_dict, port_dict)
+        return [self._make_floating_ip_obj(context, fip, pool_dict, port_dict)
                 for fip in fips]
 
     def get_instance_id_by_floating_address(self, context, address):

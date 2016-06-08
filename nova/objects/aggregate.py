@@ -15,14 +15,36 @@
 from oslo_log import log as logging
 from oslo_utils import uuidutils
 
+from sqlalchemy.orm import contains_eager
+from sqlalchemy.orm import joinedload
+
 from nova.compute import utils as compute_utils
 from nova import db
+from nova.db.sqlalchemy import api as db_api
+from nova.db.sqlalchemy import api_models
 from nova import exception
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
 
 LOG = logging.getLogger(__name__)
+
+DEPRECATED_FIELDS = ['deleted', 'deleted_at']
+
+
+@db_api.api_context_manager.reader
+def _aggregate_get_from_db(context, aggregate_id):
+    query = context.session.query(api_models.Aggregate).\
+            options(joinedload('_hosts')).\
+            options(joinedload('_metadata'))
+    query = query.filter(api_models.Aggregate.id == aggregate_id)
+
+    aggregate = query.first()
+
+    if not aggregate:
+        raise exception.AggregateNotFound(aggregate_id=aggregate_id)
+
+    return aggregate
 
 
 @base.NovaObjectRegistry.register
@@ -49,6 +71,8 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject):
                 db_key = 'metadetails'
             elif key == 'uuid':
                 continue
+            elif key in DEPRECATED_FIELDS and key not in db_aggregate:
+                continue
             else:
                 db_key = key
             setattr(aggregate, key, db_aggregate[db_key])
@@ -58,6 +82,12 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject):
         # that all UUIDs in the database are not NULL.
         if db_aggregate.get('uuid'):
             aggregate.uuid = db_aggregate['uuid']
+
+        # NOTE: This can be removed when we remove compatibility with
+        # the old aggregate model.
+        if any(f not in db_aggregate for f in DEPRECATED_FIELDS):
+            aggregate.deleted_at = None
+            aggregate.deleted = False
 
         aggregate._context = context
         aggregate.obj_reset_changes()
@@ -82,7 +112,10 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject):
 
     @base.remotable_classmethod
     def get_by_id(cls, context, aggregate_id):
-        db_aggregate = db.aggregate_get(context, aggregate_id)
+        try:
+            db_aggregate = _aggregate_get_from_db(context, aggregate_id)
+        except exception.AggregateNotFound:
+            db_aggregate = db.aggregate_get(context, aggregate_id)
         return cls._from_db_object(context, cls(), db_aggregate)
 
     @base.remotable
@@ -180,6 +213,41 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject):
         return self.metadata.get('availability_zone', None)
 
 
+@db_api.api_context_manager.reader
+def _get_all_from_db(context):
+    query = context.session.query(api_models.Aggregate).\
+            options(joinedload('_hosts')).\
+            options(joinedload('_metadata'))
+
+    return query.all()
+
+
+@db_api.api_context_manager.reader
+def _get_by_host_from_db(context, host, key=None):
+    query = context.session.query(api_models.Aggregate).\
+            options(joinedload('_hosts')).\
+            options(joinedload('_metadata'))
+    query = query.join('_hosts')
+    query = query.filter(api_models.AggregateHost.host == host)
+
+    if key:
+        query = query.join("_metadata").filter(
+            api_models.AggregateMetadata.key == key)
+
+    return query.all()
+
+
+@db_api.api_context_manager.reader
+def _get_by_metadata_key_from_db(context, key):
+    query = context.session.query(api_models.Aggregate)
+    query = query.join("_metadata")
+    query = query.filter(api_models.AggregateMetadata.key == key)
+    query = query.options(contains_eager("_metadata"))
+    query = query.options(joinedload("_hosts"))
+
+    return query.all()
+
+
 @base.NovaObjectRegistry.register
 class AggregateList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial version
@@ -191,6 +259,14 @@ class AggregateList(base.ObjectListBase, base.NovaObject):
     fields = {
         'objects': fields.ListOfObjectsField('Aggregate'),
         }
+
+    # NOTE(mdoff): Calls to this can be removed when we remove
+    # compatibility with the old aggregate model.
+    @staticmethod
+    def _fill_deprecated(db_aggregate):
+        db_aggregate['deleted_at'] = None
+        db_aggregate['deleted'] = False
+        return db_aggregate
 
     @classmethod
     def _filter_db_aggregates(cls, db_aggregates, hosts):
@@ -206,20 +282,28 @@ class AggregateList(base.ObjectListBase, base.NovaObject):
 
     @base.remotable_classmethod
     def get_all(cls, context):
+        api_db_aggregates = [cls._fill_deprecated(agg) for agg in
+                                _get_all_from_db(context)]
         db_aggregates = db.aggregate_get_all(context)
         return base.obj_make_list(context, cls(context), objects.Aggregate,
-                                  db_aggregates)
+                                  db_aggregates + api_db_aggregates)
 
     @base.remotable_classmethod
     def get_by_host(cls, context, host, key=None):
+        api_db_aggregates = [cls._fill_deprecated(agg) for agg in
+                            _get_by_host_from_db(context, host, key=key)]
         db_aggregates = db.aggregate_get_by_host(context, host, key=key)
         return base.obj_make_list(context, cls(context), objects.Aggregate,
-                                  db_aggregates)
+                                  db_aggregates + api_db_aggregates)
 
     @base.remotable_classmethod
     def get_by_metadata_key(cls, context, key, hosts=None):
+        api_db_aggregates = [cls._fill_deprecated(agg) for agg in
+                            _get_by_metadata_key_from_db(context, key=key)]
         db_aggregates = db.aggregate_get_by_metadata_key(context, key=key)
+
+        all_aggregates = db_aggregates + api_db_aggregates
         if hosts is not None:
-            db_aggregates = cls._filter_db_aggregates(db_aggregates, hosts)
+            all_aggregates = cls._filter_db_aggregates(all_aggregates, hosts)
         return base.obj_make_list(context, cls(context), objects.Aggregate,
-                                  db_aggregates)
+                                  all_aggregates)

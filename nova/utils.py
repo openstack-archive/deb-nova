@@ -34,6 +34,7 @@ import socket
 import struct
 import sys
 import tempfile
+import textwrap
 import time
 from xml.sax import saxutils
 
@@ -41,7 +42,6 @@ import eventlet
 import netaddr
 from oslo_concurrency import lockutils
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_context import context as common_context
 from oslo_log import log as logging
 import oslo_messaging as messaging
@@ -51,110 +51,18 @@ from oslo_utils import importutils
 from oslo_utils import strutils
 from oslo_utils import timeutils
 from oslo_utils import units
+import prettytable
 import six
 from six.moves import range
 
+import nova.conf
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 import nova.network
 from nova import safe_utils
 
-notify_decorator = 'nova.notifications.notify_decorator'
 
-monkey_patch_opts = [
-    cfg.BoolOpt('monkey_patch',
-                default=False,
-                help='Whether to apply monkey patching'),
-    cfg.ListOpt('monkey_patch_modules',
-                default=[
-                  'nova.compute.api:%s' % (notify_decorator)
-                  ],
-                help='List of modules/decorators to monkey patch'),
-]
-utils_opts = [
-    cfg.IntOpt('password_length',
-               default=12,
-               help='Length of generated instance admin passwords'),
-    cfg.StrOpt('instance_usage_audit_period',
-               default='month',
-               help='Time period to generate instance usages for.  '
-                    'Time period must be hour, day, month or year'),
-    cfg.BoolOpt('use_rootwrap_daemon', default=False,
-                help="Start and use a daemon that can run the commands that "
-                     "need to be run with root privileges. This option is "
-                     "usually enabled on nodes that run nova compute "
-                     "processes"),
-    cfg.StrOpt('rootwrap_config',
-               default="/etc/nova/rootwrap.conf",
-               help='Path to the rootwrap configuration file to use for '
-                    'running commands as root'),
-    cfg.StrOpt('tempdir',
-               help='Explicitly specify the temporary working directory'),
-]
-
-workarounds_opts = [
-    cfg.BoolOpt('disable_rootwrap',
-                default=False,
-                help='This option allows a fallback to sudo for performance '
-                     'reasons. For example see '
-                     'https://bugs.launchpad.net/nova/+bug/1415106'),
-    cfg.BoolOpt('disable_libvirt_livesnapshot',
-                default=True,
-                help='When using libvirt 1.2.2 live snapshots fail '
-                     'intermittently under load.  This config option provides '
-                     'a mechanism to enable live snapshot while this is '
-                     'resolved.  See '
-                     'https://bugs.launchpad.net/nova/+bug/1334398'),
-    cfg.BoolOpt('destroy_after_evacuate',
-                default=True,
-                deprecated_for_removal=True,
-                help='DEPRECATED: Whether to destroy '
-                     'instances on startup when we suspect '
-                     'they have previously been evacuated. This can result in '
-                      'data loss if undesired. See '
-                      'https://launchpad.net/bugs/1419785'),
-    cfg.BoolOpt('handle_virt_lifecycle_events',
-                default=True,
-                help="Whether or not to handle events raised from the compute "
-                     "driver's 'emit_event' method. These are lifecycle "
-                     "events raised from compute drivers that implement the "
-                     "method. An example of a lifecycle event is an instance "
-                     "starting or stopping. If the instance is going through "
-                     "task state changes due to an API operation, like "
-                     "resize, the events are ignored. However, this is an "
-                     "advanced feature which allows the hypervisor to signal "
-                     "to the compute service that an unexpected state change "
-                     "has occurred in an instance and the instance can be "
-                     "shutdown automatically - which can inherently race in "
-                     "reboot operations or when the compute service or host "
-                     "is rebooted, either planned or due to an unexpected "
-                     "outage. Care should be taken when using this and "
-                     "sync_power_state_interval is negative since then if any "
-                     "instances are out of sync between the hypervisor and "
-                     "the Nova database they will have to be synchronized "
-                     "manually. See https://bugs.launchpad.net/bugs/1444630"),
-    ]
-""" The workarounds_opts group is for very specific reasons.
-
-If you're:
-
- - Working around an issue in a system tool (e.g. libvirt or qemu) where the
-   fix is in flight/discussed in that community.
- - The tool can be/is fixed in some distributions and rather than patch the
-   code those distributions can trivially set a config option to get the
-   "correct" behavior.
-
-Then this is a good place for your workaround.
-
-.. warning::
-
-  Please use with care! Document the BugID that your workaround is paired with.
-"""
-
-CONF = cfg.CONF
-CONF.register_opts(monkey_patch_opts)
-CONF.register_opts(utils_opts)
-CONF.register_opts(workarounds_opts, group='workarounds')
+CONF = nova.conf.CONF
 
 LOG = logging.getLogger(__name__)
 
@@ -1473,3 +1381,65 @@ def isotime(at=None):
 
 def strtime(at):
     return at.strftime("%Y-%m-%dT%H:%M:%S.%f")
+
+
+def print_dict(dct, dict_property="Property", wrap=0, dict_value='Value'):
+    """Print a `dict` as a table of two columns.
+
+    :param dct: `dict` to print
+    :param dict_property: name of the first column
+    :param wrap: wrapping for the second column
+    :param dict_value: header label for the value (second) column
+    """
+    pt = prettytable.PrettyTable([dict_property, dict_value])
+    pt.align = 'l'
+    for k, v in sorted(dct.items()):
+        # convert dict to str to check length
+        if isinstance(v, dict):
+            v = six.text_type(v)
+        if wrap > 0:
+            v = textwrap.fill(six.text_type(v), wrap)
+        # if value has a newline, add in multiple rows
+        # e.g. fault with stacktrace
+        if v and isinstance(v, six.string_types) and r'\n' in v:
+            lines = v.strip().split(r'\n')
+            col1 = k
+            for line in lines:
+                pt.add_row([col1, line])
+                col1 = ''
+        else:
+            pt.add_row([k, v])
+
+    if six.PY2:
+        print(encodeutils.safe_encode(pt.get_string()))
+    else:
+        print(encodeutils.safe_encode(pt.get_string()).decode())
+
+
+def validate_args(fn, *args, **kwargs):
+    """Check that the supplied args are sufficient for calling a function.
+
+    >>> validate_args(lambda a: None)
+    Traceback (most recent call last):
+        ...
+    MissingArgs: Missing argument(s): a
+    >>> validate_args(lambda a, b, c, d: None, 0, c=1)
+    Traceback (most recent call last):
+        ...
+    MissingArgs: Missing argument(s): b, d
+
+    :param fn: the function to check
+    :param arg: the positional arguments supplied
+    :param kwargs: the keyword arguments supplied
+    """
+    argspec = inspect.getargspec(fn)
+
+    num_defaults = len(argspec.defaults or [])
+    required_args = argspec.args[:len(argspec.args) - num_defaults]
+
+    if six.get_method_self(fn) is not None:
+        required_args.pop(0)
+
+    missing = [arg for arg in required_args if arg not in kwargs]
+    missing = missing[len(args):]
+    return missing

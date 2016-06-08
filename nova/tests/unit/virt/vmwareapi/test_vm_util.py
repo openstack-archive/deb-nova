@@ -215,6 +215,13 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual("ns0:ParaVirtualSCSIController",
                          config_spec.device.obj_name)
 
+    def test_create_controller_spec_with_specfic_bus_number(self):
+        # Test controller spec with specifc bus number rather default 0
+        config_spec = vm_util.create_controller_spec(fake.FakeFactory(), -101,
+                          adapter_type=constants.ADAPTER_TYPE_LSILOGICSAS,
+                          bus_number=1)
+        self.assertEqual(1, config_spec.device.busNumber)
+
     def _vmdk_path_and_adapter_type_devices(self, filename, parent=None):
         # Test the adapter_type returned for a lsiLogic sas controller
         controller_key = 1000
@@ -333,6 +340,27 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual([1], taken[201])
         self.assertEqual([7], taken[1000])
 
+    def test_get_bus_number_for_scsi_controller(self):
+        devices = [fake.VirtualLsiLogicController(1000, scsiCtlrUnitNumber=7,
+                                                  busNumber=0),
+                   fake.VirtualLsiLogicController(1002, scsiCtlrUnitNumber=7,
+                                                  busNumber=2)]
+        bus_number = vm_util._get_bus_number_for_scsi_controller(devices)
+        self.assertEqual(1, bus_number)
+
+    def test_get_bus_number_for_scsi_controller_buses_used_up(self):
+        devices = [fake.VirtualLsiLogicController(1000, scsiCtlrUnitNumber=7,
+                                                  busNumber=0),
+                   fake.VirtualLsiLogicController(1001, scsiCtlrUnitNumber=7,
+                                                  busNumber=1),
+                   fake.VirtualLsiLogicController(1002, scsiCtlrUnitNumber=7,
+                                                  busNumber=2),
+                   fake.VirtualLsiLogicController(1003, scsiCtlrUnitNumber=7,
+                                                  busNumber=3)]
+        self.assertRaises(vexc.VMwareDriverException,
+                          vm_util._get_bus_number_for_scsi_controller,
+                          devices)
+
     def test_allocate_controller_key_and_unit_number_ide_default(self):
         # Test that default IDE controllers are used when there is a free slot
         # on them
@@ -386,6 +414,23 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         self.assertEqual(1000, controller_key)
         self.assertEqual(8, unit_number)
         self.assertIsNone(controller_spec)
+
+    def test_allocate_controller_key_and_unit_number_scsi_new_controller(self):
+        # Test that we allocate on existing SCSI controller if there is a free
+        # slot on it
+        devices = [fake.VirtualLsiLogicController(1000, scsiCtlrUnitNumber=15)]
+        for unit_number in range(15):
+            disk = fake.VirtualDisk(1000, unit_number)
+            devices.append(disk)
+        factory = fake.FakeFactory()
+        (controller_key, unit_number,
+         controller_spec) = vm_util.allocate_controller_key_and_unit_number(
+                                                factory,
+                                                devices,
+                                                constants.DEFAULT_ADAPTER_TYPE)
+        self.assertEqual(-101, controller_key)
+        self.assertEqual(0, unit_number)
+        self.assertEqual(1, controller_spec.device.busNumber)
 
     def test_get_vnc_config_spec(self):
         fake_factory = fake.FakeFactory()
@@ -1143,22 +1188,15 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         expected.deviceChange.append(device_change)
         self.assertEqual(expected, result)
 
-    def test_get_create_vif_spec(self):
-        vif_info = {'network_name': 'br100',
-            'mac_address': '00:00:00:ca:fe:01',
-            'network_ref': {'type': 'DistributedVirtualPortgroup',
-                            'dvsw': 'fake-network-id',
-                            'dvpg': 'fake-group'},
-            'iface_id': 7,
-            'vif_model': 'VirtualE1000'}
-        fake_factory = fake.FakeFactory()
+    def _get_create_vif_spec(self, fake_factory, vif_info):
         limits = vm_util.Limits()
         limits.limit = 10
         limits.reservation = 20
         limits.shares_level = 'custom'
         limits.shares_share = 40
-        result = vm_util._create_vif_spec(
-                fake_factory, vif_info, limits)
+        return vm_util._create_vif_spec(fake_factory, vif_info, limits)
+
+    def _construct_vif_spec(self, fake_factory, vif_info):
         port = 'ns0:DistributedVirtualSwitchPortConnection'
         backing = 'ns0:VirtualEthernetCardDistributedVirtualPortBackingInfo'
 
@@ -1175,6 +1213,9 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         device.backing.port = fake_factory.create(port)
         device.backing.port.portgroupKey = vif_info['network_ref']['dvpg']
         device.backing.port.switchUuid = vif_info['network_ref']['dvsw']
+        if vif_info['network_ref'].get('dvs_port_key'):
+            device.backing.port.portKey = (
+                vif_info['network_ref']['dvs_port_key'])
 
         device.resourceAllocation = fake_factory.create(
             'ns0:VirtualEthernetCardResourceAllocation')
@@ -1191,6 +1232,33 @@ class VMwareVMUtilTestCase(test.NoDBTestCase):
         connectable.startConnected = True
         device.connectable = connectable
         device_change.device = device
+        return device_change
+
+    def test_get_create_vif_spec(self):
+        vif_info = {'network_name': 'br100',
+            'mac_address': '00:00:00:ca:fe:01',
+            'network_ref': {'type': 'DistributedVirtualPortgroup',
+                            'dvsw': 'fake-network-id',
+                            'dvpg': 'fake-group'},
+            'iface_id': 7,
+            'vif_model': 'VirtualE1000'}
+        fake_factory = fake.FakeFactory()
+        result = self._get_create_vif_spec(fake_factory, vif_info)
+        device_change = self._construct_vif_spec(fake_factory, vif_info)
+        self.assertEqual(device_change, result)
+
+    def test_get_create_vif_spec_dvs_port_key(self):
+        vif_info = {'network_name': 'br100',
+            'mac_address': '00:00:00:ca:fe:01',
+            'network_ref': {'type': 'DistributedVirtualPortgroup',
+                            'dvsw': 'fake-network-id',
+                            'dvpg': 'fake-group',
+                            'dvs_port_key': 'fake-key'},
+            'iface_id': 7,
+            'vif_model': 'VirtualE1000'}
+        fake_factory = fake.FakeFactory()
+        result = self._get_create_vif_spec(fake_factory, vif_info)
+        device_change = self._construct_vif_spec(fake_factory, vif_info)
         self.assertEqual(device_change, result)
 
     def test_get_network_detach_config_spec(self):

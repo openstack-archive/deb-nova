@@ -25,10 +25,8 @@ import inspect
 import sys
 import uuid
 
-from oslo_config import cfg
 from oslo_db import api as oslo_db_api
 from oslo_db import exception as db_exc
-from oslo_db import options as oslo_db_options
 from oslo_db.sqlalchemy import enginefacade
 from oslo_db.sqlalchemy import update_match
 from oslo_db.sqlalchemy import utils as sqlalchemyutils
@@ -61,6 +59,7 @@ from sqlalchemy.sql import true
 from nova import block_device
 from nova.compute import task_states
 from nova.compute import vm_states
+import nova.conf
 import nova.context
 from nova.db.sqlalchemy import models
 from nova import exception
@@ -69,67 +68,9 @@ from nova.objects import fields
 from nova import quota
 from nova import safe_utils
 
-db_opts = [
-    cfg.StrOpt('osapi_compute_unique_server_name_scope',
-               default='',
-               help='When set, compute API will consider duplicate hostnames '
-                    'invalid within the specified scope, regardless of case. '
-                    'Should be empty, "project" or "global".'),
-]
 
-api_db_opts = [
-    cfg.StrOpt('connection',
-               help='The SQLAlchemy connection string to use to connect to '
-                    'the Nova API database.',
-               secret=True),
-    cfg.BoolOpt('sqlite_synchronous',
-                default=True,
-                help='If True, SQLite uses synchronous mode.'),
-    cfg.StrOpt('slave_connection',
-               secret=True,
-               help='The SQLAlchemy connection string to use to connect to the'
-                    ' slave database.'),
-    cfg.StrOpt('mysql_sql_mode',
-               default='TRADITIONAL',
-               help='The SQL mode to be used for MySQL sessions. '
-                    'This option, including the default, overrides any '
-                    'server-set SQL mode. To use whatever SQL mode '
-                    'is set by the server configuration, '
-                    'set this to no value. Example: mysql_sql_mode='),
-    cfg.IntOpt('idle_timeout',
-               default=3600,
-               help='Timeout before idle SQL connections are reaped.'),
-    cfg.IntOpt('max_pool_size',
-               help='Maximum number of SQL connections to keep open in a '
-                    'pool.'),
-    cfg.IntOpt('max_retries',
-               default=10,
-               help='Maximum number of database connection retries '
-                    'during startup. Set to -1 to specify an infinite '
-                    'retry count.'),
-    cfg.IntOpt('retry_interval',
-               default=10,
-               help='Interval between retries of opening a SQL connection.'),
-    cfg.IntOpt('max_overflow',
-               help='If set, use this value for max_overflow with '
-                    'SQLAlchemy.'),
-    cfg.IntOpt('connection_debug',
-               default=0,
-               help='Verbosity of SQL debugging information: 0=None, '
-                    '100=Everything.'),
-    cfg.BoolOpt('connection_trace',
-                default=False,
-                help='Add Python stack traces to SQL as comment strings.'),
-    cfg.IntOpt('pool_timeout',
-               help='If set, use this value for pool_timeout with '
-                    'SQLAlchemy.'),
-]
+CONF = nova.conf.CONF
 
-CONF = cfg.CONF
-CONF.register_opts(db_opts)
-CONF.register_opts(oslo_db_options.database_opts, 'database')
-CONF.register_opts(api_db_opts, group='api_database')
-CONF.import_opt('until_refresh', 'nova.quota')
 
 LOG = logging.getLogger(__name__)
 
@@ -508,13 +449,14 @@ def service_get(context, service_id):
 
 
 @pick_context_manager_reader_allow_async
-def service_get_minimum_version(context, binary):
-    min_version = context.session.query(
+def service_get_minimum_version(context, binaries):
+    min_versions = context.session.query(
+        models.Service.binary,
         func.min(models.Service.version)).\
-                         filter(models.Service.binary == binary).\
+                         filter(models.Service.binary.in_(binaries)).\
                          filter(models.Service.forced_down == false()).\
-                         scalar()
-    return min_version
+                         group_by(models.Service.binary)
+    return dict(min_versions)
 
 
 @pick_context_manager_reader
@@ -635,12 +577,12 @@ def _compute_node_select(context, filters=None):
     #  - inv_vcpus, inv_vcpus_used, inv_cpu_allocation_ratio
     #  - inv_local_gb, inv_local_gb_used, inv_disk_allocation_ratio
     # These resource capacity/usage fields store the total and used values
-    # for those three resource classes that are currently store in similar
+    # for those three resource classes that are currently stored in similar
     # fields in the compute_nodes table (e.g. memory_mb and memory_mb_used)
     # The code that runs the online data migrations will be able to tell if
     # the compute node has had its inventory information moved to the
     # inventories table by checking for a non-None field value for the
-    # inv_memory_mb, inv_vcpus, and inv_disk_gb fields.
+    # inv_memory_mb, inv_vcpus, and inv_local_gb fields.
     #
     # The below SQLAlchemy code below produces the following SQL statement
     # exactly:
@@ -781,7 +723,11 @@ def _compute_node_select(context, filters=None):
     if "hypervisor_hostname" in filters:
         hyp_hostname = filters["hypervisor_hostname"]
         select = select.where(cn_tbl.c.hypervisor_hostname == hyp_hostname)
+    return select
 
+
+def _compute_node_fetchall(context, filters=None):
+    select = _compute_node_select(context, filters)
     engine = get_engine(context)
     conn = engine.connect()
 
@@ -795,7 +741,7 @@ def _compute_node_select(context, filters=None):
 
 @pick_context_manager_reader
 def compute_node_get(context, compute_id):
-    results = _compute_node_select(context, {"compute_id": compute_id})
+    results = _compute_node_fetchall(context, {"compute_id": compute_id})
     if not results:
         raise exception.ComputeHostNotFound(host=compute_id)
     return results[0]
@@ -815,7 +761,7 @@ def compute_node_get_model(context, compute_id):
 
 @pick_context_manager_reader
 def compute_nodes_get_by_service_id(context, service_id):
-    results = _compute_node_select(context, {"service_id": service_id})
+    results = _compute_node_fetchall(context, {"service_id": service_id})
     if not results:
         raise exception.ServiceNotFound(service_id=service_id)
     return results
@@ -823,7 +769,7 @@ def compute_nodes_get_by_service_id(context, service_id):
 
 @pick_context_manager_reader
 def compute_node_get_by_host_and_nodename(context, host, nodename):
-    results = _compute_node_select(context,
+    results = _compute_node_fetchall(context,
             {"host": host, "hypervisor_hostname": nodename})
     if not results:
         raise exception.ComputeHostNotFound(host=host)
@@ -832,7 +778,7 @@ def compute_node_get_by_host_and_nodename(context, host, nodename):
 
 @pick_context_manager_reader_allow_async
 def compute_node_get_all_by_host(context, host):
-    results = _compute_node_select(context, {"host": host})
+    results = _compute_node_fetchall(context, {"host": host})
     if not results:
         raise exception.ComputeHostNotFound(host=host)
     return results
@@ -840,7 +786,7 @@ def compute_node_get_all_by_host(context, host):
 
 @pick_context_manager_reader
 def compute_node_get_all(context):
-    return _compute_node_select(context)
+    return _compute_node_fetchall(context)
 
 
 @pick_context_manager_reader
@@ -895,38 +841,115 @@ def compute_node_delete(context, compute_id):
 @pick_context_manager_reader
 def compute_node_statistics(context):
     """Compute statistics over all compute nodes."""
+    engine = get_engine(context)
+    services_tbl = models.Service.__table__
+
+    inner_sel = sa.alias(_compute_node_select(context), name='inner_sel')
 
     # TODO(sbauza): Remove the service_id filter in a later release
     # once we are sure that all compute nodes report the host field
-    _filter = or_(models.Service.host == models.ComputeNode.host,
-                  models.Service.id == models.ComputeNode.service_id)
+    j = sa.join(
+        inner_sel, services_tbl,
+        sql.and_(
+            sql.or_(
+                inner_sel.c.host == services_tbl.c.host,
+                inner_sel.c.service_id == services_tbl.c.id
+            ),
+            services_tbl.c.disabled == false(),
+            services_tbl.c.binary == 'nova-compute'
+        )
+    )
 
-    result = model_query(context,
-                         models.ComputeNode, (
-                             func.count(models.ComputeNode.id),
-                             func.sum(models.ComputeNode.vcpus),
-                             func.sum(models.ComputeNode.memory_mb),
-                             func.sum(models.ComputeNode.local_gb),
-                             func.sum(models.ComputeNode.vcpus_used),
-                             func.sum(models.ComputeNode.memory_mb_used),
-                             func.sum(models.ComputeNode.local_gb_used),
-                             func.sum(models.ComputeNode.free_ram_mb),
-                             func.sum(models.ComputeNode.free_disk_gb),
-                             func.sum(models.ComputeNode.current_workload),
-                             func.sum(models.ComputeNode.running_vms),
-                             func.sum(models.ComputeNode.disk_available_least),
-                         ), read_deleted="no").\
-                         filter(models.Service.disabled == false()).\
-                         filter(models.Service.binary == "nova-compute").\
-                         filter(_filter).\
-                         first()
+    # NOTE(jaypipes): This COALESCE() stuff is temporary while the data
+    # migration to the new resource providers inventories and allocations
+    # tables is completed.
+    agg_cols = [
+        func.count().label('count'),
+        sql.func.sum(
+            sql.func.coalesce(
+                inner_sel.c.inv_vcpus,
+                inner_sel.c.vcpus
+            )
+        ).label('vcpus'),
+        sql.func.sum(
+            sql.func.coalesce(
+                inner_sel.c.inv_memory_mb,
+                inner_sel.c.memory_mb
+            )
+        ).label('memory_mb'),
+        sql.func.sum(
+            sql.func.coalesce(
+                inner_sel.c.inv_local_gb,
+                inner_sel.c.local_gb
+            )
+        ).label('local_gb'),
+        sql.func.sum(
+            sql.func.coalesce(
+                inner_sel.c.inv_vcpus_used,
+                inner_sel.c.vcpus_used
+            )
+        ).label('vcpus_used'),
+        sql.func.sum(
+            sql.func.coalesce(
+                inner_sel.c.inv_memory_mb_used,
+                inner_sel.c.memory_mb_used
+            )
+        ).label('memory_mb_used'),
+        sql.func.sum(
+            sql.func.coalesce(
+                inner_sel.c.inv_local_gb_used,
+                inner_sel.c.local_gb_used
+            )
+        ).label('local_gb_used'),
+        # NOTE(jaypipes): This mess cannot be removed until the
+        # resource-providers-allocations blueprint is completed and all of the
+        # data migrations for BOTH inventory and allocations fields have been
+        # completed.
+        sql.func.sum(
+            # NOTE(jaypipes): free_ram_mb and free_disk_gb do NOT take
+            # allocation ratios for those resources into account but they DO
+            # take reserved memory and disk configuration option amounts into
+            # account. Awesomesauce.
+            sql.func.coalesce(
+                (inner_sel.c.inv_memory_mb - (
+                    inner_sel.c.inv_memory_mb_used +
+                    inner_sel.c.inv_memory_mb_reserved)
+                ),
+                inner_sel.c.free_ram_mb
+            )
+        ).label('free_ram_mb'),
+        sql.func.sum(
+            sql.func.coalesce(
+                (inner_sel.c.inv_local_gb - (
+                    inner_sel.c.inv_local_gb_used +
+                    inner_sel.c.inv_local_gb_reserved)
+                ),
+                inner_sel.c.free_disk_gb
+            )
+        ).label('free_disk_gb'),
+        sql.func.sum(
+            inner_sel.c.current_workload
+        ).label('current_workload'),
+        sql.func.sum(
+            inner_sel.c.running_vms
+        ).label('running_vms'),
+        sql.func.sum(
+            inner_sel.c.disk_available_least
+        ).label('disk_available_least'),
+    ]
+    select = sql.select(agg_cols).select_from(j)
+    conn = engine.connect()
+
+    results = conn.execute(select).fetchone()
 
     # Build a dict of the info--making no assumptions about result
     fields = ('count', 'vcpus', 'memory_mb', 'local_gb', 'vcpus_used',
               'memory_mb_used', 'local_gb_used', 'free_ram_mb', 'free_disk_gb',
               'current_workload', 'running_vms', 'disk_available_least')
-    return {field: int(result[idx] or 0)
-            for idx, field in enumerate(fields)}
+    results = {field: int(results[idx] or 0)
+               for idx, field in enumerate(fields)}
+    conn.close()
+    return results
 
 
 ###################
@@ -1949,6 +1972,12 @@ def instance_destroy(context, instance_uuid, constraint=None):
     model_query(context, models.InstanceSystemMetadata).\
             filter_by(instance_uuid=instance_uuid).\
             soft_delete()
+    model_query(context, models.InstanceGroupMember).\
+            filter_by(instance_id=instance_uuid).\
+            soft_delete()
+    model_query(context, models.BlockDeviceMapping).\
+            filter_by(instance_uuid=instance_uuid).\
+            soft_delete()
     # NOTE(snikitin): We can't use model_query here, because there is no
     # column 'deleted' in 'tags' table.
     context.session.query(models.Tag).filter_by(
@@ -2162,16 +2191,24 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
     of these tags:
 
     `tags` -- One or more strings that will be used to filter results
-            in an AND expression.
+            in an AND expression: T1 AND T2
 
     `tags-any` -- One or more strings that will be used to filter results in
-            an OR expression.
+            an OR expression: T1 OR T2
+
+    `not-tags` -- One or more strings that will be used to filter results in
+            an NOT AND expression: NOT (T1 AND T2)
+
+    `not-tags-any` -- One or more strings that will be used to filter results
+            in an NOT OR expression: NOT (T1 OR T2)
 
     Tags should be represented as list::
 
     |    filters = {
     |        'tags': [some-tag, some-another-tag],
-    |        'tags-any: [some-any-tag, some-another-any-tag]
+    |        'tags-any: [some-any-tag, some-another-any-tag],
+    |        'not-tags: [some-not-tag, some-another-not-tag],
+    |        'not-tags-any: [some-not-any-tag, some-another-not-any-tag]
     |    }
 
     """
@@ -2263,6 +2300,25 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
         tag_alias = aliased(models.Tag)
         query_prefix = query_prefix.join(tag_alias, models.Instance.tags)
         query_prefix = query_prefix.filter(tag_alias.tag.in_(tags))
+
+    if 'not-tags' in filters:
+        tags = filters.pop('not-tags')
+        first_tag = tags.pop(0)
+        subq = query_prefix.session.query(models.Tag.resource_id)
+        subq = subq.join(models.Instance.tags)
+        subq = subq.filter(models.Tag.tag == first_tag)
+
+        for tag in tags:
+            tag_alias = aliased(models.Tag)
+            subq = subq.join(tag_alias, models.Instance.tags)
+            subq = subq.filter(tag_alias.tag == tag)
+
+        query_prefix = query_prefix.filter(~models.Instance.uuid.in_(subq))
+
+    if 'not-tags-any' in filters:
+        tags = filters.pop('not-tags-any')
+        query_prefix = query_prefix.filter(~models.Instance.tags.any(
+            models.Tag.tag.in_(tags)))
 
     if not context.is_admin:
         # If we're not admin context, add appropriate filter..
@@ -2893,6 +2949,7 @@ def instance_info_cache_get(context, instance_uuid):
 
 
 @require_context
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 @pick_context_manager_writer
 def instance_info_cache_update(context, instance_uuid, values):
     """Update an instance info cache record in the table.
@@ -3416,6 +3473,10 @@ def quota_get_all(context, project_id):
     return result
 
 
+def quota_get_per_project_resources():
+    return PER_PROJECT_QUOTAS
+
+
 @main_context_manager.writer
 def quota_create(context, project_id, resource, limit, user_id=None):
     per_user = user_id and resource not in PER_PROJECT_QUOTAS
@@ -3735,6 +3796,53 @@ def _refresh_quota_usages(quota_usage, until_refresh, in_use):
     quota_usage.until_refresh = until_refresh or None
 
 
+def _refresh_quota_usages_if_needed(user_usages, context, resources, keys,
+                                    project_id, user_id, until_refresh,
+                                    max_age, force_refresh=False):
+    elevated = context.elevated()
+
+    # Handle usage refresh
+    work = set(keys)
+    while work:
+        resource = work.pop()
+
+        # Do we need to refresh the usage?
+        created = _create_quota_usage_if_missing(user_usages, resource,
+                                                 until_refresh, project_id,
+                                                 user_id, context.session)
+
+        refresh = force_refresh
+        if not refresh:
+            refresh = created or \
+                      _is_quota_refresh_needed(user_usages[resource], max_age)
+
+        # OK, refresh the usage
+        if refresh:
+            # Grab the sync routine
+            sync = QUOTA_SYNC_FUNCTIONS[resources[resource].sync]
+
+            updates = sync(elevated, project_id, user_id)
+            for res, in_use in updates.items():
+                # Make sure we have a destination for the usage!
+                _create_quota_usage_if_missing(user_usages, res,
+                                               until_refresh, project_id,
+                                               user_id, context.session)
+                _refresh_quota_usages(user_usages[res], until_refresh,
+                                      in_use)
+
+                # Because more than one resource may be refreshed
+                # by the call to the sync routine, and we don't
+                # want to double-sync, we make sure all refreshed
+                # resources are dropped from the work set.
+                work.discard(res)
+
+                # NOTE(Vek): We make the assumption that the sync
+                #            routine actually refreshes the
+                #            resources that it is the sync routine
+                #            for.  We don't check, because this is
+                #            a best-effort mechanism.
+
+
 def _calculate_overquota(project_quotas, user_quotas, deltas,
                          project_usages, user_usages):
     """Checks if any resources will go over quota based on the request.
@@ -3779,11 +3887,8 @@ def _calculate_overquota(project_quotas, user_quotas, deltas,
 @require_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
 @main_context_manager.writer
-def quota_reserve(context, resources, project_quotas, user_quotas, deltas,
-                  expire, until_refresh, max_age, project_id=None,
-                  user_id=None):
-    elevated = context.elevated()
-
+def quota_usage_refresh(context, resources, keys, until_refresh, max_age,
+                        project_id=None, user_id=None):
     if project_id is None:
         project_id = context.project_id
     if user_id is None:
@@ -3793,43 +3898,30 @@ def quota_reserve(context, resources, project_quotas, user_quotas, deltas,
     project_usages, user_usages = _get_project_user_quota_usages(
             context, project_id, user_id)
 
-    # Handle usage refresh
-    work = set(deltas.keys())
-    while work:
-        resource = work.pop()
+    # Force refresh of the usages
+    _refresh_quota_usages_if_needed(user_usages, context, resources, keys,
+                                    project_id, user_id, until_refresh,
+                                    max_age, force_refresh=True)
 
-        # Do we need to refresh the usage?
-        created = _create_quota_usage_if_missing(user_usages, resource,
-                                                 until_refresh, project_id,
-                                                 user_id, context.session)
-        refresh = created or _is_quota_refresh_needed(
-                                    user_usages[resource], max_age)
 
-        # OK, refresh the usage
-        if refresh:
-            # Grab the sync routine
-            sync = QUOTA_SYNC_FUNCTIONS[resources[resource].sync]
+@require_context
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+@main_context_manager.writer
+def quota_reserve(context, resources, project_quotas, user_quotas, deltas,
+                  expire, until_refresh, max_age, project_id=None,
+                  user_id=None):
+    if project_id is None:
+        project_id = context.project_id
+    if user_id is None:
+        user_id = context.user_id
 
-            updates = sync(elevated, project_id, user_id)
-            for res, in_use in updates.items():
-                # Make sure we have a destination for the usage!
-                _create_quota_usage_if_missing(user_usages, res,
-                                               until_refresh, project_id,
-                                               user_id, context.session)
-                _refresh_quota_usages(user_usages[res], until_refresh,
-                                      in_use)
+    # Get the current usages
+    project_usages, user_usages = _get_project_user_quota_usages(
+            context, project_id, user_id)
 
-                # Because more than one resource may be refreshed
-                # by the call to the sync routine, and we don't
-                # want to double-sync, we make sure all refreshed
-                # resources are dropped from the work set.
-                work.discard(res)
-
-                # NOTE(Vek): We make the assumption that the sync
-                #            routine actually refreshes the
-                #            resources that it is the sync routine
-                #            for.  We don't check, because this is
-                #            a best-effort mechanism.
+    _refresh_quota_usages_if_needed(user_usages, context, resources,
+                                    deltas.keys(), project_id, user_id,
+                                    until_refresh, max_age)
 
     # Check for deltas that would go negative
     unders = [res for res, delta in deltas.items()
@@ -4765,7 +4857,7 @@ def migration_get_in_progress_by_host_and_node(context, host, node):
                             models.Migration.dest_node == node))).\
             filter(~models.Migration.status.in_(['accepted', 'confirmed',
                                                  'reverted', 'error',
-                                                 'failed'])).\
+                                                 'failed', 'completed'])).\
             options(joinedload_all('instance.system_metadata')).\
             all()
 
@@ -4792,7 +4884,7 @@ def migration_get_all_by_filters(context, filters):
     query = model_query(context, models.Migration)
     if "status" in filters:
         status = filters["status"]
-        status = [status] if isinstance(status, str) else status
+        status = [status] if isinstance(status, six.string_types) else status
         query = query.filter(models.Migration.status.in_(status))
     if "host" in filters:
         host = filters["host"]
@@ -4807,6 +4899,9 @@ def migration_get_all_by_filters(context, filters):
     if "hidden" in filters:
         hidden = filters["hidden"]
         query = query.filter(models.Migration.hidden == hidden)
+    if "instance_uuid" in filters:
+        uuid = filters["instance_uuid"]
+        query = query.filter(models.Migration.instance_uuid == uuid)
     return query.all()
 
 
@@ -5109,13 +5204,13 @@ def flavor_get_by_flavor_id(context, flavor_id, read_deleted):
 
 
 @main_context_manager.writer
-def flavor_destroy(context, name):
+def flavor_destroy(context, flavor_id):
     """Marks specific flavor as deleted."""
     ref = model_query(context, models.InstanceTypes, read_deleted="no").\
-                filter_by(name=name).\
+                filter_by(flavorid=flavor_id).\
                 first()
     if not ref:
-        raise exception.FlavorNotFoundByName(flavor_name=name)
+        raise exception.FlavorNotFound(flavor_id=flavor_id)
 
     ref.soft_delete(context.session)
     model_query(context, models.InstanceTypeExtraSpecs, read_deleted="no").\
@@ -6320,6 +6415,35 @@ def _archive_deleted_rows_for_table(tablename, max_rows):
     # database's limit of maximum parameter in one SQL statement.
     deleted_column = table.c.deleted
     columns = [c.name for c in table.c]
+
+    # NOTE(clecomte): Tables instance_actions and instances_actions_events
+    # have to be manage differently so we soft-delete them here to let
+    # the archive work the same for all tables
+    if tablename == "instance_actions":
+        instances = models.BASE.metadata.tables["instances"]
+        deleted_instances = sql.select([instances.c.uuid]).\
+            where(instances.c.deleted != instances.c.deleted.default.arg)
+        update_statement = table.update().values(deleted=table.c.id).\
+            where(table.c.instance_uuid.in_(deleted_instances))
+
+        conn.execute(update_statement)
+
+    elif tablename == "instance_actions_events":
+        # NOTE(clecomte): we have to grab all the relation from
+        # instances because instance_actions_events rely on
+        # action_id and not uuid
+        instances = models.BASE.metadata.tables["instances"]
+        instance_actions = models.BASE.metadata.tables["instance_actions"]
+        deleted_instances = sql.select([instances.c.uuid]).\
+            where(instances.c.deleted != instances.c.deleted.default.arg)
+        deleted_actions = sql.select([instance_actions.c.id]).\
+            where(instance_actions.c.instance_uuid.in_(deleted_instances))
+
+        update_statement = table.update().values(deleted=table.c.id).\
+            where(table.c.action_id.in_(deleted_actions))
+
+        conn.execute(update_statement)
+
     insert = shadow_table.insert(inline=True).\
         from_select(columns,
                     sql.select([table],
@@ -6428,24 +6552,6 @@ def aggregate_uuids_online_data_migration(context, max_count):
                                                   aggregate.Aggregate(),
                                                   db_agg)
         if 'uuid' in agg:
-            count_hit += 1
-    return count_all, count_hit
-
-
-@main_context_manager.writer
-def computenode_uuids_online_data_migration(context, max_count):
-    from nova.objects import compute_node
-
-    count_all = 0
-    count_hit = 0
-
-    results = model_query(context, models.ComputeNode).filter_by(
-        uuid=None).limit(max_count)
-    for db_cn in results:
-        count_all += 1
-        cn = compute_node.ComputeNode._from_db_object(
-            context, compute_node.ComputeNode(), db_cn)
-        if 'uuid' in cn:
             count_hit += 1
     return count_all, count_hit
 

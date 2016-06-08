@@ -37,6 +37,7 @@ VIF_TYPE_BRIDGE = 'bridge'
 VIF_TYPE_802_QBG = '802.1qbg'
 VIF_TYPE_802_QBH = '802.1qbh'
 VIF_TYPE_HW_VEB = 'hw_veb'
+VIF_TYPE_HOSTDEV = 'hostdev_physical'
 VIF_TYPE_IB_HOSTDEV = 'ib_hostdev'
 VIF_TYPE_MIDONET = 'midonet'
 VIF_TYPE_VHOSTUSER = 'vhostuser'
@@ -92,9 +93,11 @@ VIF_DETAILS_TAP_MAC_ADDRESS = 'mac_address'
 VNIC_TYPE_NORMAL = 'normal'
 VNIC_TYPE_DIRECT = 'direct'
 VNIC_TYPE_MACVTAP = 'macvtap'
+VNIC_TYPE_DIRECT_PHYSICAL = 'direct-physical'
 VNIC_TYPE_BAREMETAL = 'baremetal'
 
-VNIC_TYPES_SRIOV = (VNIC_TYPE_DIRECT, VNIC_TYPE_MACVTAP)
+VNIC_TYPES_SRIOV = (VNIC_TYPE_DIRECT, VNIC_TYPE_MACVTAP,
+                    VNIC_TYPE_DIRECT_PHYSICAL)
 
 # Constants for the 'vif_model' values
 VIF_MODEL_VIRTIO = 'virtio'

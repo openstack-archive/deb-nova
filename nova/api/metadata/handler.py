@@ -19,7 +19,6 @@ import hashlib
 import hmac
 import os
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import secretutils as secutils
 import six
@@ -28,6 +27,7 @@ import webob.exc
 
 from nova.api.metadata import base
 from nova import cache_utils
+import nova.conf
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _
@@ -36,35 +36,7 @@ from nova.i18n import _LW
 from nova.network.neutronv2 import api as neutronapi
 from nova import wsgi
 
-CONF = cfg.CONF
-CONF.import_opt('use_forwarded_for', 'nova.api.auth')
-
-metadata_proxy_opts = [
-    cfg.BoolOpt(
-        'service_metadata_proxy',
-        default=False,
-        help='Set flag to indicate Neutron will proxy metadata requests and '
-             'resolve instance ids.'),
-     cfg.StrOpt(
-         'metadata_proxy_shared_secret',
-         default='', secret=True,
-         help='Shared secret to validate proxies Neutron metadata requests'),
-]
-
-metadata_opts = [
-    cfg.IntOpt('metadata_cache_expiration',
-               default=15,
-               help='Time in seconds to cache metadata; 0 to disable '
-                    'metadata caching entirely (not recommended). Increasing'
-                    'this should improve response times of the metadata API '
-                    'when under heavy load. Higher values may increase memory'
-                    'usage and result in longer times for host metadata '
-                    'changes to take effect.')
-]
-
-CONF.register_opts(metadata_proxy_opts, 'neutron')
-CONF.register_opts(metadata_opts)
-
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 

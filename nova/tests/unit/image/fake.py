@@ -20,14 +20,14 @@ import copy
 import datetime
 import uuid
 
-from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.compute import arch
+import nova.conf
 from nova import exception
+from nova.tests import fixtures as nova_fixtures
 
-CONF = cfg.CONF
-CONF.import_opt('null_kernel', 'nova.compute.api')
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 AUTO_DISK_CONFIG_ENABLED_IMAGE_UUID = '70a599e0-31e7-49b7-b260-868f441e862b'
 
@@ -259,4 +259,6 @@ def stub_out_image_service(test):
                   lambda x, y: (image_service, y))
     test.stub_out('nova.image.glance.get_default_image_service',
                   lambda: image_service)
+    test.useFixture(nova_fixtures.ConfPatcher(
+        group="glance", api_servers=['http://localhost:9292']))
     return image_service

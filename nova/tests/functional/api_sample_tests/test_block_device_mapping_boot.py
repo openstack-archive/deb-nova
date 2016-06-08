@@ -13,14 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
-
+import nova.conf
 from nova.tests.functional.api_sample_tests import test_servers
 from nova.tests.unit.api.openstack import fakes
 
-CONF = cfg.CONF
-CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.legacy_v2.extensions')
+CONF = nova.conf.CONF
 
 
 class BlockDeviceMappingV1BootJsonTest(test_servers.ServersSampleBase):
@@ -39,7 +36,4 @@ class BlockDeviceMappingV2BootJsonTest(BlockDeviceMappingV1BootJsonTest):
     def _get_flags(self):
         f = super(BlockDeviceMappingV2BootJsonTest, self)._get_flags()
         f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.legacy_v2.contrib.'
-            'block_device_mapping_v2_boot.Block_device_mapping_v2_boot')
         return f

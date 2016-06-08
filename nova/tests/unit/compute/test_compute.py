@@ -99,9 +99,6 @@ from nova.volume import cinder
 QUOTAS = quota.QUOTAS
 LOG = logging.getLogger(__name__)
 CONF = nova.conf.CONF
-CONF.import_opt('compute_manager', 'nova.service')
-CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('live_migration_retry_count', 'nova.compute.manager')
 
 
 FAKE_IMAGE_REF = uuids.image_ref
@@ -227,8 +224,8 @@ class BaseTestCase(test.TestCase):
                 return {'id': id,
                         'name': 'fake_name',
                         'status': 'active',
-                        'properties': {'kernel_id': 'fake_kernel_id',
-                                       'ramdisk_id': 'fake_ramdisk_id',
+                        'properties': {'kernel_id': uuids.kernel_id,
+                                       'ramdisk_id': uuids.ramdisk_id,
                                        'something_else': 'meow'}}
             else:
                 raise exception.ImageNotFound(image_id=id)
@@ -1445,7 +1442,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                                             filter_properties,
                                             block_device_mapping=[])
-        self.assertEqual(999999999999, self.rt.compute_node['memory_mb_used'])
+        self.assertEqual(999999999999, self.rt.compute_node.memory_mb_used)
 
     def test_create_instance_unlimited_disk(self):
         self.flags(reserved_host_disk_mb=0, reserved_host_memory_mb=0)
@@ -1465,22 +1462,22 @@ class ComputeTestCase(BaseTestCase):
         instance = self._create_fake_instance_obj(params)
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                 {}, block_device_mapping=[], limits=limits)
-        self.assertEqual(1024, self.rt.compute_node['memory_mb_used'])
-        self.assertEqual(256, self.rt.compute_node['local_gb_used'])
+        self.assertEqual(1024, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(256, self.rt.compute_node.local_gb_used)
 
         params = {"memory_mb": 2048, "root_gb": 256, "ephemeral_gb": 256}
         instance = self._create_fake_instance_obj(params)
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                 {}, block_device_mapping=[], limits=limits)
-        self.assertEqual(3072, self.rt.compute_node['memory_mb_used'])
-        self.assertEqual(768, self.rt.compute_node['local_gb_used'])
+        self.assertEqual(3072, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(768, self.rt.compute_node.local_gb_used)
 
         params = {"memory_mb": 8192, "root_gb": 8192, "ephemeral_gb": 8192}
         instance = self._create_fake_instance_obj(params)
         self.compute.build_and_run_instance(self.context, instance,
                 {}, {}, {}, block_device_mapping=[], limits=limits)
-        self.assertEqual(3072, self.rt.compute_node['memory_mb_used'])
-        self.assertEqual(768, self.rt.compute_node['local_gb_used'])
+        self.assertEqual(3072, self.rt.compute_node.memory_mb_used)
+        self.assertEqual(768, self.rt.compute_node.local_gb_used)
 
     def test_create_multiple_instance_with_neutron_port(self):
         instance_type = flavors.get_default_flavor()
@@ -1522,7 +1519,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                 filter_properties, block_device_mapping=[])
 
-        self.assertEqual(instance_mb, self.rt.compute_node['memory_mb_used'])
+        self.assertEqual(instance_mb, self.rt.compute_node.memory_mb_used)
 
     def test_create_instance_with_oversubscribed_ram_fail(self):
         """Test passing of oversubscribed ram policy from the scheduler, but
@@ -1569,7 +1566,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                 filter_properties, block_device_mapping=[])
 
-        self.assertEqual(2, self.rt.compute_node['vcpus_used'])
+        self.assertEqual(2, self.rt.compute_node.vcpus_used)
 
         # create one more instance:
         params = {"memory_mb": 10, "root_gb": 1,
@@ -1578,14 +1575,14 @@ class ComputeTestCase(BaseTestCase):
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                 filter_properties, block_device_mapping=[])
 
-        self.assertEqual(3, self.rt.compute_node['vcpus_used'])
+        self.assertEqual(3, self.rt.compute_node.vcpus_used)
 
         # delete the instance:
         instance['vm_state'] = vm_states.DELETED
         self.rt.update_usage(self.context,
                 instance=instance)
 
-        self.assertEqual(2, self.rt.compute_node['vcpus_used'])
+        self.assertEqual(2, self.rt.compute_node.vcpus_used)
 
         # now oversubscribe vcpus and fail:
         params = {"memory_mb": 10, "root_gb": 1,
@@ -1620,7 +1617,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.build_and_run_instance(self.context, instance, {}, {},
                 filter_properties, block_device_mapping=[])
 
-        self.assertEqual(instance_gb, self.rt.compute_node['local_gb_used'])
+        self.assertEqual(instance_gb, self.rt.compute_node.local_gb_used)
 
     def test_create_instance_with_oversubscribed_disk_fail(self):
         """Test passing of oversubscribed disk policy from the scheduler, but
@@ -2162,7 +2159,9 @@ class ComputeTestCase(BaseTestCase):
         fake_notifier.NOTIFICATIONS = []
         instance.task_state = task_states.RESCUING
         instance.save()
-        self.compute.rescue_instance(self.context, instance, None, True, True)
+        self.compute.rescue_instance(self.context, instance, None,
+                                     rescue_image_ref=uuids.fake_image_ref_1,
+                                     clean_shutdown=True)
 
         expected_notifications = ['compute.instance.rescue.start',
                                   'compute.instance.exists',
@@ -2284,7 +2283,7 @@ class ComputeTestCase(BaseTestCase):
     @mock.patch.object(nova.virt.fake.FakeDriver, "rescue")
     def test_rescue_with_base_image_when_image_not_specified(self,
             mock_rescue, mock_image_get):
-        image_ref = "image-ref"
+        image_ref = FAKE_IMAGE_REF
         system_meta = {"image_base_image_ref": image_ref}
         rescue_image_meta = {}
         params = {"task_state": task_states.RESCUING,
@@ -4833,7 +4832,7 @@ class ComputeTestCase(BaseTestCase):
         orig_sys_metadata = db.instance_system_metadata_get(self.context,
                 inst_ref['uuid'])
         image_ref = instance["image_ref"]
-        new_image_ref = image_ref + '-new_image_ref'
+        new_image_ref = uuids.new_image_ref
         db.instance_update(self.context, inst_ref['uuid'],
                            {'image_ref': new_image_ref})
 
@@ -5194,9 +5193,9 @@ class ComputeTestCase(BaseTestCase):
 
         # Confirm the instance size before the resize starts
         instance.refresh()
-        instance_type_ref = db.flavor_get(self.context,
+        flavor = objects.Flavor.get_by_id(self.context,
                                           instance.instance_type_id)
-        self.assertEqual(instance_type_ref['flavorid'], '1')
+        self.assertEqual(flavor.flavorid, '1')
 
         instance.vm_state = old_vm_state
         instance.power_state = p_state
@@ -5235,9 +5234,9 @@ class ComputeTestCase(BaseTestCase):
                     disk_info={}, image={}, instance=instance)
 
         # Prove that the instance size is now the new size
-        instance_type_ref = db.flavor_get(self.context,
-                instance.instance_type_id)
-        self.assertEqual(instance_type_ref['flavorid'], '3')
+        flavor = objects.Flavor.get_by_id(self.context,
+                                          instance.instance_type_id)
+        self.assertEqual(flavor.flavorid, '3')
         # Prove that the NUMA topology has also been updated to that of the new
         # flavor - meaning None
         self.assertIsNone(instance.numa_topology)
@@ -5251,9 +5250,9 @@ class ComputeTestCase(BaseTestCase):
 
         instance.refresh()
 
-        instance_type_ref = db.flavor_get(self.context,
-                instance.instance_type_id)
-        self.assertEqual(instance_type_ref['flavorid'], '3')
+        flavor = objects.Flavor.get_by_id(self.context,
+                                          instance.instance_type_id)
+        self.assertEqual(flavor.flavorid, '3')
         self.assertEqual('fake-mini', migration.source_compute)
         self.assertEqual(old_vm_state, instance.vm_state)
         self.assertIsNone(instance.task_state)
@@ -5312,9 +5311,9 @@ class ComputeTestCase(BaseTestCase):
                                             block_device_mapping=[])
 
         instance.refresh()
-        instance_type_ref = db.flavor_get(self.context,
+        flavor = objects.Flavor.get_by_id(self.context,
                                           instance.instance_type_id)
-        self.assertEqual(instance_type_ref['flavorid'], '1')
+        self.assertEqual(flavor.flavorid, '1')
 
         old_vm_state = instance['vm_state']
 
@@ -5384,9 +5383,9 @@ class ComputeTestCase(BaseTestCase):
 
         self.assertIsNone(instance.task_state)
 
-        instance_type_ref = db.flavor_get(self.context,
-                instance['instance_type_id'])
-        self.assertEqual(instance_type_ref['flavorid'], '1')
+        flavor = objects.Flavor.get_by_id(self.context,
+                                          instance['instance_type_id'])
+        self.assertEqual(flavor.flavorid, '1')
         self.assertEqual(instance.host, migration.source_compute)
         self.assertEqual(migration.dest_compute, migration.source_compute)
         self.assertIsInstance(instance.numa_topology, numa_topology.__class__)
@@ -6193,11 +6192,11 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.driver.set_bootable(inst1, False).AndRaise(
                 NotImplementedError)
-        compute_manager.LOG.warn(mox.IgnoreArg())
+        compute_manager.LOG.warning(mox.IgnoreArg())
         self.compute.driver.power_off(inst1)
         self.compute.driver.set_bootable(inst2, False).AndRaise(
                 NotImplementedError)
-        compute_manager.LOG.warn(mox.IgnoreArg())
+        compute_manager.LOG.warning(mox.IgnoreArg())
         self.compute.driver.power_off(inst2)
 
         self.mox.ReplayAll()
@@ -6214,11 +6213,11 @@ class ComputeTestCase(BaseTestCase):
 
         self.compute.driver.set_bootable(inst1, False)
         self.compute.driver.power_off(inst1).AndRaise(e)
-        compute_manager.LOG.warn(mox.IgnoreArg())
+        compute_manager.LOG.warning(mox.IgnoreArg())
 
         self.compute.driver.set_bootable(inst2, False)
         self.compute.driver.power_off(inst2).AndRaise(e)
-        compute_manager.LOG.warn(mox.IgnoreArg())
+        compute_manager.LOG.warning(mox.IgnoreArg())
 
         self.mox.ReplayAll()
         self.compute._cleanup_running_deleted_instances(ctxt)
@@ -7446,8 +7445,8 @@ class ComputeAPITestCase(BaseTestCase):
             'id': 'f9000000-0000-0000-0000-000000000000',
             'name': 'fake_name',
             'status': 'active',
-            'properties': {'kernel_id': 'fake_kernel_id',
-                           'ramdisk_id': 'fake_ramdisk_id'},
+            'properties': {'kernel_id': uuids.kernel_id,
+                           'ramdisk_id': uuids.ramdisk_id},
         }
 
         def fake_show(obj, context, image_id, **kwargs):
@@ -7644,8 +7643,8 @@ class ComputeAPITestCase(BaseTestCase):
         sys_metadata = db.instance_system_metadata_get(self.context,
                 ref[0]['uuid'])
 
-        image_props = {'image_kernel_id': 'fake_kernel_id',
-                 'image_ramdisk_id': 'fake_ramdisk_id',
+        image_props = {'image_kernel_id': uuids.kernel_id,
+                 'image_ramdisk_id': uuids.ramdisk_id,
                  'image_something_else': 'meow', }
         for key, value in six.iteritems(image_props):
             self.assertIn(key, sys_metadata)
@@ -7734,6 +7733,7 @@ class ComputeAPITestCase(BaseTestCase):
     def test_populate_instance_for_create(self):
         base_options = {'image_ref': self.fake_image['id'],
                         'system_metadata': {'fake': 'value'},
+                        'display_name': 'foo',
                         'uuid': uuids.instance}
         instance = objects.Instance()
         instance.update(base_options)
@@ -7744,7 +7744,9 @@ class ComputeAPITestCase(BaseTestCase):
                                 self.fake_image,
                                 1,
                                 security_groups=objects.SecurityGroupList(),
-                                instance_type=inst_type)
+                                instance_type=inst_type,
+                                num_instances=1,
+                                shutdown_terminate=False)
         self.assertEqual(str(base_options['image_ref']),
                          instance['system_metadata']['image_base_image_ref'])
         self.assertEqual(vm_states.BUILDING, instance['vm_state'])
@@ -7900,9 +7902,9 @@ class ComputeAPITestCase(BaseTestCase):
         sys_meta = {k: v for k, v in instance.system_metadata.items()
                     if not k.startswith('instance_type')}
         self.assertEqual(sys_meta,
-                {'image_kernel_id': 'fake_kernel_id',
+                {'image_kernel_id': uuids.kernel_id,
                 'image_min_disk': '1',
-                'image_ramdisk_id': 'fake_ramdisk_id',
+                'image_ramdisk_id': uuids.ramdisk_id,
                 'image_something_else': 'meow',
                 'preserved': 'preserve this!'})
 
@@ -7943,7 +7945,8 @@ class ComputeAPITestCase(BaseTestCase):
     def test_rebuild_with_deleted_image(self):
         # If we're given a deleted image by glance, we should not be able to
         # rebuild from it
-        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
+        instance = self._create_fake_instance_obj(
+            params={'image_ref': FAKE_IMAGE_REF})
         self.fake_image['name'] = 'fake_name'
         self.fake_image['status'] = 'DELETED'
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
@@ -7957,7 +7960,8 @@ class ComputeAPITestCase(BaseTestCase):
                                      self.fake_image['id'], 'new_password')
 
     def test_rebuild_with_too_little_ram(self):
-        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
+        instance = self._create_fake_instance_obj(
+            params={'image_ref': FAKE_IMAGE_REF})
         instance.flavor.memory_mb = 64
         instance.flavor.root_gb = 1
 
@@ -7975,7 +7979,8 @@ class ComputeAPITestCase(BaseTestCase):
                 instance, self.fake_image['id'], 'new_password')
 
     def test_rebuild_with_too_little_disk(self):
-        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
+        instance = self._create_fake_instance_obj(
+            params={'image_ref': FAKE_IMAGE_REF})
 
         def fake_extract_flavor(_inst, prefix=''):
             if prefix == '':
@@ -8003,7 +8008,8 @@ class ComputeAPITestCase(BaseTestCase):
                 instance, self.fake_image['id'], 'new_password')
 
     def test_rebuild_with_just_enough_ram_and_disk(self):
-        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
+        instance = self._create_fake_instance_obj(
+            params={'image_ref': FAKE_IMAGE_REF})
 
         def fake_extract_flavor(_inst, prefix=''):
             if prefix == '':
@@ -8025,7 +8031,8 @@ class ComputeAPITestCase(BaseTestCase):
                 instance, self.fake_image['id'], 'new_password')
 
     def test_rebuild_with_no_ram_and_disk_reqs(self):
-        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
+        instance = self._create_fake_instance_obj(
+            params={'image_ref': FAKE_IMAGE_REF})
 
         def fake_extract_flavor(_inst, prefix=''):
             if prefix == '':
@@ -8044,7 +8051,8 @@ class ComputeAPITestCase(BaseTestCase):
                 instance, self.fake_image['id'], 'new_password')
 
     def test_rebuild_with_too_large_image(self):
-        instance = self._create_fake_instance_obj(params={'image_ref': '1'})
+        instance = self._create_fake_instance_obj(
+            params={'image_ref': FAKE_IMAGE_REF})
 
         def fake_extract_flavor(_inst, prefix=''):
             if prefix == '':
@@ -8121,7 +8129,7 @@ class ComputeAPITestCase(BaseTestCase):
                                                     mock_get_bdms):
         # Instance started with a placeholder image (for metadata)
         volume_backed_inst_2 = self._create_fake_instance_obj(
-                {'image_ref': 'my_placeholder_img',
+                {'image_ref': FAKE_IMAGE_REF,
                  'root_device_name': '/dev/vda'})
         bdms, volume = self._fake_rescue_block_devices(volume_backed_inst_2)
 
@@ -8263,26 +8271,32 @@ class ComputeAPITestCase(BaseTestCase):
         # Test searching instances by image.
 
         c = context.get_admin_context()
-        instance1 = self._create_fake_instance_obj({'image_ref': '1234'})
-        instance2 = self._create_fake_instance_obj({'image_ref': '4567'})
-        instance3 = self._create_fake_instance_obj({'image_ref': '4567'})
+        instance1 = self._create_fake_instance_obj(
+            {'image_ref': uuids.fake_image_ref_1})
+        instance2 = self._create_fake_instance_obj(
+            {'image_ref': uuids.fake_image_ref_2})
+        instance3 = self._create_fake_instance_obj(
+            {'image_ref': uuids.fake_image_ref_2})
 
         instances = self.compute_api.get_all(c, search_opts={'image': '123'})
         self.assertEqual(len(instances), 0)
 
-        instances = self.compute_api.get_all(c, search_opts={'image': '1234'})
+        instances = self.compute_api.get_all(
+            c, search_opts={'image': uuids.fake_image_ref_1})
         self.assertEqual(len(instances), 1)
         self.assertEqual(instances[0]['uuid'], instance1['uuid'])
 
-        instances = self.compute_api.get_all(c, search_opts={'image': '4567'})
+        instances = self.compute_api.get_all(
+            c, search_opts={'image': uuids.fake_image_ref_2})
         self.assertEqual(len(instances), 2)
         instance_uuids = [instance['uuid'] for instance in instances]
         self.assertIn(instance2['uuid'], instance_uuids)
         self.assertIn(instance3['uuid'], instance_uuids)
 
         # Test passing a list as search arg
-        instances = self.compute_api.get_all(c,
-                                    search_opts={'image': ['1234', '4567']})
+        instances = self.compute_api.get_all(
+            c, search_opts={'image': [uuids.fake_image_ref_1,
+                                     uuids.fake_image_ref_2]})
         self.assertEqual(len(instances), 3)
 
     def test_get_all_by_flavor(self):
@@ -8960,111 +8974,6 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertIsNone(
             self.compute_api._volume_size(inst_type, blank_bdm))
 
-    def test_is_volume_backed_instance_no_bdm_no_image(self):
-        ctxt = self.context
-
-        instance = self._create_fake_instance_obj({'image_ref': ''})
-        self.assertTrue(
-            self.compute_api.is_volume_backed_instance(ctxt, instance, None))
-
-    def test_is_volume_backed_instance_empty_bdm_with_image(self):
-        ctxt = self.context
-        instance = self._create_fake_instance_obj({
-            'root_device_name': 'vda',
-            'image_ref': FAKE_IMAGE_REF
-        })
-        self.assertFalse(
-            self.compute_api.is_volume_backed_instance(
-                ctxt, instance,
-                block_device_obj.block_device_make_list(ctxt, [])))
-
-    def test_is_volume_backed_instance_bdm_volume_no_image(self):
-        ctxt = self.context
-        instance = self._create_fake_instance_obj({
-            'root_device_name': 'vda',
-            'image_ref': ''
-        })
-        bdms = block_device_obj.block_device_make_list(ctxt,
-                            [fake_block_device.FakeDbBlockDeviceDict(
-                                {'source_type': 'volume',
-                                 'device_name': '/dev/vda',
-                                 'volume_id': uuids.volume_id,
-                                 'instance_uuid':
-                                     'f8000000-0000-0000-0000-000000000000',
-                                 'boot_index': 0,
-                                 'destination_type': 'volume'})])
-        self.assertTrue(
-            self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
-
-    def test_is_volume_backed_instance_bdm_local_no_image(self):
-        # if the root device is local the instance is not volume backed, even
-        # if no image_ref is set.
-        ctxt = self.context
-        instance = self._create_fake_instance_obj({
-            'root_device_name': 'vda',
-            'image_ref': ''
-        })
-        bdms = block_device_obj.block_device_make_list(ctxt,
-               [fake_block_device.FakeDbBlockDeviceDict(
-                {'source_type': 'volume',
-                 'device_name': '/dev/vda',
-                 'volume_id': uuids.volume_id,
-                 'destination_type': 'local',
-                 'instance_uuid': 'f8000000-0000-0000-0000-000000000000',
-                 'boot_index': 0,
-                 'snapshot_id': None}),
-                fake_block_device.FakeDbBlockDeviceDict(
-                {'source_type': 'volume',
-                 'device_name': '/dev/vdb',
-                 'instance_uuid': 'f8000000-0000-0000-0000-000000000000',
-                 'boot_index': 1,
-                 'destination_type': 'volume',
-                 'volume_id': 'c2ec2156-d75e-11e2-985b-5254009297d6',
-                 'snapshot_id': None})])
-        self.assertFalse(
-            self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
-
-    def test_is_volume_backed_instance_bdm_volume_with_image(self):
-        ctxt = self.context
-        instance = self._create_fake_instance_obj({
-            'root_device_name': 'vda',
-            'image_ref': FAKE_IMAGE_REF
-        })
-        bdms = block_device_obj.block_device_make_list(ctxt,
-                            [fake_block_device.FakeDbBlockDeviceDict(
-                                {'source_type': 'volume',
-                                 'device_name': '/dev/vda',
-                                 'volume_id': uuids.volume_id,
-                                 'boot_index': 0,
-                                 'destination_type': 'volume'})])
-        self.assertTrue(
-            self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
-
-    def test_is_volume_backed_instance_bdm_snapshot(self):
-        ctxt = self.context
-        instance = self._create_fake_instance_obj({'root_device_name': 'vda'})
-        bdms = block_device_obj.block_device_make_list(ctxt,
-               [fake_block_device.FakeDbBlockDeviceDict(
-                {'source_type': 'volume',
-                 'device_name': '/dev/vda',
-                 'snapshot_id': 'de8836ac-d75e-11e2-8271-5254009297d6',
-                 'instance_uuid': 'f8000000-0000-0000-0000-000000000000',
-                 'destination_type': 'volume',
-                 'boot_index': 0,
-                 'volume_id': None})])
-        self.assertTrue(
-            self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
-
-    @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
-    def test_is_volume_backed_instance_empty_bdm_by_uuid(self, mock_bdms):
-        ctxt = self.context
-        instance = self._create_fake_instance_obj()
-        mock_bdms.return_value = \
-            block_device_obj.block_device_make_list(ctxt, [])
-        self.assertFalse(
-            self.compute_api.is_volume_backed_instance(ctxt, instance, None))
-        mock_bdms.assert_called_with(ctxt, instance.uuid)
-
     def test_reservation_id_one_instance(self):
         """Verify building an instance has a reservation_id that
         matches return value from create.
@@ -9526,11 +9435,13 @@ class ComputeAPITestCase(BaseTestCase):
             bind_host_id='fake-host'
             ).AndReturn(nwinfo)
         self.mox.ReplayAll()
-        vif = self.compute.attach_interface(self.context,
-                                            instance,
-                                            network_id,
-                                            port_id,
-                                            req_ip)
+        with mock.patch.dict(self.compute.driver.capabilities,
+                             supports_attach_interface=True):
+            vif = self.compute.attach_interface(self.context,
+                                                instance,
+                                                network_id,
+                                                port_id,
+                                                req_ip)
         self.assertEqual(vif['id'], network_id)
         return nwinfo, port_id
 
@@ -9553,8 +9464,10 @@ class ComputeAPITestCase(BaseTestCase):
             mock.patch.object(self.compute.network_api,
                               'allocate_port_for_instance'),
             mock.patch.object(self.compute.network_api,
-                              'deallocate_port_for_instance')) as (
-            mock_attach, mock_allocate, mock_deallocate):
+                              'deallocate_port_for_instance'),
+            mock.patch.dict(self.compute.driver.capabilities,
+                            supports_attach_interface=True)) as (
+                mock_attach, mock_allocate, mock_deallocate, mock_dict):
 
             mock_allocate.return_value = nwinfo
             mock_attach.side_effect = exception.NovaException("attach_failed")
@@ -10246,22 +10159,25 @@ class ComputeAPITestCase(BaseTestCase):
 
     @mock.patch("nova.db.migration_get_in_progress_by_instance")
     def test_get_migrations_in_progress_by_instance(self, mock_get):
-        migration = test_migration.fake_db_migration(instance_uuid="1234")
+        migration = test_migration.fake_db_migration(
+            instance_uuid=uuids.instance)
         mock_get.return_value = [migration]
-        db.migration_get_in_progress_by_instance(self.context, "1234")
+        db.migration_get_in_progress_by_instance(self.context,
+                                                 uuids.instance)
         migrations = self.compute_api.get_migrations_in_progress_by_instance(
-                self.context, "1234")
+                self.context, uuids.instance)
         self.assertEqual(1, len(migrations))
         self.assertEqual(migrations[0].id, migration['id'])
 
     @mock.patch("nova.db.migration_get_by_id_and_instance")
     def test_get_migration_by_id_and_instance(self, mock_get):
-        migration = test_migration.fake_db_migration(instance_uuid="1234")
+        migration = test_migration.fake_db_migration(
+            instance_uuid=uuids.instance)
         mock_get.return_value = migration
         db.migration_get_by_id_and_instance(
                 self.context, migration['id'], uuid)
         res = self.compute_api.get_migration_by_id_and_instance(
-                self.context, migration['id'], "1234")
+                self.context, migration['id'], uuids.instance)
         self.assertEqual(res.id, migration['id'])
 
 
@@ -10625,7 +10541,7 @@ class ComputeAPIAggrTestCase(BaseTestCase):
                          'aggregate.updatemetadata.end')
 
     def test_update_aggregate_az_do_not_replace_existing_metadata(self):
-        # Ensure that that update of the aggregate availability zone
+        # Ensure that the update of the aggregate availability zone
         # does not replace the aggregate existing metadata
         aggr = self.api.create_aggregate(self.context, 'fake_aggregate',
                                          'fake_zone')
@@ -11402,8 +11318,8 @@ class ComputeInactiveImageTestCase(BaseTestCase):
         def fake_show(meh, context, id, **kwargs):
             return {'id': id, 'name': 'fake_name', 'status': 'deleted',
                     'min_ram': 0, 'min_disk': 0,
-                    'properties': {'kernel_id': 'fake_kernel_id',
-                                   'ramdisk_id': 'fake_ramdisk_id',
+                    'properties': {'kernel_id': uuids.kernel_id,
+                                   'ramdisk_id': uuids.ramdisk_id,
                                    'something_else': 'meow'}}
 
         fake_image.stub_out_image_service(self)
@@ -11660,11 +11576,14 @@ class EvacuateHostTestCase(BaseTestCase):
             self.assertRaises(exception.InstanceRecreateNotSupported,
                               lambda: self._rebuild(on_shared_storage=True))
 
-    def test_on_shared_storage_not_provided_host_without_shared_storage(self):
+    @mock.patch('nova.objects.ImageMeta.from_image_ref')
+    def test_on_shared_storage_not_provided_host_without_shared_storage(self,
+            mock_image_meta):
+        # 'spawn' should be called with the image_meta from the image_ref
         self.mox.StubOutWithMock(self.compute.driver, 'spawn')
         self.compute.driver.spawn(mox.IsA(self.context),
                 mox.IsA(objects.Instance),
-                mox.IsA(objects.ImageMeta),
+                mock_image_meta.return_value,
                 mox.IgnoreArg(), mox.IsA('newpass'),
                 network_info=mox.IgnoreArg(),
                 block_device_info=mox.IgnoreArg())
@@ -11675,11 +11594,15 @@ class EvacuateHostTestCase(BaseTestCase):
 
         self._rebuild(on_shared_storage=None)
 
-    def test_on_shared_storage_not_provided_host_with_shared_storage(self):
+    @mock.patch('nova.objects.Instance.image_meta',
+                new_callable=mock.PropertyMock)
+    def test_on_shared_storage_not_provided_host_with_shared_storage(self,
+            mock_image_meta):
+        # 'spawn' should be called with the image_meta from the instance
         self.mox.StubOutWithMock(self.compute.driver, 'spawn')
         self.compute.driver.spawn(mox.IsA(self.context),
                 mox.IsA(objects.Instance),
-                mox.IsA(objects.ImageMeta),
+                mock_image_meta.return_value,
                 mox.IgnoreArg(), 'newpass',
                 network_info=mox.IgnoreArg(),
                 block_device_info=mox.IgnoreArg())

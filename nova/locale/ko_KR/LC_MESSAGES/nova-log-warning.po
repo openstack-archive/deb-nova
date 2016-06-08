@@ -3,13 +3,12 @@
 # This file is distributed under the same license as the nova project.
 #
 # Translators:
-# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
-# SeYeon Lee <sy_lee@kr.ibm.com>, 2016. #zanata
+# Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 13.0.0.0rc2.dev15\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-03-24 10:46+0000\n"
+"Project-Id-Version: nova 13.0.1.dev400\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-04-21 04:29+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -109,14 +108,6 @@ msgid "Address |%(address)s| is not allocated to your project |%(project)s|"
 msgstr "|%(address)s| 주소가 |%(project)s| 프로젝트에 할당되지 않음"
 
 #, python-format
-msgid ""
-"An error occurred trying to live migrate. Falling back to legacy live "
-"migrate flow. Error: %s"
-msgstr ""
-"라이브 마이그레이션 시도 중에 오류가 발생했습니다. 레거시 라이브 마이그레이"
-"션 플로우로 돌아갑니다. 오류: %s"
-
-#, python-format
 msgid "Arguments dropped when creating context: %s"
 msgstr "컨텍스트 작성중 인자가 삭제되었습니다: %s"
 
@@ -206,10 +197,6 @@ msgstr ""
 "용하도록 구성되어 있습니다. Cinder에서 V2 API를 사용하도록 설정하고 nova.conf"
 "에서 사용할 수 있도록 cinder.catalog_info를 설정하십시오."
 
-#, python-format
-msgid "Compute resource plugin %s was not loaded"
-msgstr "컴퓨트 리소스 플러그인 %s이(가) 로드되지 않음"
-
 msgid ""
 "Conductor local mode is deprecated and will be removed in a subsequent "
 "release"
@@ -273,14 +260,6 @@ msgid ""
 msgstr ""
 "더 이상 사용되지 않음: scheduler_driver에서 클래스 로더를 사용하여 %(path)s을"
 "(를) 로드합니다. 이 레거시 로드 스타일은 N 릴리스에서 제거됩니다."
-
-#, python-format
-msgid ""
-"DEPRECATED: scheduler_host_manager uses classloader to load %(path)s. This "
-"legacy loading style will be removed in the N release."
-msgstr ""
-"더 이상 사용되지 않음: scheduler_host_manager가 클래스 로더를 사용하여 "
-"%(path)s을(를) 로드합니다. N 릴리스에서 이 레거시 로드 스타일이 제거됩니다."
 
 #, python-format
 msgid ""
@@ -672,14 +651,6 @@ msgstr ""
 "%(err)s"
 
 #, python-format
-msgid "Ignoring EndpointNotFound: %s"
-msgstr "EndpointNotFound 무시: %s"
-
-#, python-format
-msgid "Ignoring Unknown cinder exception: %s"
-msgstr "알 수 없는 Cinder 예외 무시: %s"
-
-#, python-format
 msgid "Ignoring Volume Error on vol %(vol_id)s during delete %(exc)s"
 msgstr "%(exc)s 삭제 중에 %(vol_id)s 볼륨에서 발생한 볼륨 오류 무시"
 
@@ -751,9 +722,6 @@ msgid ""
 msgstr ""
 "M 릴리스에서 모든 API를 실행해야 합니다. 컴퓨트 API가 하나만 있도록 데이터베"
 "이스에서 API 확장의 개념이 제거됩니다. "
-
-msgid "In the M release you must run the v2.1 API."
-msgstr "M 릴리스에서 v2.1 API를 실행해야 합니다."
 
 msgid ""
 "In vmwareapi:vmops:_destroy_instance, exception while deleting the VM "
@@ -1351,19 +1319,6 @@ msgstr ""
 "VIR_MIGRATE_TUNNELLED가 설정됨"
 
 msgid ""
-"The Extensible Resource Tracker is deprecated and will be removed in the "
-"14.0.0 release. If you use this functionality and have custom resources that "
-"are managed by the Extensible Resource Tracker, please contact the Nova "
-"development team by posting to the openstack-dev mailing list. There is no "
-"future planned support for the tracking of custom resources."
-msgstr ""
-"Extensible Resource Tracker가 더 이상 사용되지 않으므로, 14.0.0 릴리스에서 제"
-"거됩니다. 이 기능을 사용하고 Extensible Resource Tracker에서 관리되는 사용자 "
-"설정 리소스가 있으면 openstack-dev 메일링 목록에 게시하여 Nova 개발 팀에 문의"
-"하십시오. 향후에 사용자 지정 리소스를 추적하도록 지원하는 기능은 계획되어 있"
-"지 않습니다."
-
-msgid ""
 "The TrustedFilter is considered experimental by the OpenStack project "
 "because it receives much less testing than the rest of Nova. This may change "
 "in the future, but current deployers should be aware that the use of it in "
@@ -1779,10 +1734,6 @@ msgstr "PBM을 사용하면  datastore_regex가 무시됨"
 #, python-format
 msgid "deallocate port %(port_id)s failed"
 msgstr "%(port_id)s 포트 할당 해제 실패"
-
-#, python-format
-msgid "get_minimum_version called with likely-incorrect binary `%s'"
-msgstr "올바르지 않은 바이너리 `%s'(으)로 get_minimum_version이 호출됨"
 
 #, python-format
 msgid "hostname %s too long, truncating."

@@ -171,13 +171,15 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         juno_placeholders = range(255, 265)
         kilo_placeholders = range(281, 291)
         liberty_placeholders = range(303, 313)
+        mitaka_placeholders = range(320, 330)
 
         return (special +
                 havana_placeholders +
                 icehouse_placeholders +
                 juno_placeholders +
                 kilo_placeholders +
-                liberty_placeholders)
+                liberty_placeholders +
+                mitaka_placeholders)
 
     def migrate_up(self, version, with_data=False):
         if with_data:
@@ -330,10 +332,7 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertFalse(quota_usages.c.resource.nullable)
 
         pci_devices = oslodbutils.get_table(engine, 'pci_devices')
-        if engine.name == 'ibm_db_sa':
-            self.assertFalse(pci_devices.c.deleted.nullable)
-        else:
-            self.assertTrue(pci_devices.c.deleted.nullable)
+        self.assertTrue(pci_devices.c.deleted.nullable)
         self.assertFalse(pci_devices.c.product_id.nullable)
         self.assertFalse(pci_devices.c.vendor_id.nullable)
         self.assertFalse(pci_devices.c.dev_type.nullable)
@@ -749,12 +748,7 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
                                 'virtual_interfaces_uuid_idx', ['uuid'])
 
     def _check_296(self, engine, data):
-        if engine.name == 'ibm_db_sa':
-            # Make sure the last FK in the list was created.
-            inspector = reflection.Inspector.from_engine(engine)
-            fkeys = inspector.get_foreign_keys('instance_extra')
-            fkey_names = [fkey['name'] for fkey in fkeys]
-            self.assertIn('fk_instance_extra_instance_uuid', fkey_names)
+        pass
 
     def _check_297(self, engine, data):
         self.assertColumnExists(engine, 'services', 'forced_down')
@@ -884,6 +878,17 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
         self.assertIndexMembers(engine, 'instances',
                                 'instances_deleted_created_at_idx',
                                 ['deleted', 'created_at'])
+
+    def _check_330(self, engine, data):
+        # Just a sanity-check migration
+        pass
+
+    def _check_331(self, engine, data):
+        self.assertColumnExists(engine, 'virtual_interfaces', 'tag')
+        self.assertColumnExists(engine, 'block_device_mapping', 'tag')
+
+    def _check_332(self, engine, data):
+        self.assertColumnExists(engine, 'instance_extra', 'keypairs')
 
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,

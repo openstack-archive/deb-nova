@@ -19,6 +19,7 @@ import inspect
 import math
 import time
 
+import microversion_parse
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import strutils
@@ -70,9 +71,10 @@ DEFAULT_API_VERSION = "2.1"
 # name of attribute to keep version method information
 VER_METHOD_ATTR = 'versioned_methods'
 
-# Name of header used by clients to request a specific version
+# Names of headers used by clients to request a specific version
 # of the REST API
-API_VERSION_REQUEST_HEADER = 'X-OpenStack-Nova-API-Version'
+API_VERSION_REQUEST_HEADER = 'OpenStack-API-Version'
+LEGACY_API_VERSION_REQUEST_HEADER = 'X-OpenStack-Nova-API-Version'
 
 
 ENV_LEGACY_V2 = 'openstack.legacy_v2'
@@ -227,29 +229,30 @@ class Request(wsgi.Request):
 
     def set_api_version_request(self):
         """Set API version request based on the request header information."""
-        if API_VERSION_REQUEST_HEADER in self.headers:
-            hdr_string = self.headers[API_VERSION_REQUEST_HEADER]
-            # 'latest' is a special keyword which is equivalent to requesting
-            # the maximum version of the API supported
-            if hdr_string == 'latest':
-                self.api_version_request = api_version.max_api_version()
-            else:
-                self.api_version_request = api_version.APIVersionRequest(
-                    hdr_string)
+        hdr_string = microversion_parse.get_version(
+            self.headers, service_type='compute',
+            legacy_headers=[LEGACY_API_VERSION_REQUEST_HEADER])
 
-                # Check that the version requested is within the global
-                # minimum/maximum of supported API versions
-                if not self.api_version_request.matches(
-                        api_version.min_api_version(),
-                        api_version.max_api_version()):
-                    raise exception.InvalidGlobalAPIVersion(
-                        req_ver=self.api_version_request.get_string(),
-                        min_ver=api_version.min_api_version().get_string(),
-                        max_ver=api_version.max_api_version().get_string())
-
-        else:
+        if hdr_string is None:
             self.api_version_request = api_version.APIVersionRequest(
                 api_version.DEFAULT_API_VERSION)
+        elif hdr_string == 'latest':
+            # 'latest' is a special keyword which is equivalent to
+            # requesting the maximum version of the API supported
+            self.api_version_request = api_version.max_api_version()
+        else:
+            self.api_version_request = api_version.APIVersionRequest(
+                hdr_string)
+
+            # Check that the version requested is within the global
+            # minimum/maximum of supported API versions
+            if not self.api_version_request.matches(
+                    api_version.min_api_version(),
+                    api_version.max_api_version()):
+                raise exception.InvalidGlobalAPIVersion(
+                    req_ver=self.api_version_request.get_string(),
+                    min_ver=api_version.min_api_version().get_string(),
+                    max_ver=api_version.max_api_version().get_string())
 
     def set_legacy_v2(self):
         self.environ[ENV_LEGACY_V2] = True
@@ -661,7 +664,7 @@ class Resource(wsgi.Application):
             accept = request.best_match_content_type()
         except exception.InvalidContentType:
             msg = _("Unsupported Content-Type")
-            return Fault(webob.exc.HTTPBadRequest(explanation=msg))
+            return Fault(webob.exc.HTTPUnsupportedMediaType(explanation=msg))
 
         # NOTE(Vek): Splitting the function up this way allows for
         #            auditing by external tools that wrap the existing
@@ -765,8 +768,11 @@ class Resource(wsgi.Application):
 
             if not request.api_version_request.is_null():
                 response.headers[API_VERSION_REQUEST_HEADER] = \
+                    'compute ' + request.api_version_request.get_string()
+                response.headers[LEGACY_API_VERSION_REQUEST_HEADER] = \
                     request.api_version_request.get_string()
-                response.headers['Vary'] = API_VERSION_REQUEST_HEADER
+                response.headers.add('Vary', API_VERSION_REQUEST_HEADER)
+                response.headers.add('Vary', LEGACY_API_VERSION_REQUEST_HEADER)
 
         return response
 
@@ -1011,8 +1017,16 @@ class Controller(object):
             # so later when we work through the list in order we find
             # the method which has the latest version which supports
             # the version requested.
-            # TODO(cyeoh): Add check to ensure that there are no overlapping
-            # ranges of valid versions as that is amibiguous
+            is_intersect = Controller.check_for_versions_intersection(
+                func_list)
+
+            if is_intersect:
+                raise exception.ApiVersionsIntersect(
+                    name=new_func.name,
+                    min_ver=new_func.start_version,
+                    max_ver=new_func.end_version,
+                )
+
             func_list.sort(key=lambda f: f.start_version, reverse=True)
 
             return f
@@ -1032,6 +1046,36 @@ class Controller(object):
                 return False
 
         return is_dict(body[entity_name])
+
+    @staticmethod
+    def check_for_versions_intersection(func_list):
+        """Determines whether function list contains version intervals
+        intersections or not. General algorithm:
+
+        https://en.wikipedia.org/wiki/Intersection_algorithm
+
+        :param func_list: list of VersionedMethod objects
+        :return: boolean
+        """
+        pairs = []
+        counter = 0
+
+        for f in func_list:
+            pairs.append((f.start_version, 1, f))
+            pairs.append((f.end_version, -1, f))
+
+        def compare(x):
+            return x[0]
+
+        pairs.sort(key=compare)
+
+        for p in pairs:
+            counter += p[1]
+
+            if counter > 1:
+                return True
+
+        return False
 
 
 class Fault(webob.exc.HTTPException):
@@ -1081,9 +1125,12 @@ class Fault(webob.exc.HTTPException):
 
         if not req.api_version_request.is_null():
             self.wrapped_exc.headers[API_VERSION_REQUEST_HEADER] = \
+                'compute ' + req.api_version_request.get_string()
+            self.wrapped_exc.headers[LEGACY_API_VERSION_REQUEST_HEADER] = \
                 req.api_version_request.get_string()
-            self.wrapped_exc.headers['Vary'] = \
-              API_VERSION_REQUEST_HEADER
+            self.wrapped_exc.headers.add('Vary', API_VERSION_REQUEST_HEADER)
+            self.wrapped_exc.headers.add('Vary',
+                                         LEGACY_API_VERSION_REQUEST_HEADER)
 
         self.wrapped_exc.content_type = 'application/json'
         self.wrapped_exc.charset = 'UTF-8'

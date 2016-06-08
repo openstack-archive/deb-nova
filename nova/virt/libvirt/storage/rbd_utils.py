@@ -14,9 +14,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urllib
-
 from eventlet import tpool
+from six.moves import urllib
 
 try:
     import rados
@@ -168,7 +167,7 @@ class RBDDriver(object):
         if not url.startswith(prefix):
             reason = _('Not stored in rbd')
             raise exception.ImageUnacceptable(image_id=url, reason=reason)
-        pieces = map(urllib.unquote, url[len(prefix):].split('/'))
+        pieces = map(urllib.parse.unquote, url[len(prefix):].split('/'))
         if '' in pieces:
             reason = _('Blank components')
             raise exception.ImageUnacceptable(image_id=url, reason=reason)
@@ -287,7 +286,7 @@ class RBDDriver(object):
             try:
                 rbd.RBD().remove(client.ioctx, name)
             except rbd.ImageNotFound:
-                LOG.warn(_LW('image %(volume)s in pool %(pool)s can not be '
+                LOG.warning(_LW('image %(volume)s in pool %(pool)s can not be '
                              'found, failed to remove'),
                             {'volume': name, 'pool': self.pool})
             except rbd.ImageHasSnapshots:
@@ -323,7 +322,7 @@ class RBDDriver(object):
                 self.remove_snap(volume, libvirt_utils.RESIZE_SNAPSHOT_NAME,
                                  ignore_errors=True)
             except (rbd.ImageBusy, rbd.ImageHasSnapshots):
-                LOG.warn(_LW('rbd remove %(volume)s in pool %(pool)s '
+                LOG.warning(_LW('rbd remove %(volume)s in pool %(pool)s '
                              'failed'),
                          {'volume': volume, 'pool': self.pool})
             retryctx['retries'] -= 1

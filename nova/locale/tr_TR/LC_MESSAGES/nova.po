@@ -5,13 +5,12 @@
 # Translators:
 # Özcan Zafer AYAN <ozcanzaferayan@gmail.com>, 2013
 # Özcan Zafer AYAN <ozcanzaferayan@gmail.com>, 2013
-# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 13.0.0.0rc2.dev7\n"
-"Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2016-03-17 05:38+0000\n"
+"Project-Id-Version: nova 13.0.1.dev400\n"
+"Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
+"POT-Creation-Date: 2016-04-21 04:28+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -281,9 +280,6 @@ msgstr "İstemci %(host)s sayısı için takım bulunamadı."
 msgid "Aggregates does not have %s action"
 msgstr "Kümeler %s işlemine sahip değil"
 
-msgid "An unexpected error has occurred."
-msgstr "Beklenmedik bir hata oluştu."
-
 msgid "An unknown error has occurred. Please try your request again."
 msgstr "Bilinmeyen bir hata oluştu. Lütfen tekrar deneyin."
 
@@ -381,9 +377,6 @@ msgstr "Global ipv6 için yanlış proje numarası: %s"
 #, python-format
 msgid "Bad volumeId format: volumeId is not in proper format (%s)"
 msgstr "Kötü volumeId biçimi: volumeId geçerli biçimde değil (%s)"
-
-msgid "Binary"
-msgstr "İkilik"
 
 msgid "Blank components"
 msgstr "Boş bileşenler"
@@ -952,14 +945,6 @@ msgstr "İstenen geçici diskler sunucu türünün izin verdiğinden daha büyü
 
 #, python-format
 msgid ""
-"Error contacting Ironic server for '%(method)s'. Attempt %(attempt)d of "
-"%(total)d"
-msgstr ""
-"Ironic sunucuya '%(method)s' için bağlantı kurulamadı. Deneme %(attempt)d / "
-"%(total)d"
-
-#, python-format
-msgid ""
 "Error destroying the instance on node %(node)s. Provision state still "
 "'%(state)s'."
 msgstr ""
@@ -1211,14 +1196,6 @@ msgid "Failure prepping block device."
 msgstr "Blok aygıt hazırlama başarısız."
 
 #, python-format
-msgid ""
-"Field labels list %(labels)s has different number of elements than fields "
-"list %(fields)s"
-msgstr ""
-"Alan etiketleri listesi %(labels)s alan listesi %(fields)s'den farklı sayıda "
-"öğeye sahip"
-
-#, python-format
 msgid "File %(file_path)s could not be found."
 msgstr "%(file_path)s dosyası bulunamadı."
 
@@ -1385,24 +1362,9 @@ msgstr "Glance imajı %s öldürülmüş durumda"
 msgid "Group not valid. Reason: %(reason)s"
 msgstr "Grup geçerli değil. Sebep: %(reason)s"
 
-msgid "HOST"
-msgstr "İSTEMCİ"
-
-msgid "Host"
-msgstr "Host"
-
 #, python-format
 msgid "Host %(host)s could not be found."
 msgstr "%(host)s sunucusu bulunamadı."
-
-#, python-format
-msgid ""
-"Host %(server)s is running an old version of Nova, live migrations involving "
-"that version may cause data loss. Upgrade Nova on %(server)s and try again."
-msgstr ""
-"İstemci %(server)s Nova'nın eski bir sürümünü çalıştırıyor, bu sürümü içeren "
-"canlı göçler veri kaybına sebep olabilir. %(server)s üzerinde Nova "
-"güncellemesi yapın ve tekrar deneyin."
 
 msgid "Host PowerOn is not supported by the Hyper-V driver"
 msgstr "İstemci GüçAçma Hyper-V sürücüsü tarafından desteklenmiyor"
@@ -2784,9 +2746,6 @@ msgstr ""
 msgid "PIF %s does not contain IP address"
 msgstr "PIF %s IP adresi içermiyor"
 
-msgid "PROJECT"
-msgstr "PROJE"
-
 #, python-format
 msgid "Page size %(pagesize)s forbidden against '%(against)s'"
 msgstr "Sayfa boyutu %(pagesize)s '%(against)s' e karşı yasaklı"
@@ -3209,14 +3168,6 @@ msgid "ServerGroupAntiAffinityFilter not configured"
 msgstr "ServerGroupAntiAffinityFilter yapılandırılmamış"
 
 #, python-format
-msgid "Service %(service)s on host %(host)s disabled."
-msgstr "%(host)s istemcisindeki %(service)s servisi kapatıldı."
-
-#, python-format
-msgid "Service %(service)s on host %(host)s enabled."
-msgstr "%(host)s istemcisi üstündeki %(service)s servisi etkinleştirildi."
-
-#, python-format
 msgid "Service %(service_id)s could not be found."
 msgstr "%(service_id)s servisi bulunamadı."
 
@@ -3296,12 +3247,6 @@ msgstr "Yalnızca bir parametre belirtin `table_name` `table`"
 
 msgid "Started"
 msgstr "Başlatıldı"
-
-msgid "State"
-msgstr "Durum"
-
-msgid "Status"
-msgstr "Statü"
 
 msgid "Stopped"
 msgstr "Durduruldu"
@@ -3950,9 +3895,6 @@ msgstr "Askıdan almaya çalışıldı ama %s imajı bulunamadı."
 msgid "Unsupported Content-Type"
 msgstr "Desteklenmeyen içerik türü"
 
-msgid "Updated_At"
-msgstr "Güncelleme_Zamanı"
-
 msgid "Upgrade DB using Essex release first."
 msgstr "Önce Essex sürümünü kullanarak veritabanı yükseltimi yapın."
 
@@ -4199,12 +4141,6 @@ msgstr ""
 "yakalayan (0.0.0.0 veya ::) ya da yerel adres (127.0.0.1 veya ::1) olarak "
 "yapılandırmalısınız."
 
-msgid "Zone"
-msgstr "Bölge"
-
-msgid "[Result]"
-msgstr "[Sonuç]"
-
 msgid "accessIPv4 is not proper IPv4 format"
 msgstr "IPv4 adresi uygun IPv4 formatında değil"
 
@@ -4249,9 +4185,6 @@ msgstr "bağlantı bilgisi: %s"
 #, python-format
 msgid "connecting to: %(host)s:%(port)s"
 msgstr "bağlanılıyor: %(host)s:%(port)s"
-
-msgid "cpu"
-msgstr "cpu"
 
 #, python-format
 msgid "createBackup entity requires %s attribute"
@@ -4306,9 +4239,6 @@ msgstr "%(backing_file)s tarafından desteklenen fmt=%(fmt)s"
 
 msgid "fping utility is not found."
 msgstr "fping aracı bulunamadı."
-
-msgid "hdd"
-msgstr "hdd"
 
 msgid "host"
 msgstr "Host"
@@ -4404,9 +4334,6 @@ msgstr " [%s] göstergesi bulunamadı"
 
 msgid "max_count cannot be greater than 1 if an fixed_ip is specified."
 msgstr "sabit ip belirtildiyse max_count 1'den büyük olamaz."
-
-msgid "mem(mb)"
-msgstr "mem(mb)"
 
 msgid "memcached_servers not defined"
 msgstr "memcached_servers tanımlanmamış"

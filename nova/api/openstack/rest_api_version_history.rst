@@ -213,8 +213,90 @@ user documentation.
 
     DELETE /servers/<uuid>/migrations/<id>
 
-2.25
-----
+2.25 (Maximum in Mitaka)
+------------------------
 
   Modify input parameter for ``os-migrateLive``. The block_migration will
   support 'auto' value, and disk_over_commit flag will be removed.
+
+2.26
+----
+
+  Added support of server tags.
+
+  A user can create, update, delete or check existence of simple string tags
+  for servers by the os-server-tags plugin.
+
+  The resource point for these operations is /servers/<server_id>/tags
+
+  A user can add a single tag to the server by sending PUT request to the
+  /servers/<server_id>/tags/<tag>
+
+  where <tag> is any valid tag name.
+
+  A user can replace **all** current server tags to the new set of tags
+  by sending PUT request to the /servers/<server_id>/tags. New set of tags
+  must be specified in request body. This set must be in list 'tags'.
+
+  A user can remove specified tag from the server by sending DELETE request
+  to the /servers/<server_id>/tags/<tag>
+
+  where <tag> is tag name which user wants to remove.
+
+  A user can remove **all** tags from the server by sending DELETE request
+  to the /servers/<server_id>/tags
+
+  A user can get a set of server tags with information about server by sending
+  GET request to the /servers/<server_id>
+
+  Request returns dictionary with information about specified server, including
+  list 'tags' ::
+
+      {
+          'id': {server_id},
+          ...
+          'tags': ['foo', 'bar', 'baz']
+      }
+
+  A user can get **only** a set of server tags by sending GET request to the
+  /servers/<server_id>/tags
+
+  Response ::
+
+      {
+         'tags': ['foo', 'bar', 'baz']
+      }
+
+  A user can check if a tag exists or not on a server by sending
+  GET /servers/{server_id}/tags/{tag}
+
+  Request returns `204 No Content` if tag exist on a server or `404 Not Found`
+  if tag doesn't exist on a server.
+
+  A user can filter servers in GET /servers request by new filters:
+
+  * tags
+  * tags-any
+  * not-tags
+  * not-tags-any
+
+  These filters can be combined. Also user can use more than one string tags
+  for each filter. In this case string tags for each filter must be separated
+  by comma: GET /servers?tags=red&tags-any=green,orange
+
+2.27
+----
+
+  Added support for the new form of microversion headers described in the
+  `Microversion Specification
+  <http://specs.openstack.org/openstack/api-wg/guidelines/microversion_specification.html>`_.
+  Both the original form of header and the new form is supported.
+
+2.28
+----
+
+  Nova API hypervisor.cpu_info change from string to JSON object.
+
+  From this version of the API the hypervisor's 'cpu_info' field will be
+  will returned as JSON object (not string) by sending GET request
+  to the /v2.1/os-hypervisors/{hypervisor_id}.

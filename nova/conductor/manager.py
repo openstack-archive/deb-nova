@@ -172,7 +172,7 @@ class ComputeTaskManager(base.Base):
         exception.HypervisorUnavailable,
         exception.InstanceInvalidState,
         exception.MigrationPreCheckError,
-        exception.LiveMigrationWithOldNovaNotSafe,
+        exception.MigrationPreCheckClientException,
         exception.LiveMigrationWithOldNovaNotSupported,
         exception.UnsupportedPolicyException)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
@@ -200,20 +200,30 @@ class ComputeTaskManager(base.Base):
                                              instance_uuid):
                 self._cold_migrate(context, instance, flavor,
                                    scheduler_hint['filter_properties'],
-                                   reservations, clean_shutdown)
+                                   reservations, clean_shutdown, request_spec)
         else:
             raise NotImplementedError()
 
     def _cold_migrate(self, context, instance, flavor, filter_properties,
-                      reservations, clean_shutdown):
+                      reservations, clean_shutdown, request_spec):
         image = utils.get_image_from_system_metadata(
             instance.system_metadata)
 
-        request_spec = scheduler_utils.build_request_spec(
-            context, image, [instance], instance_type=flavor)
+        # NOTE(sbauza): If a reschedule occurs when prep_resize(), then
+        # it only provides filter_properties legacy dict back to the
+        # conductor with no RequestSpec part of the payload.
+        if not request_spec:
+            request_spec = objects.RequestSpec.from_components(
+                context, instance.uuid, image,
+                instance.flavor, instance.numa_topology, instance.pci_requests,
+                filter_properties, None, instance.availability_zone)
+
         task = self._build_cold_migrate_task(context, instance, flavor,
-                                             filter_properties, request_spec,
+                                             request_spec,
                                              reservations, clean_shutdown)
+        # TODO(sbauza): Provide directly the RequestSpec object once
+        # _set_vm_state_and_notify() accepts it
+        legacy_spec = request_spec.to_legacy_request_spec_dict()
         try:
             task.execute()
         except exception.NoValidHost as ex:
@@ -223,7 +233,7 @@ class ComputeTaskManager(base.Base):
             updates = {'vm_state': vm_state, 'task_state': None}
             self._set_vm_state_and_notify(context, instance.uuid,
                                           'migrate_server',
-                                          updates, ex, request_spec)
+                                          updates, ex, legacy_spec)
 
             # if the flavor IDs match, it's migrate; otherwise resize
             if flavor.id == instance.instance_type_id:
@@ -239,14 +249,14 @@ class ComputeTaskManager(base.Base):
                 updates = {'vm_state': vm_state, 'task_state': None}
                 self._set_vm_state_and_notify(context, instance.uuid,
                                               'migrate_server',
-                                              updates, ex, request_spec)
+                                              updates, ex, legacy_spec)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
                 updates = {'vm_state': instance.vm_state,
                            'task_state': None}
                 self._set_vm_state_and_notify(context, instance.uuid,
                                               'migrate_server',
-                                              updates, ex, request_spec)
+                                              updates, ex, legacy_spec)
 
     def _set_vm_state_and_notify(self, context, instance_uuid, method, updates,
                                  ex, request_spec):
@@ -320,7 +330,7 @@ class ComputeTaskManager(base.Base):
                 exception.HypervisorUnavailable,
                 exception.InstanceInvalidState,
                 exception.MigrationPreCheckError,
-                exception.LiveMigrationWithOldNovaNotSafe,
+                exception.MigrationPreCheckClientException,
                 exception.LiveMigrationWithOldNovaNotSupported,
                 exception.MigrationSchedulerRPCError) as ex:
             with excutils.save_and_reraise_exception():
@@ -351,13 +361,58 @@ class ComputeTaskManager(base.Base):
                                               request_spec)
 
     def _build_cold_migrate_task(self, context, instance, flavor,
-                                 filter_properties, request_spec, reservations,
+                                 request_spec, reservations,
                                  clean_shutdown):
         return migrate.MigrationTask(context, instance, flavor,
-                                     filter_properties, request_spec,
+                                     request_spec,
                                      reservations, clean_shutdown,
                                      self.compute_rpcapi,
                                      self.scheduler_client)
+
+    def _destroy_build_request(self, context, instance):
+        try:
+            build_request = objects.BuildRequest.get_by_instance_uuid(context,
+                    instance.uuid)
+        except exception.BuildRequestNotFound:
+            LOG.debug('BuildRequest not found for instance %(uuid)s, likely '
+                      'due to an older nova-api service running.',
+                      {'uuid': instance.uuid})
+            return
+
+        # The BuildRequest needs to be stored until the instance is mapped to
+        # an instance table. At that point it will never be used again and
+        # should be deleted.
+        # TODO(alaski): Sync API updates to the build_request to the
+        # instance before it is destroyed. Right now only locked_by can
+        # be updated before this is destroyed.
+        build_request.destroy()
+
+    def _populate_instance_mapping(self, context, instance, host):
+        try:
+            inst_mapping = objects.InstanceMapping.get_by_instance_uuid(
+                    context, instance.uuid)
+        except exception.InstanceMappingNotFound:
+            # NOTE(alaski): If nova-api is up to date this exception should
+            # never be hit. But during an upgrade it's possible that an old
+            # nova-api didn't create an instance_mapping during this boot
+            # request.
+            LOG.debug('Instance was not mapped to a cell, likely due '
+                      'to an older nova-api service running.',
+                      instance=instance)
+        else:
+            try:
+                host_mapping = objects.HostMapping.get_by_host(context,
+                        host['host'])
+            except exception.HostMappingNotFound:
+                # NOTE(alaski): For now this exception means that a
+                # deployment has not migrated to cellsv2 and we should
+                # remove the instance_mapping that has been created.
+                # Eventually this will indicate a failure to properly map a
+                # host to a cell and we may want to reschedule.
+                inst_mapping.destroy()
+            else:
+                inst_mapping.cell_mapping = host_mapping.cell_mapping
+                inst_mapping.save()
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
@@ -368,9 +423,8 @@ class ComputeTaskManager(base.Base):
         if (requested_networks and
                 not isinstance(requested_networks,
                                objects.NetworkRequestList)):
-            requested_networks = objects.NetworkRequestList(
-                objects=[objects.NetworkRequest.from_tuple(t)
-                         for t in requested_networks])
+            requested_networks = objects.NetworkRequestList.from_tuples(
+                requested_networks)
         # TODO(melwitt): Remove this in version 2.0 of the RPC API
         flavor = filter_properties.get('instance_type')
         if flavor and not isinstance(flavor, objects.Flavor):
@@ -414,6 +468,9 @@ class ComputeTaskManager(base.Base):
             # instance specific information
             bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                     context, instance.uuid)
+
+            self._populate_instance_mapping(context, instance, host)
+            self._destroy_build_request(context, instance)
 
             self.compute_rpcapi.build_and_run_instance(context,
                     instance=instance, host=host['host'], image=image,

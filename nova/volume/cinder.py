@@ -28,65 +28,20 @@ from cinderclient import exceptions as cinder_exception
 from cinderclient.v1 import client as v1_client
 from keystoneauth1 import exceptions as keystone_exception
 from keystoneauth1 import loading as ks_loading
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
 from oslo_utils import strutils
 import six
 
 from nova import availability_zones as az
+import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE
 from nova.i18n import _LW
 
-cinder_opts = [
-    cfg.StrOpt('catalog_info',
-            default='volumev2:cinderv2:publicURL',
-            help='Info to match when looking for cinder in the service '
-                 'catalog. Format is: separated values of the form: '
-                 '<service_type>:<service_name>:<endpoint_type>'),
-    cfg.StrOpt('endpoint_template',
-               help='Override service catalog lookup with template for cinder '
-                    'endpoint e.g. http://localhost:8776/v1/%(project_id)s'),
-    cfg.StrOpt('os_region_name',
-               help='Region name of this node'),
-    cfg.IntOpt('http_retries',
-               default=3,
-               help='Number of cinderclient retries on failed http calls'),
-    cfg.BoolOpt('cross_az_attach',
-                default=True,
-                help='Allow attach between instance and volume in different '
-                     'availability zones. If False, volumes attached to an '
-                     'instance must be in the same availability zone in '
-                     'Cinder as the instance availability zone in Nova. '
-                     'This also means care should be taken when booting an '
-                     'instance from a volume where source is not "volume" '
-                     'because Nova will attempt to create a volume using '
-                     'the same availability zone as what is assigned to the '
-                     'instance. If that AZ is not in Cinder (or '
-                     'allow_availability_zone_fallback=False in cinder.conf), '
-                     'the volume create request will fail and the instance '
-                     'will fail the build request.'),
-]
 
-CONF = cfg.CONF
-CINDER_OPT_GROUP = 'cinder'
-
-# cinder_opts options in the DEFAULT group were deprecated in Juno
-CONF.register_opts(cinder_opts, group=CINDER_OPT_GROUP)
-
-
-deprecated = {'timeout': [cfg.DeprecatedOpt('http_timeout',
-                                            group=CINDER_OPT_GROUP)],
-              'cafile': [cfg.DeprecatedOpt('ca_certificates_file',
-                                           group=CINDER_OPT_GROUP)],
-              'insecure': [cfg.DeprecatedOpt('api_insecure',
-                                             group=CINDER_OPT_GROUP)]}
-
-ks_loading.register_session_conf_options(CONF,
-                                         CINDER_OPT_GROUP,
-                                         deprecated_opts=deprecated)
+CONF = nova.conf.CONF
 
 LOG = logging.getLogger(__name__)
 
@@ -106,8 +61,8 @@ def cinderclient(context):
     global _V1_ERROR_RAISED
 
     if not _SESSION:
-        _SESSION = ks_loading.load_session_from_conf_options(CONF,
-                                                             CINDER_OPT_GROUP)
+        _SESSION = ks_loading.load_session_from_conf_options(
+            CONF, nova.conf.cinder.cinder_group.name)
 
     url = None
     endpoint_override = None
@@ -136,7 +91,7 @@ def cinderclient(context):
                   'release, and Nova is still configured to use it. '
                   'Enable the V2 API in Cinder and set '
                   'cinder.catalog_info in nova.conf to use it.')
-        LOG.warn(msg)
+        LOG.warning(msg)
         _V1_ERROR_RAISED = True
 
     return cinder_client.Client(version,
@@ -233,20 +188,16 @@ def translate_cinder_exception(method):
         except (cinder_exception.ConnectionError,
                 keystone_exception.ConnectionError):
             exc_type, exc_value, exc_trace = sys.exc_info()
-            exc_value = exception.CinderConnectionFailed(
-                reason=six.text_type(exc_value))
-            six.reraise(exc_value, None, exc_trace)
+            _reraise(exception.CinderConnectionFailed(
+                reason=six.text_type(exc_value)))
         except (keystone_exception.BadRequest,
                 cinder_exception.BadRequest):
             exc_type, exc_value, exc_trace = sys.exc_info()
-            exc_value = exception.InvalidInput(
-                reason=six.text_type(exc_value))
-            six.reraise(exc_value, None, exc_trace)
+            _reraise(exception.InvalidInput(reason=six.text_type(exc_value)))
         except (keystone_exception.Forbidden,
                 cinder_exception.Forbidden):
             exc_type, exc_value, exc_trace = sys.exc_info()
-            exc_value = exception.Forbidden(message=six.text_type(exc_value))
-            six.reraise(exc_value, None, exc_trace)
+            _reraise(exception.Forbidden(six.text_type(exc_value)))
         return res
     return wrapper
 
@@ -257,13 +208,10 @@ def translate_volume_exception(method):
     def wrapper(self, ctx, volume_id, *args, **kwargs):
         try:
             res = method(self, ctx, volume_id, *args, **kwargs)
-        except (cinder_exception.ClientException,
-                keystone_exception.ClientException):
-            exc_type, exc_value, exc_trace = sys.exc_info()
-            if isinstance(exc_value, (keystone_exception.NotFound,
-                                      cinder_exception.NotFound)):
-                exc_value = exception.VolumeNotFound(volume_id=volume_id)
-            six.reraise(exc_value, None, exc_trace)
+        except (keystone_exception.NotFound, cinder_exception.NotFound):
+            _reraise(exception.VolumeNotFound(volume_id=volume_id))
+        except cinder_exception.OverLimit:
+            _reraise(exception.OverQuota(overs='volumes'))
         return res
     return translate_cinder_exception(wrapper)
 
@@ -275,15 +223,29 @@ def translate_snapshot_exception(method):
     def wrapper(self, ctx, snapshot_id, *args, **kwargs):
         try:
             res = method(self, ctx, snapshot_id, *args, **kwargs)
-        except (cinder_exception.ClientException,
-                keystone_exception.ClientException):
-            exc_type, exc_value, exc_trace = sys.exc_info()
-            if isinstance(exc_value, (keystone_exception.NotFound,
-                                      cinder_exception.NotFound)):
-                exc_value = exception.SnapshotNotFound(snapshot_id=snapshot_id)
-            six.reraise(exc_value, None, exc_trace)
+        except (keystone_exception.NotFound, cinder_exception.NotFound):
+            _reraise(exception.SnapshotNotFound(snapshot_id=snapshot_id))
         return res
     return translate_cinder_exception(wrapper)
+
+
+def translate_mixed_exceptions(method):
+    """Transforms exceptions that can come from both volumes and snapshots."""
+    def wrapper(self, ctx, res_id, *args, **kwargs):
+        try:
+            res = method(self, ctx, res_id, *args, **kwargs)
+        except (keystone_exception.NotFound, cinder_exception.NotFound):
+            _reraise(exception.VolumeNotFound(volume_id=res_id))
+        except cinder_exception.OverLimit:
+            _reraise(exception.OverQuota(overs='snapshots'))
+        return res
+    return translate_cinder_exception(wrapper)
+
+
+def _reraise(desired_exc):
+    exc_type, exc_value, exc_trace = sys.exc_info()
+    exc_value = desired_exc
+    six.reraise(exc_value, None, exc_trace)
 
 
 class API(object):
@@ -434,7 +396,8 @@ class API(object):
                               {'vol': volume_id,
                                'host': connector.get('host'),
                                'msg': six.text_type(exc),
-                               'code': exc.code})
+                               'code': (
+                                exc.code if hasattr(exc, 'code') else None)})
 
     @translate_volume_exception
     def terminate_connection(self, context, volume_id, connector):
@@ -447,7 +410,7 @@ class API(object):
         return cinderclient(context).volumes.migrate_volume_completion(
             old_volume_id, new_volume_id, error)
 
-    @translate_cinder_exception
+    @translate_volume_exception
     def create(self, context, size, name, description, snapshot=None,
                image_id=None, volume_type=None, metadata=None,
                availability_zone=None):
@@ -473,11 +436,8 @@ class API(object):
             kwargs['name'] = name
             kwargs['description'] = description
 
-        try:
-            item = client.volumes.create(size, **kwargs)
-            return _untranslate_volume_summary_view(context, item)
-        except cinder_exception.OverLimit:
-            raise exception.OverQuota(overs='volumes')
+        item = client.volumes.create(size, **kwargs)
+        return _untranslate_volume_summary_view(context, item)
 
     @translate_volume_exception
     def delete(self, context, volume_id):
@@ -502,7 +462,7 @@ class API(object):
 
         return rvals
 
-    @translate_volume_exception
+    @translate_mixed_exceptions
     def create_snapshot(self, context, volume_id, name, description):
         item = cinderclient(context).volume_snapshots.create(volume_id,
                                                              False,
@@ -510,7 +470,7 @@ class API(object):
                                                              description)
         return _untranslate_snapshot_summary_view(context, item)
 
-    @translate_volume_exception
+    @translate_mixed_exceptions
     def create_snapshot_force(self, context, volume_id, name, description):
         item = cinderclient(context).volume_snapshots.create(volume_id,
                                                              True,

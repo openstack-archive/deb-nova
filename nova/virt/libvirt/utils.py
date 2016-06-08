@@ -24,11 +24,11 @@ import re
 
 from lxml import etree
 from oslo_concurrency import processutils
-from oslo_config import cfg
 from oslo_log import log as logging
 
 from nova.compute import arch
 from nova.compute import vm_mode
+import nova.conf
 from nova.i18n import _
 from nova.i18n import _LI
 from nova import utils
@@ -37,16 +37,7 @@ from nova.virt.libvirt import config as vconfig
 from nova.virt.libvirt.volume import remotefs
 from nova.virt import volumeutils
 
-libvirt_opts = [
-    cfg.BoolOpt('snapshot_compression',
-                default=False,
-                help='Compress snapshot images when possible. This '
-                     'currently applies exclusively to qcow2 images'),
-    ]
-
-CONF = cfg.CONF
-CONF.register_opts(libvirt_opts, 'libvirt')
-CONF.import_opt('instances_path', 'nova.compute.manager')
+CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 RESIZE_SNAPSHOT_NAME = 'nova-resize'
@@ -423,21 +414,18 @@ def get_fs_info(path):
             'used': used}
 
 
-def fetch_image(context, target, image_id, user_id, project_id, max_size=0):
+def fetch_image(context, target, image_id, max_size=0):
     """Grab image."""
-    images.fetch_to_raw(context, image_id, target, user_id, project_id,
-                        max_size=max_size)
+    images.fetch_to_raw(context, image_id, target, max_size=max_size)
 
 
-def fetch_raw_image(context, target, image_id, user_id, project_id,
-                    max_size=0):
+def fetch_raw_image(context, target, image_id, max_size=0):
     """Grab initrd or kernel image.
 
     This function does not attempt raw conversion, as these images will
     already be in raw format.
     """
-    images.fetch(context, image_id, target, user_id, project_id,
-                 max_size=max_size)
+    images.fetch(context, image_id, target, max_size=max_size)
 
 
 def get_instance_path(instance, forceold=False, relative=False):

@@ -25,7 +25,7 @@ import uuid as stdlib_uuid
 import iso8601
 import mock
 import netaddr
-from oslo_config import cfg
+
 from oslo_db import api as oslo_db_api
 from oslo_db import exception as db_exc
 from oslo_db.sqlalchemy import enginefacade
@@ -53,6 +53,7 @@ from nova import block_device
 from nova.compute import arch
 from nova.compute import task_states
 from nova.compute import vm_states
+import nova.conf
 from nova import context
 from nova import db
 from nova.db.sqlalchemy import api as sqlalchemy_api
@@ -68,9 +69,7 @@ from nova.tests.unit import matchers
 from nova.tests import uuidsentinel
 from nova import utils
 
-CONF = cfg.CONF
-CONF.import_opt('reserved_host_memory_mb', 'nova.compute.resource_tracker')
-CONF.import_opt('reserved_host_disk_mb', 'nova.compute.resource_tracker')
+CONF = nova.conf.CONF
 
 get_engine = sqlalchemy_api.get_engine
 
@@ -1335,6 +1334,7 @@ class MigrationTestCase(test.TestCase):
         self._create(status='error')
         self._create(status='failed')
         self._create(status='accepted')
+        self._create(status='completed')
         self._create(source_compute='host2', source_node='b',
                 dest_compute='host1', dest_node='a')
         self._create(source_compute='host2', dest_compute='host3')
@@ -1418,6 +1418,14 @@ class MigrationTestCase(test.TestCase):
         for migration in migrations:
             self.assertIn(migration['status'], filters['status'])
 
+    def test_get_migrations_by_filters_unicode_status(self):
+        self._create(status=u"unicode")
+        filters = {"status": u"unicode"}
+        migrations = db.migration_get_all_by_filters(self.ctxt, filters)
+        self.assertEqual(1, len(migrations))
+        for migration in migrations:
+            self.assertIn(migration['status'], filters['status'])
+
     def test_get_migrations_by_filters_with_type(self):
         self._create(status="special", source_compute="host9",
                      migration_type="evacuation")
@@ -1436,6 +1444,16 @@ class MigrationTestCase(test.TestCase):
         self.assertEqual(['host2', 'host2'], sources)
         dests = [x['dest_compute'] for x in migrations]
         self.assertEqual(['host1', 'host3'], dests)
+
+    def test_get_migrations_by_filters_instance_uuid(self):
+        migrations = db.migration_get_all_by_filters(self.ctxt, filters={})
+        for migration in migrations:
+            filters = {'instance_uuid': migration['instance_uuid']}
+            instance_migrations = db.migration_get_all_by_filters(
+                self.ctxt, filters)
+            self.assertEqual(1, len(instance_migrations))
+            self.assertEqual(migration['instance_uuid'],
+                             instance_migrations[0]['instance_uuid'])
 
     def test_migration_get_unconfirmed_by_dest_compute(self):
         # Ensure no migrations are returned.
@@ -1614,6 +1632,89 @@ class InstanceSystemMetadataTestCase(test.TestCase):
                           db.instance_system_metadata_update,
                           self.ctxt, 'nonexistent-uuid',
                           {'key': 'value'}, True)
+
+
+class RefreshUsageTestCase(test.TestCase):
+    """Tests for the db.api.quota_usage_refresh method. """
+
+    def setUp(self):
+        super(RefreshUsageTestCase, self).setUp()
+        self.ctxt = context.get_admin_context()
+        self.project_id = 'project1'
+        self.user_id = 'user1'
+
+    def _quota_refresh(self, keys):
+        """Refresh the in_use count on the QuotaUsage objects.
+           The QuotaUsage objects are created if they don't exist.
+        """
+        def get_sync(resource, usage):
+            def sync(elevated, project_id, user_id):
+                return {resource: usage}
+            return sync
+
+        resources = {}
+        for i in range(4):
+            resource = 'resource%d' % i
+            if i == 2:
+                # test for project level resources
+                resource = 'fixed_ips'
+            if i == 3:
+                # test for project level resources
+                resource = 'floating_ips'
+
+            sync_name = '_sync_%s' % resource
+            resources[resource] = quota.ReservableResource(
+                resource, sync_name, 'quota_res_%d' % i)
+            setattr(sqlalchemy_api, sync_name, get_sync(resource, i + 1))
+            sqlalchemy_api.QUOTA_SYNC_FUNCTIONS[sync_name] = getattr(
+                sqlalchemy_api, sync_name)
+
+        db.quota_usage_refresh(self.ctxt, resources, keys,
+                               until_refresh=3,
+                               max_age=0,
+                               project_id=self.project_id,
+                               user_id=self.user_id)
+
+    def _compare_resource_usages(self, keys, expected, project_id,
+                                 user_id = None):
+        for key in keys:
+            actual = db.quota_usage_get(self.ctxt, project_id, key, user_id)
+            self.assertEqual(expected['project_id'], actual.project_id)
+            self.assertEqual(expected['user_id'], actual.user_id)
+            self.assertEqual(key, actual.resource)
+            self.assertEqual(expected[key]['in_use'], actual.in_use)
+            self.assertEqual(expected[key]['reserved'], actual.reserved)
+            self.assertEqual(expected[key]['until_refresh'],
+                             actual.until_refresh)
+
+    def test_refresh_created_project_usages(self):
+        # The refresh will create the usages and then sync
+        # in_use from 0 to 3 for fixed_ips and 0 to 4 for floating_ips.
+        keys = ['fixed_ips', 'floating_ips']
+        self._quota_refresh(keys)
+        expected = {'project_id': self.project_id,
+                    # User ID will be none for per-project resources
+                    'user_id': None,
+                    'fixed_ips': {'in_use': 3, 'reserved': 0,
+                                  'until_refresh': 3},
+                    'floating_ips': {'in_use': 4, 'reserved': 0,
+                                     'until_refresh': 3}}
+        self._compare_resource_usages(keys, expected, self.project_id,
+                                      self.user_id)
+
+    def test_refresh_created_user_usages(self):
+        # The refresh will create the usages and then sync
+        # in_use from 0 to 1 for resource0 and 0 to 2 for resource1.
+        keys = ['resource0', 'resource1']
+        self._quota_refresh(keys)
+        expected = {'project_id': self.project_id,
+                    'user_id': self.user_id,
+                    'resource0': {'in_use': 1, 'reserved': 0,
+                                  'until_refresh': 3},
+                    'resource1': {'in_use': 2, 'reserved': 0,
+                                  'until_refresh': 3}}
+        self._compare_resource_usages(keys, expected, self.project_id,
+                                      self.user_id)
 
 
 class ReservationTestCase(test.TestCase, ModelsObjectComparatorMixin):
@@ -2510,123 +2611,6 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
             self.assertTrue(result[1]['cleaned'])
             self.assertFalse(result[0]['cleaned'])
 
-    def test_instance_get_all_by_filters_tag_any(self):
-        inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args()
-        inst3 = self.create_instance_with_args()
-
-        t1 = u'tag1'
-        t2 = u'tag2'
-        t3 = u'tag3'
-
-        db.instance_tag_set(self.ctxt, inst1.uuid, [t1])
-        db.instance_tag_set(self.ctxt, inst2.uuid, [t1, t2, t3])
-        db.instance_tag_set(self.ctxt, inst3.uuid, [t3])
-
-        result = db.instance_get_all_by_filters(self.ctxt,
-                                                {'tags-any': [t1, t2]})
-        self._assertEqualListsOfObjects([inst1, inst2], result,
-                ignored_keys=['deleted', 'deleted_at', 'metadata', 'extra',
-                              'system_metadata', 'info_cache', 'pci_devices'])
-
-    def test_instance_get_all_by_filters_tag_any_empty(self):
-        inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args()
-
-        t1 = u'tag1'
-        t2 = u'tag2'
-        t3 = u'tag3'
-        t4 = u'tag4'
-
-        db.instance_tag_set(self.ctxt, inst1.uuid, [t1])
-        db.instance_tag_set(self.ctxt, inst2.uuid, [t1, t2])
-
-        result = db.instance_get_all_by_filters(self.ctxt,
-                                                {'tags-any': [t3, t4]})
-        self.assertEqual([], result)
-
-    def test_instance_get_all_by_filters_tag(self):
-        inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args()
-        inst3 = self.create_instance_with_args()
-
-        t1 = u'tag1'
-        t2 = u'tag2'
-        t3 = u'tag3'
-
-        db.instance_tag_set(self.ctxt, inst1.uuid, [t1, t3])
-        db.instance_tag_set(self.ctxt, inst2.uuid, [t1, t2])
-        db.instance_tag_set(self.ctxt, inst3.uuid, [t1, t2, t3])
-
-        result = db.instance_get_all_by_filters(self.ctxt,
-                                                {'tags': [t1, t2]})
-        self._assertEqualListsOfObjects([inst2, inst3], result,
-                ignored_keys=['deleted', 'deleted_at', 'metadata', 'extra',
-                              'system_metadata', 'info_cache', 'pci_devices'])
-
-    def test_instance_get_all_by_filters_tag_empty(self):
-        inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args()
-
-        t1 = u'tag1'
-        t2 = u'tag2'
-        t3 = u'tag3'
-
-        db.instance_tag_set(self.ctxt, inst1.uuid, [t1])
-        db.instance_tag_set(self.ctxt, inst2.uuid, [t1, t2])
-
-        result = db.instance_get_all_by_filters(self.ctxt,
-                                                {'tags': [t3]})
-        self.assertEqual([], result)
-
-    def test_instance_get_all_by_filters_tag_any_and_tag(self):
-        inst1 = self.create_instance_with_args()
-        inst2 = self.create_instance_with_args()
-        inst3 = self.create_instance_with_args()
-
-        t1 = u'tag1'
-        t2 = u'tag2'
-        t3 = u'tag3'
-        t4 = u'tag4'
-
-        db.instance_tag_set(self.ctxt, inst1.uuid, [t1, t2])
-        db.instance_tag_set(self.ctxt, inst2.uuid, [t1, t2, t4])
-        db.instance_tag_set(self.ctxt, inst3.uuid, [t2, t3])
-
-        result = db.instance_get_all_by_filters(self.ctxt,
-                                                {'tags': [t1, t2],
-                                                 'tags-any': [t3, t4]})
-        self._assertEqualListsOfObjects([inst2], result,
-                ignored_keys=['deleted', 'deleted_at', 'metadata', 'extra',
-                              'system_metadata', 'info_cache', 'pci_devices'])
-
-    def test_instance_get_all_by_filters_tags_and_project_id(self):
-        context1 = context.RequestContext('user1', 'p1')
-        context2 = context.RequestContext('user2', 'p2')
-
-        inst1 = self.create_instance_with_args(context=context1,
-                                               project_id='p1')
-        inst2 = self.create_instance_with_args(context=context1,
-                                               project_id='p1')
-        inst3 = self.create_instance_with_args(context=context2,
-                                               project_id='p2')
-        t1 = u'tag1'
-        t2 = u'tag2'
-        t3 = u'tag3'
-        t4 = u'tag4'
-
-        db.instance_tag_set(context1, inst1.uuid, [t1, t2])
-        db.instance_tag_set(context1, inst2.uuid, [t1, t2, t4])
-        db.instance_tag_set(context2, inst3.uuid, [t1, t2, t3, t4])
-
-        result = db.instance_get_all_by_filters(self.ctxt,
-                                                {'tags': [t1, t2],
-                                                 'tags-any': [t3, t4],
-                                                 'project_id': 'p1'})
-        self._assertEqualListsOfObjects([inst2], result,
-                ignored_keys=['deleted', 'deleted_at', 'metadata', 'extra',
-                              'system_metadata', 'info_cache', 'pci_devices'])
-
     def test_instance_get_all_by_host_and_node_no_join(self):
         instance = self.create_instance_with_args()
         result = db.instance_get_all_by_host_and_node(self.ctxt, 'h1', 'n1')
@@ -2773,6 +2757,23 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         system_meta = db.instance_system_metadata_get(ctxt, instance['uuid'])
         self.assertEqual('baz', system_meta['original_image_ref'])
 
+    def test_delete_block_device_mapping_on_instance_destroy(self):
+        # Makes sure that the block device mapping is deleted when the
+        # related instance is deleted.
+        ctxt = context.get_admin_context()
+        instance = db.instance_create(ctxt, dict(display_name='bdm-test'))
+        bdm = {
+            'volume_id': uuidutils.generate_uuid(),
+            'device_name': '/dev/vdb',
+            'instance_uuid': instance['uuid'],
+        }
+        bdm = db.block_device_mapping_create(ctxt, bdm, legacy=False)
+        db.instance_destroy(ctxt, instance['uuid'])
+        # make sure the bdm is deleted as well
+        bdms = db.block_device_mapping_get_all_by_instance(
+            ctxt, instance['uuid'])
+        self.assertEqual([], bdms)
+
     def test_delete_instance_metadata_on_instance_destroy(self):
         ctxt = context.get_admin_context()
         # Create an instance with some metadata
@@ -2810,6 +2811,23 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         faults = db.instance_fault_get_by_instance_uuids(ctxt, [uuid])
         # Make sure instance faults is deleted as well
         self.assertEqual(0, len(faults[uuid]))
+
+    def test_delete_instance_group_member_on_instance_destroy(self):
+        ctxt = context.get_admin_context()
+        uuid = str(stdlib_uuid.uuid4())
+        db.instance_create(ctxt, {'uuid': uuid})
+        values = {'name': 'fake_name', 'user_id': 'fake',
+                  'project_id': 'fake'}
+        group = db.instance_group_create(ctxt, values,
+                                         policies=None, members=[uuid])
+        self.assertEqual([uuid],
+                         db.instance_group_members_get(ctxt,
+                                                       group['uuid']))
+
+        db.instance_destroy(ctxt, uuid)
+        self.assertEqual([],
+                         db.instance_group_members_get(ctxt,
+                                                       group['uuid']))
 
     def test_instance_update_and_get_original(self):
         instance = self.create_instance_with_args(vm_state='building')
@@ -3384,8 +3402,9 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self._create_service({'version': 3,
                               'host': 'host2',
                               'binary': 'compute'})
-        self.assertEqual(2, db.service_get_minimum_version(self.ctxt,
-                                                           'compute'))
+        self.assertEqual({'compute': 2},
+                         db.service_get_minimum_version(self.ctxt,
+                                                        ['compute']))
 
     def test_service_get_not_found_exception(self):
         self.assertRaises(exception.ServiceNotFound,
@@ -4000,7 +4019,7 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
         flavor2 = self._create_flavor({'name': 'name2', 'flavorid': 'a2',
                                        'extra_specs': specs2})
 
-        db.flavor_destroy(self.ctxt, 'name1')
+        db.flavor_destroy(self.ctxt, 'a1')
 
         self.assertRaises(exception.FlavorNotFound,
                           db.flavor_get, self.ctxt, flavor1['id'])
@@ -4049,7 +4068,7 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
     def test_flavor_get_all(self):
         # NOTE(boris-42): Remove base instance types
         for it in db.flavor_get_all(self.ctxt):
-            db.flavor_destroy(self.ctxt, it['name'])
+            db.flavor_destroy(self.ctxt, it['flavorid'])
 
         flavors = [
             {'root_gb': 600, 'memory_mb': 100, 'disabled': True,
@@ -4136,10 +4155,30 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
             assert_sorted_by_key_both_dir(attr)
 
     def test_flavor_get_all_limit(self):
+        flavors = [
+            {'root_gb': 1, 'memory_mb': 100, 'disabled': True,
+             'is_public': False, 'name': 'flavor1', 'flavorid': 'flavor1'},
+            {'root_gb': 100, 'memory_mb': 200, 'disabled': True,
+             'is_public': False, 'name': 'flavor2', 'flavorid': 'flavor2'},
+            {'root_gb': 100, 'memory_mb': 300, 'disabled': True,
+             'is_public': False, 'name': 'flavor3', 'flavorid': 'flavor3'},
+        ]
+        flavors = [self._create_flavor(it) for it in flavors]
+
         limited_flavors = db.flavor_get_all(self.ctxt, limit=2)
         self.assertEqual(2, len(limited_flavors))
 
     def test_flavor_get_all_list_marker(self):
+        flavors = [
+            {'root_gb': 1, 'memory_mb': 100, 'disabled': True,
+             'is_public': False, 'name': 'flavor1', 'flavorid': 'flavor1'},
+            {'root_gb': 100, 'memory_mb': 200, 'disabled': True,
+             'is_public': False, 'name': 'flavor2', 'flavorid': 'flavor2'},
+            {'root_gb': 100, 'memory_mb': 300, 'disabled': True,
+             'is_public': False, 'name': 'flavor3', 'flavorid': 'flavor3'},
+        ]
+        flavors = [self._create_flavor(it) for it in flavors]
+
         all_flavors = db.flavor_get_all(self.ctxt)
 
         # Set the 3rd result as the marker
@@ -4256,7 +4295,7 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
     def test_flavor_get_by_flavor_id_deleted(self):
         flavor = self._create_flavor({'name': 'abc', 'flavorid': '123'})
 
-        db.flavor_destroy(self.ctxt, 'abc')
+        db.flavor_destroy(self.ctxt, '123')
 
         flavor_by_fid = db.flavor_get_by_flavor_id(self.ctxt,
                 flavor['flavorid'], read_deleted='yes')
@@ -4268,7 +4307,7 @@ class InstanceTypeTestCase(BaseInstanceTypeTestCase):
         param_dict = {'name': 'abc', 'flavorid': '123'}
 
         self._create_flavor(param_dict)
-        db.flavor_destroy(self.ctxt, 'abc')
+        db.flavor_destroy(self.ctxt, '123')
 
         # Recreate the flavor with the same params
         flavor = self._create_flavor(param_dict)
@@ -4434,13 +4473,13 @@ class InstanceTypeAccessTestCase(BaseInstanceTypeTestCase):
         for v in values:
             self._create_flavor_access(*v)
 
-        db.flavor_destroy(self.ctxt, flavor1['name'])
+        db.flavor_destroy(self.ctxt, flavor1['flavorid'])
 
         p = (self.ctxt, flavor1['flavorid'])
         self.assertEqual(0, len(db.flavor_access_get_by_flavor_id(*p)))
         p = (self.ctxt, flavor2['flavorid'])
         self.assertEqual(1, len(db.flavor_access_get_by_flavor_id(*p)))
-        db.flavor_destroy(self.ctxt, flavor2['name'])
+        db.flavor_destroy(self.ctxt, flavor2['flavorid'])
         self.assertEqual(0, len(db.flavor_access_get_by_flavor_id(*p)))
 
 
@@ -6370,7 +6409,8 @@ class VirtualInterfaceTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'instance_uuid': self.instance_uuid,
             'address': 'fake_address',
             'network_id': self.network['id'],
-            'uuid': str(stdlib_uuid.uuid4())
+            'uuid': str(stdlib_uuid.uuid4()),
+            'tag': 'fake-tag',
         }
 
     def mock_db_query_first_to_raise_data_error_exception(self):
@@ -7425,7 +7465,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         # entries under the new resource-providers schema return non-None
         # values for the inv_* fields in the returned list of dicts from
         # _compute_node_select().
-        nodes = sqlalchemy_api._compute_node_select(self.ctxt)
+        nodes = sqlalchemy_api._compute_node_fetchall(self.ctxt)
         self.assertEqual(1, len(nodes))
         node = nodes[0]
         self.assertIsNone(node['inv_memory_mb'])
@@ -7514,12 +7554,6 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(64, node['inv_memory_mb_used'])
         self.assertEqual(16, node['inv_vcpus'])
         self.assertEqual(2, node['inv_vcpus_used'])
-
-    def test_compute_node_exec(self):
-        results = sqlalchemy_api._compute_node_select(self.ctxt)
-        self.assertIsInstance(results, list)
-        self.assertEqual(1, len(results))
-        self.assertIsInstance(results[0], dict)
 
     def test_compute_node_get_all_deleted_compute_node(self):
         # Create a service and compute node and ensure we can find its stats;
@@ -7724,11 +7758,83 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self._assertEqualListsOfObjects(nodes_created, nodes,
                         ignored_keys=self._ignored_keys + ['stats', 'service'])
 
-    def test_compute_node_statistics(self):
+    def test_compute_node_statistics_no_resource_providers(self):
+        service_dict = dict(host='hostA', binary='nova-compute',
+                            topic=CONF.compute_topic, report_count=1,
+                            disabled=False)
+        service = db.service_create(self.ctxt, service_dict)
+        # Define the various values for the new compute node
+        new_vcpus = 4
+        new_memory_mb = 4096
+        new_local_gb = 2048
+        new_vcpus_used = 1
+        new_memory_mb_used = 1024
+        new_local_gb_used = 100
+        new_free_ram_mb = 3072
+        new_free_disk_gb = 1948
+        new_running_vms = 1
+        new_current_workload = 0
+
+        # Calculate the expected values by adding the values for the new
+        # compute node to those for self.item
+        itm = self.item
+        exp_count = 2
+        exp_vcpus = new_vcpus + itm['vcpus']
+        exp_memory_mb = new_memory_mb + itm['memory_mb']
+        exp_local_gb = new_local_gb + itm['local_gb']
+        exp_vcpus_used = new_vcpus_used + itm['vcpus_used']
+        exp_memory_mb_used = new_memory_mb_used + itm['memory_mb_used']
+        exp_local_gb_used = new_local_gb_used + itm['local_gb_used']
+        exp_free_ram_mb = new_free_ram_mb + itm['free_ram_mb']
+        exp_free_disk_gb = new_free_disk_gb + itm['free_disk_gb']
+        exp_running_vms = new_running_vms + itm['running_vms']
+        exp_current_workload = new_current_workload + itm['current_workload']
+
+        # Create the new compute node
+        compute_node_dict = dict(vcpus=new_vcpus,
+                                 memory_mb=new_memory_mb,
+                                 local_gb=new_local_gb,
+                                 uuid=uuidsentinel.fake_compute_node,
+                                 vcpus_used=new_vcpus_used,
+                                 memory_mb_used=new_memory_mb_used,
+                                 local_gb_used=new_local_gb_used,
+                                 free_ram_mb=new_free_ram_mb,
+                                 free_disk_gb=new_free_disk_gb,
+                                 hypervisor_type="xen",
+                                 hypervisor_version=1,
+                                 cpu_info="",
+                                 running_vms=new_running_vms,
+                                 current_workload=new_current_workload,
+                                 service_id=service['id'],
+                                 host=service['host'],
+                                 disk_available_least=100,
+                                 hypervisor_hostname='abracadabra',
+                                 host_ip='127.0.0.2',
+                                 supported_instances='',
+                                 pci_stats='',
+                                 metrics='',
+                                 extra_resources='',
+                                 cpu_allocation_ratio=16.0,
+                                 ram_allocation_ratio=1.5,
+                                 disk_allocation_ratio=1.0,
+                                 stats='',
+                                 numa_topology='')
+        db.compute_node_create(self.ctxt, compute_node_dict)
+
+        # Get the stats, and make sure the stats agree with the expected
+        # amounts.
         stats = db.compute_node_statistics(self.ctxt)
-        self.assertEqual(stats.pop('count'), 1)
-        for k, v in stats.items():
-            self.assertEqual(v, self.item[k])
+        self.assertEqual(exp_count, stats['count'])
+        self.assertEqual(exp_vcpus, stats['vcpus'])
+        self.assertEqual(exp_memory_mb, stats['memory_mb'])
+        self.assertEqual(exp_local_gb, stats['local_gb'])
+        self.assertEqual(exp_vcpus_used, stats['vcpus_used'])
+        self.assertEqual(exp_memory_mb_used, stats['memory_mb_used'])
+        self.assertEqual(exp_local_gb_used, stats['local_gb_used'])
+        self.assertEqual(exp_free_ram_mb, stats['free_ram_mb'])
+        self.assertEqual(exp_free_disk_gb, stats['free_disk_gb'])
+        self.assertEqual(exp_running_vms, stats['running_vms'])
+        self.assertEqual(exp_current_workload, stats['current_workload'])
 
     def test_compute_node_statistics_disabled_service(self):
         serv = db.service_get_by_host_and_topic(
@@ -9354,29 +9460,6 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(0, total)
         self.assertEqual(0, done)
 
-    def test_migrate_computenode(self):
-        db.compute_node_create(self.context,
-                               dict(vcpus=1, memory_mb=512, local_gb=10,
-                                    vcpus_used=0, memory_mb_used=256,
-                                    local_gb_used=5,
-                                    hypervisor_type='HyperDanVM',
-                                    hypervisor_version='34', cpu_info='foo'))
-        db.compute_node_create(self.context,
-                               dict(vcpus=1, memory_mb=512, local_gb=10,
-                                    uuid='foo',
-                                    vcpus_used=0, memory_mb_used=256,
-                                    local_gb_used=5,
-                                    hypervisor_type='HyperDanVM',
-                                    hypervisor_version='34', cpu_info='foo'))
-        total, done = db.computenode_uuids_online_data_migration(
-            self.context, 10)
-        self.assertEqual(1, total)
-        self.assertEqual(1, done)
-        total, done = db.computenode_uuids_online_data_migration(
-            self.context, 10)
-        self.assertEqual(0, total)
-        self.assertEqual(0, done)
-
 
 class RetryOnDeadlockTestCase(test.TestCase):
     def test_without_deadlock(self):
@@ -9745,3 +9828,249 @@ class TestInstanceInfoCache(test.TestCase):
         info_cache = db.instance_info_cache_get(self.context, instance_uuid)
         self.assertEqual(network_info, info_cache.network_info)
         self.assertEqual(instance_uuid, info_cache.instance_uuid)
+
+    @mock.patch.object(models.InstanceInfoCache, 'update')
+    def test_instance_info_cache_retried_on_deadlock(self, update):
+        update.side_effect = [db_exc.DBDeadlock(), db_exc.DBDeadlock(), None]
+
+        instance = db.instance_create(self.context, {})
+        network_info = 'net'
+        updated = db.instance_info_cache_update(self.context, instance.uuid,
+                                                {'network_info': network_info})
+        self.assertEqual(instance.uuid, updated.instance_uuid)
+
+    @mock.patch.object(models.InstanceInfoCache, 'update')
+    def test_instance_info_cache_not_retried_on_deadlock_forever(self, update):
+        update.side_effect = db_exc.DBDeadlock
+
+        instance = db.instance_create(self.context, {})
+        network_info = 'net'
+
+        self.assertRaises(db_exc.DBDeadlock,
+                          db.instance_info_cache_update,
+                          self.context, instance.uuid,
+                          {'network_info': network_info})
+
+
+class TestInstanceTagsFiltering(test.TestCase):
+    sample_data = {
+        'project_id': 'project1'
+    }
+
+    def setUp(self):
+        super(TestInstanceTagsFiltering, self).setUp()
+        self.ctxt = context.RequestContext('user1', 'project1')
+
+    def _create_instance_with_kwargs(self, **kw):
+        context = kw.pop('context', self.ctxt)
+        data = self.sample_data.copy()
+        data.update(kw)
+        return db.instance_create(context, data)
+
+    def _create_instances(self, count):
+        return [self._create_instance_with_kwargs()['uuid']
+                for i in range(count)]
+
+    def _assertEqualInstanceUUIDs(self, expected_uuids, observed_instances):
+        observed_uuids = [inst['uuid'] for inst in observed_instances]
+        self.assertEqual(sorted(expected_uuids), sorted(observed_uuids))
+
+    def test_instance_get_all_by_filters_tag_any(self):
+        uuids = self._create_instances(3)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't3'])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags-any': [u't1', u't2']})
+        self._assertEqualInstanceUUIDs([uuids[0], uuids[1]], result)
+
+    def test_instance_get_all_by_filters_tag_any_empty(self):
+        uuids = self._create_instances(2)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2'])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags-any': [u't3', u't4']})
+        self.assertEqual([], result)
+
+    def test_instance_get_all_by_filters_tag(self):
+        uuids = self._create_instances(3)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2', u't3'])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags': [u't1', u't2']})
+        self._assertEqualInstanceUUIDs([uuids[1], uuids[2]], result)
+
+    def test_instance_get_all_by_filters_tag_empty(self):
+        uuids = self._create_instances(2)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2'])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags': [u't3']})
+        self.assertEqual([], result)
+
+    def test_instance_get_all_by_filters_tag_any_and_tag(self):
+        uuids = self._create_instances(3)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2', u't4'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't2', u't3'])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags': [u't1', u't2'],
+                                                 'tags-any': [u't3', u't4']})
+        self._assertEqualInstanceUUIDs([uuids[1]], result)
+
+    def test_instance_get_all_by_filters_tags_and_project_id(self):
+        context1 = context.RequestContext('user1', 'p1')
+        context2 = context.RequestContext('user2', 'p2')
+
+        uuid1 = self._create_instance_with_kwargs(
+            context=context1, project_id='p1')['uuid']
+        uuid2 = self._create_instance_with_kwargs(
+            context=context1, project_id='p1')['uuid']
+        uuid3 = self._create_instance_with_kwargs(
+            context=context2, project_id='p2')['uuid']
+
+        db.instance_tag_set(context1, uuid1, [u't1', u't2'])
+        db.instance_tag_set(context1, uuid2, [u't1', u't2', u't4'])
+        db.instance_tag_set(context2, uuid3, [u't1', u't2', u't3', u't4'])
+
+        result = db.instance_get_all_by_filters(context.get_admin_context(),
+                                                {'tags': [u't1', u't2'],
+                                                 'tags-any': [u't3', u't4'],
+                                                 'project_id': 'p1'})
+        self._assertEqualInstanceUUIDs([uuid2], result)
+
+    def test_instance_get_all_by_filters_not_tags(self):
+        uuids = self._create_instances(8)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't2'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[3], [u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[4], [u't3'])
+        db.instance_tag_set(self.ctxt, uuids[5], [u't1', u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[6], [u't3', u't4'])
+        db.instance_tag_set(self.ctxt, uuids[7], [])
+
+        result = db.instance_get_all_by_filters(
+            self.ctxt, {'not-tags': [u't1', u't2']})
+
+        self._assertEqualInstanceUUIDs([uuids[0], uuids[1], uuids[3], uuids[4],
+                                        uuids[6], uuids[7]], result)
+
+    def test_instance_get_all_by_filters_not_tags_any(self):
+        uuids = self._create_instances(8)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't2'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[3], [u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[4], [u't3'])
+        db.instance_tag_set(self.ctxt, uuids[5], [u't1', u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[6], [u't3', u't4'])
+        db.instance_tag_set(self.ctxt, uuids[7], [])
+
+        result = db.instance_get_all_by_filters(
+            self.ctxt, {'not-tags-any': [u't1', u't2']})
+        self._assertEqualInstanceUUIDs([uuids[4], uuids[6], uuids[7]], result)
+
+    def test_instance_get_all_by_filters_not_tags_and_tags(self):
+        uuids = self._create_instances(5)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1', u't2', u't4', u't5'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2', u't4'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[3], [u't1', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[4], [])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags': [u't1', u't2'],
+                                                 'not-tags': [u't4', u't5']})
+        self._assertEqualInstanceUUIDs([uuids[1], uuids[2]], result)
+
+    def test_instance_get_all_by_filters_tags_contradictory(self):
+        uuids = self._create_instances(4)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[3], [])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags': [u't1'],
+                                                 'not-tags': [u't1']})
+        self.assertEqual([], result)
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags': [u't1'],
+                                                 'not-tags-any': [u't1']})
+        self.assertEqual([], result)
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags-any': [u't1'],
+                                                 'not-tags-any': [u't1']})
+        self.assertEqual([], result)
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags-any': [u't1'],
+                                                 'not-tags': [u't1']})
+        self.assertEqual([], result)
+
+    def test_instance_get_all_by_filters_not_tags_and_tags_any(self):
+        uuids = self._create_instances(6)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't2'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[3], [u't1', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[4], [u't1', u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[5], [])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'tags-any': [u't1', u't2'],
+                                                 'not-tags': [u't1', u't2']})
+        self._assertEqualInstanceUUIDs([uuids[0], uuids[1], uuids[3]], result)
+
+    def test_instance_get_all_by_filters_not_tags_and_not_tags_any(self):
+        uuids = self._create_instances(6)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't2', u't5'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[3], [u't1', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[4], [u't1', u't2', u't4', u't5'])
+        db.instance_tag_set(self.ctxt, uuids[5], [])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                              {'not-tags': [u't1', u't2'],
+                                               'not-tags-any': [u't3', u't4']})
+        self._assertEqualInstanceUUIDs([uuids[0], uuids[1], uuids[5]], result)
+
+    def test_instance_get_all_by_filters_all_tag_filters(self):
+        uuids = self._create_instances(9)
+
+        db.instance_tag_set(self.ctxt, uuids[0], [u't1', u't3', u't7'])
+        db.instance_tag_set(self.ctxt, uuids[1], [u't1', u't2'])
+        db.instance_tag_set(self.ctxt, uuids[2], [u't1', u't2', u't7'])
+        db.instance_tag_set(self.ctxt, uuids[3], [u't1', u't2', u't3', u't5'])
+        db.instance_tag_set(self.ctxt, uuids[4], [u't1', u't2', u't3', u't7'])
+        db.instance_tag_set(self.ctxt, uuids[5], [u't1', u't2', u't3'])
+        db.instance_tag_set(self.ctxt, uuids[6], [u't1', u't2', u't3', u't4',
+                                                  u't5'])
+        db.instance_tag_set(self.ctxt, uuids[7], [u't1', u't2', u't3', u't4',
+                                                  u't5', u't6'])
+        db.instance_tag_set(self.ctxt, uuids[8], [])
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                              {'tags': [u't1', u't2'],
+                                               'tags-any': [u't3', u't4'],
+                                               'not-tags': [u't5', u't6'],
+                                               'not-tags-any': [u't7', u't8']})
+        self._assertEqualInstanceUUIDs([uuids[3], uuids[5], uuids[6]], result)

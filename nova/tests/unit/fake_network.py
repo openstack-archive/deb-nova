@@ -13,12 +13,13 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
-from oslo_config import cfg
+
 from oslo_serialization import jsonutils
 from six.moves import range
 
 from nova.compute import api as compute_api
 from nova.compute import manager as compute_manager
+import nova.conf
 import nova.context
 from nova import db
 from nova import exception
@@ -36,8 +37,7 @@ from nova.tests import uuidsentinel as uuids
 
 
 HOST = "testhost"
-CONF = cfg.CONF
-CONF.import_opt('use_ipv6', 'nova.netconf')
+CONF = nova.conf.CONF
 
 
 class FakeModel(dict):
@@ -60,7 +60,8 @@ class FakeNetworkManager(network_manager.NetworkManager):
                  'instance_uuid': uuids.instance_1,
                  'network_id': 1,
                  'uuid': uuids.vifs_1,
-                 'address': 'DC:AD:BE:FF:EF:01'},
+                 'address': 'DC:AD:BE:FF:EF:01',
+                 'tag': 'fake-tag1'},
                 {'id': 1,
                  'created_at': None,
                  'updated_at': None,
@@ -69,7 +70,8 @@ class FakeNetworkManager(network_manager.NetworkManager):
                  'instance_uuid': uuids.instance_2,
                  'network_id': 21,
                  'uuid': uuids.vifs_2,
-                 'address': 'DC:AD:BE:FF:EF:02'},
+                 'address': 'DC:AD:BE:FF:EF:02',
+                 'tag': 'fake-tag2'},
                 {'id': 2,
                  'created_at': None,
                  'updated_at': None,
@@ -78,7 +80,8 @@ class FakeNetworkManager(network_manager.NetworkManager):
                  'instance_uuid': uuids.instance_1,
                  'network_id': 31,
                  'uuid': uuids.vifs_3,
-                 'address': 'DC:AD:BE:FF:EF:03'}]
+                 'address': 'DC:AD:BE:FF:EF:03',
+                 'tag': None}]
 
         floating_ips = [dict(address='172.16.1.1',
                              fixed_ip_id=100),
@@ -223,7 +226,8 @@ def fake_vif(x):
            'address': 'DE:AD:BE:EF:00:%02x' % x,
            'uuid': getattr(uuids, 'vif%i' % x),
            'network_id': x,
-           'instance_uuid': uuids.vifs_1}
+           'instance_uuid': uuids.vifs_1,
+           'tag': 'fake-tag'}
 
 
 def floating_ip_ids():
@@ -449,11 +453,11 @@ def _get_instances_with_cached_ips(orig_func, *args, **kwargs):
     if isinstance(instances, (list, obj_base.ObjectListBase)):
         for instance in instances:
             _info_cache_for(instance)
-            fake_device.claim(instance)
+            fake_device.claim(instance.uuid)
             fake_device.allocate(instance)
     else:
         _info_cache_for(instances)
-        fake_device.claim(instances)
+        fake_device.claim(instances.uuid)
         fake_device.allocate(instances)
     return instances
 
