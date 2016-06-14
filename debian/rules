@@ -72,7 +72,7 @@ override_dh_install:
 		--namespace oslo.concurrency \
 		--namespace keystonemiddleware.auth_token
 	# Otherwise, this is set to the build dir
-	pkgos-fix-config-default $(CURDIR)debian/nova-common/usr/share/nova-common/nova.conf DEFAULT pybasedir /usr/lib/python2.7/dist-packages
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT pybasedir /usr/lib/python2.7/dist-packages
 
 	# General needed fixes
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf oslo_concurrency lock_path /var/lock/nova
