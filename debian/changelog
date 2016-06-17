@@ -1,6 +1,9 @@
 nova (2:14.0.0~b1-2) UNRELEASED; urgency=medium
 
   * Fixed correct path for $pybasedir.
+  * Fixed bindir to /usr/bin.
+  * Fixed use_neutron to True by default.
+  * Fixed api_servers to http://localhost:9292 by default.
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 14 Jun 2016 19:38:23 +0000
 

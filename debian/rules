@@ -73,6 +73,7 @@ override_dh_install:
 		--namespace keystonemiddleware.auth_token
 	# Otherwise, this is set to the build dir
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT pybasedir /usr/lib/python2.7/dist-packages
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT bindir /usr/bin
 
 	# General needed fixes
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf oslo_concurrency lock_path /var/lock/nova
@@ -81,6 +82,7 @@ override_dh_install:
 	# Let's use Neutron by default, and not stupid nova-network
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT security_group_api neutron
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT network_api_class nova.network.neutronv2.api.API
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT use_neutron True
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT linuxnet_interface_driver nova.network.linux_net.LinuxOVSInterfaceDriver
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT firewall_driver nova.virt.firewall.NoopFirewallDriver
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf DEFAULT default_floating_pool ext-nat
@@ -107,6 +109,9 @@ override_dh_install:
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice server_listen 0.0.0.0
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice server_proxyclient_address \$$my_ip
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf spice enabled true
+
+	# Set glance on localhost by default, to allow PoC to work
+	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf glance api_servers http://localhost:9292
 
 	# Works by default
 	pkgos-fix-config-default $(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf keystone_authtoken auth_protocol http
