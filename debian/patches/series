@@ -2,3 +2,4 @@ path-to-the-xenhost.conf-fixup.patch
 Add_nova-idmapshift_to_rootwrap_filters.patch
 Install-missed-files.patch
 support-all-paramiko-versions.patch
+fix-requirements.txt
