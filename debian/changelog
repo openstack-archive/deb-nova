@@ -1,3 +1,9 @@
+nova (2:13.1.0-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 21 Jun 2016 11:05:26 +0200
+
 nova (2:13.0.0-4) unstable; urgency=medium
 
   * Fix pybasedir to a correct value. (Closes: #827179).
