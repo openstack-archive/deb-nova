@@ -5,6 +5,8 @@ nova (2:13.1.0-1) unstable; urgency=medium
     python-paramiko (>= 2).
   * Build-Depends: python-oslo.concurrency should be >= 3.7.1 for this release,
     even though upstream advertises otherwise.
+  * Do not run broken unit test with Paramiko 2.x:
+    test_crypto.KeyPairTest.test_generate_key_pair_mocked_private_key
 
  -- Thomas Goirand <zigo@debian.org>  Tue, 21 Jun 2016 11:05:26 +0200
 
