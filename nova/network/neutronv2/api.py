@@ -331,6 +331,8 @@ class API(base_api.NetworkAPI):
             if port_binding:
                 port_req_body['port']['binding:host_id'] = None
                 port_req_body['port']['binding:profile'] = {}
+            if constants.DNS_INTEGRATION in self.extensions:
+                port_req_body['port']['dns_name'] = ''
             try:
                 port_client.update_port(port_id, port_req_body)
             except Exception:

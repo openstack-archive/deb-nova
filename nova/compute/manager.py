@@ -2366,12 +2366,20 @@ class ComputeManager(manager.Manager):
                           instance=instance)
             except (cinder_exception.EndpointNotFound,
                     keystone_exception.EndpointNotFound) as exc:
-                LOG.warning(_LW('Ignoring EndpointNotFound: %s'), exc,
+                LOG.warning(_LW('Ignoring EndpointNotFound for '
+                                'volume %(volume_id)s: %(exc)s'),
+                            {'exc': exc, 'volume_id': bdm.volume_id},
                             instance=instance)
             except cinder_exception.ClientException as exc:
-                LOG.warning(_LW('Ignoring Unknown cinder exception: %s'), exc,
+                LOG.warning(_LW('Ignoring unknown cinder exception for '
+                                'volume %(volume_id)s: %(exc)s'),
+                            {'exc': exc, 'volume_id': bdm.volume_id},
                             instance=instance)
-
+            except Exception as exc:
+                LOG.warning(_LW('Ignoring unknown exception for '
+                                'volume %(volume_id)s: %(exc)s'),
+                            {'exc': exc, 'volume_id': bdm.volume_id},
+                            instance=instance)
         if vol_bdms:
             LOG.info(_LI('Took %(time).2f seconds to detach %(num)s volumes '
                          'for instance.'),
@@ -2889,7 +2897,7 @@ class ComputeManager(manager.Manager):
             image_meta = objects.ImageMeta.from_image_ref(
                 context, self.image_api, image_ref)
         else:
-            image_meta = objects.ImageMeta.from_dict({})
+            image_meta = instance.image_meta
 
         # This instance.exists message should contain the original
         # image_ref, not the new one.  Since the DB has been updated
@@ -6785,28 +6793,29 @@ class ComputeManager(manager.Manager):
                                          in migrations])
 
         inst_filters = {'deleted': True, 'soft_deleted': False,
-                        'uuid': inst_uuid_from_migrations, 'host': CONF.host}
+                        'uuid': inst_uuid_from_migrations}
         attrs = ['info_cache', 'security_groups', 'system_metadata']
         with utils.temporary_mutation(context, read_deleted='yes'):
             instances = objects.InstanceList.get_by_filters(
                 context, inst_filters, expected_attrs=attrs, use_slave=True)
 
         for instance in instances:
-            for migration in migrations:
-                if instance.uuid == migration.instance_uuid:
-                    # Delete instance files if not cleanup properly either
-                    # from the source or destination compute nodes when
-                    # the instance is deleted during resizing.
-                    self.driver.delete_instance_files(instance)
-                    try:
-                        migration.status = 'failed'
-                        with migration.obj_as_admin():
-                            migration.save()
-                    except exception.MigrationNotFound:
-                        LOG.warning(_LW("Migration %s is not found."),
-                                    migration.id, context=context,
-                                    instance=instance)
-                    break
+            if instance.host != CONF.host:
+                for migration in migrations:
+                    if instance.uuid == migration.instance_uuid:
+                        # Delete instance files if not cleanup properly either
+                        # from the source or destination compute nodes when
+                        # the instance is deleted during resizing.
+                        self.driver.delete_instance_files(instance)
+                        try:
+                            migration.status = 'failed'
+                            with migration.obj_as_admin():
+                                migration.save()
+                        except exception.MigrationNotFound:
+                            LOG.warning(_LW("Migration %s is not found."),
+                                        migration.id, context=context,
+                                        instance=instance)
+                        break
 
     @messaging.expected_exceptions(exception.InstanceQuiesceNotSupported,
                                    exception.QemuGuestAgentNotEnabled,

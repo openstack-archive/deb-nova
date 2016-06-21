@@ -1111,6 +1111,10 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         exc = exception.DiskNotFound(location="not\\here")
         self._test_shutdown_instance_exception(exc)
 
+    def test_shutdown_instance_other_exception(self):
+        exc = Exception('some other exception')
+        self._test_shutdown_instance_exception(exc)
+
     def _test_init_instance_retries_reboot(self, instance, reboot_type,
                                            return_power_state):
         instance.host = self.compute.host
@@ -1576,13 +1580,10 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         # files deletion for those instances whose instance.host is not
         # same as compute host where periodic task is running.
         for inst in fake_instances:
-            for mig in fake_migrations:
-                if inst.uuid == mig.instance_uuid:
-                    self.assertEqual('failed', mig.status)
-
-        # Make sure we filtered the instances by host in the DB query.
-        self.assertEqual(CONF.host,
-                         mock_inst_get_by_filters.call_args[0][1]['host'])
+            if inst.host != CONF.host:
+                for mig in fake_migrations:
+                    if inst.uuid == mig.instance_uuid:
+                        self.assertEqual('failed', mig.status)
 
     def test_cleanup_incomplete_migrations_dest_node(self):
         """Test to ensure instance files are deleted from destination node.

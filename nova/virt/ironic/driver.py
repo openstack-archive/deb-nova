@@ -184,7 +184,9 @@ class IronicDriver(virt_driver.ComputeDriver):
             ironic_states.AVAILABLE, ironic_states.NOSTATE]
         return (node_obj.maintenance or
                 node_obj.power_state in bad_power_states or
-                node_obj.provision_state not in good_provision_states)
+                node_obj.provision_state not in good_provision_states or
+                (node_obj.provision_state in good_provision_states and
+                 node_obj.instance_uuid is not None))
 
     def _node_resources_used(self, node_obj):
         """Determine whether the node's resources are currently used.
@@ -310,7 +312,11 @@ class IronicDriver(virt_driver.ComputeDriver):
             vcpus_used = vcpus = instance_info['vcpus']
             memory_mb_used = memory_mb = instance_info['memory_mb']
             local_gb_used = local_gb = instance_info['local_gb']
-        elif self._node_resources_unavailable(node):
+
+        # Always checking allows us to catch the case where Nova thinks there
+        # are available resources on the Node, but Ironic does not (because it
+        # is not in a usable state): https://launchpad.net/bugs/1503453
+        if self._node_resources_unavailable(node):
             # The node's current state is such that it should not present any
             # of its resources to Nova
             vcpus = 0

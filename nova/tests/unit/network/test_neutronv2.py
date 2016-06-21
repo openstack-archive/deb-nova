@@ -45,6 +45,7 @@ from nova.pci import whitelist as pci_whitelist
 from nova import policy
 from nova import test
 from nova.tests.unit import fake_instance
+from nova.tests import uuidsentinel as uuids
 
 CONF = cfg.CONF
 
@@ -1400,7 +1401,7 @@ class TestNeutronv2(TestNeutronv2Base):
             for net, fip, port, request_id in requested_networks:
                 self.moxed_client.update_port(port)
         for port in ports:
-            self.moxed_client.delete_port(port)
+            self.moxed_client.delete_port(port).InAnyOrder("delete_port_group")
 
         self.mox.StubOutWithMock(api.db, 'instance_info_cache_update')
         api.db.instance_info_cache_update(self.context,
@@ -3802,6 +3803,20 @@ class TestNeutronv2WithMock(test.TestCase):
         self.assertRaises(exceptions.InternalServerError,
                           self.api.get_floating_ips_by_project,
                           self.context)
+
+    def test_unbind_ports_reset_dns_name(self):
+        neutron = mock.Mock()
+        port_client = mock.Mock()
+        with mock.patch.object(self.api, '_has_port_binding_extension',
+                               return_value=False):
+            self.api.extensions = [constants.DNS_INTEGRATION]
+            ports = [uuids.port_id]
+            self.api._unbind_ports(self.context, ports, neutron, port_client)
+            port_req_body = {'port': {'device_id': '',
+                                      'device_owner': '',
+                                      'dns_name': ''}}
+            port_client.update_port.assert_called_once_with(
+                uuids.port_id, port_req_body)
 
 
 class TestNeutronv2ModuleMethods(test.NoDBTestCase):

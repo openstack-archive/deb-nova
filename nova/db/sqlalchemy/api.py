@@ -1949,6 +1949,9 @@ def instance_destroy(context, instance_uuid, constraint=None):
     model_query(context, models.InstanceSystemMetadata).\
             filter_by(instance_uuid=instance_uuid).\
             soft_delete()
+    model_query(context, models.InstanceGroupMember).\
+            filter_by(instance_id=instance_uuid).\
+            soft_delete()
     # NOTE(snikitin): We can't use model_query here, because there is no
     # column 'deleted' in 'tags' table.
     context.session.query(models.Tag).filter_by(
@@ -4765,7 +4768,7 @@ def migration_get_in_progress_by_host_and_node(context, host, node):
                             models.Migration.dest_node == node))).\
             filter(~models.Migration.status.in_(['accepted', 'confirmed',
                                                  'reverted', 'error',
-                                                 'failed'])).\
+                                                 'failed', 'completed'])).\
             options(joinedload_all('instance.system_metadata')).\
             all()
 
@@ -6320,6 +6323,35 @@ def _archive_deleted_rows_for_table(tablename, max_rows):
     # database's limit of maximum parameter in one SQL statement.
     deleted_column = table.c.deleted
     columns = [c.name for c in table.c]
+
+    # NOTE(clecomte): Tables instance_actions and instances_actions_events
+    # have to be manage differently so we soft-delete them here to let
+    # the archive work the same for all tables
+    if tablename == "instance_actions":
+        instances = models.BASE.metadata.tables["instances"]
+        deleted_instances = sql.select([instances.c.uuid]).\
+            where(instances.c.deleted != instances.c.deleted.default.arg)
+        update_statement = table.update().values(deleted=table.c.id).\
+            where(table.c.instance_uuid.in_(deleted_instances))
+
+        conn.execute(update_statement)
+
+    elif tablename == "instance_actions_events":
+        # NOTE(clecomte): we have to grab all the relation from
+        # instances because instance_actions_events rely on
+        # action_id and not uuid
+        instances = models.BASE.metadata.tables["instances"]
+        instance_actions = models.BASE.metadata.tables["instance_actions"]
+        deleted_instances = sql.select([instances.c.uuid]).\
+            where(instances.c.deleted != instances.c.deleted.default.arg)
+        deleted_actions = sql.select([instance_actions.c.id]).\
+            where(instance_actions.c.instance_uuid.in_(deleted_instances))
+
+        update_statement = table.update().values(deleted=table.c.id).\
+            where(table.c.action_id.in_(deleted_actions))
+
+        conn.execute(update_statement)
+
     insert = shadow_table.insert(inline=True).\
         from_select(columns,
                     sql.select([table],

@@ -1254,8 +1254,9 @@ class LibvirtDriver(driver.ComputeDriver):
         # reasonably assumed that no such instances exist in the wild
         # anymore, it should be set back to False (the default) so it will
         # throw errors, like it should.
-        backend.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME,
-                            ignore_errors=True)
+        if backend.check_image_exists():
+            backend.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME,
+                                ignore_errors=True)
 
         if instance.host != CONF.host:
             self._undefine_domain(instance)
@@ -1638,7 +1639,7 @@ class LibvirtDriver(driver.ComputeDriver):
         if (self._host.has_min_version(MIN_LIBVIRT_LIVESNAPSHOT_VERSION,
                                        MIN_QEMU_LIVESNAPSHOT_VERSION,
                                        host.HV_DRIVER_QEMU)
-             and source_type not in ('lvm', 'rbd')
+             and source_type not in ('lvm')
              and not CONF.ephemeral_storage_encryption.enabled
              and not CONF.workarounds.disable_libvirt_livesnapshot):
             live_snapshot = True
@@ -1702,6 +1703,15 @@ class LibvirtDriver(driver.ComputeDriver):
                                                      ignore_errors=True)
             update_task_state(task_state=task_states.IMAGE_PENDING_UPLOAD,
                               expected_state=task_states.IMAGE_UPLOADING)
+
+            # TODO(nic): possibly abstract this out to the snapshot_backend
+            if source_type == 'rbd' and live_snapshot:
+                # Standard snapshot uses qemu-img convert from RBD which is
+                # not safe to run with live_snapshot.
+                live_snapshot = False
+                # Suspend the guest, so this is no longer a live snapshot
+                self._prepare_domain_for_snapshot(context, live_snapshot,
+                                                  state, instance)
 
             snapshot_directory = CONF.libvirt.snapshots_directory
             fileutils.ensure_tree(snapshot_directory)
@@ -2725,7 +2735,9 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         instance_dir = libvirt_utils.get_instance_path(instance)
         unrescue_xml_path = os.path.join(instance_dir, 'unrescue.xml')
+        xml_path = os.path.join(instance_dir, 'libvirt.xml')
         xml = libvirt_utils.load_file(unrescue_xml_path)
+        libvirt_utils.write_to_file(xml_path, xml)
         guest = self._host.get_guest(instance)
 
         # TODO(sahid): We are converting all calls from a
@@ -3345,7 +3357,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 for hdev in [d for d in guest_config.devices
                     if isinstance(d, vconfig.LibvirtConfigGuestHostdevPCI)]:
                     hdbsf = [hdev.domain, hdev.bus, hdev.slot, hdev.function]
-                    dbsf = pci_utils.parse_address(dev['address'])
+                    dbsf = pci_utils.parse_address(dev.address)
                     if [int(x, 16) for x in hdbsf] ==\
                             [int(x, 16) for x in dbsf]:
                         raise exception.PciDeviceDetachFailed(reason=
@@ -3550,6 +3562,15 @@ class LibvirtDriver(driver.ComputeDriver):
         image = self.image_backend.image(instance,
                                          name,
                                          image_type)
+        if (name == 'disk.config' and image_type == 'rbd' and
+                not image.check_image_exists()):
+            # This is likely an older config drive that has not been migrated
+            # to rbd yet. Try to fall back on 'raw' image type.
+            # TODO(melwitt): Add online migration of some sort so we can
+            # remove this fall back once we know all config drives are in rbd.
+            image = self.image_backend.image(instance, name, 'raw')
+            LOG.debug('Config drive not found in RBD, falling back to the '
+                      'instance directory', instance=instance)
         disk_info = disk_mapping[name]
         return image.libvirt_info(disk_info['bus'],
                                   disk_info['dev'],
@@ -5657,8 +5678,13 @@ class LibvirtDriver(driver.ComputeDriver):
             raise exception.
         """
 
-        # NOTE(berendt): virConnectCompareCPU not working for Xen
-        if CONF.libvirt.virt_type not in ['qemu', 'kvm']:
+        # NOTE(kchamart): Comparing host to guest CPU model for emulated
+        # guests (<domain type='qemu'>) should not matter -- in this
+        # mode (QEMU "TCG") the CPU is fully emulated in software and no
+        # hardware acceleration, like KVM, is involved. So, skip the CPU
+        # compatibility check for the QEMU domain type, and retain it for
+        # KVM guests.
+        if CONF.libvirt.virt_type not in ['kvm']:
             return
 
         if guest_cpu is None:
@@ -7448,14 +7474,15 @@ class LibvirtDriver(driver.ComputeDriver):
         # anymore, the try/except/finally should be removed,
         # and ignore_errors should be set back to False (the default) so
         # that problems throw errors, like they should.
-        try:
-            backend.rollback_to_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
-        except exception.SnapshotNotFound:
-            LOG.warning(_LW("Failed to rollback snapshot (%s)"),
-                        libvirt_utils.RESIZE_SNAPSHOT_NAME)
-        finally:
-            backend.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME,
-                                ignore_errors=True)
+        if backend.check_image_exists():
+            try:
+                backend.rollback_to_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
+            except exception.SnapshotNotFound:
+                LOG.warning(_LW("Failed to rollback snapshot (%s)"),
+                            libvirt_utils.RESIZE_SNAPSHOT_NAME)
+            finally:
+                backend.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME,
+                                    ignore_errors=True)
 
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
