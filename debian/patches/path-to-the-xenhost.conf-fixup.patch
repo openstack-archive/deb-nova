@@ -5,7 +5,7 @@ Index: nova/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
 ===================================================================
 --- nova.orig/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
 +++ nova/plugins/xenserver/xenapi/etc/xapi.d/plugins/xenhost
-@@ -50,7 +50,7 @@ _ = pluginlib._
+@@ -52,7 +52,7 @@ _ = pluginlib._
  
  
  host_data_pattern = re.compile(r"\s*(\S+) \([^\)]+\) *: ?(.*)")

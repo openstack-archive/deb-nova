@@ -14,7 +14,7 @@ Index: nova/etc/nova/rootwrap.d/compute.filters
 ===================================================================
 --- nova.orig/etc/nova/rootwrap.d/compute.filters
 +++ nova/etc/nova/rootwrap.d/compute.filters
-@@ -165,6 +165,9 @@ mkswap: CommandFilter, mkswap, root
+@@ -168,6 +168,9 @@ mkswap: CommandFilter, mkswap, root
  # nova/virt/libvirt/utils.py: 'nova-idmapshift'
  nova-idmapshift: CommandFilter, nova-idmapshift, root
  

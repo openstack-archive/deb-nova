@@ -1,0 +1,40 @@
+Description: Support all paramiko versions
+ The interface of paramiko.RSAKey has changed (version 2.0 of Paramiko broke
+ it). This patch makes it possible for Nova to work with both Paramiko from
+ Sid (ie: 2.x) and from Jessie (1.15.1).
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2016-06-21
+
+--- nova-13.1.0.orig/nova/crypto.py
++++ nova-13.1.0/nova/crypto.py
+@@ -182,13 +182,22 @@ def generate_key(bits):
+ 
+ 
+ def generate_key_pair(bits=2048):
+-    key = generate_key(bits)
+-    keyout = six.StringIO()
+-    key.write_private_key(keyout)
+-    private_key = keyout.getvalue()
+-    public_key = '%s %s Generated-by-Nova' % (key.get_name(), key.get_base64())
+-    fingerprint = generate_fingerprint(public_key)
+-    return (private_key, public_key, fingerprint)
++    if map(int, (paramiko.__version__.split(".")))[0] >= 2:
++        key = paramiko.RSAKey.generate(bits)
++        keyout = six.StringIO()
++        key.write_private_key(keyout)
++        private_key = keyout.getvalue()
++        public_key = '%s %s Generated-by-Nova' % (key.get_name(), key.get_base64())
++        fingerprint = generate_fingerprint(public_key)
++        return (private_key, public_key, fingerprint)
++    else:
++        key = generate_key(bits)
++        keyout = six.StringIO()
++        key.write_private_key(keyout)
++        private_key = keyout.getvalue()
++        public_key = '%s %s Generated-by-Nova' % (key.get_name(), key.get_base64())
++        fingerprint = generate_fingerprint(public_key)
++        return (private_key, public_key, fingerprint)
+ 
+ 
+ def fetch_crl(project_id):
