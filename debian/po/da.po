@@ -1,14 +1,14 @@
 # Danish translation nova.
-# Copyright (C) 2015 nova & nedenstående oversættere.
+# Copyright (C) 2016 nova & nedenstående oversættere.
 # This file is distributed under the same license as the nova package.
-# Joe Hansen <joedalton2@yahoo.dk>, 2012, 2013, 2014, 2015.
+# Joe Hansen <joedalton2@yahoo.dk>, 2012, 2013, 2014, 2015, 2016.
 #
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2016-03-29 11:54+0000\n"
-"PO-Revision-Date: 2015-09-28 23:51+0200\n"
+"PO-Revision-Date: 2016-07-09 23:51+0200\n"
 "Last-Translator: Joe Hansen <joedalton2@yahoo.dk>\n"
 "Language-Team: Danish <debian-l10n-danish@lists.debian.org>\n"
 "Language: da\n"
@@ -374,17 +374,14 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:1001
-#, fuzzy
-#| msgid ""
-#| "Note that you will need to have an up and running keystone server on "
-#| "which to connect using the Keystone auth token."
 msgid ""
 "Note that you will need to have an up and running keystone server on which "
 "to connect using a known admin project name, admin username and password. "
 "The admin auth token is not used anymore."
 msgstr ""
 "Bemærk at du skal bruge en op og kørende keystoneserver til at forbinde til "
-"med brug af Keystone-godkendelsessymbolet."
+"via et kendt administratorprojektnavn, administratorbrugernavn og adgangskode. "
+"Administratorens godkendelsessymbol bruges ikke længere."
 
 #. Type: string
 #. Description
@@ -405,10 +402,8 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-api.templates:3001
-#, fuzzy
-#| msgid "Neutron admin tenant name:"
 msgid "Keystone admin name:"
-msgstr "Tenantnavn for Neutronadministrator:"
+msgstr "Administratornavn for Keystone:"
 
 #. Type: string
 #. Description
@@ -422,22 +417,20 @@ msgid ""
 "To register the service endpoint, this package needs to know the Admin "
 "login, name, project name, and password to the Keystone server."
 msgstr ""
+"For at registrere tjenesteslutpunktet så skal denne pakke kende til "
+"administratorlogind, projektnavn og adgangskode for Keystoneserveren."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
-#, fuzzy
-#| msgid "Neutron admin tenant name:"
 msgid "Keystone admin project name:"
-msgstr "Tenantnavn for Neutronadministrator:"
+msgstr "Projektnavn for Keystoneadministratoren:"
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:5001
-#, fuzzy
-#| msgid "Neutron administrator password:"
 msgid "Keystone admin password:"
-msgstr "Adgangskode for Neutronadministratoren:"
+msgstr "Adgangskode for Keystoneadministratoren:"
 
 #. Type: string
 #. Description
@@ -488,24 +481,18 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
-#| msgid "Set up a database for Nova?"
 msgid "Set up a database for Nova API?"
-msgstr "Opsæt en database for Nova?"
+msgstr "Opsæt en database for Nova API?"
 
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
-#| msgid ""
-#| "You can change this setting later on by running \"dpkg-reconfigure -plow "
-#| "nova-common\"."
 msgid ""
 "You can change this setting later on by running \"dpkg-reconfigure -plow "
 "nova-api\"."
 msgstr ""
 "Du kan ændre denne indstilling senere ved at køre »dpkg-reconfigure -plow "
-"nova-common«."
+"nova-api«."
 
 #. Type: select
 #. Description
@@ -535,12 +522,3 @@ msgstr ""
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Dette kan senere redigeres i /etc/default/nova-consoleproxy."
 
-#~ msgid "Keystone Auth Token:"
-#~ msgstr "Godkendelsessymbol for keystone:"
-
-#~ msgid ""
-#~ "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
-#~ "token."
-#~ msgstr ""
-#~ "For at konfigurere sit slutpunkt i Keystone, skal nova-api bruge "
-#~ "godkendelsessymbolet for Keystone."

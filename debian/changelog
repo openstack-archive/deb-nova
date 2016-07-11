@@ -1,3 +1,9 @@
+nova (2:14.0.0~b1-3) UNRELEASED; urgency=medium
+
+  * Updated Danish translation of the debconf (Closes: #830630).
+
+ -- Thomas Goirand <zigo@debian.org>  Mon, 11 Jul 2016 14:18:44 +0200
+
 nova (2:14.0.0~b1-2) experimental; urgency=medium
 
   * Fixed correct path for $pybasedir.
