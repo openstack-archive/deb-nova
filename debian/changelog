@@ -1,5 +1,7 @@
 nova (2:14.0.0~b2-1) experimental; urgency=medium
 
+  * New upstream release.
+  * Fixed (build-)depends for this release.
   * Updated Danish translation of the debconf (Closes: #830630).
 
  -- Thomas Goirand <zigo@debian.org>  Mon, 11 Jul 2016 14:18:44 +0200
