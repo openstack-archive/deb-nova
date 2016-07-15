@@ -1,18 +1,24 @@
 .. -*- rst -*-
-.. needs:parameter_verification
-.. needs:example_verification
-.. needs:body_verification
 
-========
- Images
-========
+====================
+ Images (DEPRECATED)
+====================
 
-Lists, shows details for, and deletes images. Also sets, lists, shows
-details for, and deletes image metadata.
+.. warning::
+
+   These APIs are proxy calls to the Image service. Nova has
+   deprecated all the proxy APIs and users should use the native APIs
+   instead.
+   See: `Relevant Image APIs
+   <http://developer.openstack.org/api-ref-image-v2.html#images-images-v2>`__.
+
+Lists, shows details, creates, updates, and deletes images.
+Also sets, lists, shows details, create, update and deletes image metadata.
 
 An image is a collection of files that you use to create and rebuild a
 server. By default, operators provide pre-built operating system images.
-You can also create custom images. See Compute server actions.
+You can also create custom images. See: `Create Image Action
+<http://developer.openstack.org/api-ref/compute/#create-image-createimage-action>`__.
 
 By default, the ``policy.json`` file authorizes all users to view the
 image size in the ``OS-EXT-IMG-SIZE:size`` extended attribute.
@@ -20,24 +26,38 @@ image size in the ``OS-EXT-IMG-SIZE:size`` extended attribute.
 List Images
 ===========
 
-.. rest_method:: GET /v2.1/{tenant_id}/images
+.. rest_method:: GET /images
 
 List images.
 
 Normal response codes: 200
 
-Error response codes: badRequest(400), unauthorized(401), forbidden(403),
-itemNotFound(404)
+Error response codes: badRequest(400), unauthorized(401), forbidden(403)
 
 Request
 -------
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+  - changes-since: changes-since
+  - server: image_server_query
+  - name: image_name_query
+  - status: image_status_query
+  - minDisk: minDisk
+  - minRam: minRam
+  - type : image_type_query
+  - limit : limit
+  - marker : marker
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+   - images: images
+   - id: image_id_body
+   - name: image_name
+   - links: links
 
 **Example List Images: JSON response**
 
@@ -47,24 +67,48 @@ Response
 List Images With Details
 ========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/images/detail
+.. rest_method:: GET /images/detail
 
 List images with details.
 
 Normal response codes: 200
 
-Error response codes: badRequest(400), unauthorized(401), forbidden(403),
-itemNotFound(404)
+Error response codes: badRequest(400), unauthorized(401), forbidden(403)
 
 Request
 -------
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+  - changes-since: changes-since
+  - server: image_server_query
+  - name: image_name_query
+  - status: image_status_query
+  - minDisk: minDisk
+  - minRam: minRam
+  - type : image_type_query
+  - limit : limit
+  - marker : marker
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+   - images: images
+   - id: image_id_body
+   - name: image_name
+   - minRam: minRam_body
+   - minDisk: minDisk_body
+   - metadata: metadata_image
+   - created: created
+   - updated: updated
+   - status: image_status
+   - progress: image_progress
+   - links: links
+   - server: image_server
+   - OS-EXT-IMG-SIZE:size: image_size
+   - OS-DCF:diskConfig: OS-DCF:diskConfig
 
 **Example List Images Details: JSON response**
 
@@ -75,7 +119,7 @@ Response
 Show Image Details
 ==================
 
-.. rest_method:: GET /v2.1/{tenant_id}/images/{image_id}
+.. rest_method:: GET /images/{image_id}
 
 Shows details for an image.
 
@@ -88,11 +132,27 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+   - images: images
+   - id: image_id_body
+   - name: image_name
+   - minRam: minRam_body
+   - minDisk: minDisk_body
+   - metadata: metadata_image
+   - created: created
+   - updated: updated
+   - status: image_status
+   - progress: image_progress
+   - links: links
+   - server: image_server
+   - OS-EXT-IMG-SIZE:size: image_size
+   - OS-DCF:diskConfig: OS-DCF:diskConfig
 
 **Example Show Image Details: JSON response**
 
@@ -102,7 +162,7 @@ Response
 Delete Image
 ============
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/images/{image_id}
+.. rest_method:: DELETE /images/{image_id}
 
 Deletes an image.
 
@@ -115,16 +175,17 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
 
 Response
 --------
 
+There is no body content for the response of a successful DELETE action.
+
 List Image Metadata
 ===================
 
-.. rest_method:: GET /v2.1/{tenant_id}/images/{image_id}/metadata
+.. rest_method:: GET /images/{image_id}/metadata
 
 List metadata of an image.
 
@@ -137,13 +198,16 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
 
 Response
 --------
 
-**Example Show Image Metadata Details: JSON response**
+.. rest_parameters:: parameters.yaml
+
+   - metadata: metadata_image
+
+**Example List Image Metadata Details: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/images/image-metadata-get-resp.json
    :language: javascript
@@ -151,22 +215,22 @@ Response
 Create Image Metadata
 =====================
 
-.. rest_method:: POST /v2.1/{tenant_id}/images/{image_id}/metadata
+.. rest_method:: POST /images/{image_id}/metadata
 
 Create an image metadata.
 
 Normal response codes: 200
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403),
-itemNotFound(404), requestEntityTooLarge(413)
+itemNotFound(404)
 
 Request
 -------
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
+  - metadata: metadata_image
 
 **Example Create Image Metadata: JSON request**
 
@@ -176,6 +240,10 @@ Request
 Response
 --------
 
+.. rest_parameters:: parameters.yaml
+
+   - metadata: metadata_image
+
 **Example Create Image Metadata: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/images/image-metadata-post-resp.json
@@ -184,22 +252,22 @@ Response
 Update Image Metadata
 =====================
 
-.. rest_method:: PUT /v2.1/{tenant_id}/images/{image_id}/metadata
+.. rest_method:: PUT /images/{image_id}/metadata
 
 Update an image metadata
 
 Normal response codes: 200
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403),
-itemNotFound(404), requestEntityTooLarge(413)
+itemNotFound(404)
 
 Request
 -------
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
+  - metadata: metadata_image
 
 **Example Update Image Metadata: JSON request**
 
@@ -209,6 +277,10 @@ Request
 Response
 --------
 
+.. rest_parameters:: parameters.yaml
+
+   - metadata: metadata_image
+
 **Example Update Image Metadata: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/images/image-metadata-put-resp.json
@@ -217,7 +289,7 @@ Response
 Show Image Metadata Item
 ========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/images/{image_id}/metadata/{key}
+.. rest_method:: GET /images/{image_id}/metadata/{key}
 
 Shows metadata item, by key, for an image.
 
@@ -230,12 +302,15 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
   - key: key
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+   - meta: meta
 
 **Example Show Image Metadata Item Details: JSON response**
 
@@ -245,7 +320,7 @@ Response
 Create Or Update Image Metadata Item
 ====================================
 
-.. rest_method:: PUT /v2.1/{tenant_id}/images/{image_id}/metadata/{key}
+.. rest_method:: PUT /images/{image_id}/metadata/{key}
 
 Creates or updates a metadata item, by key, for an image.
 
@@ -258,9 +333,9 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
   - key: key
+  - meta: meta
 
 **Example Create Or Update Image Metadata Item: JSON request**
 
@@ -270,6 +345,10 @@ Request
 Response
 --------
 
+.. rest_parameters:: parameters.yaml
+
+   - meta: meta
+
 **Example Create Or Update Image Metadata Item: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/images/image-meta-key-put-resp.json
@@ -278,7 +357,7 @@ Response
 Delete Image Metadata Item
 ==========================
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/images/{image_id}/metadata/{key}
+.. rest_method:: DELETE /images/{image_id}/metadata/{key}
 
 Deletes a metadata item, by key, for an image.
 
@@ -291,9 +370,10 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - image_id: image_id
   - key: key
 
 Response
 --------
+
+There is no body content for the response of a successful DELETE action.

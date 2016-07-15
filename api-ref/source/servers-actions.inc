@@ -10,8 +10,8 @@
 Enables all users to perform an action on a server. Specify the action
 in the request body.
 
-You can associate a fixed or floating IP address with a server instance,
-or disassociate a fixed or floating IP address from a server instance.
+You can associate a fixed or floating IP address with a server,
+or disassociate a fixed or floating IP address from a server.
 You can attach a volume to a server.
 
 You can create an image from a server, evacuate a server from a failed
@@ -28,7 +28,7 @@ You can get an RDP, serial, SPICE, or VNC console for a server.
 Add (Associate) Floating Ip (addFloatingIp Action)
 ==================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Adds a floating IP address to a server, which associates
 that address with the server.
@@ -61,8 +61,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - addFloatingIp: addFloatingIp
   - address: address
   - fixed_address: fixed_address
@@ -76,10 +76,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Add Security Group To A Server (addSecurityGroup Action)
 ========================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Adds a security group to a server.
 
@@ -95,8 +97,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - addSecurityGroup: addSecurityGroup
   - name: name
 
@@ -108,10 +110,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Change Administrative Password (changePassword Action)
 ======================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Changes the administrative password for a server.
 
@@ -131,8 +135,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - changePassword: changePassword
 
 **Example Change Administrative Password (changePassword Action): JSON request**
@@ -143,10 +147,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Confirm Resized Server (confirmResize Action)
 =============================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Confirms a pending resize action for a server.
 
@@ -183,8 +189,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - confirmResize: confirmResize
 
 **Example Confirm Resized Server (confirmResize Action): JSON request**
@@ -195,10 +201,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Create Image (createImage Action)
 =================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Creates an image from a server.
 
@@ -247,8 +255,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - createImage: createImage
 
 **Example Create Image (createImage Action): JSON request**
@@ -259,10 +267,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Lock Server (lock Action)
 =========================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Locks a server.
 
@@ -281,8 +291,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - lock: lock
 
 **Example Lock Server (lock Action): JSON request**
@@ -293,10 +303,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Pause Server (pause Action)
 ===========================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Pauses a server. Changes its status to ``PAUSED``.
 
@@ -316,8 +328,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - pause: pause
 
 **Example Pause Server (pause Action): JSON request**
@@ -328,10 +340,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Reboot Server (reboot Action)
 =============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Reboots a server.
 
@@ -347,8 +361,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - reboot: reboot
 
 **Example Reboot Server (reboot Action): JSON request**
@@ -359,10 +373,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Rebuild Server (rebuild Action)
 ===============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Rebuilds a server.
 
@@ -381,8 +397,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - rebuild: rebuild
   - imageRef: imageRef
   - name: name
@@ -409,7 +425,7 @@ Response
 Remove (Disassociate) Floating Ip (removeFloatingIp Action)
 ===========================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Removes, or disassociates, a floating IP address from a server.
 
@@ -430,8 +446,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - removeFloatingIp: removeFloatingIp
   - address: address
 
@@ -444,10 +460,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Remove Security Group From A Server (removeSecurityGroup Action)
 ================================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Removes a security group from a server.
 
@@ -463,8 +481,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - removeSecurityGroup: removeSecurityGroup
   - name: name
 
@@ -476,10 +494,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Rescue Server (rescue Action)
 =============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Puts a server in rescue mode and changes its status to ``RESCUE``.
 
@@ -491,9 +511,8 @@ reference, the base image reference is used by default.
 
 Asynchronous Postconditions
 
-After you successfully rescue a server and make a
-``GET /v2.1/​{tenant_id}​/servers/​{server_id}​``
-request, its status changes to ``RESCUE``.
+After you successfully rescue a server and make a ``GET
+/servers/​{server_id}​`` request, its status changes to ``RESCUE``.
 
 Normal response codes: 202
 
@@ -505,8 +524,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - rescue: rescue
   - adminPass: adminPass_rescue
   - rescue_image_ref: rescue_image_ref
@@ -531,7 +550,7 @@ Response
 Resize Server (resize Action)
 =============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Resizes a server.
 
@@ -560,8 +579,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - resize: resize
 
 **Example Resize Server (Resize Action): JSON request**
@@ -572,10 +591,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Resume Suspended Server (resume Action)
 =======================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Resumes a suspended server and changes its status to ``ACTIVE``.
 
@@ -595,8 +616,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - resume: resume
 
 **Example Resume Suspended Server (Resume Action): JSON request**
@@ -607,33 +628,37 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Revert Resized Server (revertResize Action)
 ===========================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Cancels and reverts a pending resize action for a server.
 
 Specify the ``revertResize`` action in the request body.
 
-After you make this request, you typically must keep polling the server status
-to determine whether the request succeeded. A successfully reverting resize
-operation shows a status of ``ACTIVE`` or ``SHUTOFF`` and a migration_status
-of ``reverted``. You can also see the reverted server in the compute node
-that OpenStack Compute manages.
-
 Preconditions
 
-You can only confirm the resized server where the status is
-``VERIFY_RESIZE`` and the vm_status is ``RESIZED``.
+You can only revert the resized server where the status is
+``VERIFY_RESIZE`` and the OS-EXT-STS:vm_state is ``resized``.
 
 If the server is locked, you must have administrator privileges to revert
 the resizing.
 
+Asynchronous Postconditions
+
+After you make this request, you typically must keep polling the server status
+to determine whether the request succeeded. A reverting resize operation shows
+a status of ``REVERT_RESIZE`` and a task_state of ``resize_reverting``. If
+successful, the status will return to ``ACTIVE`` or ``SHUTOFF``. You can also
+see the reverted server in the compute node that OpenStack Compute manages.
+
 Troubleshooting
 
-If the server status remains ``RESIZED``, the request failed. Ensure you meet
-the preconditions and run the request again. If the request fails again,
+If the server status remains ``VERIFY_RESIZE``, the request failed. Ensure you
+meet the preconditions and run the request again. If the request fails again,
 investigate the compute back end.
 
 The server is not reverted in the compute node that OpenStack Compute manages.
@@ -648,8 +673,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - revertResize: revertResize
 
 **Example Revert Resized Server (revertResize Action): JSON request**
@@ -660,10 +685,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Start Server (os-start Action)
 ==============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Starts a stopped server and changes its status to ``ACTIVE``.
 
@@ -698,8 +725,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - os-start: os-start
 
 **Example Start server: JSON request**
@@ -710,10 +737,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Stop Server (os-stop Action)
 ============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Stops a running server and changes its status to ``SHUTOFF``.
 
@@ -742,8 +771,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - os-stop: os-stop
 
 **Example Stop server: JSON request**
@@ -754,10 +783,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Suspend Server (suspend Action)
 ===============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Suspends a server and changes its status to ``SUSPENDED``.
 
@@ -777,8 +808,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - suspend: suspend
 
 **Example Suspend Server (suspend Action): JSON request**
@@ -789,10 +820,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Unlock Server (unlock Action)
 =============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Unlocks a locked server.
 
@@ -811,8 +844,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - unlock: unlock
 
 **Example Unlock Server (unlock Action): JSON request**
@@ -823,10 +856,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Unpause Server (unpause Action)
 ===============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Unpauses a paused server and changes its status to ``ACTIVE``.
 
@@ -846,8 +881,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - unpause: unpause
 
 **Example Unpause Server (unpause Action): JSON request**
@@ -858,10 +893,12 @@ Request
 Response
 --------
 
+There is no body content for the response of a successful POST operation.
+
 Unrescue Server (unrescue Action)
 =================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Unrescues a server. Changes status to ``ACTIVE``.
 
@@ -876,7 +913,7 @@ You can only unrescue a server when its status is ``RESCUE``.
 Asynchronous Postconditions
 
 After you successfully unrescue a server and make a
-``GET /v2.1/​{tenant_id}​/servers/​{server_id}​``
+``GET /servers/​{server_id}​``
 request, its status changes to ``ACTIVE``.
 
 Normal response codes: 202
@@ -889,8 +926,8 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - unrescue: unrescue
 
 **Example Unrescue server: JSON request**
@@ -900,3 +937,5 @@ Request
 
 Response
 --------
+
+There is no body content for the response of a successful POST operation.

@@ -35,6 +35,7 @@ from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import migration as migration_obj
 from nova.pci import manager as pci_manager
+from nova.pci import request as pci_request
 from nova import rpc
 from nova.scheduler import client as scheduler_client
 from nova import utils
@@ -89,7 +90,7 @@ class ResourceTracker(object):
         self.disk_allocation_ratio = CONF.disk_allocation_ratio
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
-    def instance_claim(self, context, instance_ref, limits=None):
+    def instance_claim(self, context, instance, limits=None):
         """Indicate that some resources are needed for an upcoming compute
         instance build operation.
 
@@ -97,8 +98,8 @@ class ResourceTracker(object):
         an instance build operation that will consume additional resources.
 
         :param context: security context
-        :param instance_ref: instance to reserve resources for.
-        :type instance_ref: nova.objects.instance.Instance object
+        :param instance: instance to reserve resources for.
+        :type instance: nova.objects.instance.Instance object
         :param limits: Dict of oversubscription limits for memory, disk,
                        and CPUs.
         :returns: A Claim ticket representing the reserved resources.  It can
@@ -108,41 +109,41 @@ class ResourceTracker(object):
         if self.disabled:
             # compute_driver doesn't support resource tracking, just
             # set the 'host' and node fields and continue the build:
-            self._set_instance_host_and_node(instance_ref)
+            self._set_instance_host_and_node(instance)
             return claims.NopClaim()
 
         # sanity checks:
-        if instance_ref.host:
+        if instance.host:
             LOG.warning(_LW("Host field should not be set on the instance "
                             "until resources have been claimed."),
-                        instance=instance_ref)
+                        instance=instance)
 
-        if instance_ref.node:
+        if instance.node:
             LOG.warning(_LW("Node field should not be set on the instance "
                             "until resources have been claimed."),
-                        instance=instance_ref)
+                        instance=instance)
 
         # get the overhead required to build this instance:
-        overhead = self.driver.estimate_instance_overhead(instance_ref)
+        overhead = self.driver.estimate_instance_overhead(instance)
         LOG.debug("Memory overhead for %(flavor)d MB instance; %(overhead)d "
-                  "MB", {'flavor': instance_ref.memory_mb,
+                  "MB", {'flavor': instance.memory_mb,
                           'overhead': overhead['memory_mb']})
         LOG.debug("Disk overhead for %(flavor)d GB instance; %(overhead)d "
-                  "GB", {'flavor': instance_ref.root_gb,
+                  "GB", {'flavor': instance.root_gb,
                          'overhead': overhead.get('disk_gb', 0)})
 
         pci_requests = objects.InstancePCIRequests.get_by_instance_uuid(
-            context, instance_ref.uuid)
-        claim = claims.Claim(context, instance_ref, self, self.compute_node,
+            context, instance.uuid)
+        claim = claims.Claim(context, instance, self, self.compute_node,
                              pci_requests, overhead=overhead, limits=limits)
 
-        # self._set_instance_host_and_node() will save instance_ref to the DB
-        # so set instance_ref['numa_topology'] first.  We need to make sure
+        # self._set_instance_host_and_node() will save instance to the DB
+        # so set instance.numa_topology first.  We need to make sure
         # that numa_topology is saved while under COMPUTE_RESOURCE_SEMAPHORE
         # so that the resource audit knows about any cpus we've pinned.
         instance_numa_topology = claim.claimed_numa_topology
-        instance_ref.numa_topology = instance_numa_topology
-        self._set_instance_host_and_node(instance_ref)
+        instance.numa_topology = instance_numa_topology
+        self._set_instance_host_and_node(instance)
 
         if self.pci_tracker:
             # NOTE(jaypipes): ComputeNode.pci_device_pools is set below
@@ -151,7 +152,7 @@ class ResourceTracker(object):
                                             instance_numa_topology)
 
         # Mark resources in-use and update stats
-        self._update_usage_from_instance(context, instance_ref)
+        self._update_usage_from_instance(context, instance)
 
         elevated = context.elevated()
         # persist changes to the compute node:
@@ -217,15 +218,49 @@ class ResourceTracker(object):
                   "GB", {'flavor': instance.root_gb,
                          'overhead': overhead.get('disk_gb', 0)})
 
-        pci_requests = objects.InstancePCIRequests.\
-                       get_by_instance_uuid_and_newness(
-                           context, instance.uuid, True)
+        # TODO(moshele): we are recreating the pci requests even if
+        # there was no change on resize. This will cause allocating
+        # the old/new pci device in the resize phase. In the future
+        # we would like to optimise this.
+        new_pci_requests = pci_request.get_pci_requests_from_flavor(
+            new_instance_type)
+        new_pci_requests.instance_uuid = instance.uuid
+        # PCI requests come from two sources: instance flavor and
+        # SR-IOV ports. SR-IOV ports pci_request don't have an alias_name.
+        # On resize merge the SR-IOV ports pci_requests with the new
+        # instance flavor pci_requests.
+        if instance.pci_requests:
+            for request in instance.pci_requests.requests:
+                if request.alias_name is None:
+                    new_pci_requests.requests.append(request)
         claim = claims.MoveClaim(context, instance, new_instance_type,
                                  image_meta, self, self.compute_node,
-                                 pci_requests, overhead=overhead,
+                                 new_pci_requests, overhead=overhead,
                                  limits=limits)
+
         claim.migration = migration
-        instance.migration_context = claim.create_migration_context()
+        claimed_pci_devices_objs = []
+        if self.pci_tracker:
+            # NOTE(jaypipes): ComputeNode.pci_device_pools is set below
+            # in _update_usage_from_instance().
+            claimed_pci_devices_objs = self.pci_tracker.claim_instance(
+                    context, new_pci_requests, claim.claimed_numa_topology)
+        claimed_pci_devices = objects.PciDeviceList(
+                objects=claimed_pci_devices_objs)
+
+        # TODO(jaypipes): Move claimed_numa_topology out of the Claim's
+        # constructor flow so the Claim constructor only tests whether
+        # resources can be claimed, not consume the resources directly.
+        mig_context = objects.MigrationContext(
+            context=context, instance_uuid=instance.uuid,
+            migration_id=migration.id,
+            old_numa_topology=instance.numa_topology,
+            new_numa_topology=claim.claimed_numa_topology,
+            old_pci_devices=instance.pci_devices,
+            new_pci_devices=claimed_pci_devices,
+            old_pci_requests=instance.pci_requests,
+            new_pci_requests=new_pci_requests)
+        instance.migration_context = mig_context
         instance.save()
 
         # Mark the resources in-use for the resize landing on this
@@ -319,13 +354,16 @@ class ResourceTracker(object):
 
             if instance_type is not None and instance_type.id == itype['id']:
                 numa_topology = self._get_migration_context_resource(
-                    'numa_topology', instance)
+                    'numa_topology', instance, prefix=prefix)
                 usage = self._get_usage_dict(
                         itype, numa_topology=numa_topology)
                 if self.pci_tracker:
-                    self.pci_tracker.update_pci_for_migration(context,
-                                                              instance,
-                                                              sign=-1)
+                    # free old allocated pci devices
+                    old_pci_devices = self._get_migration_context_resource(
+                        'pci_devices', instance, prefix='old_')
+                    if old_pci_devices:
+                        for pci_device in old_pci_devices:
+                            self.pci_tracker.free_device(pci_device, instance)
                 self._update_usage(usage, sign=-1)
 
                 ctxt = context.elevated()
@@ -433,7 +471,7 @@ class ResourceTracker(object):
         metrics_info = {}
         for monitor in self.monitors:
             try:
-                monitor.add_metrics_to_list(metrics)
+                monitor.populate_metrics(metrics)
             except Exception as exc:
                 LOG.warning(_LW("Cannot get the metrics from %(mon)s; "
                                 "error: %(exc)s"),
@@ -683,12 +721,12 @@ class ResourceTracker(object):
                                             'evacuation')
 
     def _get_migration_context_resource(self, resource, instance,
-                                        prefix='new_', itype=None):
+                                        prefix='new_'):
         migration_context = instance.migration_context
-        if migration_context:
-            return getattr(migration_context, prefix + resource)
-        else:
-            return None
+        resource = prefix + resource
+        if migration_context and resource in migration_context:
+            return getattr(migration_context, resource)
+        return None
 
     def _update_usage_from_migration(self, context, instance, image_meta,
                                      migration):
@@ -710,7 +748,7 @@ class ResourceTracker(object):
         record = self.tracked_instances.get(uuid, None)
         itype = None
         numa_topology = None
-
+        sign = 0
         if same_node:
             # same node resize. record usage for whichever instance type the
             # instance is *not* in:
@@ -720,6 +758,7 @@ class ResourceTracker(object):
                         migration)
                 numa_topology = self._get_migration_context_resource(
                     'numa_topology', instance)
+                sign = 1
             else:
                 # instance record already has new flavor, hold space for a
                 # possible revert to the old instance type:
@@ -742,18 +781,12 @@ class ResourceTracker(object):
             numa_topology = self._get_migration_context_resource(
                 'numa_topology', instance, prefix='old_')
 
-        if image_meta is None:
-            image_meta = objects.ImageMeta.from_instance(instance)
-        # TODO(jaypipes): Remove when image_meta is always passed
-        # as an objects.ImageMeta
-        elif not isinstance(image_meta, objects.ImageMeta):
-            image_meta = objects.ImageMeta.from_dict(image_meta)
-
         if itype:
             usage = self._get_usage_dict(
                         itype, numa_topology=numa_topology)
-            if self.pci_tracker:
-                self.pci_tracker.update_pci_for_migration(context, instance)
+            if self.pci_tracker and sign:
+                self.pci_tracker.update_pci_for_instance(
+                    context, instance, sign=sign)
             self._update_usage(usage)
             if self.pci_tracker:
                 obj = self.pci_tracker.stats.to_device_pools_obj()
@@ -802,7 +835,7 @@ class ResourceTracker(object):
                                                   migration)
             except exception.FlavorNotFound:
                 LOG.warning(_LW("Flavor could not be found, skipping "
-                                "migration."), instance_uuid=uuid)
+                                "migration."), instance_uuid=instance.uuid)
                 continue
 
     def _update_usage_from_instance(self, context, instance, is_removed=False):
@@ -810,9 +843,10 @@ class ResourceTracker(object):
 
         uuid = instance['uuid']
         is_new_instance = uuid not in self.tracked_instances
-        is_removed_instance = (
-                is_removed or
-                instance['vm_state'] in vm_states.ALLOW_RESOURCE_REMOVAL)
+        # NOTE(sfinucan): Both brand new instances as well as instances that
+        # are being unshelved will have is_new_instance == True
+        is_removed_instance = not is_new_instance and (is_removed or
+            instance['vm_state'] in vm_states.ALLOW_RESOURCE_REMOVAL)
 
         if is_new_instance:
             self.tracked_instances[uuid] = obj_base.obj_to_primitive(instance)

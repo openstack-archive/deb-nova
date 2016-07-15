@@ -169,13 +169,15 @@ class _ImageTestCase(object):
                                   device_type="cdrom",
                                   cache_mode="none",
                                   extra_specs=extra_specs,
-                                  hypervisor_version=4004001)
+                                  hypervisor_version=4004001,
+                                  boot_order="1")
 
         self.assertIsInstance(disk, vconfig.LibvirtConfigGuestDisk)
         self.assertEqual("/dev/vda", disk.target_dev)
         self.assertEqual("virtio", disk.target_bus)
         self.assertEqual("none", disk.driver_cache)
         self.assertEqual("cdrom", disk.source_device)
+        self.assertEqual("1", disk.boot_order)
 
         self.assertEqual(10 * units.Mi, disk.disk_read_bytes_sec)
         self.assertEqual(1 * units.Ki, disk.disk_read_iops_sec)
@@ -1588,6 +1590,7 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
                                  '__call__')
         self.mox.StubOutWithMock(imagebackend.libvirt_utils, 'copy_image')
         self.mox.StubOutWithMock(self.utils, 'execute')
+        self.mox.StubOutWithMock(imagebackend.disk, 'extend')
         return fn
 
     def test_cache(self):
@@ -1617,9 +1620,9 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, img_path)
         self.utils.execute("ploop", "restore-descriptor", "-f", "raw",
                            self.PATH, img_path)
-        self.utils.execute("ploop", "grow", '-s', "2K",
-                           os.path.join(self.PATH, "DiskDescriptor.xml"),
-                           run_as_root=True)
+        image = imgmodel.LocalFileImage(self.PATH, imgmodel.FORMAT_PLOOP)
+        imagebackend.disk.extend(image, 2048)
+
         self.mox.ReplayAll()
 
         image = self.image_class(self.INSTANCE, self.NAME)
@@ -1674,17 +1677,9 @@ class BackendTestCase(test.NoDBTestCase):
         self._test_image('raw', imagebackend.Flat, imagebackend.Flat)
 
     def test_image_flat_preallocate_images(self):
-        flags = ('space', 'Space', 'SPACE')
-        for f in flags:
-            self.flags(preallocate_images=f)
-            raw = imagebackend.Flat(self.INSTANCE, 'fake_disk',
-                                         '/tmp/xyz')
-            self.assertTrue(raw.preallocate)
-
-    def test_image_flat_preallocate_images_bad_conf(self):
-        self.flags(preallocate_images='space1')
+        self.flags(preallocate_images='space')
         raw = imagebackend.Flat(self.INSTANCE, 'fake_disk', '/tmp/xyz')
-        self.assertFalse(raw.preallocate)
+        self.assertTrue(raw.preallocate)
 
     def test_image_flat_native_io(self):
         self.flags(preallocate_images="space")
@@ -1695,16 +1690,9 @@ class BackendTestCase(test.NoDBTestCase):
         self._test_image('qcow2', imagebackend.Qcow2, imagebackend.Qcow2)
 
     def test_image_qcow2_preallocate_images(self):
-        flags = ('space', 'Space', 'SPACE')
-        for f in flags:
-            self.flags(preallocate_images=f)
-            qcow = imagebackend.Qcow2(self.INSTANCE, 'fake_disk', '/tmp/xyz')
-            self.assertTrue(qcow.preallocate)
-
-    def test_image_qcow2_preallocate_images_bad_conf(self):
-        self.flags(preallocate_images='space1')
+        self.flags(preallocate_images='space')
         qcow = imagebackend.Qcow2(self.INSTANCE, 'fake_disk', '/tmp/xyz')
-        self.assertFalse(qcow.preallocate)
+        self.assertTrue(qcow.preallocate)
 
     def test_image_qcow2_native_io(self):
         self.flags(preallocate_images="space")

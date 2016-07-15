@@ -357,9 +357,38 @@ volume_size = {
     'maximum': db.MAX_INT
 }
 
+disk_config = {
+    'type': 'string',
+    'enum': ['AUTO', 'MANUAL']
+}
+
+accessIPv4 = {
+    'type': 'string',
+    'format': 'ipv4',
+}
+
+accessIPv6 = {
+    'type': 'string',
+    'format': 'ipv6',
+}
 
 flavor_param_positive = copy.deepcopy(volume_size)
 
 
 flavor_param_non_negative = copy.deepcopy(volume_size)
 flavor_param_non_negative['minimum'] = 0
+
+personality = {
+    'type': 'array',
+    'items': {
+        'type': 'object',
+        'properties': {
+            'path': {'type': 'string'},
+            'contents': {
+                'type': 'string',
+                'format': 'base64'
+            }
+        },
+        'additionalProperties': False,
+    }
+}

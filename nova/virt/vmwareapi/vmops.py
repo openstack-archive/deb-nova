@@ -232,31 +232,21 @@ class VMwareVMOps(object):
 
     def _get_instance_metadata(self, context, instance):
         flavor = instance.flavor
-        return ('name:%s\n'
-                'userid:%s\n'
-                'username:%s\n'
-                'projectid:%s\n'
-                'projectname:%s\n'
-                'flavor:name:%s\n'
-                'flavor:memory_mb:%s\n'
-                'flavor:vcpus:%s\n'
-                'flavor:ephemeral_gb:%s\n'
-                'flavor:root_gb:%s\n'
-                'flavor:swap:%s\n'
-                'imageid:%s\n'
-                'package:%s\n') % (instance.display_name,
-                                   context.user_id,
-                                   context.user_name,
-                                   context.project_id,
-                                   context.project_name,
-                                   flavor.name,
-                                   flavor.memory_mb,
-                                   flavor.vcpus,
-                                   flavor.ephemeral_gb,
-                                   flavor.root_gb,
-                                   flavor.swap,
-                                   instance.image_ref,
-                                   version.version_string_with_package())
+        metadata = [('name', instance.display_name),
+                    ('userid', context.user_id),
+                    ('username', context.user_name),
+                    ('projectid', context.project_id),
+                    ('projectname', context.project_name),
+                    ('flavor:name', flavor.name),
+                    ('flavor:memory_mb', flavor.memory_mb),
+                    ('flavor:vcpus', flavor.vcpus),
+                    ('flavor:ephemeral_gb', flavor.ephemeral_gb),
+                    ('flavor:root_gb', flavor.root_gb),
+                    ('flavor:swap', flavor.swap),
+                    ('imageid', instance.image_ref),
+                    ('package', version.version_string_with_package())]
+        # NOTE: formatted as lines like this: 'name:NAME\nuserid:ID\n...'
+        return ''.join(['%s:%s\n' % (k, v) for k, v in metadata])
 
     def _create_folders(self, parent_folder, folder_path):
         folders = folder_path.split('/')
@@ -1760,8 +1750,11 @@ class VMwareVMOps(object):
                             lock_file_prefix='nova-vmware-hot-plug'):
             port_index = vm_util.get_attach_port_index(self._session, vm_ref)
             client_factory = self._session.vim.client.factory
+            extra_specs = self._get_extra_specs(instance.flavor)
+
             attach_config_spec = vm_util.get_network_attach_config_spec(
-                                        client_factory, vif_info, port_index)
+                                        client_factory, vif_info, port_index,
+                                        extra_specs.vif_limits)
             LOG.debug("Reconfiguring VM to attach interface",
                       instance=instance)
             try:

@@ -19,6 +19,7 @@ Provides common functionality for integrated unit tests
 
 import random
 import string
+import time
 import uuid
 
 from oslo_log import log as logging
@@ -66,8 +67,6 @@ class _IntegratedTestBase(test.TestCase):
     def setUp(self):
         super(_IntegratedTestBase, self).setUp()
 
-        f = self._get_flags()
-        self.flags(**f)
         self.flags(verbose=True)
 
         nova.tests.unit.image.fake.stub_out_image_service(self)
@@ -102,14 +101,6 @@ class _IntegratedTestBase(test.TestCase):
 
         self.network = self.start_service('network')
         self.scheduler = self._setup_scheduler_service()
-
-    def _get_flags(self):
-        """Allow subclass to modify global config before we start services."""
-        # NOTE(sdague): _get_flags is used by about 13 tests that
-        # subclass this mostly to modify the extensions list. We
-        # should instead make that declarative in the future, at which
-        # point we can get rid of this.
-        return {}
 
     def get_unused_server_name(self):
         servers = self.api.get_servers()
@@ -229,3 +220,46 @@ class _IntegratedTestBase(test.TestCase):
                          expected_middleware,
                          ("The expected wsgi middlewares %s are not "
                           "existed") % expected_middleware)
+
+
+class InstanceHelperMixin(object):
+    def _wait_for_state_change(self, admin_api, server, expected_status,
+                               max_retries=10):
+        retry_count = 0
+        while True:
+            server = admin_api.get_server(server['id'])
+            if server['status'] == expected_status:
+                break
+            retry_count += 1
+            if retry_count == max_retries:
+                self.fail('Wait for state change failed, '
+                          'expected_status=%s, actual_status=%s'
+                          % (expected_status, server['status']))
+            time.sleep(0.5)
+
+        return server
+
+    def _build_minimal_create_server_request(self, api, name, image_uuid=None,
+                                             flavor_id=None):
+        server = {}
+
+        if image_uuid:
+            image_href = 'http://fake.server/%s' % image_uuid
+        else:
+            image = api.get_images()[0]
+
+            if 'imageRef' in image:
+                image_href = image['imageRef']
+            else:
+                image_href = image['id']
+                image_href = 'http://fake.server/%s' % image_href
+
+        # We now have a valid imageId
+        server['imageRef'] = image_href
+
+        if not flavor_id:
+            # Set a valid flavorId
+            flavor_id = api.get_flavors()[1]['id']
+        server['flavorRef'] = ('http://fake.server/%s' % flavor_id)
+        server['name'] = name
+        return server

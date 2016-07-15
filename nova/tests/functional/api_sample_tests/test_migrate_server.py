@@ -16,22 +16,12 @@
 import mock
 from oslo_utils import versionutils
 
-import nova.conf
+from nova import objects
 from nova.tests.functional.api_sample_tests import test_servers
-
-CONF = nova.conf.CONF
 
 
 class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
-    extension_name = "os-migrate-server"
-
-    def _get_flags(self):
-        f = super(MigrateServerSamplesJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.admin_actions.'
-            'Admin_actions')
-        return f
+    sample_dir = "os-migrate-server"
 
     def setUp(self):
         """setUp Method for MigrateServer api samples extension
@@ -40,6 +30,7 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
         """
         super(MigrateServerSamplesJsonTest, self).setUp()
         self.uuid = self._post_server()
+        self.host_attended = self.compute.host
 
     @mock.patch('nova.conductor.manager.ComputeTaskManager._cold_migrate')
     def test_post_migrate(self, mock_cold_migrate):
@@ -48,13 +39,15 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
                                  'migrate-server', {})
         self.assertEqual(202, response.status_code)
 
-    def test_post_live_migrate_server(self):
-        # Get api samples to server live migrate request.
+    def _check_post_live_migrate_server(self, req_subs=None):
+        if not req_subs:
+            req_subs = {'hostname': self.compute.host}
+
         def fake_live_migrate(_self, context, instance, scheduler_hint,
                               block_migration, disk_over_commit, request_spec):
             self.assertEqual(self.uuid, instance["uuid"])
             host = scheduler_hint["host"]
-            self.assertEqual(self.compute.host, host)
+            self.assertEqual(self.host_attended, host)
 
         self.stub_out(
             'nova.conductor.manager.ComputeTaskManager._live_migrate',
@@ -75,15 +68,48 @@ class MigrateServerSamplesJsonTest(test_servers.ServersSampleBase):
 
         response = self._do_post('servers/%s/action' % self.uuid,
                                  'live-migrate-server',
-                                 {'hostname': self.compute.host})
+                                 req_subs)
         self.assertEqual(202, response.status_code)
+
+    def test_post_live_migrate_server(self):
+        # Get api samples to server live migrate request.
+        self._check_post_live_migrate_server()
 
 
 class MigrateServerSamplesJsonTestV225(MigrateServerSamplesJsonTest):
-    extension_name = "os-migrate-server"
+    sample_dir = "os-migrate-server"
     microversion = '2.25'
     scenarios = [('v2_25', {'api_major_version': 'v2.1'})]
 
     def test_post_migrate(self):
         # no changes for migrate-server
         pass
+
+
+class MigrateServerSamplesJsonTestV230(MigrateServerSamplesJsonTest):
+    sample_dir = "os-migrate-server"
+    microversion = '2.30'
+    scenarios = [('v2_30', {'api_major_version': 'v2.1'})]
+
+    def test_post_migrate(self):
+        # no changes for migrate-server
+        pass
+
+    @mock.patch('nova.objects.ComputeNodeList.get_all_by_host')
+    def test_post_live_migrate_server(self, compute_node_get_all_by_host):
+        # Get api samples to server live migrate request.
+
+        fake_computes = objects.ComputeNodeList(
+            objects=[objects.ComputeNode(host='testHost',
+                                         hypervisor_hostname='host')])
+        compute_node_get_all_by_host.return_value = fake_computes
+        self.host_attended = None
+        self._check_post_live_migrate_server(
+            req_subs={'hostname': self.compute.host,
+                      'force': 'False'})
+
+    def test_post_live_migrate_server_with_force(self):
+        self.host_attended = self.compute.host
+        self._check_post_live_migrate_server(
+            req_subs={'hostname': self.compute.host,
+                      'force': 'True'})

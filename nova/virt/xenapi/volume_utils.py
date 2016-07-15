@@ -24,12 +24,14 @@ import uuid
 
 from eventlet import greenthread
 from oslo_log import log as logging
+from oslo_utils import excutils
 from oslo_utils import strutils
 from oslo_utils import versionutils
 import six
 
 import nova.conf
 from nova import exception
+
 from nova.i18n import _, _LE, _LW
 
 
@@ -49,7 +51,7 @@ def parse_sr_info(connection_data, description=''):
         sr_identity = "%s/%s/%s" % (params['target'], params['port'],
                                     params['targetIQN'])
         # PY2 can only support taking an ascii string to uuid5
-        if six.PY2 and isinstance(sr_identity, unicode):
+        if six.PY2 and isinstance(sr_identity, six.text_type):
             sr_identity = sr_identity.encode('utf-8')
         sr_uuid = str(uuid.uuid5(SR_NAMESPACE, sr_identity))
     else:
@@ -349,3 +351,49 @@ def is_booted_from_volume(session, vm_ref):
     if vbd_other_config.get('osvol', False):
         return True
     return False
+
+
+def _get_vdi_import_path(session, task_ref, vdi_ref, disk_format):
+    session_id = session.get_session_id()
+    str_fmt = '/import_raw_vdi?session_id={}&task_id={}&vdi={}&format={}'
+    return str_fmt.format(session_id, task_ref, vdi_ref, disk_format)
+
+
+def _stream_to_vdi(conn, vdi_import_path, file_size, file_obj):
+    headers = {'Content-Type': 'application/octet-stream',
+               'Content-Length': '%s' % file_size}
+
+    CHUNK_SIZE = 16 * 1024
+    LOG.debug('Initialising PUT request to %s (Headers: %s)' % (
+        vdi_import_path, headers))
+    conn.request('PUT', vdi_import_path, headers=headers)
+    remain_size = file_size
+    while remain_size >= CHUNK_SIZE:
+        trunk = file_obj.read(CHUNK_SIZE)
+        remain_size -= CHUNK_SIZE
+        conn.send(trunk)
+    if remain_size != 0:
+        trunk = file_obj.read(remain_size)
+        conn.send(trunk)
+    resp = conn.getresponse()
+    LOG.debug("Connection response status:reason is "
+              "%(status)s:%(reason)s",
+              {'status': resp.status, 'reason': resp.reason})
+
+
+def stream_to_vdi(session, instance, disk_format,
+                  file_obj, file_size, vdi_ref):
+
+    task_name_label = 'VDI_IMPORT_for_' + instance['name']
+    with session.custom_task(task_name_label) as task_ref:
+        vdi_import_path = _get_vdi_import_path(session, task_ref, vdi_ref,
+                                               disk_format)
+
+        with session.http_connection() as conn:
+            try:
+                _stream_to_vdi(conn, vdi_import_path, file_size, file_obj)
+            except Exception as e:
+                with excutils.save_and_reraise_exception():
+                    LOG.error(_LE('Streaming disk to VDI failed '
+                                  'with error: %s'),
+                              e, instance=instance)

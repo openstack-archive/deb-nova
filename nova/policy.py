@@ -22,6 +22,8 @@ from oslo_policy import policy
 from oslo_utils import excutils
 
 from nova import exception
+from nova.i18n import _LE
+from nova import policies
 
 
 CONF = cfg.CONF
@@ -55,6 +57,7 @@ def init(policy_file=None, rules=None, default_rule=None, use_conf=True):
                                     rules=rules,
                                     default_rule=default_rule,
                                     use_conf=use_conf)
+        register_rules(_ENFORCER)
 
 
 def set_rules(rules, overwrite=True, use_conf=False):
@@ -70,7 +73,7 @@ def set_rules(rules, overwrite=True, use_conf=False):
     _ENFORCER.set_rules(rules, overwrite, use_conf)
 
 
-def enforce(context, action, target, do_raise=True, exc=None):
+def authorize(context, action, target, do_raise=True, exc=None):
     """Verifies that the action is valid on the target in this context.
 
        :param context: nova context
@@ -84,9 +87,15 @@ def enforce(context, action, target, do_raise=True, exc=None):
            location of the object e.g. ``{'project_id': context.project_id}``
        :param do_raise: if True (the default), raises PolicyNotAuthorized;
            if False, returns False
+       :param exc: Class of the exception to raise if the check fails.
+                   Any remaining arguments passed to :meth:`authorize` (both
+                   positional and keyword arguments) will be passed to
+                   the exception class. If not specified,
+                   :class:`PolicyNotAuthorized` will be used.
 
        :raises nova.exception.PolicyNotAuthorized: if verification fails
-           and do_raise is True.
+           and do_raise is True. Or if 'exc' is specified it will raise an
+           exception of that type.
 
        :return: returns a non-False value (not necessarily "True") if
            authorized, and the exact value False if not authorized and
@@ -97,8 +106,11 @@ def enforce(context, action, target, do_raise=True, exc=None):
     if not exc:
         exc = exception.PolicyNotAuthorized
     try:
-        result = _ENFORCER.enforce(action, target, credentials,
-                                   do_raise=do_raise, exc=exc, action=action)
+        result = _ENFORCER.authorize(action, target, credentials,
+                                     do_raise=do_raise, exc=exc, action=action)
+    except policy.PolicyNotRegistered:
+        with excutils.save_and_reraise_exception():
+            LOG.exception(_LE('Policy not registered'))
     except Exception:
         credentials.pop('auth_token', None)
         with excutils.save_and_reraise_exception():
@@ -117,7 +129,7 @@ def check_is_admin(context):
     # the target is user-self
     credentials = context.to_dict()
     target = credentials
-    return _ENFORCER.enforce('context_is_admin', target, credentials)
+    return _ENFORCER.authorize('context_is_admin', target, credentials)
 
 
 @policy.register('is_admin')
@@ -140,3 +152,7 @@ class IsAdminCheck(policy.Check):
 def get_rules():
     if _ENFORCER:
         return _ENFORCER.rules
+
+
+def register_rules(enforcer):
+    enforcer.register_defaults(policies.list_rules())

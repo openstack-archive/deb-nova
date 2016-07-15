@@ -13,12 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from six.moves import StringIO
 import sys
 
 import fixtures
 import mock
 from oslo_utils import uuidutils
+from six.moves import StringIO
 
 from nova.cmd import manage
 from nova import conf
@@ -190,9 +190,8 @@ class NetworkCommandsTestCase(test.NoDBTestCase):
             self.assertEqual(kwargs['dns1'], '8.8.8.8')
             self.assertEqual(kwargs['dns2'], '8.8.4.4')
         self.flags(network_manager='nova.network.manager.VlanManager')
-        from nova.network import manager as net_manager
-        self.stubs.Set(net_manager.VlanManager, 'create_networks',
-                       fake_create_networks)
+        self.stub_out('nova.network.manager.VlanManager.create_networks',
+                      fake_create_networks)
         self.commands.create(
                             label='Test',
                             cidr='10.2.0.0/24',
@@ -210,6 +209,63 @@ class NetworkCommandsTestCase(test.NoDBTestCase):
                             dns1='8.8.8.8',
                             dns2='8.8.4.4',
                             uuid='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+
+    def test_create_without_lable(self):
+        self.assertRaises(exception.NetworkNotCreated,
+                          self.commands.create,
+                          cidr='10.2.0.0/24',
+                          num_networks=1,
+                          network_size=256,
+                          multi_host='F',
+                          vlan=200,
+                          vlan_start=201,
+                          vpn_start=2000,
+                          cidr_v6='fd00:2::/120',
+                          gateway='10.2.0.1',
+                          gateway_v6='fd00:2::22',
+                          bridge='br200',
+                          bridge_interface='eth0',
+                          dns1='8.8.8.8',
+                          dns2='8.8.4.4',
+                          uuid='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+
+    def test_create_with_lable_too_long(self):
+        self.assertRaises(exception.LabelTooLong,
+                          self.commands.create,
+                          label='x' * 256,
+                          cidr='10.2.0.0/24',
+                          num_networks=1,
+                          network_size=256,
+                          multi_host='F',
+                          vlan=200,
+                          vlan_start=201,
+                          vpn_start=2000,
+                          cidr_v6='fd00:2::/120',
+                          gateway='10.2.0.1',
+                          gateway_v6='fd00:2::22',
+                          bridge='br200',
+                          bridge_interface='eth0',
+                          dns1='8.8.8.8',
+                          dns2='8.8.4.4',
+                          uuid='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+
+    def test_create_without_cidr(self):
+        self.assertRaises(exception.NetworkNotCreated,
+                          self.commands.create,
+                          label='Test',
+                          num_networks=1,
+                          network_size=256,
+                          multi_host='F',
+                          vlan=200,
+                          vlan_start=201,
+                          vpn_start=2000,
+                          gateway='10.2.0.1',
+                          gateway_v6='fd00:2::22',
+                          bridge='br200',
+                          bridge_interface='eth0',
+                          dns1='8.8.8.8',
+                          dns2='8.8.4.4',
+                          uuid='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
 
     def test_list(self):
 
@@ -334,6 +390,33 @@ class ProjectCommandsTestCase(test.TestCase):
 
     def test_quota_update_invalid_key(self):
         self.assertEqual(2, self.commands.quota('admin', 'volumes1', '10'))
+
+    def test_quota_usage_refresh_all_user_keys(self):
+        self.assertIsNone(self.commands.quota_usage_refresh(
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaab'))
+
+    def test_quota_usage_refresh_all_project_keys(self):
+        self.assertIsNone(self.commands.quota_usage_refresh(
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'))
+
+    def test_quota_usage_refresh_with_keys(self):
+        self.assertIsNone(self.commands.quota_usage_refresh(
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaab',
+            'ram'))
+
+    def test_quota_usage_refresh_invalid_user_key(self):
+        self.assertEqual(2, self.commands.quota_usage_refresh(
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaab',
+            'fixed_ip'))
+
+    def test_quota_usage_refresh_invalid_project_key(self):
+        self.assertEqual(2, self.commands.quota_usage_refresh(
+            'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+            None,
+            'ram'))
 
 
 class VmCommandsTestCase(test.NoDBTestCase):
@@ -610,7 +693,7 @@ class CellCommandsTestCase(test.NoDBTestCase):
 
     def test_create_transport_hosts_wrong_val(self):
         """Test the _create_transport_hosts method when broker_hosts
-        is wrongly sepcified
+        is wrongly specified
         """
         self.assertRaises(ValueError,
                           self.commands._create_transport_hosts,
@@ -619,7 +702,7 @@ class CellCommandsTestCase(test.NoDBTestCase):
 
     def test_create_transport_hosts_wrong_port_val(self):
         """Test the _create_transport_hosts method when port in
-        broker_hosts is wrongly sepcified
+        broker_hosts is wrongly specified
         """
         self.assertRaises(ValueError,
                           self.commands._create_transport_hosts,
@@ -628,7 +711,7 @@ class CellCommandsTestCase(test.NoDBTestCase):
 
     def test_create_transport_hosts_wrong_port_arg(self):
         """Test the _create_transport_hosts method when port
-        argument is wrongly sepcified
+        argument is wrongly specified
         """
         self.assertRaises(ValueError,
                           self.commands._create_transport_hosts,
@@ -835,6 +918,19 @@ class CellV2CommandsTestCase(test.TestCase):
         output = sys.stdout.getvalue().strip()
         expected = 'No hosts found to map to cell, exiting.'
         self.assertEqual(expected, output)
+
+    def test_map_cell_and_hosts_no_transport_url(self):
+        retval = self.commands.map_cell_and_hosts()
+        self.assertEqual(1, retval)
+        output = sys.stdout.getvalue().strip()
+        expected = ('Must specify --transport-url if [DEFAULT]/transport_url '
+                    'is not set in the configuration file.')
+        self.assertEqual(expected, output)
+
+    def test_map_cell_and_hosts_transport_url_config(self):
+        self.flags(transport_url = "fake://guest:devstack@127.0.0.1:9999/")
+        retval = self.commands.map_cell_and_hosts()
+        self.assertEqual(0, retval)
 
     def test_map_instances(self):
         ctxt = context.RequestContext('fake-user', 'fake_project')

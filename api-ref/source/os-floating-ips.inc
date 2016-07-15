@@ -3,9 +3,17 @@
 .. needs:example_verification
 .. needs:body_verification
 
-================================
- Floating IPs (os-floating-ips)
-================================
+============================================
+ Floating IPs (os-floating-ips) (DEPRECATED)
+============================================
+
+.. warning::
+
+   These APIs are proxy calls to the Network service. Nova has
+   deprecated all the proxy APIs and users should use the native APIs
+   instead.
+   See: `Relevant Network APIs
+   <http://developer.openstack.org/api-ref-networking-v2-ext.html#layer3-ext>`__.
 
 Lists floating IP addresses for a project. Also, creates (allocates) a
 floating IP address for a project, shows floating IP address details,
@@ -33,7 +41,7 @@ for a project, you can:
 List Floating Ip Addresses
 ==========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ips
+.. rest_method:: GET /os-floating-ips
 
 Lists floating IP addresses associated with the tenant or account.
 
@@ -44,13 +52,6 @@ can change these permissions through the ``policy.json`` file.
 Normal response codes: 200
 
 Error response codes: unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -63,7 +64,7 @@ Response
 Create (Allocate) Floating Ip Address
 =====================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-floating-ips
+.. rest_method:: POST /os-floating-ips
 
 Creates, or allocates, a floating IP address for the current project.
 By default, the floating IP address is allocated from the public pool.
@@ -84,7 +85,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - pool: pool
 
 **Example Create (Allocate) Floating Ip Address: JSON request**
@@ -103,7 +103,7 @@ Response
 Show Floating Ip Address Details
 ================================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ips/{floating_ip_id}
+.. rest_method:: GET /os-floating-ips/{floating_ip_id}
 
 Shows details for a floating IP address, by ID, that is associated with the tenant or account.
 
@@ -120,7 +120,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - floating_ip_id: floating_ip_id
 
 Response
@@ -134,7 +133,7 @@ Response
 Delete (Deallocate) Floating Ip Address
 =======================================
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-floating-ips/{floating_ip_id}
+.. rest_method:: DELETE /os-floating-ips/{floating_ip_id}
 
 Deletes, or deallocates, a floating IP address from the current project and
 returns it to the pool from which it was allocated.
@@ -156,9 +155,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - floating_ip_id: floating_ip_id
 
 Response
 --------
-

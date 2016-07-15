@@ -890,6 +890,32 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
     def _check_332(self, engine, data):
         self.assertColumnExists(engine, 'instance_extra', 'keypairs')
 
+    def _check_333(self, engine, data):
+        self.assertColumnExists(engine, 'console_auth_tokens', 'id')
+        self.assertColumnExists(engine, 'console_auth_tokens', 'token_hash')
+        self.assertColumnExists(engine, 'console_auth_tokens', 'console_type')
+        self.assertColumnExists(engine, 'console_auth_tokens', 'host')
+        self.assertColumnExists(engine, 'console_auth_tokens', 'port')
+        self.assertColumnExists(engine, 'console_auth_tokens',
+                                'internal_access_path')
+        self.assertColumnExists(engine, 'console_auth_tokens',
+                                'instance_uuid')
+        self.assertColumnExists(engine, 'console_auth_tokens', 'expires')
+        self.assertIndexMembers(engine, 'console_auth_tokens',
+            'console_auth_tokens_instance_uuid_idx',
+            ['instance_uuid'])
+        self.assertIndexMembers(engine, 'console_auth_tokens',
+            'console_auth_tokens_host_expires_idx',
+            ['host', 'expires'])
+        self.assertIndexMembers(engine, 'console_auth_tokens',
+            'console_auth_tokens_token_hash_idx',
+            ['token_hash'])
+
+    def _check_334(self, engine, data):
+        self.assertColumnExists(engine, 'instance_extra', 'device_metadata')
+        self.assertColumnExists(engine, 'shadow_instance_extra',
+                                        'device_metadata')
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
                                test_base.DbTestCase,
@@ -910,7 +936,7 @@ class TestNovaMigrationsMySQL(NovaMigrationsCheckers,
             "FROM information_schema.TABLES "
             "WHERE TABLE_SCHEMA = '%(database)s'" %
             {'database': self.migrate_engine.url.database})
-        self.assertTrue(total.scalar() > 0, "No tables found. Wrong schema?")
+        self.assertGreater(total.scalar(), 0, "No tables found. Wrong schema?")
 
         noninnodb = self.migrate_engine.execute(
             "SELECT count(*) "

@@ -26,16 +26,7 @@ CONF = nova.conf.CONF
 
 
 class CellsSampleJsonTest(api_sample_base.ApiSampleTestBaseV21):
-    extension_name = "os-cells"
-
-    def _get_flags(self):
-        f = super(CellsSampleJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.cells.Cells')
-        f['osapi_compute_extension'].append('nova.api.openstack.compute.'
-                      'contrib.cell_capacities.Cell_capacities')
-        return f
+    sample_dir = "os-cells"
 
     def setUp(self):
         # db_check_interval < 0 makes cells manager always hit the DB

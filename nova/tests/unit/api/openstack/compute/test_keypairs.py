@@ -14,10 +14,9 @@
 #    under the License.
 
 import mock
+from oslo_policy import policy as oslo_policy
 from oslo_serialization import jsonutils
 import webob
-
-from oslo_policy import policy as oslo_policy
 
 from nova.api.openstack.compute import keypairs as keypairs_v21
 from nova.api.openstack import wsgi as os_wsgi
@@ -48,7 +47,7 @@ def fake_keypair(name):
                 name=name, **keypair_data)
 
 
-def db_key_pair_get_all_by_user(self, user_id):
+def db_key_pair_get_all_by_user(self, user_id, limit, marker):
     return [fake_keypair('FAKE')]
 
 
@@ -101,8 +100,8 @@ class KeypairsTestV21(test.TestCase):
     def test_keypair_create(self):
         body = {'keypair': {'name': 'create_test'}}
         res_dict = self.controller.create(self.req, body=body)
-        self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
-        self.assertTrue(len(res_dict['keypair']['private_key']) > 0)
+        self.assertGreater(len(res_dict['keypair']['fingerprint']), 0)
+        self.assertGreater(len(res_dict['keypair']['private_key']), 0)
         self._assert_keypair_type(res_dict)
 
     def _test_keypair_create_bad_request_case(self,
@@ -181,8 +180,8 @@ class KeypairsTestV21(test.TestCase):
             },
         }
         res_dict = self.controller.create(self.req, body=body)
-        # FIXME(ja): sholud we check that public_key was sent to create?
-        self.assertTrue(len(res_dict['keypair']['fingerprint']) > 0)
+        # FIXME(ja): Should we check that public_key was sent to create?
+        self.assertGreater(len(res_dict['keypair']['fingerprint']), 0)
         self.assertNotIn('private_key', res_dict['keypair'])
         self._assert_keypair_type(res_dict)
 
@@ -285,6 +284,13 @@ class KeypairsTestV21(test.TestCase):
                       fakes.fake_instance_get())
         self.stub_out('nova.db.instance_get_by_uuid',
                       fakes.fake_instance_get())
+        # NOTE(sdague): because of the way extensions work, we have to
+        # also stub out the Request compute cache with a real compute
+        # object. Delete this once we remove all the gorp of
+        # extensions modifying the server objects.
+        self.stub_out('nova.api.openstack.wsgi.Request.get_db_instance',
+                      fakes.fake_compute_get())
+
         req = webob.Request.blank(self.base_url + '/servers/' + uuids.server)
         req.headers['Content-Type'] = 'application/json'
         response = req.get_response(self.app_server)
@@ -556,3 +562,43 @@ class KeypairsTestV210(KeypairsTestV22):
         self.assertRaises(exception.PolicyNotAuthorized,
                           self.controller.create,
                           req, body=body)
+
+
+class KeypairsTestV235(test.TestCase):
+    base_url = '/v2/fake'
+    wsgi_api_version = '2.35'
+
+    def _setup_app_and_controller(self):
+        self.app_server = fakes.wsgi_app_v21(init_only=('os-keypairs'))
+        self.controller = keypairs_v21.KeypairController()
+
+    def setUp(self):
+        super(KeypairsTestV235, self).setUp()
+        self._setup_app_and_controller()
+
+    @mock.patch("nova.db.key_pair_get_all_by_user")
+    def test_keypair_list_limit_and_marker(self, mock_kp_get):
+        mock_kp_get.side_effect = db_key_pair_get_all_by_user
+
+        req = fakes.HTTPRequest.blank(
+            self.base_url + '/os-keypairs?limit=3&marker=fake_marker',
+            version=self.wsgi_api_version, use_admin_context=True)
+
+        res_dict = self.controller.index(req)
+
+        mock_kp_get.assert_called_once_with(
+            req.environ['nova.context'], 'fake_user',
+            limit=3, marker='fake_marker')
+        response = {'keypairs': [{'keypair': dict(keypair_data, name='FAKE',
+                                                  type='ssh')}]}
+        self.assertEqual(res_dict, response)
+
+    @mock.patch('nova.compute.api.KeypairAPI.get_key_pairs')
+    def test_keypair_list_limit_and_marker_invalid_marker(self, mock_kp_get):
+        mock_kp_get.side_effect = exception.MarkerNotFound(marker='unknown_kp')
+
+        req = fakes.HTTPRequest.blank(
+            self.base_url + '/os-keypairs?limit=3&marker=unknown_kp',
+            version=self.wsgi_api_version, use_admin_context=True)
+
+        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.index, req)

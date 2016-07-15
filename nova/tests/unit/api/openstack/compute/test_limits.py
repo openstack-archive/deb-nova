@@ -17,12 +17,11 @@
 Tests dealing with HTTP rate-limiting.
 """
 
-from six.moves import http_client as httplib
-from six.moves import StringIO
-
 import mock
 from oslo_serialization import jsonutils
 from oslo_utils import encodeutils
+from six.moves import http_client as httplib
+from six.moves import StringIO
 import webob
 
 from nova.api.openstack.compute import limits as limits_v21
@@ -208,8 +207,7 @@ class LimitsViewBuilderTest(test.NoDBTestCase):
                              "maxPersonality": 5,
                              "maxPersonalitySize": 5}}}
 
-        output = self.view_builder.build(self.rate_limits,
-                                         self.absolute_limits)
+        output = self.view_builder.build(self.absolute_limits)
         self.assertThat(output, matchers.DictMatches(expected_limits))
 
     def test_build_limits_empty_limits(self):
@@ -217,8 +215,7 @@ class LimitsViewBuilderTest(test.NoDBTestCase):
                            "absolute": {}}}
 
         abs_limits = {}
-        rate_limits = []
-        output = self.view_builder.build(rate_limits, abs_limits)
+        output = self.view_builder.build(abs_limits)
         self.assertThat(output, matchers.DictMatches(expected_limits))
 
 

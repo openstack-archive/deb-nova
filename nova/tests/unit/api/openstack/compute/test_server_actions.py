@@ -123,8 +123,8 @@ class ServerActionsControllerTestV21(test.TestCase):
 
         self.compute_api.get(self.context, uuid,
                              expected_attrs=['flavor', 'pci_devices',
-                                             'numa_topology'],
-                             want_objects=True).AndReturn(instance)
+                                             'numa_topology']
+                             ).AndReturn(instance)
         return instance
 
     def _test_locked_instance(self, action, method=None, body_map=None,
@@ -796,6 +796,16 @@ class ServerActionsControllerTestV21(test.TestCase):
 
         body = dict(resize=dict(flavorRef="http://localhost/3"))
 
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller._action_resize,
+                          self.req, FAKE_UUID, body=body)
+
+    @mock.patch('nova.compute.api.API.resize',
+                side_effect=exception.PciRequestAliasNotDefined(
+                    alias='fake_name'))
+    def test_resize_pci_alias_not_defined(self, mock_resize):
+        # Tests that PciRequestAliasNotDefined is translated to a 400 error.
+        body = dict(resize=dict(flavorRef="http://localhost/3"))
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller._action_resize,
                           self.req, FAKE_UUID, body=body)

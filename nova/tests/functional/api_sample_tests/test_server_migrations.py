@@ -14,6 +14,7 @@
 #    under the License.
 
 import datetime
+
 import mock
 
 from nova.conductor import manager as conductor_manager
@@ -25,9 +26,8 @@ from nova.tests.unit import fake_instance
 
 
 class ServerMigrationsSampleJsonTest(test_servers.ServersSampleBase):
-    extension_name = 'server-migrations'
+    sample_dir = 'server-migrations'
     scenarios = [('v2_22', {'api_major_version': 'v2.1'})]
-    extra_extensions_to_load = ["os-migrate-server", "os-access-ips"]
 
     def setUp(self):
         """setUp method for server usage."""
@@ -66,7 +66,7 @@ class ServerMigrationsSampleJsonTest(test_servers.ServersSampleBase):
 
 class ServerMigrationsSamplesJsonTestV2_23(test_servers.ServersSampleBase):
     ADMIN_API = True
-    extension_name = "server-migrations"
+    sample_dir = "server-migrations"
     microversion = '2.23'
     scenarios = [('v2_23', {'api_major_version': 'v2.1'})]
     UUID_1 = '4cfba335-03d8-49b2-8c52-e69043d1e8fe'
@@ -163,9 +163,8 @@ class ServerMigrationsSamplesJsonTestV2_23(test_servers.ServersSampleBase):
 
 class ServerMigrationsSampleJsonTestV2_24(test_servers.ServersSampleBase):
     ADMIN_API = True
-    extension_name = "server-migrations"
+    sample_dir = "server-migrations"
     scenarios = [('v2_24', {'api_major_version': 'v2.1'})]
-    extra_extensions_to_load = ["os-migrate-server", "os-access-ips"]
 
     def setUp(self):
         """setUp method for server usage."""

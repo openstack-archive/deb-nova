@@ -6,9 +6,9 @@
    deprecated methods in this file. Let's not spend a ton of brain
    power on the associate/disassociate that's going away.
 
-========================
- Networks (os-networks)
-========================
+=====================================
+ Networks (os-networks)  (DEPRECATED)
+=====================================
 
 .. warning:: The networks API was designed to work with
              ``nova-network``. Some features are proxied to
@@ -16,6 +16,9 @@
              proxies, this is far from perfect compatibility. These
              APIs should be avoided in new applications in favor of
              using ``neutron`` directly.
+             See: `Relevant Network APIs
+             <http://developer.openstack.org/api-ref-networking-v2.html#networks>`__.
+
 
 Creates, lists, shows information for, and deletes networks.
 
@@ -28,7 +31,7 @@ Associates host with and disassociates host from a network.
 List Networks
 =============
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-networks
+.. rest_method:: GET /os-networks
 
 Lists networks for the project.
 
@@ -38,13 +41,6 @@ providers can change these permissions through the ``policy.json`` file.
 Normal response codes: 200
 
 Error response codes: unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -57,7 +53,7 @@ Response
 Create Network
 ==============
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-networks
+.. rest_method:: POST /os-networks
 
 Creates a network.
 
@@ -71,10 +67,6 @@ Error response codes: badRequest(400), unauthorized(401), forbidden(403), confli
 
 Request
 -------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 **Example Create Network: JSON request**
 
@@ -92,7 +84,7 @@ Response
 Add Network
 ===========
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-networks/add
+.. rest_method:: POST /os-networks/add
 
 Adds a network to a project.
 
@@ -107,10 +99,6 @@ Error response codes: badRequest(400), unauthorized(401), forbidden(403), NotImp
 Request
 -------
 
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
-
 **Example Add Network: JSON request**
 
 .. literalinclude:: ../../doc/api_samples/os-networks/network-add-req.json
@@ -122,7 +110,7 @@ Response
 Show Network Details
 ====================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-networks/{network_id}
+.. rest_method:: GET /os-networks/{network_id}
 
 Shows details for a network.
 
@@ -138,7 +126,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - network_id: network_id
 
 Response
@@ -152,7 +139,7 @@ Response
 Delete Network
 ==============
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-networks/{network_id}
+.. rest_method:: DELETE /os-networks/{network_id}
 
 Deletes a network.
 
@@ -169,7 +156,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - network_id: network_id
 
 Response
@@ -180,7 +166,7 @@ There is no body content for the response of a successful DELETE query.
 Associate Host (DEPRECATED)
 ===========================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-networks/{network_id}/action
+.. rest_method:: POST /os-networks/{network_id}/action
 
 .. warning::
    This API is only available with ``nova-network`` which is
@@ -203,7 +189,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - network_id: network_id
   - associate_host: associate_host
 
@@ -220,7 +205,7 @@ There is no body content for the response of a successful POST query.
 Disassociate Network (DEPRECATED)
 =================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-networks/{network_id}/action
+.. rest_method:: POST /os-networks/{network_id}/action
 
 .. warning::
    This API is only available with ``nova-network`` which is
@@ -243,12 +228,11 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - network_id: network_id
 
 **Example Disassociate Network: JSON request**
 
-.. literalinclude:: ../../doc/api_samples/os-networks/networks-disassociate-req.json
+.. literalinclude:: ../../doc/api_samples/os-networks-associate/network-disassociate-req.json
    :language: javascript
 
 Response
@@ -259,7 +243,7 @@ There is no body content for the response of a successful POST query.
 Disassociate Host (DEPRECATED)
 ==============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-networks/{network_id}/action
+.. rest_method:: POST /os-networks/{network_id}/action
 
 .. warning::
    This API is only available with ``nova-network`` which is
@@ -282,7 +266,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - network_id: network_id
 
 **Example Disassociate Host from Network: JSON request**
@@ -299,7 +282,7 @@ There is no body content for the response of a successful POST query.
 Disassociate Project (DEPRECATED)
 =================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-networks/{network_id}/action
+.. rest_method:: POST /os-networks/{network_id}/action
 
 .. warning::
    This API is only available with ``nova-network`` which is
@@ -322,7 +305,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - network_id: network_id
 
 **Example Disassociate Project from Network: JSON request**

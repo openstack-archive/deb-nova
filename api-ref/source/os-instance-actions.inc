@@ -1,5 +1,4 @@
 .. -*- rst -*-
-.. needs:parameter_verification
 .. needs:example_verification
 .. needs:body_verification
 
@@ -12,7 +11,7 @@ All users can list available actions for a server.
 List Actions For Server
 =======================
 
-.. rest_method:: GET /v2.1/{tenant_id}/servers/{server_id}/os-instance-actions
+.. rest_method:: GET /servers/{server_id}/os-instance-actions
 
 Lists actions for a server.
 
@@ -29,11 +28,23 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+
+  - instanceActions: instanceActions
+  - action: action
+  - instance_uuid: instance_id_body
+  - message: message
+  - project_id: project_id_instance_action
+  - request_id: request_id_body
+  - start_time: start_time
+  - user_id: user_id
 
 **Example List Actions For Server: JSON response**
 
@@ -43,7 +54,7 @@ Response
 Show Server Action Details
 ==========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/servers/{server_id}/os-instance-actions/{request_id}
+.. rest_method:: GET /servers/{server_id}/os-instance-actions/{request_id}
 
 Shows details for a server action.
 
@@ -59,12 +70,31 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-  - server_id: server_id
+
+  - server_id: server_id_path
   - request_id: request_id
 
 Response
 --------
+
+
+.. rest_parameters:: parameters.yaml
+
+
+  - instanceAction: instanceAction
+  - action: action
+  - instance_uuid: instance_id_body
+  - message: message
+  - project_id: project_id_instance_action
+  - request_id: request_id_body
+  - start_time: start_time
+  - user_id: user_id
+  - events: instance_action_events
+  - events.event: event
+  - events.start_time: event_start_time
+  - events.finish_time: event_finish_time
+  - events.result: event_result
+  - events.traceback: event_traceback
 
 **Example Show Server Action Details: JSON response**
 

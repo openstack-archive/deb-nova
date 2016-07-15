@@ -16,12 +16,12 @@
 from nova.api.openstack.compute.views import limits as limits_views
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
+from nova.policies import limits as limits_policies
 from nova import quota
 
 
 QUOTAS = quota.QUOTAS
 ALIAS = 'limits'
-authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 class LimitsController(wsgi.Controller):
@@ -29,19 +29,17 @@ class LimitsController(wsgi.Controller):
 
     @extensions.expected_errors(())
     def index(self, req):
-        """Return all global and rate limit information."""
+        """Return all global limit information."""
         context = req.environ['nova.context']
-        authorize(context)
+        context.can(limits_policies.BASE_POLICY_NAME)
         project_id = req.params.get('tenant_id', context.project_id)
         quotas = QUOTAS.get_project_quotas(context, project_id,
                                            usages=False)
         abs_limits = {k: v['limit'] for k, v in quotas.items()}
 
         builder = self._get_view_builder(req)
-        # NOTE(sdague): rate_limits is vestigial, but their is common
-        # code between v2 legacy and v2.1 so we have to pass an empty
-        # list.
-        return builder.build([], abs_limits)
+
+        return builder.build(abs_limits)
 
     def _get_view_builder(self, req):
         return limits_views.ViewBuilderV21()

@@ -52,6 +52,12 @@ class ConfigDriveTestV21(test.TestCase):
                       fakes.fake_instance_get())
         self.stub_out('nova.db.instance_get_by_uuid',
                       fakes.fake_instance_get())
+        # NOTE(sdague): because of the way extensions work, we have to
+        # also stub out the Request compute cache with a real compute
+        # object. Delete this once we remove all the gorp of
+        # extensions modifying the server objects.
+        self.stub_out('nova.api.openstack.wsgi.Request.get_db_instance',
+                      fakes.fake_compute_get())
         req = webob.Request.blank(self.base_url + uuids.sentinel)
         req.headers['Content-Type'] = 'application/json'
         response = req.get_response(self.app)
@@ -89,7 +95,7 @@ class ServersControllerCreateTestV21(test.TestCase):
         self.no_config_drive_controller = servers_v21.ServersController(
             extension_info=ext_info)
 
-    def _verfiy_config_drive(self, **kwargs):
+    def _verify_config_drive(self, **kwargs):
         self.assertNotIn('config_drive', kwargs)
 
     def _initialize_extension(self):
@@ -151,10 +157,10 @@ class ServersControllerCreateTestV21(test.TestCase):
         old_create = compute_api.API.create
 
         def create(*args, **kwargs):
-            self._verfiy_config_drive(**kwargs)
+            self._verify_config_drive(**kwargs)
             return old_create(*args, **kwargs)
 
-        self.stubs.Set(compute_api.API, 'create', create)
+        self.stub_out('nova.compute.api.API.create', create)
         self._test_create_extra(params,
             override_controller=self.no_config_drive_controller)
 
@@ -166,7 +172,7 @@ class ServersControllerCreateTestV21(test.TestCase):
             return old_create(*args, **kwargs)
 
         old_create = compute_api.API.create
-        self.stubs.Set(compute_api.API, 'create', create)
+        self.stub_out('nova.compute.api.API.create', create)
         image_href = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
         flavor_ref = ('http://localhost' + self.base_url + 'flavors/3')
         body = {

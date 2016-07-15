@@ -27,6 +27,7 @@ from nova import test
 from nova.tests.unit import fake_block_device
 import nova.tests.unit.image.fake
 from nova.tests.unit.virt import fakelibosinfo
+from nova.tests import uuidsentinel as uuids
 from nova.virt import block_device as driver_block_device
 from nova.virt import driver
 from nova.virt.libvirt import blockinfo
@@ -359,7 +360,9 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
         # is sdz
 
         bus_ppc = ("scsi", "sdz")
-        expect_bus = {"ppc": bus_ppc, "ppc64": bus_ppc, "ppc64le": bus_ppc}
+        bus_aarch64 = ("scsi", "sdz")
+        expect_bus = {"ppc": bus_ppc, "ppc64": bus_ppc,
+                        "ppc64le": bus_ppc, "aarch64": bus_aarch64}
 
         bus, dev = expect_bus.get(blockinfo.libvirt_utils.get_arch({}),
                                   ("ide", "hdd"))
@@ -392,7 +395,9 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
                                              image_meta)
 
         bus_ppc = ("scsi", "sdz")
-        expect_bus = {"ppc": bus_ppc, "ppc64": bus_ppc, "ppc64le": bus_ppc}
+        bus_aarch64 = ("scsi", "sdz")
+        expect_bus = {"ppc": bus_ppc, "ppc64": bus_ppc,
+                        "ppc64le": bus_ppc, "aarch64": bus_aarch64}
 
         bus, dev = expect_bus.get(blockinfo.libvirt_utils.get_arch({}),
                                   ("ide", "hdd"))
@@ -712,7 +717,9 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
                 (arch.S390, 'disk', 'virtio'),
                 (arch.S390, 'cdrom', 'scsi'),
                 (arch.S390X, 'disk', 'virtio'),
-                (arch.S390X, 'cdrom', 'scsi')
+                (arch.S390X, 'cdrom', 'scsi'),
+                (arch.AARCH64, 'disk', 'virtio'),
+                (arch.AARCH64, 'cdrom', 'scsi')
                 )
         image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
         for guestarch, dev, res in expected:
@@ -878,7 +885,7 @@ class LibvirtBlockInfoTest(test.NoDBTestCase):
     def test_get_device_name(self):
         bdm_obj = objects.BlockDeviceMapping(self.context,
             **fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 3, 'instance_uuid': 'fake-instance',
+                {'id': 3, 'instance_uuid': uuids.instance,
                  'device_name': '/dev/vda',
                  'source_type': 'volume',
                  'destination_type': 'volume',
@@ -1050,7 +1057,7 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
 
         self.ephemerals = [objects.BlockDeviceMapping(
             self.context, **fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 1, 'instance_uuid': 'fake-instance',
+                {'id': 1, 'instance_uuid': uuids.instance,
                  'device_name': '/dev/vdb',
                  'source_type': 'blank',
                  'destination_type': 'local',
@@ -1063,7 +1070,7 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
 
         self.swap = [objects.BlockDeviceMapping(
             self.context, **fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 2, 'instance_uuid': 'fake-instance',
+                {'id': 2, 'instance_uuid': uuids.instance,
                  'device_name': '/dev/vdc',
                  'source_type': 'blank',
                  'destination_type': 'local',
@@ -1077,7 +1084,7 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
         self.block_device_mapping = [
             objects.BlockDeviceMapping(self.context,
                 **fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 3, 'instance_uuid': 'fake-instance',
+                {'id': 3, 'instance_uuid': uuids.instance,
                  'device_name': '/dev/vda',
                  'source_type': 'volume',
                  'destination_type': 'volume',
@@ -1087,7 +1094,7 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
                  'boot_index': 0})),
             objects.BlockDeviceMapping(self.context,
                 **fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 4, 'instance_uuid': 'fake-instance',
+                {'id': 4, 'instance_uuid': uuids.instance,
                  'device_name': '/dev/vdd',
                  'source_type': 'snapshot',
                  'device_type': 'disk',
@@ -1097,7 +1104,7 @@ class DefaultDeviceNamesTestCase(test.NoDBTestCase):
                  'boot_index': -1})),
             objects.BlockDeviceMapping(self.context,
                 **fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 5, 'instance_uuid': 'fake-instance',
+                {'id': 5, 'instance_uuid': uuids.instance,
                  'device_name': '/dev/vde',
                  'source_type': 'blank',
                  'device_type': 'disk',

@@ -2,16 +2,24 @@
 .. needs:example_verification
 .. needs:body_verification
 
-====================================================
- Rules for security group (os-security-group-rules)
-====================================================
+================================================================
+ Rules for security group (os-security-group-rules) (DEPRECATED)
+================================================================
+
+.. warning::
+
+   These APIs are proxy calls to the Network service. Nova has
+   deprecated all the proxy APIs and users should use the native APIs
+   instead.
+   See: `Relevant Network APIs
+   <http://developer.openstack.org/api-ref-networking-v2-ext.html#security_group_rules>`__.
 
 Creates and deletes security group rules.
 
 Create Security Group Rule
 ==========================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-security-group-rules
+.. rest_method:: POST /os-security-group-rules
 
 Creates a rule for a security group. Either ``cidr`` or ``group_id`` must be
 specified when creating a rule.
@@ -29,7 +37,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - security_group_rule: security_group_rule
   - parent_group_id: parent_group_id
   - ip_protocol: ip_protocol
@@ -74,7 +82,7 @@ The ``ip_range`` is empty if ``cidr`` was not provided on the request.
 Delete Security Group Rule
 ==========================
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-security-group-rules/{security_group_rule_id}
+.. rest_method:: DELETE /os-security-group-rules/{security_group_rule_id}
 
 Deletes a security group rule.
 
@@ -87,7 +95,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - security_group_rule_id: security_group_rule_id
 
 Response

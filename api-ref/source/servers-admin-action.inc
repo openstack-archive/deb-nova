@@ -16,7 +16,7 @@ of a server.
 Create Server Back Up (createBackup Action)
 ===========================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Creates a back up of a server.
 
@@ -36,13 +36,13 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - createBackup: createBackup
   - name: backup_name
   - backup_type: backup_type
   - rotation: backup_rotation
-  - metadata: metadata_image
+  - metadata: metadata
 
 **Example Create Server Back Up (Createbackup Action): JSON request**
 
@@ -58,7 +58,7 @@ will be returned.
 Inject Network Information (injectNetworkInfo Action)
 =====================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Injects network information into a server.
 
@@ -81,7 +81,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - injectNetworkInfo: injectNetworkInfo
 
@@ -98,7 +98,7 @@ On success no body is returned.
 Migrate Server (migrate Action)
 ===============================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Migrates a server to a host. The scheduler chooses the host.
 
@@ -118,7 +118,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - migrate: migrate
 
@@ -135,7 +135,7 @@ On success no body is returned.
 Live-Migrate Server (os-migrateLive Action)
 ===========================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Live-migrates a server to a new host without rebooting.
 
@@ -155,6 +155,12 @@ Policy defaults enable only users with the administrative role to
 perform this operation. Cloud providers can change these permissions
 through the ``policy.json`` file.
 
+Starting from REST API version 2.34 pre-live-migration checks are done
+asynchronously, results of these checks are available in ``instance-actions``.
+Nova responds immediately, and no pre-live-migration checks are returned.
+The instance will not immediately change state to ``ERROR``, if a failure of
+the live-migration checks occurs.
+
 Normal response codes: 202
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403)
@@ -165,11 +171,12 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - host: host_migration
   - block_migration: block_migration
   - disk_over_commit: disk_over_commit
+  - force: force_live_migrate
 
 **Example Live-Migrate Server (os-migrateLive Action): JSON request**
 
@@ -184,14 +191,14 @@ On success no body is returned.
 Reset Networking On A Server (resetNetwork Action)
 ==================================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
-Resets networking on a server. 
+Resets networking on a server.
 
 .. note::
 
     Only the XenServer driver implements this feature and only if the guest
-    has the XenAPI agent in the targeted server. 
+    has the XenAPI agent in the targeted server.
 
 Specify the ``resetNetwork`` action in the request body.
 
@@ -209,7 +216,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - resetNetwork: resetNetwork
 
@@ -226,7 +233,7 @@ On success no body is returned.
 Reset Server State (os-resetState Action)
 =========================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Resets the state of a server.
 
@@ -245,7 +252,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - os-resetState: os-resetState
   - os-resetState.state: os-resetState_state

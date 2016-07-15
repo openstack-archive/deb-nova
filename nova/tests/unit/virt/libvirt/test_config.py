@@ -742,6 +742,43 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
 
         self.assertEqual('native', obj.driver_io)
 
+    def test_config_boot_order(self):
+        obj = config.LibvirtConfigGuestDisk()
+        obj.driver_name = "qemu"
+        obj.driver_format = "qcow2"
+        obj.driver_cache = "none"
+        obj.driver_io = "native"
+        obj.source_type = "file"
+        obj.source_path = "/tmp/hello.qcow2"
+        obj.target_dev = "/dev/hda"
+        obj.target_bus = "ide"
+        obj.serial = "7a97c4a3-6f59-41d4-bf47-191d7f97f8e9"
+        obj.boot_order = "1"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual("""
+            <disk type="file" device="disk">
+              <driver name="qemu" type="qcow2" cache="none" io="native"/>
+              <source file="/tmp/hello.qcow2"/>
+              <target bus="ide" dev="/dev/hda"/>
+              <serial>7a97c4a3-6f59-41d4-bf47-191d7f97f8e9</serial>
+              <boot order="1"/>
+            </disk>""", xml)
+
+    def test_config_boot_order_parse(self):
+        xml = """
+            <disk type="file" device="disk">
+              <driver name="qemu" type="qcow2" cache="none" discard="unmap"/>
+              <source file="/tmp/hello.qcow2"/>
+              <target bus="ide" dev="/dev/hda"/>
+              <serial>7a97c4a3-6f59-41d4-bf47-191d7f97f8e9</serial>
+              <boot order="1"/>
+            </disk>"""
+        xmldoc = etree.fromstring(xml)
+        obj = config.LibvirtConfigGuestDisk()
+        obj.parse_dom(xmldoc)
+        self.assertEqual(obj.boot_order, "1")
+
     def test_config_block(self):
         obj = config.LibvirtConfigGuestDisk()
         obj.source_type = "block"
@@ -1202,6 +1239,23 @@ class LibvirtConfigGuestHostdevPCI(LibvirtConfigBaseTest):
         self.assertEqual(obj.type, 'usb')
 
 
+class LibvirtConfigGuestCharDeviceLog(LibvirtConfigBaseTest):
+
+    def test_config_log(self):
+        obj = config.LibvirtConfigGuestCharDeviceLog()
+        obj.file = "/tmp/guestname-logd.log"
+        obj.append = "on"
+
+        xml = obj.to_xml()
+        self.assertXmlEqual(xml, """
+            <log file="/tmp/guestname-logd.log" append="on"/>""")
+
+        # create a new object from the XML and check it again
+        obj2 = config.LibvirtConfigGuestCharDeviceLog()
+        obj2.parse_str(xml)
+        self.assertXmlEqual(xml, obj2.to_xml())
+
+
 class LibvirtConfigGuestSerialTest(LibvirtConfigBaseTest):
 
     def test_config_file(self):
@@ -1225,6 +1279,24 @@ class LibvirtConfigGuestSerialTest(LibvirtConfigBaseTest):
         self.assertXmlEqual(xml, """
             <serial type="tcp">
               <source host="0.0.0.0" service="11111" mode="bind"/>
+            </serial>""")
+
+    def test_config_log(self):
+        log = config.LibvirtConfigGuestCharDeviceLog()
+        log.file = "/tmp/guestname-logd.log"
+        log.append = "off"
+
+        device = config.LibvirtConfigGuestSerial()
+        device.type = "tcp"
+        device.listen_port = 11111
+        device.listen_host = "0.0.0.0"
+        device.log = log
+
+        xml = device.to_xml()
+        self.assertXmlEqual(xml, """
+            <serial type="tcp">
+              <source host="0.0.0.0" service="11111" mode="bind"/>
+              <log file="/tmp/guestname-logd.log" append="off"/>
             </serial>""")
 
 
@@ -1273,6 +1345,24 @@ class LibvirtConfigGuestConsoleTest(LibvirtConfigBaseTest):
                 <target port="0"/>
             </console>
             """)
+
+    def test_config_log(self):
+        log = config.LibvirtConfigGuestCharDeviceLog()
+        log.file = "/tmp/guestname-logd.log"
+        log.append = "off"
+
+        device = config.LibvirtConfigGuestConsole()
+        device.type = "tcp"
+        device.listen_port = 11111
+        device.listen_host = "0.0.0.0"
+        device.log = log
+
+        xml = device.to_xml()
+        self.assertXmlEqual(xml, """
+            <console type="tcp">
+              <source host="0.0.0.0" service="11111" mode="bind"/>
+              <log file="/tmp/guestname-logd.log" append="off"/>
+            </console>""")
 
 
 class LibvirtConfigGuestChannelTest(LibvirtConfigBaseTest):
@@ -1990,6 +2080,32 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
               </os>
             </domain>""")
 
+    def test_config_perf(self):
+        obj = config.LibvirtConfigGuest()
+        obj.virt_type = "kvm"
+        obj.memory = 100 * units.Mi
+        obj.vcpus = 2
+        obj.name = "perf"
+        obj.uuid = "f01cf68d-515c-4daf-b85f-ef1424d93bfc"
+        obj.os_type = "fake"
+        obj.perf_events = ['cmt', 'mbml']
+        xml = obj.to_xml()
+
+        self.assertXmlEqual(xml, """
+            <domain type="kvm">
+              <uuid>f01cf68d-515c-4daf-b85f-ef1424d93bfc</uuid>
+              <name>perf</name>
+              <memory>104857600</memory>
+              <vcpu>2</vcpu>
+              <os>
+                <type>fake</type>
+              </os>
+              <perf>
+                <event enabled="yes" name="cmt"/>
+                <event enabled="yes" name="mbml"/>
+              </perf>
+            </domain>""")
+
     def test_config_machine_type(self):
         obj = config.LibvirtConfigGuest()
         obj.virt_type = "kvm"
@@ -2040,7 +2156,7 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         obj.parse_str(xmldoc)
         self.assertEqual(len(obj.devices), 0)
 
-    def test_ConfigGuest_parese_cpu(self):
+    def test_ConfigGuest_parse_cpu(self):
         xmldoc = """ <domain>
                        <cpu mode='custom' match='exact'>
                          <model>kvm64</model>
@@ -2053,6 +2169,19 @@ class LibvirtConfigGuestTest(LibvirtConfigBaseTest):
         self.assertEqual(obj.cpu.mode, 'custom')
         self.assertEqual(obj.cpu.match, 'exact')
         self.assertEqual(obj.cpu.model, 'kvm64')
+
+    def test_ConfigGuest_parse_perf(self):
+        xmldoc = """ <domain>
+             <perf>
+               <event enabled="yes" name="cmt"/>
+               <event enabled="no" name="mbml"/>
+             </perf>
+                    </domain>
+               """
+        obj = config.LibvirtConfigGuest()
+        obj.parse_str(xmldoc)
+
+        self.assertEqual(['cmt'], obj.perf_events)
 
 
 class LibvirtConfigGuestSnapshotTest(LibvirtConfigBaseTest):

@@ -3,9 +3,17 @@
 .. needs:example_verification
 .. needs:body_verification
 
-==========================================
- Floating IPs bulk (os-floating-ips-bulk)
-==========================================
+======================================================
+ Floating IPs bulk (os-floating-ips-bulk) (DEPRECATED)
+======================================================
+
+.. warning::
+
+   These APIs are proxy calls to the Network service. Nova has
+   deprecated all the proxy APIs and users should use the native APIs
+   instead.
+   See: `Relevant Network APIs
+   <http://developer.openstack.org/api-ref-networking-v2-ext.html>`__.
 
 (nova-network only) Bulk-creates, deletes, and lists floating IPs.
 Default pool name is ``nova``.
@@ -15,20 +23,13 @@ To view available pools, use the ``os-floating-ip-pools`` extension.
 List Floating Ips
 =================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ips-bulk
+.. rest_method:: GET /os-floating-ips-bulk
 
 Lists all floating IPs.
 
 Normal response codes: 200
 
 Error response codes: unauthorized(401), forbidden(403), itemNotFound(404)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -41,7 +42,7 @@ Response
 Create Floating Ips
 ===================
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-floating-ips-bulk
+.. rest_method:: POST /os-floating-ips-bulk
 
 Bulk-creates floating IPs.
 
@@ -54,7 +55,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - ip_range: ip_range
 
 **Example Create Floating Ips: JSON request**
@@ -73,7 +73,7 @@ Response
 Bulk-Delete Floating Ips
 ========================
 
-.. rest_method:: PUT /v2.1/{tenant_id}/os-floating-ips-bulk/delete
+.. rest_method:: PUT /os-floating-ips-bulk/delete
 
 Bulk-deletes floating IPs.
 
@@ -86,7 +86,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - ip_range: ip_range
 
 **Example Bulk-Delete Floating Ips: JSON request**
@@ -105,7 +104,7 @@ Response
 List Floating Ips By Host
 =========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ips-bulk/{host_name}
+.. rest_method:: GET /os-floating-ips-bulk/{host_name}
 
 Lists all floating IPs for a host.
 
@@ -118,7 +117,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - host_name: host_name
 
 Response
@@ -128,4 +126,3 @@ Response
 
 .. literalinclude:: ../../doc/api_samples/os-floating-ips-bulk/floating-ips-bulk-list-by-host-resp.json
    :language: javascript
-

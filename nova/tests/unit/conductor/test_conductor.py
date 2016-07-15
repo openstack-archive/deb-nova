@@ -73,7 +73,7 @@ class _BaseTestCase(object):
         self.project_id = fakes.FAKE_PROJECT_ID
         self.context = FakeContext(self.user_id, self.project_id)
 
-        fake_notifier.stub_notifier(self.stubs)
+        fake_notifier.stub_notifier(self)
         self.addCleanup(fake_notifier.reset)
 
         def fake_deserialize_context(serializer, ctxt_dict):
@@ -285,7 +285,7 @@ class _BaseTaskTestCase(object):
         self.user_id = fakes.FAKE_USER_ID
         self.project_id = fakes.FAKE_PROJECT_ID
         self.context = FakeContext(self.user_id, self.project_id)
-        fake_server_actions.stub_out_action_events(self.stubs)
+        fake_server_actions.stub_out_action_events(self)
 
         def fake_deserialize_context(serializer, ctxt_dict):
             self.assertEqual(self.context.user_id, ctxt_dict['user_id'])
@@ -325,35 +325,6 @@ class _BaseTaskTestCase(object):
         compute_rebuild_args.pop('request_spec')
 
         return rebuild_args, compute_rebuild_args
-
-    @mock.patch('nova.objects.Migration')
-    def test_live_migrate(self, migobj):
-        inst = fake_instance.fake_db_instance()
-        inst_obj = objects.Instance._from_db_object(
-            self.context, objects.Instance(), inst, [])
-
-        migration = migobj()
-        self.mox.StubOutWithMock(live_migrate.LiveMigrationTask, 'execute')
-        task = self.conductor_manager._build_live_migrate_task(
-            self.context, inst_obj, 'destination', 'block_migration',
-            'disk_over_commit', migration)
-        task.execute()
-        self.mox.ReplayAll()
-
-        if isinstance(self.conductor, (conductor_api.ComputeTaskAPI,
-                                       conductor_api.LocalComputeTaskAPI)):
-            # The API method is actually 'live_migrate_instance'.  It gets
-            # converted into 'migrate_server' when doing RPC.
-            self.conductor.live_migrate_instance(self.context, inst_obj,
-                'destination', 'block_migration', 'disk_over_commit')
-        else:
-            self.conductor.migrate_server(self.context, inst_obj,
-                {'host': 'destination'}, True, False, None,
-                 'block_migration', 'disk_over_commit')
-
-        self.assertEqual('accepted', migration.status)
-        self.assertEqual('destination', migration.dest_compute)
-        self.assertEqual(inst_obj.host, migration.source_compute)
 
     @mock.patch.object(migrate.MigrationTask, 'execute')
     @mock.patch.object(utils, 'get_image_from_system_metadata')
@@ -917,8 +888,8 @@ class _BaseTaskTestCase(object):
             reset_forced_destinations.assert_called_once_with()
             sched_instances.assert_called_once_with(self.context, request_spec,
                                                     filter_properties)
-            # NOTE(sbauza): Since the instance is dehydrated when passing thru
-            # the RPC API, we can only assert mock.ANY for it
+            # NOTE(sbauza): Since the instance is dehydrated when passing
+            # through the RPC API, we can only assert mock.ANY for it
             unshelve_instance.assert_called_once_with(
                 self.context, mock.ANY, host['host'], image=mock.ANY,
                 filter_properties=filter_properties, node=host['nodename']
@@ -1309,13 +1280,18 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                 self.conductor_manager.compute_rpcapi)
 
     def test_migrate_server_fails_with_rebuild(self):
+        instance = fake_instance.fake_instance_obj(self.context,
+                                                   vm_state=vm_states.ACTIVE)
         self.assertRaises(NotImplementedError, self.conductor.migrate_server,
-            self.context, None, None, True, True, None, None, None)
+            self.context, instance, None, True, True, None, None, None)
 
     def test_migrate_server_fails_with_flavor(self):
         flavor = flavors.get_flavor_by_name('m1.tiny')
+        instance = fake_instance.fake_instance_obj(self.context,
+                                                   vm_state=vm_states.ACTIVE,
+                                                   flavor=flavor)
         self.assertRaises(NotImplementedError, self.conductor.migrate_server,
-            self.context, None, None, True, False, flavor, None, None)
+            self.context, instance, None, True, False, flavor, None, None)
 
     def _build_request_spec(self, instance):
         return {
@@ -1662,8 +1638,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         select_dest_mock.assert_called_once_with(
             self.context, fake_spec)
         prep_resize_mock.assert_called_once_with(
-            self.context, legacy_request_spec['image'],
-            inst_obj, flavor, hosts[0]['host'], [resvs],
+            self.context, inst_obj, legacy_request_spec['image'],
+            flavor, hosts[0]['host'], [resvs],
             request_spec=legacy_request_spec,
             filter_properties=legacy_filter_props,
             node=hosts[0]['nodename'], clean_shutdown=True)
@@ -1816,6 +1792,44 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                     block_device_mapping=mock.ANY,
                     node='node2', limits=[])
 
+    def test_cleanup_allocated_networks_none_requested(self):
+        # Tests that we don't deallocate networks if 'none' were specifically
+        # requested.
+        fake_inst = fake_instance.fake_instance_obj(
+            self.context, expected_attrs=['system_metadata'])
+        requested_networks = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest(network_id='none')])
+        with mock.patch.object(self.conductor.network_api,
+                               'deallocate_for_instance') as deallocate:
+            with mock.patch.object(fake_inst, 'save') as mock_save:
+                self.conductor._cleanup_allocated_networks(
+                    self.context, fake_inst, requested_networks)
+        self.assertFalse(deallocate.called)
+        self.assertEqual('False',
+                         fake_inst.system_metadata['network_allocated'],
+                         fake_inst.system_metadata)
+        mock_save.assert_called_once_with()
+
+    def test_cleanup_allocated_networks_auto_or_none_provided(self):
+        # Tests that we deallocate networks if auto-allocating networks or
+        # requested_networks=None.
+        fake_inst = fake_instance.fake_instance_obj(
+            self.context, expected_attrs=['system_metadata'])
+        requested_networks = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest(network_id='auto')])
+        for req_net in (requested_networks, None):
+            with mock.patch.object(self.conductor.network_api,
+                                   'deallocate_for_instance') as deallocate:
+                with mock.patch.object(fake_inst, 'save') as mock_save:
+                    self.conductor._cleanup_allocated_networks(
+                        self.context, fake_inst, req_net)
+        deallocate.assert_called_once_with(
+            self.context, fake_inst, requested_networks=req_net)
+        self.assertEqual('False',
+                         fake_inst.system_metadata['network_allocated'],
+                         fake_inst.system_metadata)
+        mock_save.assert_called_once_with()
+
 
 class ConductorTaskRPCAPITestCase(_BaseTaskTestCase,
         test_compute.BaseTestCase):
@@ -1828,6 +1842,31 @@ class ConductorTaskRPCAPITestCase(_BaseTaskTestCase,
         service_manager = self.conductor_service.manager
         self.conductor_manager = service_manager.compute_task_mgr
 
+    def test_live_migrate_instance(self):
+
+        inst = fake_instance.fake_db_instance()
+        inst_obj = objects.Instance._from_db_object(
+            self.context, objects.Instance(), inst, [])
+        version = '1.15'
+        scheduler_hint = {'host': 'destination'}
+        cctxt_mock = mock.MagicMock()
+
+        @mock.patch.object(self.conductor.client, 'prepare',
+                          return_value=cctxt_mock)
+        def _test(prepare_mock):
+            self.conductor.live_migrate_instance(
+                self.context, inst_obj, scheduler_hint,
+                'block_migration', 'disk_over_commit', request_spec=None)
+            prepare_mock.assert_called_once_with(version=version)
+            kw = {'instance': inst_obj, 'scheduler_hint': scheduler_hint,
+                  'block_migration': 'block_migration',
+                  'disk_over_commit': 'disk_over_commit',
+                  'request_spec': None,
+              }
+            cctxt_mock.cast.assert_called_once_with(
+                self.context, 'live_migrate_instance', **kw)
+        _test()
+
 
 class ConductorTaskAPITestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
     """Compute task API Tests."""
@@ -1839,6 +1878,20 @@ class ConductorTaskAPITestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         service_manager = self.conductor_service.manager
         self.conductor_manager = service_manager.compute_task_mgr
 
+    def test_live_migrate(self):
+        inst = fake_instance.fake_db_instance()
+        inst_obj = objects.Instance._from_db_object(
+            self.context, objects.Instance(), inst, [])
+
+        with mock.patch.object(self.conductor.conductor_compute_rpcapi,
+                               'migrate_server') as mock_migrate_server:
+            self.conductor.live_migrate_instance(self.context, inst_obj,
+                'destination', 'block_migration', 'disk_over_commit')
+            mock_migrate_server.assert_called_once_with(
+                self.context, inst_obj, {'host': 'destination'}, True, False,
+                None, 'block_migration', 'disk_over_commit', None,
+                request_spec=None)
+
 
 class ConductorLocalComputeTaskAPITestCase(ConductorTaskAPITestCase):
     """Conductor LocalComputeTaskAPI Tests."""
@@ -1846,3 +1899,26 @@ class ConductorLocalComputeTaskAPITestCase(ConductorTaskAPITestCase):
         super(ConductorLocalComputeTaskAPITestCase, self).setUp()
         self.conductor = conductor_api.LocalComputeTaskAPI()
         self.conductor_manager = self.conductor._manager._target
+
+    @mock.patch('nova.objects.Migration')
+    def test_live_migrate(self, migobj):
+        inst = fake_instance.fake_db_instance()
+        inst_obj = objects.Instance._from_db_object(
+            self.context, objects.Instance(), inst, [])
+
+        migration = migobj()
+        task = mock.MagicMock()
+        with mock.patch.object(self.conductor_manager,
+                               '_build_live_migrate_task',
+                               return_value=task) as mock_build_task:
+            self.conductor.live_migrate_instance(self.context, inst_obj,
+                'destination', 'block_migration', 'disk_over_commit')
+            mock_build_task.assert_called_once_with(self.context, inst_obj,
+                                                    'destination',
+                                                    'block_migration',
+                                                    'disk_over_commit',
+                                                    migration, None)
+            task.execute.assert_called_once()
+        self.assertEqual('accepted', migration.status)
+        self.assertEqual('destination', migration.dest_compute)
+        self.assertEqual(inst_obj.host, migration.source_compute)

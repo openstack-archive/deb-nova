@@ -136,7 +136,8 @@ class ComputeDriver(object):
         "has_imagecache": False,
         "supports_recreate": False,
         "supports_migrate_to_same_host": False,
-        "supports_attach_interface": False
+        "supports_attach_interface": False,
+        "supports_device_tagging": False,
     }
 
     def __init__(self, virtapi):
@@ -945,7 +946,7 @@ class ComputeDriver(object):
         """
         raise NotImplementedError()
 
-    def check_can_live_migrate_destination_cleanup(self, context,
+    def cleanup_live_migration_destination_check(self, context,
                                                    dest_check_data):
         """Do required cleanup on dest host after check_can_live_migrate calls
 
@@ -1254,14 +1255,14 @@ class ComputeDriver(object):
     def macs_for_instance(self, instance):
         """What MAC addresses must this instance have?
 
-        Some hypervisors (such as bare metal) cannot do freeform virtualisation
+        Some hypervisors (such as bare metal) cannot do freeform virtualization
         of MAC addresses. This method allows drivers to return a set of MAC
         addresses that the instance is to have. allocate_for_instance will take
         this into consideration when provisioning networking for the instance.
 
         Mapping of MAC addresses to actual networks (or permitting them to be
         freeform) is up to the network implementation layer. For instance,
-        with openflow switches, fixed MAC addresses can still be virtualised
+        with openflow switches, fixed MAC addresses can still be virtualized
         onto any L2 domain, with arbitrary VLANs etc, but regular switches
         require pre-configured MAC->network mappings that will match the
         actual configuration.

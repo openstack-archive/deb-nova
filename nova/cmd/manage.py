@@ -292,6 +292,30 @@ class ProjectCommands(object):
             print(print_format % (key, value['limit'], value['in_use'],
                                   value['reserved']))
 
+    @args('--project', dest='project_id', metavar='<Project Id>',
+            help='Project Id', required=True)
+    @args('--user', dest='user_id', metavar='<User Id>',
+            help='User Id')
+    @args('--key', metavar='<key>', help='Key')
+    def quota_usage_refresh(self, project_id, user_id=None, key=None):
+        """Refresh the quotas for project/user
+
+        If no quota key is provided, all the quota usages will be refreshed.
+        If a valid quota key is provided and it does not exist,
+        it will be created. Otherwise, it will be refreshed.
+        """
+        ctxt = context.get_admin_context()
+
+        keys = None
+        if key:
+            keys = [key]
+
+        try:
+            QUOTAS.usage_refresh(ctxt, project_id, user_id, keys)
+        except exception.QuotaUsageRefreshNotAllowed as e:
+            print(e.format_message())
+            return 2
+
     @args('--project', dest='project_id', metavar='<Project name>',
             help='Project name')
     def scrub(self, project_id):
@@ -540,6 +564,16 @@ class NetworkCommands(object):
                dns1=None, dns2=None, project_id=None, priority=None,
                uuid=None, fixed_cidr=None):
         """Creates fixed IPs for host by range."""
+
+        # NOTE(gmann): These checks are moved here as API layer does all these
+        # validation through JSON schema.
+        if not label:
+            raise exception.NetworkNotCreated(req="label")
+        if len(label) > 255:
+            raise exception.LabelTooLong()
+        if not (cidr or cidr_v6):
+            raise exception.NetworkNotCreated(req="cidr or cidr_v6")
+
         kwargs = {k: v for k, v in six.iteritems(locals())
                   if v and k != "self"}
         if multi_host is not None:
@@ -652,9 +686,13 @@ class NetworkCommands(object):
 class VmCommands(object):
     """Class for managing VM instances."""
 
+    description = ('DEPRECATED: Use the nova list command from '
+                   'python-novaclient instead. The vm subcommand will be '
+                   'removed in the 15.0.0 Ocata release.')
+
     @args('--host', metavar='<host>', help='Host')
     def list(self, host=None):
-        """Show a list of all instances."""
+        """DEPRECATED: Show a list of all instances."""
 
         print(("%-10s %-15s %-10s %-10s %-26s %-9s %-9s %-9s"
                "  %-10s %-10s %-10s %-5s" % (_('instance'),
@@ -1295,15 +1333,12 @@ class CellV2Commands(object):
             print(cell_mapping_uuid)
         return cell_mapping_uuid
 
-    # TODO(melwitt): Remove this when the oslo.messaging function
-    # for assembling a transport url from ConfigOpts is available
-    @args('--transport-url', metavar='<transport url>', required=True,
-          dest='transport_url',
+    @args('--transport-url', metavar='<transport url>', dest='transport_url',
           help='The transport url for the cell message queue')
     @args('--name', metavar='<name>', help='The name of the cell')
     @args('--verbose', action='store_true',
           help='Return and output the uuid of the created cell')
-    def map_cell_and_hosts(self, transport_url, name=None, verbose=False):
+    def map_cell_and_hosts(self, transport_url=None, name=None, verbose=False):
         """EXPERIMENTAL. Create a cell mapping and host mappings for a cell.
 
         Users not dividing their cloud into multiple cells will be a single
@@ -1315,6 +1350,11 @@ class CellV2Commands(object):
 
           nova-manage cell_v2 map_cell_and_hosts --config-file <cell nova.conf>
         """
+        transport_url = CONF.transport_url or transport_url
+        if not transport_url:
+            print('Must specify --transport-url if [DEFAULT]/transport_url '
+                  'is not set in the configuration file.')
+            return 1
         self._map_cell_and_hosts(transport_url, name, verbose)
         # online_data_migrations established a pattern of 0 meaning everything
         # is done, 1 means run again to do more work. This command doesn't do

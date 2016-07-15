@@ -300,3 +300,64 @@ user documentation.
   From this version of the API the hypervisor's 'cpu_info' field will be
   will returned as JSON object (not string) by sending GET request
   to the /v2.1/os-hypervisors/{hypervisor_id}.
+
+2.29
+----
+
+  Updates the POST request body for the ``evacuate`` action to include the
+  optional ``force`` boolean field defaulted to False.
+  Also changes the evacuate action behaviour when providing a ``host`` string
+  field by calling the nova scheduler to verify the provided host unless the
+  ``force`` attribute is set.
+
+2.30
+----
+
+  Updates the POST request body for the ``live-migrate`` action to include the
+  optional ``force`` boolean field defaulted to False.
+  Also changes the live-migrate action behaviour when providing a ``host``
+  string field by calling the nova scheduler to verify the provided host unless
+  the ``force`` attribute is set.
+
+2.31
+----
+
+  Fix os-console-auth-tokens to return connection info for all types of tokens,
+  not just RDP.
+
+2.32
+----
+
+  Adds an optional, arbitrary 'tag' item to the 'networks' item in the server
+  boot request body. In addition, every item in the block_device_mapping_v2
+  array can also have an optional, arbitrary 'tag' item. These tags are used to
+  identify virtual device metadata, as exposed in the metadata API and on the
+  config drive. For example, a network interface on the virtual PCI bus tagged
+  with 'nic1' will appear in the metadata along with its bus (PCI), bus address
+  (ex: 0000:00:02.0), MAC address, and tag ('nic1').
+
+2.33
+----
+
+  Support pagination for hypervisor by accepting limit and marker from the GET
+  API request::
+
+    GET /v2.1/{tenant_id}/os-hypervisors?marker={hypervisor_id}&limit={limit}
+
+2.34
+----
+
+  Checks in ``os-migrateLive`` before live-migration actually starts are now
+  made in background. ``os-migrateLive`` is not throwing `400 Bad Request` if
+  pre-live-migration checks fail.
+
+2.35
+----
+
+  Added pagination support for keypairs.
+
+  Optional parameters 'limit' and 'marker' were added to GET /os-keypairs
+  request, the default sort_key was changed to 'name' field as ASC order,
+  the generic request format is::
+
+    GET /os-keypairs?limit={limit}&marker={kp_name}

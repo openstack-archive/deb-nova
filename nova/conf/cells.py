@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # Copyright 2015 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -363,8 +370,10 @@ Related options:
 cell_manager_opts = [
         cfg.StrOpt('driver',
                 default='nova.cells.rpc_driver.CellsRPCDriver',
-                help="""
-Cells communication driver
+                deprecated_for_removal=True,
+                deprecated_reason='The only available driver '
+                                  'is the RPC driver.',
+                help="""Cells communication driver
 
 Driver for cell<->cell communication via RPC. This is used to
 setup the RPC consumers as well as to send a message to another cell.

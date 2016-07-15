@@ -3,29 +3,30 @@
 .. needs:example_verification
 .. needs:body_verification
 
-=============================================
- Volume extension (os-volumes, os-snapshots)
-=============================================
+=========================================================
+ Volume extension (os-volumes, os-snapshots) (DEPRECATED)
+=========================================================
+
+.. warning::
+
+   These APIs are proxy calls to the Volume service. Nova has
+   deprecated all the proxy APIs and users should use the native APIs
+   instead.
+   See: `Relevant Volume APIs
+   <http://developer.openstack.org/api-ref-blockstorage-v2.html#volumes-v2-volumes>`__.
 
 Manages volumes and snapshots for use with the Compute API.
 
 List Volumes
 ============
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-volumes
+.. rest_method:: GET /os-volumes
 
 Lists the volumes associated with the account.
 
 Normal response codes: 200
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -38,7 +39,7 @@ Response
 Create Volume
 =============
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-volumes
+.. rest_method:: POST /os-volumes
 
 Creates a volume.
 
@@ -52,7 +53,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - volume: volume
   - display_name: display_name
   - display_description: display_description
@@ -78,20 +78,13 @@ Response
 List Volumes With Details
 =========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-volumes/detail
+.. rest_method:: GET /os-volumes/detail
 
 Lists all volumes with details.
 
 Normal response codes: 200
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -104,7 +97,7 @@ Response
 Show Volume Details
 ===================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-volumes/{volume_id}
+.. rest_method:: GET /os-volumes/{volume_id}
 
 Shows details for a volume.
 
@@ -118,7 +111,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - volume_id: volume_id
 
 Response
@@ -132,7 +124,7 @@ Response
 Delete Volume
 =============
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-volumes/{volume_id}
+.. rest_method:: DELETE /os-volumes/{volume_id}
 
 Deletes a volume.
 
@@ -146,7 +138,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - volume_id: volume_id
 
 Response
@@ -155,20 +146,13 @@ Response
 List Snapshots
 ==============
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-snapshots
+.. rest_method:: GET /os-snapshots
 
 Lists snapshots.
 
 Normal response codes: 200
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -181,7 +165,7 @@ Response
 Create Snapshot
 ===============
 
-.. rest_method:: POST /v2.1/{tenant_id}/os-snapshots
+.. rest_method:: POST /os-snapshots
 
 Creates a snapshot.
 
@@ -194,7 +178,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - snapshot: snapshot
 
 **Example Create Snapshot: JSON request**
@@ -213,20 +196,13 @@ Response
 List Snapshots With Details
 ===========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-snapshots/detail
+.. rest_method:: GET /os-snapshots/detail
 
 Lists all snapshots with details.
 
 Normal response codes: 200
 
 Error response codes: badRequest(400), unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -239,7 +215,7 @@ Response
 Show Snapshot Details
 =====================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-snapshots/{snapshot_id}
+.. rest_method:: GET /os-snapshots/{snapshot_id}
 
 Shows details for a snapshot.
 
@@ -253,7 +229,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - snapshot_id: snapshot_id
 
 Response
@@ -267,7 +242,7 @@ Response
 Delete Snapshot
 ===============
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-snapshots/{snapshot_id}
+.. rest_method:: DELETE /os-snapshots/{snapshot_id}
 
 Deletes a snapshot from the account.
 
@@ -283,7 +258,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - snapshot_id: snapshot_id
 
 Response

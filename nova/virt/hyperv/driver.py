@@ -97,7 +97,8 @@ class HyperVDriver(driver.ComputeDriver):
         "has_imagecache": True,
         "supports_recreate": False,
         "supports_migrate_to_same_host": True,
-        "supports_attach_interface": True
+        "supports_attach_interface": True,
+        "supports_device_tagging": True,
     }
 
     def __init__(self, virtapi):
@@ -127,6 +128,10 @@ class HyperVDriver(driver.ComputeDriver):
                           'Server 2012). The support for this version of '
                           'Windows has been removed in Mitaka.'))
             raise exception.HypervisorTooOld(version='6.2')
+
+    @property
+    def need_legacy_block_device_info(self):
+        return False
 
     def init_host(self, host):
         self._serialconsoleops.start_console_handlers()
@@ -259,9 +264,9 @@ class HyperVDriver(driver.ComputeDriver):
             context, instance, src_compute_info, dst_compute_info,
             block_migration, disk_over_commit)
 
-    def check_can_live_migrate_destination_cleanup(self, context,
+    def cleanup_live_migration_destination_check(self, context,
                                                    dest_check_data):
-        self._livemigrationops.check_can_live_migrate_destination_cleanup(
+        self._livemigrationops.cleanup_live_migration_destination_check(
             context, dest_check_data)
 
     def check_can_live_migrate_source(self, context, instance,

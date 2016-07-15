@@ -13,16 +13,19 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import nova.conf
-from nova.tests.functional.api_sample_tests import api_sample_base
-from nova.tests.unit.image import fake
+import base64
 
-CONF = nova.conf.CONF
+from nova.tests.functional.api_sample_tests import api_sample_base
+from nova.tests.unit.api.openstack import fakes
+from nova.tests.unit.image import fake
 
 
 class ServersSampleBase(api_sample_base.ApiSampleTestBaseV21):
-    extra_extensions_to_load = ["os-access-ips"]
     microversion = None
+    sample_dir = 'servers'
+
+    user_data_contents = '#!/bin/bash\n/bin/su\necho "I am in you!"\n'
+    user_data = base64.b64encode(user_data_contents)
 
     def _post_server(self, use_common_server_api_samples=True):
         # param use_common_server_api_samples: Boolean to set whether tests use
@@ -30,7 +33,6 @@ class ServersSampleBase(api_sample_base.ApiSampleTestBaseV21):
         # Default is True which means _get_sample_path method will fetch the
         # common server sample files from 'servers' directory.
         # Set False if tests need to use extension specific sample files
-
         subs = {
             'image_id': fake.get_valid_image_id(),
             'host': self._get_host(),
@@ -38,24 +40,19 @@ class ServersSampleBase(api_sample_base.ApiSampleTestBaseV21):
             'versioned_compute_endpoint': self._get_vers_compute_endpoint(),
             'glance_host': self._get_glance_host(),
             'access_ip_v4': '1.2.3.4',
-            'access_ip_v6': '80fe::'
+            'access_ip_v6': '80fe::',
+            'user_data': self.user_data,
+            'uuid': '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}'
+                    '-[0-9a-f]{4}-[0-9a-f]{12}',
         }
-        # TODO(gmann): Remove this hack once all tests using this common
-        # _post_server method are enabled with all extension.
-        # This is added to avoid all tests updates together.
-        post_req_template = 'server-post-req'
-        post_resp_template = 'server-post-resp'
-        if self.all_extensions and use_common_server_api_samples:
-            post_req_template = 'server-create-req'
-            post_resp_template = 'server-create-resp'
 
         orig_value = self.__class__._use_common_server_api_samples
         orig_sample_dir = self.__class__.sample_dir
         try:
             self.__class__._use_common_server_api_samples = (
                                         use_common_server_api_samples)
-            response = self._do_post('servers', post_req_template, subs)
-            status = self._verify_response(post_resp_template, subs,
+            response = self._do_post('servers', 'server-create-req', subs)
+            status = self._verify_response('server-create-resp', subs,
                                            response, 202)
             return status
         finally:
@@ -68,34 +65,28 @@ class ServersSampleBase(api_sample_base.ApiSampleTestBaseV21):
 
 
 class ServersSampleJsonTest(ServersSampleBase):
-    sample_dir = 'servers'
     microversion = None
-
-    def _get_flags(self):
-        f = super(ServersSampleBase, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.keypairs.Keypairs')
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.extended_ips.Extended_ips')
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.extended_ips_mac.'
-            'Extended_ips_mac')
-        return f
 
     def test_servers_post(self):
         return self._post_server()
 
     def test_servers_get(self):
+        self.stub_out('nova.db.block_device_mapping_get_all_by_instance_uuids',
+                      fakes.stub_bdm_get_all_by_instance_uuids)
         uuid = self.test_servers_post()
         response = self._do_get('servers/%s' % uuid)
         subs = {}
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
+        subs['instance_name'] = 'instance-\d{8}'
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
+        subs['hostname'] = r'[\w\.\-]+'
         subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
         subs['access_ip_v4'] = '1.2.3.4'
         subs['access_ip_v6'] = '80fe::'
+        subs['user_data'] = self.user_data
+        # config drive can be a string for True or empty value for False
+        subs['cdrive'] = '.*'
         self._verify_response('server-get-resp', subs, response, 200)
 
     def test_servers_list(self):
@@ -105,15 +96,22 @@ class ServersSampleJsonTest(ServersSampleBase):
         self._verify_response('servers-list-resp', subs, response, 200)
 
     def test_servers_details(self):
+        self.stub_out('nova.db.block_device_mapping_get_all_by_instance_uuids',
+                      fakes.stub_bdm_get_all_by_instance_uuids)
         uuid = self.test_servers_post()
         response = self._do_get('servers/detail')
         subs = {}
         subs['hostid'] = '[a-f0-9]+'
         subs['id'] = uuid
+        subs['instance_name'] = 'instance-\d{8}'
         subs['hypervisor_hostname'] = r'[\w\.\-]+'
+        subs['hostname'] = r'[\w\.\-]+'
         subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
         subs['access_ip_v4'] = '1.2.3.4'
         subs['access_ip_v6'] = '80fe::'
+        subs['user_data'] = self.user_data
+        # config drive can be a string for True or empty value for False
+        subs['cdrive'] = '.*'
         self._verify_response('servers-details-resp', subs, response, 200)
 
 
@@ -125,9 +123,13 @@ class ServersSampleJson29Test(ServersSampleJsonTest):
     scenarios = [('v2_9', {'api_major_version': 'v2.1'})]
 
 
+class ServersSampleJson216Test(ServersSampleJsonTest):
+    microversion = '2.16'
+    scenarios = [('v2_16', {'api_major_version': 'v2.1'})]
+
+
 class ServersSampleJson219Test(ServersSampleJsonTest):
     microversion = '2.19'
-    sample_dir = 'servers'
     scenarios = [('v2_19', {'api_major_version': 'v2.1'})]
 
     def test_servers_post(self):
@@ -146,12 +148,16 @@ class ServersSampleJson219Test(ServersSampleJsonTest):
         self._verify_response('server-put-resp', subs, response, 200)
 
 
-class ServersUpdateSampleJsonTest(ServersSampleBase):
+class ServersSampleJson232Test(ServersSampleBase):
+    microversion = '2.32'
     sample_dir = 'servers'
+    scenarios = [('v2_32', {'api_major_version': 'v2.1'})]
 
-    # TODO(gmann): This will be removed once all API tests runs for
-    # all extension enable.
-    all_extensions = True
+    def test_servers_post(self):
+        self._post_server(use_common_server_api_samples=False)
+
+
+class ServersUpdateSampleJsonTest(ServersSampleBase):
 
     def test_update_server(self):
         uuid = self._post_server()
@@ -167,14 +173,6 @@ class ServersUpdateSampleJsonTest(ServersSampleBase):
 class ServerSortKeysJsonTests(ServersSampleBase):
     sample_dir = 'servers-sort'
 
-    def _get_flags(self):
-        f = super(ServerSortKeysJsonTests, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.server_sort_keys.'
-            'Server_sort_keys')
-        return f
-
     def test_servers_list(self):
         self._post_server()
         response = self._do_get('servers?sort_key=display_name&sort_dir=asc')
@@ -182,13 +180,7 @@ class ServerSortKeysJsonTests(ServersSampleBase):
                               200)
 
 
-class ServersSampleAllExtensionJsonTest(ServersSampleJsonTest):
-    all_extensions = True
-    sample_dir = None
-
-
 class ServersActionsJsonTest(ServersSampleBase):
-    sample_dir = 'servers'
 
     def _test_server_action(self, uuid, action, req_tpl,
                             subs=None, resp_tpl=None, code=202):
@@ -263,7 +255,6 @@ class ServersActionsJsonTest(ServersSampleBase):
 
 class ServersActionsJson219Test(ServersSampleBase):
     microversion = '2.19'
-    sample_dir = 'servers'
     scenarios = [('v2_19', {'api_major_version': 'v2.1'})]
 
     def test_server_rebuild(self):
@@ -286,21 +277,7 @@ class ServersActionsJson219Test(ServersSampleBase):
         self._verify_response('server-action-rebuild-resp', subs, resp, 202)
 
 
-class ServersActionsAllJsonTest(ServersActionsJsonTest):
-    all_extensions = True
-    sample_dir = None
-
-
 class ServerStartStopJsonTest(ServersSampleBase):
-    sample_dir = 'servers'
-
-    def _get_flags(self):
-        f = super(ServerStartStopJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.contrib.server_start_stop.'
-            'Server_start_stop')
-        return f
 
     def _test_server_action(self, uuid, action, req_tpl):
         response = self._do_post('servers/%s/action' % uuid,
@@ -320,13 +297,6 @@ class ServerStartStopJsonTest(ServersSampleBase):
 
 
 class ServersSampleMultiStatusJsonTest(ServersSampleBase):
-    sample_dir = 'servers'
-    extra_extensions_to_load = ["os-access-ips"]
-
-    def _get_flags(self):
-        f = super(ServersSampleMultiStatusJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        return f
 
     def test_servers_list(self):
         uuid = self._post_server()
@@ -336,7 +306,6 @@ class ServersSampleMultiStatusJsonTest(ServersSampleBase):
 
 
 class ServerTriggerCrashDumpJsonTest(ServersSampleBase):
-    sample_dir = 'servers'
     microversion = '2.17'
     scenarios = [('v2_17', {'api_major_version': 'v2.1'})]
 

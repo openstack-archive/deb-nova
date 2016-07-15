@@ -367,6 +367,11 @@ class FakeDriver(driver.ComputeDriver):
            running VM.
         """
         bw = []
+        for instance in instances:
+            bw.append({'uuid': instance.uuid,
+                       'mac_address': 'fa:16:3e:4c:2c:30',
+                       'bw_in': 0,
+                       'bw_out': 0})
         return bw
 
     def get_all_volume_usage(self, context, compute_host_bdms):
@@ -474,7 +479,7 @@ class FakeDriver(driver.ComputeDriver):
     def live_migration_abort(self, instance):
         return
 
-    def check_can_live_migrate_destination_cleanup(self, context,
+    def cleanup_live_migration_destination_check(self, context,
                                                    dest_check_data):
         return
 

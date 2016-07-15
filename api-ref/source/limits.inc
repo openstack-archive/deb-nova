@@ -1,29 +1,21 @@
 .. -*- rst -*-
-.. needs:body_verification
 
 =================
  Limits (limits)
 =================
 
-Shows rate and absolute limits for the tenant.
+Shows rate and absolute limits for the project.
 
 Show Rate And Absolute Limits
 =============================
 
-.. rest_method:: GET /v2.1/{tenant_id}/limits
+.. rest_method:: GET /limits
 
-Shows rate and absolute limits for the tenant.
+Shows rate and absolute limits for the project.
 
 Normal response codes: 200
 
 Error response codes: unauthorized(401), forbidden(403)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -51,4 +43,3 @@ Response
 
 .. literalinclude:: ../../doc/api_samples/limits/limit-get-resp.json
    :language: javascript
-

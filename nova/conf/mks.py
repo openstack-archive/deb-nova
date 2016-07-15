@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # Copyright 2016 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -33,7 +40,7 @@ ALL_MKS_OPTS = mks_opts
 
 def register_opts(conf):
     conf.register_group(mks_group)
-    conf.register_opts(ALL_MKS_OPTS, group = mks_group)
+    conf.register_opts(ALL_MKS_OPTS, group=mks_group)
 
 
 def list_opts():

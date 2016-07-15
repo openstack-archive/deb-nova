@@ -45,7 +45,8 @@ class FakeCinderClient(object):
         def __getattr__(self, item):
             return None
 
-    def __init__(self):
+    def __init__(self, version='2'):
+        self.version = version
         self.volumes = self.Volumes()
         self.volume_snapshots = self.volumes
 
@@ -71,8 +72,10 @@ class CinderApiTestCase(test.NoDBTestCase):
 
     def test_get_failed(self):
         volume_id = 'volume_id'
-        cinder.cinderclient(self.ctx).AndRaise(cinder_exception.NotFound(''))
-        cinder.cinderclient(self.ctx).AndRaise(cinder_exception.BadRequest(''))
+        cinder.cinderclient(self.ctx).AndRaise(
+                cinder_exception.NotFound(404, '404'))
+        cinder.cinderclient(self.ctx).AndRaise(
+                cinder_exception.BadRequest(400, '400'))
         cinder.cinderclient(self.ctx).AndRaise(
                                         cinder_exception.ConnectionError(''))
         self.mox.ReplayAll()
@@ -94,7 +97,7 @@ class CinderApiTestCase(test.NoDBTestCase):
     @mock.patch('nova.volume.cinder.cinderclient')
     def test_create_failed(self, mock_cinderclient):
         mock_cinderclient.return_value.volumes.create.side_effect = (
-            cinder_exception.BadRequest(''))
+            cinder_exception.BadRequest(400, '400'))
 
         self.assertRaises(exception.InvalidInput,
                           self.api.create, self.ctx, 1, '', '')
@@ -293,6 +296,18 @@ class CinderApiTestCase(test.NoDBTestCase):
 
         self.api.detach(self.ctx, 'id1', instance_uuid='fake_uuid')
 
+    def test_detach_v1(self):
+        self.cinderclient = FakeCinderClient('1')
+
+        cinder.cinderclient(self.ctx).AndReturn(self.cinderclient)
+        self.mox.StubOutWithMock(self.cinderclient.volumes,
+                                 'detach',
+                                 use_mock_anything=True)
+        self.cinderclient.volumes.detach('id1')
+        self.mox.ReplayAll()
+
+        self.api.detach(self.ctx, 'id1', instance_uuid='fake_uuid')
+
     @mock.patch('nova.volume.cinder.cinderclient')
     def test_initialize_connection(self, mock_cinderclient):
         connection_info = {'foo': 'bar'}
@@ -486,7 +501,7 @@ class CinderApiTestCase(test.NoDBTestCase):
 
     def test_translate_cinder_exception_cinder_bad_request(self):
         self._do_translate_cinder_exception_test(
-            cinder_exception.BadRequest(''),
+            cinder_exception.BadRequest(400, '400'),
             exception.InvalidInput)
 
     def test_translate_cinder_exception_keystone_bad_request(self):
@@ -496,7 +511,7 @@ class CinderApiTestCase(test.NoDBTestCase):
 
     def test_translate_cinder_exception_cinder_forbidden(self):
         self._do_translate_cinder_exception_test(
-            cinder_exception.Forbidden(''),
+            cinder_exception.Forbidden(403, '403'),
             exception.Forbidden)
 
     def test_translate_cinder_exception_keystone_forbidden(self):

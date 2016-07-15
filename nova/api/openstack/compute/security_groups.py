@@ -28,19 +28,18 @@ from nova import compute
 from nova import exception
 from nova.i18n import _
 from nova.network.security_group import openstack_driver
+from nova.policies import security_groups as sg_policies
 from nova.virt import netutils
 
 
 LOG = logging.getLogger(__name__)
 ALIAS = 'os-security-groups'
 ATTRIBUTE_NAME = 'security_groups'
-authorize = extensions.os_compute_authorizer(ALIAS)
-softauth = extensions.os_compute_soft_authorizer(ALIAS)
 
 
 def _authorize_context(req):
     context = req.environ['nova.context']
-    authorize(context)
+    context.can(sg_policies.BASE_POLICY_NAME)
     return context
 
 
@@ -49,10 +48,9 @@ class SecurityGroupControllerBase(wsgi.Controller):
 
     def __init__(self):
         self.security_group_api = (
-            openstack_driver.get_openstack_security_group_driver(
-                skip_policy_check=True))
+            openstack_driver.get_openstack_security_group_driver())
         self.compute_api = compute.API(
-            security_group_api=self.security_group_api, skip_policy_check=True)
+            security_group_api=self.security_group_api)
 
     def _format_security_group_rule(self, context, rule, group_rule_data=None):
         """Return a security group rule in desired API response format.
@@ -357,10 +355,9 @@ class SecurityGroupActionController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupActionController, self).__init__(*args, **kwargs)
         self.security_group_api = (
-            openstack_driver.get_openstack_security_group_driver(
-                skip_policy_check=True))
+            openstack_driver.get_openstack_security_group_driver())
         self.compute_api = compute.API(
-            security_group_api=self.security_group_api, skip_policy_check=True)
+            security_group_api=self.security_group_api)
 
     def _parse(self, body, action):
         try:
@@ -388,7 +385,7 @@ class SecurityGroupActionController(wsgi.Controller):
     @wsgi.action('addSecurityGroup')
     def _addSecurityGroup(self, req, id, body):
         context = req.environ['nova.context']
-        authorize(context)
+        context.can(sg_policies.BASE_POLICY_NAME)
 
         group_name = self._parse(body, 'addSecurityGroup')
         try:
@@ -408,7 +405,7 @@ class SecurityGroupActionController(wsgi.Controller):
     @wsgi.action('removeSecurityGroup')
     def _removeSecurityGroup(self, req, id, body):
         context = req.environ['nova.context']
-        authorize(context)
+        context.can(sg_policies.BASE_POLICY_NAME)
 
         group_name = self._parse(body, 'removeSecurityGroup')
 
@@ -427,10 +424,9 @@ class SecurityGroupActionController(wsgi.Controller):
 class SecurityGroupsOutputController(wsgi.Controller):
     def __init__(self, *args, **kwargs):
         super(SecurityGroupsOutputController, self).__init__(*args, **kwargs)
-        self.compute_api = compute.API(skip_policy_check=True)
+        self.compute_api = compute.API()
         self.security_group_api = (
-            openstack_driver.get_openstack_security_group_driver(
-                skip_policy_check=True))
+            openstack_driver.get_openstack_security_group_driver())
 
     def _extend_servers(self, req, servers):
         # TODO(arosen) this function should be refactored to reduce duplicate
@@ -439,7 +435,7 @@ class SecurityGroupsOutputController(wsgi.Controller):
             return
         key = "security_groups"
         context = req.environ['nova.context']
-        if not softauth(context):
+        if not context.can(sg_policies.BASE_POLICY_NAME, fatal=False):
             return
 
         if not openstack_driver.is_neutron_security_groups():
@@ -447,7 +443,7 @@ class SecurityGroupsOutputController(wsgi.Controller):
                 instance = req.get_db_instance(server['id'])
                 groups = instance.get(key)
                 if groups:
-                    server[ATTRIBUTE_NAME] = [{"name": group["name"]}
+                    server[ATTRIBUTE_NAME] = [{"name": group.name}
                                               for group in groups]
         else:
             # If method is a POST we get the security groups intended for an

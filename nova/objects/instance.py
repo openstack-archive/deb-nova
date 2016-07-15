@@ -51,7 +51,10 @@ _INSTANCE_OPTIONAL_NON_COLUMN_FIELDS = ['fault', 'flavor', 'old_flavor',
 # These are fields that are optional and in instance_extra
 _INSTANCE_EXTRA_FIELDS = ['numa_topology', 'pci_requests',
                           'flavor', 'vcpu_model', 'migration_context',
-                          'keypairs']
+                          'keypairs', 'device_metadata']
+# These are fields that applied/drooped by migration_context
+_MIGRATION_CONTEXT_ATTRS = ['numa_topology', 'pci_requests',
+                            'pci_devices']
 
 # These are fields that can be specified as expected_attrs
 INSTANCE_OPTIONAL_ATTRS = (_INSTANCE_OPTIONAL_JOINED_FIELDS +
@@ -96,7 +99,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     # Version 2.0: Initial version
     # Version 2.1: Added services
     # Version 2.2: Added keypairs
-    VERSION = '2.2'
+    # Version 2.3: Added device_metadata
+    VERSION = '2.3'
 
     fields = {
         'id': fields.IntegerField(),
@@ -187,6 +191,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                                             nullable=True),
         'pci_requests': fields.ObjectField('InstancePCIRequests',
                                            nullable=True),
+        'device_metadata': fields.ObjectField('InstanceDeviceMetadata',
+                                              nullable=True),
         'tags': fields.ObjectField('TagList'),
         'flavor': fields.ObjectField('Flavor'),
         'old_flavor': fields.ObjectField('Flavor', nullable=True),
@@ -203,6 +209,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
     def obj_make_compatible(self, primitive, target_version):
         super(Instance, self).obj_make_compatible(primitive, target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (2, 3) and 'device_metadata' in primitive:
+            del primitive['device_metadata']
         if target_version < (2, 2) and 'keypairs' in primitive:
             del primitive['keypairs']
         if target_version < (2, 1) and 'services' in primitive:
@@ -333,6 +341,12 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                     db_inst['extra'].get('pci_requests'))
             else:
                 instance.pci_requests = None
+        if 'device_metadata' in expected_attrs:
+            if have_extra:
+                instance._load_device_metadata(
+                    db_inst['extra'].get('device_metadata'))
+            else:
+                instance.device_metadata = None
         if 'vcpu_model' in expected_attrs:
             if have_extra:
                 instance._load_vcpu_model(
@@ -453,6 +467,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 pci_requests.to_json())
         else:
             updates['extra']['pci_requests'] = None
+        device_metadata = updates.pop('device_metadata', None)
+        expected_attrs.append('device_metadata')
+        if device_metadata:
+            updates['extra']['device_metadata'] = (
+                device_metadata._to_json())
+        else:
+            updates['extra']['device_metadata'] = None
         flavor = updates.pop('flavor', None)
         if flavor:
             expected_attrs.append('flavor')
@@ -537,8 +558,11 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         pass
 
     def _save_pci_requests(self, context):
-        # NOTE(danms): No need for this yet.
-        pass
+        # TODO(danms): Unfortunately, extra.pci_requests is not a serialized
+        # PciRequests object (!), so we have to handle it specially here.
+        # That should definitely be fixed!
+        self._extra_values_to_save['pci_requests'] = (
+            self.pci_requests.to_json())
 
     def _save_pci_devices(self, context):
         # NOTE(yjiang5): All devices held by PCI tracker, only PCI tracker
@@ -793,6 +817,16 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 objects.InstancePCIRequests.get_by_instance_uuid(
                     self._context, self.uuid)
 
+    def _load_device_metadata(self, db_requests=None):
+        if db_requests is not None:
+            self.device_metadata = \
+                objects.InstanceDeviceMetadata.obj_from_db(
+                self._context, db_requests)
+        else:
+            self.device_metadata = \
+                objects.InstanceDeviceMetadata.get_by_instance_uuid(
+                    self._context, self.uuid)
+
     def _load_flavor(self):
         instance = self.__class__.get_by_uuid(
             self._context, uuid=self.uuid,
@@ -876,19 +910,32 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
                 jsonutils.loads(db_keypairs))
             self.obj_reset_changes(['keypairs'])
 
+    def _load_tags(self):
+        self.tags = objects.TagList.get_by_resource_id(
+            self._context, self.uuid)
+
     def apply_migration_context(self):
         if self.migration_context:
-            self.numa_topology = self.migration_context.new_numa_topology
+            self._set_migration_context_to_instance(prefix='new_')
         else:
             LOG.debug("Trying to apply a migration context that does not "
                       "seem to be set for this instance", instance=self)
 
     def revert_migration_context(self):
         if self.migration_context:
-            self.numa_topology = self.migration_context.old_numa_topology
+            self._set_migration_context_to_instance(prefix='old_')
         else:
             LOG.debug("Trying to revert a migration context that does not "
                       "seem to be set for this instance", instance=self)
+
+    def _set_migration_context_to_instance(self, prefix):
+        for inst_attr_name in _MIGRATION_CONTEXT_ATTRS:
+            setattr(self, inst_attr_name, None)
+            attr_name = prefix + inst_attr_name
+            if attr_name in self.migration_context:
+                attr_value = getattr(
+                    self.migration_context, attr_name)
+                setattr(self, inst_attr_name, attr_value)
 
     @contextlib.contextmanager
     def mutated_migration_context(self):
@@ -898,12 +945,15 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         context will be saved which can cause incorrect resource tracking, and
         should be avoided.
         """
-        current_numa_topo = self.numa_topology
+        current_values = {}
+        for attr_name in _MIGRATION_CONTEXT_ATTRS:
+            current_values[attr_name] = getattr(self, attr_name)
         self.apply_migration_context()
         try:
             yield
         finally:
-            self.numa_topology = current_numa_topo
+            for attr_name in _MIGRATION_CONTEXT_ATTRS:
+                setattr(self, attr_name, current_values[attr_name])
 
     @base.remotable
     def drop_migration_context(self):
@@ -939,6 +989,8 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             self._load_fault()
         elif attrname == 'numa_topology':
             self._load_numa_topology()
+        elif attrname == 'device_metadata':
+            self._load_device_metadata()
         elif attrname == 'pci_requests':
             self._load_pci_requests()
         elif attrname == 'vcpu_model':
@@ -962,6 +1014,14 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             # filters on instances.deleted == 0, so if the instance is deleted
             # don't attempt to even load services since we'll fail.
             self.services = objects.ServiceList(self._context)
+        elif attrname == 'tags':
+            if self.deleted:
+                # NOTE(mriedem): Same story as services, the DB API query
+                # in instance_tag_get_by_instance_uuid will fail if the
+                # instance has been deleted so just return an empty tag list.
+                self.tags = objects.TagList(self._context)
+            else:
+                self._load_tags()
         else:
             # FIXME(comstud): This should be optimized to only load the attr.
             self._load_generic(attrname)

@@ -13,19 +13,14 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import mock
-
 import fixtures
-from oslo_log import log as logging
+import mock
 
 from nova.tests.functional.api import client
 from nova.tests.functional.test_servers import ServersTestBase
 from nova.tests.unit import fake_network
 from nova.tests.unit.virt.libvirt import fake_libvirt_utils
 from nova.tests.unit.virt.libvirt import fakelibvirt
-
-
-LOG = logging.getLogger(__name__)
 
 
 class NumaHostInfo(fakelibvirt.HostInfo):

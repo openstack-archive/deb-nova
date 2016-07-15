@@ -117,9 +117,8 @@ NEW_NETWORK = {
 class FakeNetworkAPI(object):
 
     _sentinel = object()
-    _vlan_is_disabled = False
 
-    def __init__(self, skip_policy_check=False):
+    def __init__(self):
         self.networks = copy.deepcopy(FAKE_NETWORKS)
 
     def delete(self, context, network_id):
@@ -153,8 +152,6 @@ class FakeNetworkAPI(object):
 
     def add_network_to_project(self, context,
                                project_id, network_uuid=None):
-        if self._vlan_is_disabled:
-            raise NotImplementedError()
         if network_uuid:
             for network in self.networks:
                 if network.get('project_id', None) is None:
@@ -260,7 +257,19 @@ class NetworkCreateExceptionsTestV21(test.TestCase):
                           body=self.new_network)
 
     def test_network_create_no_cidr(self):
-        self.new_network['network']['cidr'] = ''
+        del self.new_network['network']['cidr']
+        self.assertRaises(self.validation_error,
+                          self.controller.create, self.req,
+                          body=self.new_network)
+
+    def test_network_create_no_label(self):
+        del self.new_network['network']['label']
+        self.assertRaises(self.validation_error,
+                          self.controller.create, self.req,
+                          body=self.new_network)
+
+    def test_network_create_label_too_long(self):
+        self.new_network['network']['label'] = "x" * 256
         self.assertRaises(self.validation_error,
                           self.controller.create, self.req,
                           body=self.new_network)
@@ -325,7 +334,7 @@ class NetworksTestV21(test.NoDBTestCase):
         self.controller = networks_v21.NetworkController(
             self.fake_network_api)
         self.neutron_ctrl = networks_v21.NetworkController(
-            neutron.API(skip_policy_check=True))
+            neutron.API())
         self.req = fakes.HTTPRequest.blank('',
                                            project_id=fakes.FAKE_PROJECT_ID)
 
@@ -488,7 +497,7 @@ class NetworksAssociateTestV21(test.NoDBTestCase):
             .NetworkAssociateActionController(self.fake_network_api)
         self.neutron_assoc_ctrl = (
             networks_associate_v21.NetworkAssociateActionController(
-                neutron.API(skip_policy_check=True)))
+                neutron.API()))
         self.req = fakes.HTTPRequest.blank('')
 
     def _check_status(self, res, method, code):

@@ -81,7 +81,8 @@ def reset():
     create_vm('fake dom 0',
               'Running',
               is_a_template=False,
-              is_control_domain=True)
+              is_control_domain=True,
+              domid='0')
 
 
 def reset_table(table):
@@ -119,18 +120,18 @@ def create_network(name_label, bridge):
 
 def create_vm(name_label, status, **kwargs):
     if status == 'Running':
-        domid = random.randrange(1, 1 << 16)
+        domid = "%d" % random.randrange(1, 1 << 16)
         resident_on = list(_db_content['host'])[0]
     else:
-        domid = -1
+        domid = "-1"
         resident_on = ''
 
-    vm_rec = kwargs.copy()
-    vm_rec.update({'name_label': name_label,
-                   'domid': domid,
-                   'power_state': status,
-                   'blocked_operations': {},
-                   'resident_on': resident_on})
+    vm_rec = {'name_label': name_label,
+              'domid': domid,
+              'power_state': status,
+              'blocked_operations': {},
+              'resident_on': resident_on}
+    vm_rec.update(kwargs.copy())
     vm_ref = _create_object('VM', vm_rec)
     after_VM_create(vm_ref, vm_rec)
     return vm_ref
@@ -244,7 +245,7 @@ def after_VIF_create(vif_ref, vif_rec):
 
 def after_VM_create(vm_ref, vm_rec):
     """Create read-only fields in the VM record."""
-    vm_rec.setdefault('domid', -1)
+    vm_rec.setdefault('domid', "-1")
     vm_rec.setdefault('is_control_domain', False)
     vm_rec.setdefault('is_a_template', False)
     vm_rec.setdefault('memory_static_max', str(8 * units.Gi))
@@ -494,7 +495,7 @@ class SessionBase(object):
         if rec['currently_attached']:
             raise Failure(['DEVICE_ALREADY_ATTACHED', ref])
         rec['currently_attached'] = True
-        rec['device'] = rec['userdevice']
+        rec['device'] = 'fakedev'
 
     def VBD_unplug(self, _1, ref):
         rec = get_record('VBD', ref)
@@ -663,7 +664,6 @@ class SessionBase(object):
         assert vdi_ref
         return pickle.dumps(None)
 
-    _plugin_glance_upload_vhd = _plugin_pickle_noop
     _plugin_glance_upload_vhd2 = _plugin_pickle_noop
     _plugin_kernel_copy_vdi = _plugin_noop
     _plugin_kernel_create_kernel_ramdisk = _plugin_noop
@@ -761,12 +761,16 @@ class SessionBase(object):
         return base64.b64encode(zlib.compress("dom_id: %s" % dom_id))
 
     def _plugin_nova_plugin_version_get_version(self, method, args):
-        return pickle.dumps("1.3")
+        return pickle.dumps("1.7")
 
     def _plugin_xenhost_query_gc(self, method, args):
         return pickle.dumps("False")
 
+    def _plugin_partition_utils_dot_py_make_partition(self, method, args):
+        return pickle.dumps(None)
+
     def host_call_plugin(self, _1, _2, plugin, method, args):
+        plugin = plugin.replace('.', '_dot_')
         func = getattr(self, '_plugin_%s_%s' % (plugin, method), None)
         if not func:
             raise Exception('No simulation in host_call_plugin for %s,%s' %
@@ -788,7 +792,7 @@ class SessionBase(object):
             raise Failure(['VM_BAD_POWER_STATE',
                 'fake-opaque-ref', db_ref['power_state'].lower(), 'halted'])
         db_ref['power_state'] = 'Running'
-        db_ref['domid'] = random.randrange(1, 1 << 16)
+        db_ref['domid'] = '%d' % (random.randrange(1, 1 << 16))
 
     def VM_clean_reboot(self, session, vm_ref):
         return self._VM_reboot(session, vm_ref)
@@ -799,7 +803,7 @@ class SessionBase(object):
     def VM_hard_shutdown(self, session, vm_ref):
         db_ref = _db_content['VM'][vm_ref]
         db_ref['power_state'] = 'Halted'
-        db_ref['domid'] = -1
+        db_ref['domid'] = "-1"
     VM_clean_shutdown = VM_hard_shutdown
 
     def VM_suspend(self, session, vm_ref):

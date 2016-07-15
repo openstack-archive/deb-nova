@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # Copyright 2015 Huawei Technology corp.
 # Copyright 2015 OpenStack Foundation
 # All Rights Reserved.
@@ -81,52 +88,114 @@ compute_opts = [
 
 resource_tracker_opts = [
     cfg.IntOpt('reserved_host_disk_mb',
+               min=0,
                default=0,
-               help='Amount of disk in MB to reserve for the host'),
+               help="""
+Amount of disk resources in MB to make them always available to host. The
+disk usage gets reported back to the scheduler from nova-compute running
+on the compute nodes. To prevent the disk resources from being considered
+as available, this option can be used to reserve disk space for that host.
+
+Possible values:
+
+  * Any positive integer representing amount of disk in MB to reserve
+    for the host.
+"""),
+
     cfg.IntOpt('reserved_host_memory_mb',
+               min=0,
                default=512,
-               help='Amount of memory in MB to reserve for the host'),
+               help="""
+Amount of memory in MB to reserve for the host so that it is always available
+to host processes. The host resources usage is reported back to the scheduler
+continously from nova-compute running on the compute node. To prevent the host
+memory from being considered as available, this option is used to reserve
+memory for the host.
+
+Possible values:
+
+  * Any positive integer representing amount of memory in MB to reserve
+    for the host.
+"""),
+
     cfg.StrOpt('compute_stats_class',
                default='nova.compute.stats.Stats',
-               help='DEPRECATED: Class that will manage stats for the '
-                    'local compute host',
-               deprecated_for_removal=True),
+               deprecated_for_removal=True,
+               help="""
+Abstracts out managing compute host stats to pluggable class. This class
+manages and updates stats for the local compute host after an instance
+is changed. These configurable compute stats may be useful for a
+particular scheduler implementation.
+
+Possible values
+
+  * A string representing fully qualified class name.
+"""),
 ]
 
 allocation_ratio_opts = [
     cfg.FloatOpt('cpu_allocation_ratio',
         default=0.0,
-        help='Virtual CPU to physical CPU allocation ratio which affects '
-             'all CPU filters. This configuration specifies a global ratio '
-             'for CoreFilter. For AggregateCoreFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found. '
-             'NOTE: This can be set per-compute, or if set to 0.0, the value '
-             'set on the scheduler node(s) will be used '
-             'and defaulted to 16.0'),
+        help="""
+This option helps you specify virtual CPU to physical CPU allocation
+ratio which affects all CPU filters.
+
+This configuration specifies ratio for CoreFilter which can be set
+per compute node. For AggregateCoreFilter, it will fall back to this
+configuration value if no per-aggregate setting is found.
+
+Possible values:
+
+    * Any valid positive integer or float value
+    * Default value is 0.0
+
+NOTE: This can be set per-compute, or if set to 0.0, the value
+set on the scheduler node(s) or compute node(s) will be used
+and defaulted to 16.0'.
+"""),
     cfg.FloatOpt('ram_allocation_ratio',
         default=0.0,
-        help='Virtual ram to physical ram allocation ratio which affects '
-             'all ram filters. This configuration specifies a global ratio '
-             'for RamFilter. For AggregateRamFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found. '
-             'NOTE: This can be set per-compute, or if set to 0.0, the value '
-             'set on the scheduler node(s) will be used '
-             'and defaulted to 1.5'),
+        help="""
+This option helps you specify virtual RAM to physical RAM
+allocation ratio which affects all RAM filters.
+
+This configuration specifies ratio for RamFilter which can be set
+per compute node. For AggregateRamFilter, it will fall back to this
+configuration value if no per-aggregate setting found.
+
+Possible values:
+
+    * Any valid positive integer or float value
+    * Default value is 0.0
+
+NOTE: This can be set per-compute, or if set to 0.0, the value
+set on the scheduler node(s) or compute node(s) will be used and
+defaulted to 1.5.
+"""),
     cfg.FloatOpt('disk_allocation_ratio',
         default=0.0,
-        help='This is the virtual disk to physical disk allocation ratio used '
-             'by the disk_filter.py script to determine if a host has '
-             'sufficient disk space to fit a requested instance. A ratio '
-             'greater than 1.0 will result in over-subscription of the '
-             'available physical disk, which can be useful for more '
-             'efficiently packing instances created with images that do not '
-             'use the entire virtual disk,such as sparse or compressed '
-             'images. It can be set to a value between 0.0 and 1.0 in order '
-             'to preserve a percentage of the disk for uses other than '
-             'instances.'
-             'NOTE: This can be set per-compute, or if set to 0.0, the value '
-             'set on the scheduler node(s) will be used '
-             'and defaulted to 1.0'),
+        help="""
+This option helps you specify virtual disk to physical disk
+allocation ratio used by the disk_filter.py script to determine if
+a host has sufficient disk space to fit a requested instance.
+
+A ratio greater than 1.0 will result in over-subscription of the
+available physical disk, which can be useful for more
+efficiently packing instances created with images that do not
+use the entire virtual disk, such as sparse or compressed
+images. It can be set to a value between 0.0 and 1.0 in order
+to preserve a percentage of the disk for uses other than
+instances.
+
+Possible values:
+
+    * Any valid positive integer or float value
+    * Default value is 0.0
+
+NOTE: This can be set per-compute, or if set to 0.0, the value
+set on the scheduler node(s) or compute node(s) will be used and
+defaulted to 1.0'.
+""")
 ]
 
 compute_manager_opts = [
@@ -267,16 +336,56 @@ running_deleted_opts = [
     cfg.StrOpt("running_deleted_instance_action",
                default="reap",
                choices=('noop', 'log', 'shutdown', 'reap'),
-               help="Action to take if a running deleted instance is detected."
-                    "Set to 'noop' to take no action."),
+               help="""
+The compute service periodically checks for instances that have been
+deleted in the database but remain running on the compute node. The
+above option enables action to be taken when such instances are
+identified.
+
+Possible values:
+
+* reap: Powers down the instances and deletes them(default)
+* log: Logs warning message about deletion of the resource
+* shutdown: Powers down instances and marks them as non-
+  bootable which can be later used for debugging/analysis
+* noop: Takes no action
+
+Related options:
+
+* running_deleted_instance_poll
+* running_deleted_instance_timeout
+"""),
     cfg.IntOpt("running_deleted_instance_poll_interval",
                default=1800,
-               help="Number of seconds to wait between runs of the cleanup "
-                    "task."),
+               help="""
+Time interval in seconds to wait between runs for the clean up action.
+If set to 0, above check will be disabled. If "running_deleted_instance
+_action" is set to "log" or "reap", a value greater than 0 must be set.
+
+Possible values:
+
+* Any positive integer in seconds enables the option.
+* 0: Disables the option.
+* 1800: Default value.
+
+Related options:
+
+* running_deleted_instance_action
+"""),
     cfg.IntOpt("running_deleted_instance_timeout",
                default=0,
-               help="Number of seconds after being deleted when a running "
-                    "instance should be considered eligible for cleanup."),
+               help="""
+Time interval in seconds to wait for the instances that have
+been marked as deleted in database to be eligible for cleanup.
+
+Possible values:
+
+* Any positive integer in seconds(default is 0).
+
+Related options:
+
+* "running_deleted_instance_action"
+"""),
 ]
 
 instance_cleaning_opts = [

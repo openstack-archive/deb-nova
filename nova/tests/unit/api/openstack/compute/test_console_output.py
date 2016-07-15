@@ -48,8 +48,7 @@ def fake_get_console_output_all_characters(self, _ctx, _instance, _tail_len):
     return string.printable
 
 
-def fake_get(self, context, instance_uuid, want_objects=False,
-             expected_attrs=None):
+def fake_get(self, context, instance_uuid, expected_attrs=None):
     return fake_instance.fake_instance_obj(context, **{'uuid': instance_uuid})
 
 
@@ -150,10 +149,10 @@ class ConsoleOutputExtensionTestV21(test.NoDBTestCase):
         self._check_console_output_failure(webob.exc.HTTPNotFound, body)
 
 
-class ConsoleOutpuPolicyEnforcementV21(test.NoDBTestCase):
+class ConsoleOutputPolicyEnforcementV21(test.NoDBTestCase):
 
     def setUp(self):
-        super(ConsoleOutpuPolicyEnforcementV21, self).setUp()
+        super(ConsoleOutputPolicyEnforcementV21, self).setUp()
         self.controller = console_output_v21.ConsoleOutputController()
 
     def test_get_console_output_policy_failed(self):

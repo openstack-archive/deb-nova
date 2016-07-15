@@ -84,9 +84,25 @@ class BuildRequestTestCase(test.NoDBTestCase):
                             'pci_devices', 'security_groups', 'info_cache',
                             'ec2_ids', 'migration_context', 'metadata',
                             'vcpu_model', 'services', 'system_metadata',
-                            'tags', 'fault'],
+                            'tags', 'fault', 'device_metadata'],
                         comparators={'flavor': obj_comp,
                                      'created_at': date_comp,
                                      'keypairs': obj_comp})
                 continue
             self.assertEqual(expected, db_value)
+
+    def test_destroy(self):
+        self._create_req()
+        db_req = self.build_req_obj.get_by_instance_uuid(self.context,
+                                                         self.instance_uuid)
+        db_req.destroy()
+        self.assertRaises(exception.BuildRequestNotFound,
+                self.build_req_obj._get_by_instance_uuid_from_db, self.context,
+                self.instance_uuid)
+
+    def test_destroy_twice_raises(self):
+        self._create_req()
+        db_req = self.build_req_obj.get_by_instance_uuid(self.context,
+                                                         self.instance_uuid)
+        db_req.destroy()
+        self.assertRaises(exception.BuildRequestNotFound, db_req.destroy)

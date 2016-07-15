@@ -107,7 +107,7 @@ class SchedulerManagerTestCase(test.NoDBTestCase):
         self.topic = 'fake_topic'
         self.fake_args = (1, 2, 3)
         self.fake_kwargs = {'cat': 'meow', 'dog': 'woof'}
-        fake_server_actions.stub_out_action_events(self.stubs)
+        fake_server_actions.stub_out_action_events(self)
 
     def test_1_correct_init(self):
         # Correct scheduler driver
@@ -198,14 +198,6 @@ class SchedulerInitTestCase(test.NoDBTestCase):
         self.flags(scheduler_host_manager='ironic_host_manager')
         manager = self.driver_cls().host_manager
         self.assertIsInstance(manager, ironic_host_manager.IronicHostManager)
-
-    @mock.patch.object(host_manager.HostManager, '_init_instance_info')
-    @mock.patch.object(host_manager.HostManager, '_init_aggregates')
-    def test_init_nonexist_hostmanager(self,
-                                       mock_init_agg,
-                                       mock_init_inst):
-        self.flags(scheduler_host_manager='nonexist_host_manager')
-        self.assertRaises(RuntimeError, self.driver_cls)
 
 
 class SchedulerTestCase(test.NoDBTestCase):

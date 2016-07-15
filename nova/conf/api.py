@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # Copyright 2015 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -17,28 +24,6 @@ from oslo_config import cfg
 
 
 auth_opts = [
-    cfg.BoolOpt("api_rate_limit",
-            default=False,
-            deprecated_for_removal=True,
-            deprecated_group="DEFAULT",
-            help="""
-*DEPRECATED*
-
-Determines whether rate limiting for the API is per-user. This option is only
-used by v2 API. Rate limiting is removed from v2.1 API.
-
-* Possible values:
-
-    True, False (default)
-
-* Services that use this:
-
-    ``nova-api``
-
-* Related options:
-
-    None
-"""),
     cfg.StrOpt("auth_strategy",
             default="keystone",
             choices=("keystone", "noauth2"),

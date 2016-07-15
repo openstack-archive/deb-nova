@@ -25,6 +25,7 @@ import six
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
+from nova.compute.utils import wrap_instance_event
 from nova.compute import vm_states
 from nova.conductor.tasks import live_migrate
 from nova.conductor.tasks import migrate
@@ -144,7 +145,7 @@ class ComputeTaskManager(base.Base):
     may involve coordinating activities on multiple compute nodes.
     """
 
-    target = messaging.Target(namespace='compute_task', version='1.14')
+    target = messaging.Target(namespace='compute_task', version='1.15')
 
     def __init__(self):
         super(ComputeTaskManager, self).__init__()
@@ -160,6 +161,8 @@ class ComputeTaskManager(base.Base):
         compute_rpcapi.LAST_VERSION = None
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
+    # TODO(tdurakov): remove `live` parameter here on compute task api RPC
+    # version bump to 2.x
     @messaging.expected_exceptions(
         exception.NoValidHost,
         exception.ComputeServiceUnavailable,
@@ -175,6 +178,7 @@ class ComputeTaskManager(base.Base):
         exception.MigrationPreCheckClientException,
         exception.LiveMigrationWithOldNovaNotSupported,
         exception.UnsupportedPolicyException)
+    @wrap_instance_event(prefix='conductor')
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
             flavor, block_migration, disk_over_commit, reservations=None,
             clean_shutdown=True, request_spec=None):
@@ -267,8 +271,11 @@ class ComputeTaskManager(base.Base):
     def _cleanup_allocated_networks(
             self, context, instance, requested_networks):
         try:
-            self.network_api.deallocate_for_instance(
-                context, instance, requested_networks=requested_networks)
+            # If we were told not to allocate networks let's save ourselves
+            # the trouble of calling the network API.
+            if not (requested_networks and requested_networks.no_allocate):
+                self.network_api.deallocate_for_instance(
+                    context, instance, requested_networks=requested_networks)
         except Exception:
             msg = _LE('Failed to deallocate networks')
             LOG.exception(msg, instance=instance)
@@ -282,6 +289,12 @@ class ComputeTaskManager(base.Base):
             # because the instance was deleted.  If that's the case then this
             # exception will be raised by instance.save()
             pass
+
+    @wrap_instance_event(prefix='conductor')
+    def live_migrate_instance(self, context, instance, scheduler_hint,
+                              block_migration, disk_over_commit, request_spec):
+        self._live_migrate(context, instance, scheduler_hint,
+                           block_migration, disk_over_commit, request_spec)
 
     def _live_migrate(self, context, instance, scheduler_hint,
                       block_migration, disk_over_commit, request_spec):
@@ -345,7 +358,7 @@ class ComputeTaskManager(base.Base):
                       exc_info=True)
             _set_vm_state(context, instance, ex, vm_states.ERROR,
                           instance.task_state)
-            migration.status = 'failed'
+            migration.status = 'error'
             migration.save()
             raise exception.MigrationError(reason=six.text_type(ex))
 

@@ -14,6 +14,7 @@
 #    under the License.
 
 import mock
+from webob import exc
 
 from nova.api.openstack.compute import attach_interfaces \
         as attach_interfaces_v21
@@ -24,8 +25,6 @@ from nova import objects
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_network_cache_model
-
-from webob import exc
 
 
 FAKE_UUID1 = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
@@ -218,7 +217,7 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
                           self.attachments.delete,
                           self.req,
                           FAKE_UUID1,
-                          'invaid-port-id')
+                          'invalid-port-id')
 
     def test_attach_interface_instance_locked(self):
         def fake_attach_interface_to_locked_server(self, context,
@@ -350,7 +349,6 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         attach_mock.assert_called_once_with(ctxt, fake_instance, None,
                                             None, None)
         get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
-                                         want_objects=True,
                                          expected_attrs=None)
 
     @mock.patch.object(compute_api.API, 'get')
@@ -370,7 +368,6 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         attach_mock.assert_called_once_with(ctxt, fake_instance, None,
                                             None, None)
         get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
-                                         want_objects=True,
                                          expected_attrs=None)
 
     @mock.patch.object(compute_api.API, 'get')
@@ -391,7 +388,6 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         attach_mock.assert_called_once_with(ctxt, fake_instance, None,
                                             None, None)
         get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
-                                         want_objects=True,
                                          expected_attrs=None)
 
     @mock.patch.object(compute_api.API, 'get')
@@ -408,7 +404,6 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         attach_mock.assert_called_once_with(ctxt, fake_instance, None,
                                             None, None)
         get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
-                                         want_objects=True,
                                          expected_attrs=None)
 
     @mock.patch.object(compute_api.API, 'get')
@@ -428,7 +423,6 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         attach_mock.assert_called_once_with(ctxt, fake_instance, None,
                                             None, None)
         get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
-                                         want_objects=True,
                                          expected_attrs=None)
 
     def _test_attach_interface_with_invalid_parameter(self, param):

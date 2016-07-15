@@ -63,6 +63,11 @@ class ResourcePool(object):
         if not pool_states.is_hv_pool(aggregate.metadata):
             return
 
+        if CONF.xenserver.independent_compute:
+            raise exception.NotSupportedWithOption(
+                operation='adding to a XenServer pool',
+                option='CONF.xenserver.independent_compute')
+
         invalid = {pool_states.CHANGING: _('setup in progress'),
                    pool_states.DISMISSED: _('aggregate deleted'),
                    pool_states.ERROR: _('aggregate in error')}
@@ -102,7 +107,7 @@ class ResourcePool(object):
                 slave_info = self._create_slave_info()
 
                 self.compute_rpcapi.add_aggregate_host(
-                    context, aggregate, host, master_compute, slave_info)
+                    context, host, aggregate, master_compute, slave_info)
 
     def remove_from_aggregate(self, context, aggregate, host, slave_info=None):
         """Remove a compute host from an aggregate."""
@@ -144,7 +149,7 @@ class ResourcePool(object):
             slave_info = self._create_slave_info()
 
             self.compute_rpcapi.remove_aggregate_host(
-                context, aggregate.id, host, master_compute, slave_info)
+                context, host, aggregate.id, master_compute, slave_info)
         else:
             # this shouldn't have happened
             raise exception.AggregateError(aggregate_id=aggregate.id,

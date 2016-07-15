@@ -14,6 +14,7 @@
 
 import copy
 
+from nova.api.openstack.compute.schemas import server_tags
 from nova.api.validation import parameter_types
 
 
@@ -42,7 +43,11 @@ base_create = {
                         },
                         'additionalProperties': False,
                     }
-                }
+                },
+                'OS-DCF:diskConfig': parameter_types.disk_config,
+                'accessIPv4': parameter_types.accessIPv4,
+                'accessIPv6': parameter_types.accessIPv6,
+                'personality': parameter_types.personality,
             },
             'required': ['name', 'flavorRef'],
             'additionalProperties': False,
@@ -63,6 +68,12 @@ base_create_v219['properties']['server'][
     'properties']['description'] = parameter_types.description
 
 
+base_create_v232 = copy.deepcopy(base_create_v219)
+base_create_v232['properties']['server'][
+    'properties']['networks']['items'][
+    'properties']['tag'] = server_tags.tag
+
+
 base_update = {
     'type': 'object',
     'properties': {
@@ -70,6 +81,9 @@ base_update = {
             'type': 'object',
             'properties': {
                 'name': parameter_types.name,
+                'OS-DCF:diskConfig': parameter_types.disk_config,
+                'accessIPv4': parameter_types.accessIPv4,
+                'accessIPv6': parameter_types.accessIPv6,
             },
             'additionalProperties': False,
         },
@@ -98,6 +112,10 @@ base_rebuild = {
                 'adminPass': parameter_types.admin_password,
                 'metadata': parameter_types.metadata,
                 'preserve_ephemeral': parameter_types.boolean,
+                'OS-DCF:diskConfig': parameter_types.disk_config,
+                'accessIPv4': parameter_types.accessIPv4,
+                'accessIPv6': parameter_types.accessIPv6,
+                'personality': parameter_types.personality,
             },
             'required': ['imageRef'],
             'additionalProperties': False,
@@ -123,6 +141,7 @@ base_resize = {
             'type': 'object',
             'properties': {
                 'flavorRef': parameter_types.flavor_ref,
+                'OS-DCF:diskConfig': parameter_types.disk_config,
             },
             'required': ['flavorRef'],
             'additionalProperties': False,

@@ -24,14 +24,7 @@ CONF = nova.conf.CONF
 
 class TenantNetworksJsonTests(api_sample_base.ApiSampleTestBaseV21):
     ADMIN_API = True
-    extension_name = "os-tenant-networks"
-
-    def _get_flags(self):
-        f = super(TenantNetworksJsonTests, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        f['osapi_compute_extension'].append('nova.api.openstack.compute.'
-                      'contrib.os_tenant_networks.Os_tenant_networks')
-        return f
+    sample_dir = "os-tenant-networks"
 
     def setUp(self):
         super(TenantNetworksJsonTests, self).setUp()

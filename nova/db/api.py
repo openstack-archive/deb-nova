@@ -244,6 +244,19 @@ def compute_node_get_all(context):
     return IMPL.compute_node_get_all(context)
 
 
+def compute_node_get_all_by_pagination(context, limit=None, marker=None):
+    """Get compute nodes by pagination.
+    :param context: The security context
+    :param limit: Maximum number of items to return
+    :param marker: The last item of the previous page, the next results after
+                   this value will be returned
+
+    :returns: List of dictionaries each containing compute node properties
+    """
+    return IMPL.compute_node_get_all_by_pagination(context,
+                                                   limit=limit, marker=marker)
+
+
 def compute_node_get_all_by_host(context, host):
     """Get compute nodes by host name
 
@@ -636,6 +649,11 @@ def virtual_interface_create(context, values):
     return IMPL.virtual_interface_create(context, values)
 
 
+def virtual_interface_update(context, address, values):
+    """Create a virtual interface record in the database."""
+    return IMPL.virtual_interface_update(context, address, values)
+
+
 def virtual_interface_get(context, vif_id):
     """Gets a virtual interface from the table."""
     return IMPL.virtual_interface_get(context, vif_id)
@@ -667,6 +685,11 @@ def virtual_interface_get_by_instance_and_network(context, instance_id,
 def virtual_interface_delete_by_instance(context, instance_id):
     """Delete virtual interface records associated with instance."""
     return IMPL.virtual_interface_delete_by_instance(context, instance_id)
+
+
+def virtual_interface_delete(context, id):
+    """Delete virtual interface by id."""
+    return IMPL.virtual_interface_delete(context, id)
 
 
 def virtual_interface_get_all(context):
@@ -946,9 +969,10 @@ def key_pair_get(context, user_id, name):
     return IMPL.key_pair_get(context, user_id, name)
 
 
-def key_pair_get_all_by_user(context, user_id):
+def key_pair_get_all_by_user(context, user_id, limit=None, marker=None):
     """Get all key_pairs by user."""
-    return IMPL.key_pair_get_all_by_user(context, user_id)
+    return IMPL.key_pair_get_all_by_user(
+        context, user_id, limit=limit, marker=marker)
 
 
 def key_pair_count_by_user(context, user_id):
@@ -1792,6 +1816,11 @@ def aggregate_get_by_host(context, host, key=None):
     return IMPL.aggregate_get_by_host(context, host, key)
 
 
+def aggregate_get_by_uuid(context, uuid):
+    """Get a specific aggregate by uuid."""
+    return IMPL.aggregate_get_by_uuid(context, uuid)
+
+
 def aggregate_metadata_get_by_host(context, host, key=None):
     """Get metadata for all aggregates that host belongs to.
 
@@ -2040,3 +2069,39 @@ def instance_tag_delete_all(context, instance_uuid):
 def instance_tag_exists(context, instance_uuid, tag):
     """Check if specified tag exist on the instance."""
     return IMPL.instance_tag_exists(context, instance_uuid, tag)
+
+
+####################
+
+
+def console_auth_token_create(context, values):
+    """Create a console authorization."""
+    return IMPL.console_auth_token_create(context, values)
+
+
+def console_auth_token_get_valid(context, token_hash, instance_uuid):
+    """Get a valid console authorization by token_hash and instance_uuid.
+
+    The console authorizations expire at the time specified by their
+    'expires' column. An expired console auth token will not be returned
+    to the caller - it is treated as if it does not exist.
+    """
+    return IMPL.console_auth_token_get_valid(context,
+                                             token_hash,
+                                             instance_uuid)
+
+
+def console_auth_token_destroy_all_by_instance(context, instance_uuid):
+    """Delete all console authorizations belonging to the instance."""
+    return IMPL.console_auth_token_destroy_all_by_instance(context,
+                                                           instance_uuid)
+
+
+def console_auth_token_destroy_expired_by_host(context, host):
+    """Delete expired console authorizations belonging to the host.
+
+    The console authorizations expire at the time specified by their
+    'expires' column. This function is used to garbage collect expired
+    tokens associated with the given host.
+    """
+    return IMPL.console_auth_token_destroy_expired_by_host(context, host)

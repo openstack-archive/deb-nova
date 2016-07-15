@@ -1,20 +1,24 @@
 .. -*- rst -*-
 
-=======================================
- Bare metal nodes (os-baremetal-nodes)
-=======================================
+===================================================
+ Bare metal nodes (os-baremetal-nodes) (DEPRECATED)
+===================================================
 
 .. warning::
 
    These APIs are proxy calls to the Ironic service. They exist for
    legacy compatibility, but no new applications should use them.
+   Nova has deprecated all the proxy APIs and users should use the native
+   APIs instead.
+   See: `Relevant Bare metal APIs
+   <http://developer.openstack.org/api-ref/baremetal/index.html#nodes-nodes>`__.
 
 Bare metal nodes.
 
 List Bare Metal Nodes
 =====================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-baremetal-nodes
+.. rest_method:: GET /os-baremetal-nodes
 
 Lists the bare metal nodes known by the compute environment.
 
@@ -23,12 +27,6 @@ Normal response codes: 202
 Error response codes: unauthorized(401), forbidden(403),
 notImplemented(501)
 
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -52,7 +50,7 @@ Response
 Show Bare Metal Node Details
 ============================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-baremetal-nodes/{node_id}
+.. rest_method:: GET /os-baremetal-nodes/{node_id}
 
 Shows details for a bare metal node.
 
@@ -66,7 +64,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - node_id: node_id
 
 Response

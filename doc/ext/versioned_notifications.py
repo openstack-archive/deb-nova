@@ -23,8 +23,8 @@ It is used via a single directive in the .rst file
 from sphinx.util.compat import Directive
 from docutils import nodes
 
+from nova.notifications.objects import base as notification
 from nova.objects import base
-from nova.objects import notification
 
 
 def full_name(cls):
@@ -41,6 +41,7 @@ class VersionedNotificationDirective(Directive):
         return self._build_markup(notifications)
 
     def _collect_notifications(self):
+        base.NovaObjectRegistry.register_notification_objects()
         notifications = []
         ovos = base.NovaObjectRegistry.obj_classes()
         for name, cls in ovos.items():
@@ -50,9 +51,10 @@ class VersionedNotificationDirective(Directive):
 
                 payload_name = cls.fields['payload'].objname
                 payload_cls = ovos[payload_name][0]
-
-                notifications.append((full_name(cls), full_name(payload_cls),
-                                      cls.sample))
+                for sample in cls.samples:
+                    notifications.append((full_name(cls),
+                                          full_name(payload_cls),
+                                          sample))
         return notifications
 
     def _build_markup(self, notifications):

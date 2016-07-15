@@ -35,8 +35,7 @@ def fake_compute_api(*args, **kwargs):
     return True
 
 
-def fake_compute_api_get(self, context, instance_id, want_objects=False,
-                         **kwargs):
+def fake_compute_api_get(self, context, instance_id, **kwargs):
     # BAD_UUID is something that does not exist
     if instance_id == 'BAD_UUID':
         raise exception.InstanceNotFound(instance_id=instance_id)
@@ -214,10 +213,10 @@ class EvacuateTestV21(test.NoDBTestCase):
         self.assertEqual(admin_pass, res['adminPass'])
 
     def test_evacuate_disable_password_return(self):
-        self._test_evacuate_enable_instance_password_conf(False)
+        self._test_evacuate_enable_instance_password_conf(enable_pass=False)
 
     def test_evacuate_enable_password_return(self):
-        self._test_evacuate_enable_instance_password_conf(True)
+        self._test_evacuate_enable_instance_password_conf(enable_pass=True)
 
     @mock.patch('nova.objects.Instance.save')
     def _test_evacuate_enable_instance_password_conf(self, mock_save,
@@ -229,7 +228,7 @@ class EvacuateTestV21(test.NoDBTestCase):
         if enable_pass:
             self.assertIn('adminPass', res)
         else:
-            self.assertIsNone(res.get('adminPass'))
+            self.assertIsNone(res)
 
 
 class EvacuatePolicyEnforcementv21(test.NoDBTestCase):
@@ -351,3 +350,39 @@ class EvacuateTestV214(EvacuateTestV21):
         # underscores in hostnames. However, we should test that it
         # is supported because it sometimes occurs in real systems.
         self._get_evacuate_response({'host': 'underscore_hostname'})
+
+
+class EvacuateTestV229(EvacuateTestV214):
+    def setUp(self):
+        super(EvacuateTestV229, self).setUp()
+        self.admin_req = fakes.HTTPRequest.blank('', use_admin_context=True,
+                                                 version='2.29')
+        self.req = fakes.HTTPRequest.blank('', version='2.29')
+
+    @mock.patch.object(compute_api.API, 'evacuate')
+    def test_evacuate_instance(self, mock_evacuate):
+        self._get_evacuate_response({})
+        admin_pass = mock_evacuate.call_args_list[0][0][4]
+        on_shared_storage = mock_evacuate.call_args_list[0][0][3]
+        force = mock_evacuate.call_args_list[0][0][5]
+        self.assertEqual(CONF.password_length, len(admin_pass))
+        self.assertIsNone(on_shared_storage)
+        self.assertEqual(False, force)
+
+    def test_evacuate_with_valid_instance(self):
+        admin_pass = 'MyNewPass'
+        res = self._get_evacuate_response({'host': 'my-host',
+                                           'adminPass': admin_pass,
+                                           'force': 'false'})
+        self.assertIsNone(res)
+
+    @mock.patch.object(compute_api.API, 'evacuate')
+    def test_evacuate_instance_with_forced_host(self, mock_evacuate):
+        self._get_evacuate_response({'host': 'my-host',
+                                     'force': 'true'})
+        force = mock_evacuate.call_args_list[0][0][5]
+        self.assertEqual(True, force)
+
+    def test_forced_evacuate_with_no_host_provided(self):
+        self._check_evacuate_failure(webob.exc.HTTPBadRequest,
+                                     {'force': 'true'})

@@ -312,6 +312,7 @@ class ComputeAPI(object):
         can handle the version_cap being set to 4.11
 
         * 4.12 - Remove migration_id from live_migration_force_complete
+        * 4.13 - Make get_instance_diagnostics send an instance object
     '''
 
     VERSION_ALIASES = {
@@ -377,7 +378,7 @@ class ComputeAPI(object):
     def get_cell_client(self, context):
         return rpc.get_cell_client(context, self.client)
 
-    def add_aggregate_host(self, ctxt, aggregate, host_param, host,
+    def add_aggregate_host(self, ctxt, host, aggregate, host_param,
                            slave_info=None):
         '''Add aggregate host.
 
@@ -534,7 +535,7 @@ class ComputeAPI(object):
         return cctxt.call(ctxt, 'get_console_output',
                           instance=instance, tail_length=tail_length)
 
-    def get_console_pool_info(self, ctxt, console_type, host):
+    def get_console_pool_info(self, ctxt, host, console_type):
         version = '4.0'
         cctxt = self.get_cell_client(ctxt).prepare(
                 server=host, version=version)
@@ -554,13 +555,14 @@ class ComputeAPI(object):
         return cctxt.call(ctxt, 'get_diagnostics', instance=instance)
 
     def get_instance_diagnostics(self, ctxt, instance):
-        # TODO(danms): This needs to be fixed for objects
-        instance_p = jsonutils.to_primitive(instance)
-        kwargs = {'instance': instance_p}
-        version = '4.0'
-        cctxt = self.get_cell_client(ctxt).prepare(
-                server=_compute_host(None, instance), version=version)
-        return cctxt.call(ctxt, 'get_instance_diagnostics', **kwargs)
+        version = '4.13'
+        cell_client = self.get_cell_client(ctxt)
+        if not cell_client.can_send_version(version):
+            version = '4.0'
+            instance = objects_base.obj_to_primitive(instance)
+        cctxt = cell_client.prepare(server=_compute_host(None, instance),
+                                    version=version)
+        return cctxt.call(ctxt, 'get_instance_diagnostics', instance=instance)
 
     def get_vnc_console(self, ctxt, instance, console_type):
         version = '4.0'
@@ -605,7 +607,7 @@ class ComputeAPI(object):
                           instance=instance, port=port,
                           console_type=console_type)
 
-    def host_maintenance_mode(self, ctxt, host_param, mode, host):
+    def host_maintenance_mode(self, ctxt, host, host_param, mode):
         '''Set host maintenance mode
 
         :param ctxt: request context
@@ -620,7 +622,7 @@ class ComputeAPI(object):
         return cctxt.call(ctxt, 'host_maintenance_mode',
                           host=host_param, mode=mode)
 
-    def host_power_action(self, ctxt, action, host):
+    def host_power_action(self, ctxt, host, action):
         version = '4.0'
         cctxt = self.get_cell_client(ctxt).prepare(
                 server=host, version=version)
@@ -705,7 +707,7 @@ class ComputeAPI(object):
         else:
             return result
 
-    def prep_resize(self, ctxt, image, instance, instance_type, host,
+    def prep_resize(self, ctxt, instance, image, instance_type, host,
                     reservations=None, request_spec=None,
                     filter_properties=None, node=None,
                     clean_shutdown=True):
@@ -765,7 +767,7 @@ class ComputeAPI(object):
                    recreate=recreate, on_shared_storage=on_shared_storage,
                    **extra)
 
-    def remove_aggregate_host(self, ctxt, aggregate, host_param, host,
+    def remove_aggregate_host(self, ctxt, host, aggregate, host_param,
                               slave_info=None):
         '''Remove aggregate host.
 
@@ -789,7 +791,7 @@ class ComputeAPI(object):
         cctxt.cast(ctxt, 'remove_fixed_ip_from_instance',
                    instance=instance, address=address)
 
-    def remove_volume_connection(self, ctxt, volume_id, instance, host):
+    def remove_volume_connection(self, ctxt, instance, volume_id, host):
         version = '4.0'
         cctxt = self.get_cell_client(ctxt).prepare(
                 server=host, version=version)
@@ -869,7 +871,7 @@ class ComputeAPI(object):
         return cctxt.call(ctxt, 'set_admin_password',
                           instance=instance, new_pass=new_pass)
 
-    def set_host_enabled(self, ctxt, enabled, host):
+    def set_host_enabled(self, ctxt, host, enabled):
         version = '4.0'
         cctxt = self.get_cell_client(ctxt).prepare(
                 server=host, version=version)
@@ -1062,7 +1064,7 @@ class ComputeAPI(object):
         cctxt.cast(ctxt, 'unquiesce_instance', instance=instance,
                    mapping=mapping)
 
-    def refresh_instance_security_rules(self, ctxt, host, instance):
+    def refresh_instance_security_rules(self, ctxt, instance, host):
         version = '4.4'
         cell_client = self.get_cell_client(ctxt)
         if not cell_client.can_send_version(version):

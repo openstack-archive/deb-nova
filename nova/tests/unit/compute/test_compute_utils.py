@@ -394,7 +394,7 @@ class UsageInfoTestCase(test.TestCase):
         self.stubs.Set(network_api.API, 'get_instance_nw_info',
                        fake_get_nw_info)
 
-        fake_notifier.stub_notifier(self.stubs)
+        fake_notifier.stub_notifier(self)
         self.addCleanup(fake_notifier.reset)
 
         self.flags(use_local=True, group='conductor')
@@ -412,7 +412,7 @@ class UsageInfoTestCase(test.TestCase):
         self.stubs.Set(nova.tests.unit.image.fake._FakeImageService,
                        'show', fake_show)
         fake_network.set_stub_network_methods(self)
-        fake_server_actions.stub_out_action_events(self.stubs)
+        fake_server_actions.stub_out_action_events(self)
 
     def test_notify_usage_exists(self):
         # Ensure 'exists' notification generates appropriate usage data.
@@ -485,6 +485,39 @@ class UsageInfoTestCase(test.TestCase):
         image_ref_url = "%s/images/%s" % (glance.generate_glance_url(),
                                           uuids.fake_image_ref)
         self.assertEqual(payload['image_ref_url'], image_ref_url)
+
+    def test_notify_about_instance_action(self):
+        instance = create_instance(self.context)
+
+        compute_utils.notify_about_instance_action(
+            self.context,
+            instance,
+            host='fake-compute',
+            action='delete',
+            phase='start')
+
+        self.assertEqual(len(fake_notifier.VERSIONED_NOTIFICATIONS), 1)
+        notification = fake_notifier.VERSIONED_NOTIFICATIONS[0]
+
+        self.assertEqual(notification['priority'], 'INFO')
+        self.assertEqual(notification['event_type'], 'instance.delete.start')
+        self.assertEqual(notification['publisher_id'],
+                         'nova-compute:fake-compute')
+
+        payload = notification['payload']['nova_object.data']
+        self.assertEqual(payload['tenant_id'], self.project_id)
+        self.assertEqual(payload['user_id'], self.user_id)
+        self.assertEqual(payload['uuid'], instance['uuid'])
+
+        flavorid = flavors.get_flavor_by_name('m1.tiny')['flavorid']
+        flavor = payload['flavor']['nova_object.data']
+        self.assertEqual(str(flavor['flavorid']), flavorid)
+
+        for attr in ('display_name', 'created_at', 'launched_at',
+                     'state', 'task_state'):
+            self.assertIn(attr, payload, "Key %s not in payload" % attr)
+
+        self.assertEqual(payload['image_uuid'], uuids.fake_image_ref)
 
     def test_notify_usage_exists_instance_not_found(self):
         # Ensure 'exists' notification generates appropriate usage data.
@@ -642,6 +675,64 @@ class ComputeUtilsGetRebootTypes(test.NoDBTestCase):
 
 
 class ComputeUtilsTestCase(test.NoDBTestCase):
+
+    def setUp(self):
+        super(ComputeUtilsTestCase, self).setUp()
+        self.compute = 'compute'
+        self.user_id = 'fake'
+        self.project_id = 'fake'
+        self.context = context.RequestContext(self.user_id,
+                                              self.project_id)
+
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    def test_wrap_instance_event(self, mock_finish, mock_start):
+        inst = {"uuid": uuids.instance}
+
+        @compute_utils.wrap_instance_event(prefix='compute')
+        def fake_event(self, context, instance):
+            pass
+
+        fake_event(self.compute, self.context, instance=inst)
+
+        self.assertTrue(mock_start.called)
+        self.assertTrue(mock_finish.called)
+
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    def test_wrap_instance_event_return(self, mock_finish, mock_start):
+        inst = {"uuid": uuids.instance}
+
+        @compute_utils.wrap_instance_event(prefix='compute')
+        def fake_event(self, context, instance):
+            return True
+
+        retval = fake_event(self.compute, self.context, instance=inst)
+
+        self.assertTrue(retval)
+        self.assertTrue(mock_start.called)
+        self.assertTrue(mock_finish.called)
+
+    @mock.patch.object(objects.InstanceActionEvent, 'event_start')
+    @mock.patch.object(objects.InstanceActionEvent,
+                       'event_finish_with_failure')
+    def test_wrap_instance_event_log_exception(self, mock_finish, mock_start):
+        inst = {"uuid": uuids.instance}
+
+        @compute_utils.wrap_instance_event(prefix='compute')
+        def fake_event(self2, context, instance):
+            raise exception.NovaException()
+
+        self.assertRaises(exception.NovaException, fake_event,
+                          self.compute, self.context, instance=inst)
+
+        self.assertTrue(mock_start.called)
+        self.assertTrue(mock_finish.called)
+        args, kwargs = mock_finish.call_args
+        self.assertIsInstance(kwargs['exc_val'], exception.NovaException)
+
     @mock.patch('netifaces.interfaces')
     def test_get_machine_ips_value_error(self, mock_interfaces):
         # Tests that the utility method does not explode if netifaces raises

@@ -19,7 +19,6 @@ import itertools
 import uuid
 
 import mock
-from oslo_policy import policy as oslo_policy
 
 from nova.compute import flavors
 from nova import context
@@ -31,7 +30,7 @@ from nova.network import floating_ips
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import fields
-from nova import policy
+from nova.objects import network_request as net_req_obj
 from nova import test
 from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_instance
@@ -49,40 +48,6 @@ fake_info_cache = {
     'instance_uuid': uuids.instance,
     'network_info': '[]',
     }
-
-
-class NetworkPolicyTestCase(test.TestCase):
-    def setUp(self):
-        super(NetworkPolicyTestCase, self).setUp()
-
-        policy.reset()
-        policy.init()
-
-        self.context = context.get_admin_context()
-
-    def tearDown(self):
-        super(NetworkPolicyTestCase, self).tearDown()
-        policy.reset()
-
-    @mock.patch.object(policy, 'enforce')
-    def test_check_policy(self, mock_enforce):
-        target = {
-            'project_id': self.context.project_id,
-            'user_id': self.context.user_id,
-        }
-        api.check_policy(self.context, 'get_all')
-        mock_enforce.assert_called_once_with(
-            self.context, 'network:get_all', target)
-
-    def test_skip_policy(self):
-        policy.reset()
-        rules = {'network:get_all': '!'}
-        policy.set_rules(oslo_policy.Rules.from_dict(rules))
-        api = network.API()
-        self.assertRaises(exception.PolicyNotAuthorized,
-                          api.get_all, self.context)
-        api = network.API(skip_policy_check=True)
-        api.get_all(self.context)
 
 
 class ApiTestCase(test.TestCase):
@@ -179,7 +144,8 @@ class ApiTestCase(test.TestCase):
                                         host='host', system_metadata={},
                                         flavor=flavor)
             self.network_api.allocate_for_instance(
-                self.context, instance, 'vpn', 'requested_networks', macs=macs)
+                self.context, instance, 'vpn', requested_networks=None,
+                macs=macs)
             mock_alloc.assert_called_once_with(self.context, **kwargs)
 
     def _do_test_associate_floating_ip(self, orig_instance_uuid):
@@ -317,7 +283,7 @@ class ApiTestCase(test.TestCase):
             expected['floating_addresses'] = ['fake_float1', 'fake_float2']
         return fake_instance, fake_migration, expected
 
-    def test_migrate_instance_start_with_multhost(self):
+    def test_migrate_instance_start_with_multihost(self):
         info = {'kwargs': {}}
         arg1, arg2, expected = self._stub_migrate_instance_calls(
                 'migrate_instance_start', True, info)
@@ -325,14 +291,14 @@ class ApiTestCase(test.TestCase):
         self.network_api.migrate_instance_start(self.context, arg1, arg2)
         self.assertEqual(info['kwargs'], expected)
 
-    def test_migrate_instance_start_without_multhost(self):
+    def test_migrate_instance_start_without_multihost(self):
         info = {'kwargs': {}}
         arg1, arg2, expected = self._stub_migrate_instance_calls(
                 'migrate_instance_start', False, info)
         self.network_api.migrate_instance_start(self.context, arg1, arg2)
         self.assertEqual(info['kwargs'], expected)
 
-    def test_migrate_instance_finish_with_multhost(self):
+    def test_migrate_instance_finish_with_multihost(self):
         info = {'kwargs': {}}
         arg1, arg2, expected = self._stub_migrate_instance_calls(
                 'migrate_instance_finish', True, info)
@@ -340,7 +306,7 @@ class ApiTestCase(test.TestCase):
         self.network_api.migrate_instance_finish(self.context, arg1, arg2)
         self.assertEqual(info['kwargs'], expected)
 
-    def test_migrate_instance_finish_without_multhost(self):
+    def test_migrate_instance_finish_without_multihost(self):
         info = {'kwargs': {}}
         arg1, arg2, expected = self._stub_migrate_instance_calls(
                 'migrate_instance_finish', False, info)
@@ -465,9 +431,52 @@ class ApiTestCase(test.TestCase):
     def test_allocate_for_instance_refresh_cache(self):
         instance = fake_instance.fake_instance_obj(self.context)
         vpn = 'fake-vpn'
-        requested_networks = 'fake-networks'
+        requested_networks = [('fake-networks', None)]
         self._test_refresh_cache('allocate_for_instance', self.context,
                                  instance, vpn, requested_networks)
+
+    @mock.patch('nova.network.rpcapi.NetworkAPI.allocate_for_instance')
+    def test_allocate_for_instance_no_nets_no_auto(self, mock_rpc_alloc):
+        # Tests that nothing fails if no networks are returned and auto
+        # allocation wasn't requested.
+        mock_rpc_alloc.return_value = []
+        instance = fake_instance.fake_instance_obj(self.context)
+        nw_info = self.network_api.allocate_for_instance(
+            self.context, instance, mock.sentinel.vpn, requested_networks=None)
+        self.assertEqual(0, len(nw_info))
+
+    @mock.patch('nova.network.rpcapi.NetworkAPI.allocate_for_instance')
+    def test_allocate_for_instance_no_nets_auto_allocate(self, mock_rpc_alloc):
+        # Tests that we fail when no networks are allocated and auto-allocation
+        # was requested.
+
+        def fake_rpc_allocate(context, *args, **kwargs):
+            # assert that requested_networks is nulled out
+            self.assertIn('requested_networks', kwargs)
+            self.assertIsNone(kwargs['requested_networks'])
+            return []
+
+        mock_rpc_alloc.side_effect = fake_rpc_allocate
+        instance = fake_instance.fake_instance_obj(self.context)
+        self.assertRaises(exception.UnableToAutoAllocateNetwork,
+                          self.network_api.allocate_for_instance,
+                          self.context, instance, mock.sentinel.vpn,
+                          [(net_req_obj.NETWORK_ID_AUTO, None)])
+        self.assertEqual(1, mock_rpc_alloc.call_count)
+
+    @mock.patch('nova.network.rpcapi.NetworkAPI.deallocate_for_instance')
+    def test_deallocate_for_instance_auto_allocate(self, mock_rpc_dealloc):
+        # Tests that we pass requested_networks=None to the RPC API when
+        # we're auto-allocating.
+        instance = fake_instance.fake_instance_obj(self.context)
+        req_net = objects.NetworkRequest(
+            network_id=net_req_obj.NETWORK_ID_AUTO)
+        requested_networks = objects.NetworkRequestList(objects=[req_net])
+        self.network_api.deallocate_for_instance(
+            self.context, instance, requested_networks)
+        mock_rpc_dealloc.assert_called_once_with(self.context,
+                                                 instance=instance,
+                                                 requested_networks=None)
 
     def test_add_fixed_ip_to_instance_refresh_cache(self):
         instance = fake_instance.fake_instance_obj(self.context)

@@ -14,7 +14,6 @@
 
 from oslo_log import log as logging
 from oslo_utils import uuidutils
-
 from sqlalchemy.orm import contains_eager
 from sqlalchemy.orm import joinedload
 
@@ -47,12 +46,28 @@ def _aggregate_get_from_db(context, aggregate_id):
     return aggregate
 
 
+@db_api.api_context_manager.reader
+def _aggregate_get_from_db_by_uuid(context, aggregate_uuid):
+    query = context.session.query(api_models.Aggregate).\
+            options(joinedload('_hosts')).\
+            options(joinedload('_metadata'))
+    query = query.filter(api_models.Aggregate.uuid == aggregate_uuid)
+
+    aggregate = query.first()
+
+    if not aggregate:
+        raise exception.AggregateNotFound(aggregate_id=aggregate_uuid)
+
+    return aggregate
+
+
 @base.NovaObjectRegistry.register
 class Aggregate(base.NovaPersistentObject, base.NovaObject):
     # Version 1.0: Initial version
     # Version 1.1: String attributes updated to support unicode
     # Version 1.2: Added uuid field
-    VERSION = '1.2'
+    # Version 1.3: Added get_by_uuid method
+    VERSION = '1.3'
 
     fields = {
         'id': fields.IntegerField(),
@@ -116,6 +131,15 @@ class Aggregate(base.NovaPersistentObject, base.NovaObject):
             db_aggregate = _aggregate_get_from_db(context, aggregate_id)
         except exception.AggregateNotFound:
             db_aggregate = db.aggregate_get(context, aggregate_id)
+        return cls._from_db_object(context, cls(), db_aggregate)
+
+    @base.remotable_classmethod
+    def get_by_uuid(cls, context, aggregate_uuid):
+        try:
+            db_aggregate = _aggregate_get_from_db_by_uuid(context,
+                                                          aggregate_uuid)
+        except exception.AggregateNotFound:
+            db_aggregate = db.aggregate_get_by_uuid(context, aggregate_uuid)
         return cls._from_db_object(context, cls(), db_aggregate)
 
     @base.remotable

@@ -1,5 +1,4 @@
 .. -*- rst -*-
-.. needs:parameter_verification
 .. needs:example_verification
 .. needs:body_verification
 
@@ -14,7 +13,7 @@ for a hypervisor.
 List Hypervisors
 ================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors
+.. rest_method:: GET /os-hypervisors
 
 Lists hypervisors.
 
@@ -29,10 +28,19 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+  - limit: hypervisor_limit
+  - marker: hypervisor_marker
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+  - hypervisors: hypervisors
+  - hypervisor_hostname: hypervisor_hostname
+  - id: hypervisor_id_body
+  - state: hypervisor_state
+  - status: hypervisor_status
 
 **Example List Hypervisors: JSON response**
 
@@ -42,7 +50,7 @@ Response
 List Hypervisors Details
 ========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors/detail
+.. rest_method:: GET /os-hypervisors/detail
 
 Lists hypervisors details.
 
@@ -57,20 +65,52 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+  - limit: hypervisor_limit
+  - marker: hypervisor_marker
 
 Response
 --------
 
-**Example List Hypervisors Details: JSON request**
+.. rest_parameters:: parameters.yaml
 
-.. literalinclude:: ../../doc/api_samples/os-hypervisors/hypervisors-detail-resp.json
+  - hypervisors: hypervisors
+  - cpu_info: cpu_info
+  - current_workload: current_workload
+  - status: hypervisor_status
+  - state: hypervisor_state
+  - disk_available_least: disk_available_least
+  - host_ip: host_ip
+  - free_disk_gb: hypervisor_free_disk_gb
+  - free_ram_mb: free_ram_mb
+  - hypervisor_hostname: hypervisor_hostname
+  - hypervisor_type: hypervisor_type_body
+  - hypervisor_version: hypervisor_version
+  - id: hypervisor_id_body
+  - local_gb: local_gb
+  - local_gb_used: local_gb_used
+  - memory_mb: memory_mb
+  - memory_mb_used: memory_mb_used
+  - running_vms: running_vms
+  - service: hypervisor_service
+  - service.host: host_name_body
+  - service.id: service_id_body
+  - service.disable_reason: service_disable_reason
+  - vcpus: hypervisor_vcpus
+  - vcpus_used: hypervisor_vcpus_used
+
+**Example List Hypervisors Details: JSON response**
+
+.. note::
+
+   This API sample is actual since microversion v2.28
+
+.. literalinclude:: ../../doc/api_samples/os-hypervisors/v2.28/hypervisors-detail-resp.json
    :language: javascript
 
 Show Hypervisor Statistics
 ==========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors/statistics
+.. rest_method:: GET /os-hypervisors/statistics
 
 Shows summary statistics for all hypervisors over all compute nodes.
 
@@ -80,15 +120,24 @@ Normal response codes: 200
 
 Error response codes: unauthorized(401), forbidden(403)
 
-Request
--------
+Response
+--------
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
-
-Response
---------
+  - hypervisor_statistics: hypervisor_statistics
+  - count: hypervisor_count
+  - current_workload: current_workload
+  - disk_available_least: disk_available_least
+  - free_disk_gb: hypervisor_free_disk_gb
+  - free_ram_mb: free_ram_mb
+  - local_gb: local_gb
+  - local_gb_used: local_gb_used
+  - memory_mb: memory_mb
+  - memory_mb_used: memory_mb_used
+  - running_vms: running_vms_total
+  - vcpus: hypervisor_vcpus
+  - vcpus_used: hypervisor_vcpus_used
 
 **Example Show Hypervisor Statistics: JSON response**
 
@@ -98,7 +147,7 @@ Response
 Show Hypervisor Details
 =======================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors/{hypervisor_id}
+.. rest_method:: GET /os-hypervisors/{hypervisor_id}
 
 Shows details for a hypervisor.
 
@@ -114,21 +163,51 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - hypervisor_id: hypervisor_id
 
 Response
 --------
 
+.. rest_parameters:: parameters.yaml
+
+  - hypervisor: hypervisor
+  - cpu_info: cpu_info
+  - state: hypervisor_state
+  - status: hypervisor_status
+  - current_workload: current_workload
+  - disk_available_least: disk_available_least
+  - host_ip: host_ip
+  - free_disk_gb: hypervisor_free_disk_gb
+  - free_ram_mb: free_ram_mb
+  - hypervisor_hostname: hypervisor_hostname
+  - hypervisor_type: hypervisor_type_body
+  - hypervisor_version: hypervisor_version
+  - id: hypervisor_id_body
+  - local_gb: local_gb
+  - local_gb_used: local_gb_used
+  - memory_mb: memory_mb
+  - memory_mb_used: memory_mb_used
+  - running_vms: running_vms
+  - service: hypervisor_service
+  - service.host: host_name_body
+  - service.id: service_id_body
+  - service.disable_reason: service_disable_reason
+  - vcpus: hypervisor_vcpus
+  - vcpus_used: hypervisor_vcpus_used
+
 **Example Show Hypervisor Details: JSON response**
 
-.. literalinclude:: ../../doc/api_samples/os-hypervisors/hypervisors-show-resp.json
+.. note::
+
+   This API sample is actual since microversion v2.28
+
+.. literalinclude:: ../../doc/api_samples/os-hypervisors/v2.28/hypervisors-show-resp.json
    :language: javascript
 
 Show Hypervisor Uptime
 ======================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors/{hypervisor_id}/uptime
+.. rest_method:: GET /os-hypervisors/{hypervisor_id}/uptime
 
 Shows the uptime for a hypervisor.
 
@@ -144,11 +223,19 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - hypervisor_id: hypervisor_id
 
 Response
 --------
+
+.. rest_parameters:: parameters.yaml
+
+  - hypervisor: hypervisor
+  - hypervisor_hostname: hypervisor_hostname
+  - id: hypervisor_id_body
+  - state: hypervisor_state
+  - status: hypervisor_status
+  - uptime: uptime
 
 **Example Show Hypervisor Uptime: JSON response**
 
@@ -158,7 +245,7 @@ Response
 Search Hypervisor
 =================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors/{hypervisor_id}/search
+.. rest_method:: GET /os-hypervisors/{hypervisor_id}/search
 
 Search hypervisor by given hypervisor id.
 
@@ -174,13 +261,20 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - hypervisor_id: hypervisor_id
 
 Response
 --------
 
-**Example Search Hypervisor: JSON request**
+.. rest_parameters:: parameters.yaml
+
+  - hypervisors: hypervisors
+  - hypervisor_hostname: hypervisor_hostname
+  - id: hypervisor_id_body
+  - state: hypervisor_state
+  - status: hypervisor_status
+
+**Example Search Hypervisor: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/os-hypervisors/hypervisors-search-resp.json
    :language: javascript
@@ -188,7 +282,7 @@ Response
 List Hypervisor Servers
 =======================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-hypervisors/{hypervisor_id}/servers
+.. rest_method:: GET /os-hypervisors/{hypervisor_id}/servers
 
 List all servers belong to given hypervisor.
 
@@ -204,13 +298,23 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - hypervisor_id: hypervisor_id
 
 Response
 --------
 
-**Example List Hypervisor Servers: JSON request**
+.. rest_parameters:: parameters.yaml
+
+  - hypervisors: hypervisors
+  - hypervisor_hostname: hypervisor_hostname
+  - id: hypervisor_id_body
+  - state: hypervisor_state
+  - status: hypervisor_status
+  - servers: servers
+  - servers.uuid: server_uuid
+  - servers.name: server_name
+
+**Example List Hypervisor Servers: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/os-hypervisors/hypervisors-with-servers-resp.json
    :language: javascript

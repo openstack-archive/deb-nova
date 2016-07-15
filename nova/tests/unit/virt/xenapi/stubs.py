@@ -13,6 +13,7 @@
 
 """Stubouts, mocks and fixtures for the test suite."""
 
+import mock
 import pickle
 import random
 import sys
@@ -168,7 +169,7 @@ class FakeSessionForVMTests(fake.SessionBase):
                                   "# Completed on Sun Nov  6 22:49:02 2011\n")
 
     def host_call_plugin(self, _1, _2, plugin, method, _5):
-        if plugin == 'glance' and method in ('download_vhd', 'download_vhd2'):
+        if plugin == 'glance' and method in ('download_vhd2'):
             root_uuid = _make_fake_vdi()
             return pickle.dumps(dict(root=dict(uuid=root_uuid)))
         elif (plugin, method) == ("xenhost", "iptables_config"):
@@ -257,7 +258,7 @@ def stub_out_vm_methods(stubs):
     def fake_generate_ephemeral(*args):
         pass
 
-    def fake_wait_for_device(dev):
+    def fake_wait_for_device(session, dev, dom0, max_seconds):
         pass
 
     stubs.Set(vmops.VMOps, "_acquire_bootlock", fake_acquire_bootlock)
@@ -367,6 +368,20 @@ class FakeSessionForFailedMigrateTests(FakeSessionForVMTests):
     def VM_migrate_send(self, session, vmref, migrate_data, islive, vdi_map,
                         vif_map, options):
         raise fake.Failure("XenAPI VM.migrate_send failed")
+
+
+def get_fake_session(error=None):
+    fake_session = mock.MagicMock()
+    session.apply_session_helpers(fake_session)
+
+    if error is not None:
+        class FakeException(Exception):
+            details = [error, "a", "b", "c"]
+
+        fake_session.XenAPI.Failure = FakeException
+        fake_session.call_xenapi.side_effect = FakeException
+
+    return fake_session
 
 
 # FIXME(sirp): XenAPITestBase is deprecated, all tests should be converted

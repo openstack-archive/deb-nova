@@ -14,9 +14,8 @@
 #    under the License.
 
 import mock
-import six
-
 from oslo_config import cfg
+import six
 
 from nova import exception
 from nova import objects
@@ -402,8 +401,8 @@ class PciDeviceVFPFStatsTestCase(test.NoDBTestCase):
         # Validate that the parents of these VFs has been removed
         # from pools.
         for dev in devs:
-            self.assertTrue(all(dev.parent_addr != free_dev.address
-                                for free_dev in free_devs))
+            self.assertNotIn(dev.parent_addr,
+                             [free_dev.address for free_dev in free_devs])
 
     def test_consume_PF_requests(self):
         self._create_pci_devices()

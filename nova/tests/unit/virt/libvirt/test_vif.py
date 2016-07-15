@@ -393,7 +393,7 @@ class LibvirtVifTestCase(test.NoDBTestCase):
             self.executes.append(cmd)
             return None, None
 
-        self.stubs.Set(utils, 'execute', fake_execute)
+        self.stub_out('nova.utils.execute', fake_execute)
 
     def _get_node(self, xml):
         doc = etree.fromstring(xml)
@@ -487,14 +487,14 @@ class LibvirtVifTestCase(test.NoDBTestCase):
         conf.add_device(nic)
         return conf.to_xml()
 
-    def test_virtio_multiqueue(self):
+    def _test_virtio_multiqueue(self, vcpus, want_queues):
         self.flags(use_virtio_for_bridges=True,
                    virt_type='kvm',
                    group='libvirt')
 
         flavor = objects.Flavor(name='m1.small',
                     memory_mb=128,
-                    vcpus=4,
+                    vcpus=vcpus,
                     root_gb=0,
                     ephemeral_gb=0,
                     swap=0,
@@ -515,7 +515,22 @@ class LibvirtVifTestCase(test.NoDBTestCase):
         driver = node.find("driver").get("name")
         self.assertEqual(driver, 'vhost')
         queues = node.find("driver").get("queues")
-        self.assertEqual(queues, '4')
+        self.assertEqual(queues, want_queues)
+
+    def test_virtio_multiqueue(self):
+        self._test_virtio_multiqueue(4, '4')
+
+    @mock.patch('os.uname', return_value=('Linux', '', '2.6.32-21-generic'))
+    def test_virtio_multiqueue_in_kernel_2(self, mock_uname):
+        self._test_virtio_multiqueue(10, '1')
+
+    @mock.patch('os.uname', return_value=('Linux', '', '3.19.0-47-generic'))
+    def test_virtio_multiqueue_in_kernel_3(self, mock_uname):
+        self._test_virtio_multiqueue(10, '8')
+
+    @mock.patch('os.uname', return_value=('Linux', '', '4.2.0-35-generic'))
+    def test_virtio_multiqueue_in_kernel_4(self, mock_uname):
+        self._test_virtio_multiqueue(10, '10')
 
     def test_multiple_nics(self):
         conf = self._get_conf()
@@ -912,15 +927,24 @@ class LibvirtVifTestCase(test.NoDBTestCase):
         d = vif.LibvirtGenericVIFDriver()
         with mock.patch.object(utils, 'execute') as execute:
             execute.side_effect = processutils.ProcessExecutionError
-            d.unplug(self.instance, self.vif_ivs)
+            d.unplug(self.instance, self.vif_iovisor)
 
     @mock.patch('nova.network.linux_net.device_exists')
     def test_plug_iovisor(self, device_exists):
         device_exists.return_value = True
         d = vif.LibvirtGenericVIFDriver()
         with mock.patch.object(utils, 'execute') as execute:
-            execute.side_effect = processutils.ProcessExecutionError
-            d.plug(self.instance, self.vif_ivs)
+            d.plug(self.instance, self.vif_iovisor)
+            execute.assert_has_calls([
+                mock.call('ifc_ctl', 'gateway', 'add_port',
+                          'tap-xxx-yyy-zzz', run_as_root=True),
+                mock.call('ifc_ctl', 'gateway', 'ifup',
+                          'tap-xxx-yyy-zzz',
+                          'access_vm', self.vif_iovisor['id'],
+                          self.vif_iovisor['address'],
+                          'pgtag2=%s' % self.vif_iovisor['network']['id'],
+                          'pgtag1=%s' % self.instance.project_id,
+                          run_as_root=True)])
 
     def test_unplug_vrouter_with_details(self):
         d = vif.LibvirtGenericVIFDriver()

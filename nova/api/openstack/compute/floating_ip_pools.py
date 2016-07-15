@@ -15,10 +15,10 @@
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova import network
+from nova.policies import floating_ip_pools as fip_policies
 
 
 ALIAS = 'os-floating-ip-pools'
-authorize = extensions.os_compute_authorizer(ALIAS)
 
 
 def _translate_floating_ip_view(pool_name):
@@ -38,14 +38,14 @@ class FloatingIPPoolsController(wsgi.Controller):
     """The Floating IP Pool API controller for the OpenStack API."""
 
     def __init__(self):
-        self.network_api = network.API(skip_policy_check=True)
+        self.network_api = network.API()
         super(FloatingIPPoolsController, self).__init__()
 
     @extensions.expected_errors(())
     def index(self, req):
         """Return a list of pools."""
         context = req.environ['nova.context']
-        authorize(context)
+        context.can(fip_policies.BASE_POLICY_NAME)
         pools = self.network_api.get_floating_ip_pools(context)
         return _translate_floating_ip_pools_view(pools)
 

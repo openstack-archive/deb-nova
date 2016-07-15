@@ -32,6 +32,7 @@ from nova import context
 from nova import objects
 from nova import test
 from nova.tests.unit import fake_instance
+from nova.tests import uuidsentinel as uuids
 from nova import utils
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import utils as libvirt_utils
@@ -50,6 +51,23 @@ def intercept_log_messages():
         yield stream
     finally:
         mylog.logger.removeHandler(handler)
+
+
+class GetCacheFnameTestCase(test.NoDBTestCase):
+    def test_get_cache_fname(self):
+        # Ensure a known input to this function produces a known output.
+
+        # This test assures us that, used in the expected manner, the function
+        # doesn't raise an exception in either python2 or python3. It also
+        # serves as a canary to warn if any change in underlying libraries
+        # would produce output incompatible with current usage.
+
+        # Take a known image_id and the pre-calculated hexdigest of its sha1
+        image_id = 'fd0cb2f1-8375-44c9-b1f4-3e1f4c4a8ef0'
+        expected_cache_name = '0d5e6b61602d758984b3bf038267614d6016eb2a'
+
+        cache_name = imagecache.get_cache_fname(image_id)
+        self.assertEqual(expected_cache_name, cache_name)
 
 
 class ImageCacheManagerTestCase(test.NoDBTestCase):
@@ -584,7 +602,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
         instances = [{'image_ref': '1',
                       'host': CONF.host,
                       'name': 'instance-1',
-                      'uuid': '123',
+                      'uuid': uuids.instance_1,
                       'vm_state': '',
                       'task_state': ''},
                      {'image_ref': '1',
@@ -592,7 +610,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
                       'ramdisk_id': '22',
                       'host': CONF.host,
                       'name': 'instance-2',
-                      'uuid': '456',
+                      'uuid': uuids.instance_2,
                       'vm_state': '',
                       'task_state': ''}]
         all_instances = [fake_instance.fake_instance_obj(None, **instance)
@@ -637,7 +655,7 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
 
         ctxt = context.get_admin_context()
         objects.block_device.BlockDeviceMappingList.bdms_by_instance_uuid(
-                ctxt, ['123', '456']).AndReturn({})
+                ctxt, [uuids.instance_1, uuids.instance_2]).AndReturn({})
 
         self.mox.ReplayAll()
         # And finally we can make the call we're actually testing...
@@ -687,12 +705,13 @@ class ImageCacheManagerTestCase(test.NoDBTestCase):
             was['called'] = True
             instances = []
             for x in range(2):
-                instances.append(fake_instance.fake_db_instance(
-                                                        image_ref='1',
-                                                        uuid=x,
-                                                        name=x,
-                                                        vm_state='',
-                                                        task_state=''))
+                instances.append(
+                    fake_instance.fake_db_instance(
+                        image_ref=uuids.fake_image_ref,
+                        uuid=getattr(uuids, 'instance_%s' % x),
+                        name='instance-%s' % x,
+                        vm_state='',
+                        task_state=''))
             return instances
 
         with utils.tempdir() as tmpdir:

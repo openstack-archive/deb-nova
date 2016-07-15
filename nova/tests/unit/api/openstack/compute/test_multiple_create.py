@@ -112,7 +112,7 @@ class MultiCreateExtensionTestV21(test.TestCase):
         def project_get_networks(context, user_id):
             return dict(id='1', host='localhost')
 
-        fakes.stub_out_key_pair_funcs(self.stubs)
+        fakes.stub_out_key_pair_funcs(self)
         fake.stub_out_image_service(self)
         fakes.stub_out_nw_api(self)
         self.stub_out('nova.db.instance_add_security_group',
@@ -403,7 +403,7 @@ class MultiCreateExtensionTestV21(test.TestCase):
         reservation_id = res.obj['reservation_id']
         self.assertNotEqual(reservation_id, "")
         self.assertIsNotNone(reservation_id)
-        self.assertTrue(len(reservation_id) > 1)
+        self.assertGreater(len(reservation_id), 1)
 
     def test_create_multiple_instances_with_resv_id_return(self):
         self._create_multiple_instances_resv_id_return(True)

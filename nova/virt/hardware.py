@@ -1257,7 +1257,7 @@ def numa_get_reserved_huge_pages():
     to build NUMATopology.
 
     :raises: exceptionInvalidReservedMemoryPagesOption is option is
-             not corretly set.
+             not correctly set.
 
     :returns: a list of dict ordered by NUMA node ids; keys of dict
               are pages size where values are the number reserved.
@@ -1353,9 +1353,8 @@ def numa_usage_from_instances(host, instances, free=False):
                             else:
                                 newcell.pin_cpus(pinned_cpus)
 
-            newcell.cpu_usage = max(0, cpu_usage)
-            newcell.memory_usage = max(0, memory_usage)
-
+        newcell.cpu_usage = max(0, cpu_usage)
+        newcell.memory_usage = max(0, memory_usage)
         cells.append(newcell)
 
     return objects.NUMATopology(cells=cells)
@@ -1427,7 +1426,7 @@ def host_topology_and_format_from_host(host):
 
     Since we may get a host as either a dict, a db object, or an actual
     ComputeNode object, or an instance of HostState class, this makes sure we
-    get beck either None, or an instance of objects.NUMATopology class.
+    get back either None, or an instance of objects.NUMATopology class.
 
     :returns: A two-tuple, first element is the topology itself or None, second
               is a boolean set to True if topology was in JSON format.

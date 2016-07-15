@@ -98,7 +98,7 @@ access the server directly.
 List Servers
 ============
 
-.. rest_method:: GET /v2.1/{tenant_id}/servers
+.. rest_method:: GET /servers
 
 Lists IDs, names, and links for all servers.
 
@@ -156,7 +156,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - limit: limit
   - marker: marker
   - sort_key: sort_key
@@ -195,7 +195,7 @@ Response
 Create Server
 =============
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers
+.. rest_method:: POST /servers
 
 Creates a server.
 
@@ -277,7 +277,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server: server
   - name: server_name
   - flavorRef: flavorRef
@@ -293,6 +293,7 @@ Request
   - networks.uuid: network_uuid
   - networks.port: port
   - networks.fixed_ip: fixed_ip
+  - networks.tag: device_tag
   - personality: personality
   - block_device_mapping_v2: block_device_mapping_v2
   - block_device_mapping_v2.device_name: device_name
@@ -301,6 +302,7 @@ Request
   - block_device_mapping_v2.delete_on_termination: delete_on_termination
   - block_device_mapping_v2.guest_format: guest_format
   - block_device_mapping_v2.boot_index: boot_index
+  - block_device_mapping_v2.tag: device_tag
   - config_drive: config_drive
   - key_name: key_name
   - os:scheduler_hints: os:scheduler_hints
@@ -310,6 +312,11 @@ Request
 **Example Create Server: JSON request**
 
 .. literalinclude:: ../../doc/api_samples/servers/server-create-req.json
+   :language: javascript
+
+**Example Create Server (v2.32)**
+
+.. literalinclude:: ../../doc/api_samples/servers/v2.32/server-create-req.json
    :language: javascript
 
 Response
@@ -350,17 +357,24 @@ Response
   - tenant_id: tenant_id_body
   - updated: updated
   - user_id: user_id
+  - OS-EXT-SERV-ATTR:hostname: server_hostname
+  - OS-EXT-SERV-ATTR:reservation_id: server_reservation_id
+  - OS-EXT-SERV-ATTR:launch_index: server_launch_index
+  - OS-EXT-SERV-ATTR:kernel_id: server_kernel_id
+  - OS-EXT-SERV-ATTR:ramdisk_id: server_ramdisk_id
+  - OS-EXT-SERV-ATTR:root_device_name: server_root_device_name
+  - OS-EXT-SERV-ATTR:user_data: server_user_data
 
 **Example Create Server: JSON response**
 
-.. literalinclude:: ../../doc/api_samples/all_extensions/server-create-resp.json
+.. literalinclude:: ../../doc/api_samples/servers/server-create-resp.json
    :language: javascript
 
 
 List Servers Detailed
 =====================
 
-.. rest_method:: GET /v2.1/​{tenant_id}​/servers/detail
+.. rest_method:: GET /servers/detail
 
 For each server, shows server details including configuration drive,
 extended status, and server usage information.
@@ -387,7 +401,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - limit: limit
   - marker: marker
   - sort_key: sort_key
@@ -445,17 +459,24 @@ Response
   - tenant_id: tenant_id_body
   - updated: updated
   - user_id: user_id
+  - OS-EXT-SERV-ATTR:hostname: server_hostname
+  - OS-EXT-SERV-ATTR:reservation_id: server_reservation_id
+  - OS-EXT-SERV-ATTR:launch_index: server_launch_index
+  - OS-EXT-SERV-ATTR:kernel_id: server_kernel_id
+  - OS-EXT-SERV-ATTR:ramdisk_id: server_ramdisk_id
+  - OS-EXT-SERV-ATTR:root_device_name: server_root_device_name
+  - OS-EXT-SERV-ATTR:user_data: server_user_data
 
 **Example List Servers Detailed: JSON response**
 
-.. literalinclude:: /../../doc/api_samples/all_extensions/servers-details-resp.json
+.. literalinclude:: /../../doc/api_samples/servers/servers-details-resp.json
    :language: javascript
 
 
 Show Server Details
 ===================
 
-.. rest_method:: GET /v2.1/{tenant_id}/servers/{server_id}
+.. rest_method:: GET /servers/{server_id}
 
 Shows details for a server.
 
@@ -483,7 +504,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
 
 Response
@@ -525,16 +546,23 @@ Response
   - updated: updated
   - user_id: user_id
   - fault: fault
+  - OS-EXT-SERV-ATTR:hostname: server_hostname
+  - OS-EXT-SERV-ATTR:reservation_id: server_reservation_id
+  - OS-EXT-SERV-ATTR:launch_index: server_launch_index
+  - OS-EXT-SERV-ATTR:kernel_id: server_kernel_id
+  - OS-EXT-SERV-ATTR:ramdisk_id: server_ramdisk_id
+  - OS-EXT-SERV-ATTR:root_device_name: server_root_device_name
+  - OS-EXT-SERV-ATTR:user_data: server_user_data
 
 **Example Show Server Details: JSON response**
 
-.. literalinclude:: ../../doc/api_samples/all_extensions/server-get-resp.json
+.. literalinclude:: ../../doc/api_samples/servers/server-get-resp.json
    :language: javascript
 
 Update Server
 =============
 
-.. rest_method:: PUT /v2.1/{tenant_id}/servers/{server_id}
+.. rest_method:: PUT /servers/{server_id}
 
 Updates the editable attributes of an existing server.
 
@@ -548,7 +576,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
   - accessIPv4: accessIPv4_in
   - accessIPv6: accessIPv6_in
@@ -609,9 +637,16 @@ Response
   - security_group.name: name
   - status: server_status
   - host_status: host_status
-  - tenant_id: tenant_id
+  - tenant_id: tenant_id_body
   - updated: updated
   - user_id: user_id
+  - OS-EXT-SERV-ATTR:hostname: server_hostname
+  - OS-EXT-SERV-ATTR:reservation_id: server_reservation_id
+  - OS-EXT-SERV-ATTR:launch_index: server_launch_index
+  - OS-EXT-SERV-ATTR:kernel_id: server_kernel_id
+  - OS-EXT-SERV-ATTR:ramdisk_id: server_ramdisk_id
+  - OS-EXT-SERV-ATTR:root_device_name: server_root_device_name
+  - OS-EXT-SERV-ATTR:user_data: server_user_data
 
 **Example Update server name: JSON response**
 
@@ -621,7 +656,7 @@ Response
 Delete Server
 =============
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/servers/{server_id}
+.. rest_method:: DELETE /servers/{server_id}
 
 Deletes a server.
 
@@ -671,7 +706,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
 
 Response

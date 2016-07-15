@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # Copyright 2016 OpenStack Foundation
 # All Rights Reserved.
 #
@@ -15,9 +22,9 @@
 
 import itertools
 
-from nova.conf import paths
-
 from oslo_config import cfg
+
+from nova.conf import paths
 
 # Downtime period in milliseconds
 LIVE_MIGRATION_DOWNTIME_MIN = 100
@@ -63,7 +70,9 @@ libvirt_general_opts = [
                     '0 => not partitioned, >0 => partition number'),
     cfg.BoolOpt('use_usb_tablet',
                 default=True,
-                help='Sync virtual and real mouse cursors in Windows VMs'),
+                deprecated_for_removal=True,
+                help='(Deprecated, please see pointer_model) Sync virtual and '
+                     'real mouse cursors in Windows VMs'),
     cfg.StrOpt('live_migration_inbound_addr',
                help='Live migration target ip or hostname '
                     '(if this option is set to None, which is the default, '
@@ -132,6 +141,7 @@ libvirt_general_opts = [
                     LIVE_MIGRATION_DOWNTIME_DELAY_MIN),
     cfg.IntOpt('live_migration_completion_timeout',
                default=800,
+               mutable=True,
                help='Time to wait, in seconds, for migration to successfully '
                     'complete transferring data before aborting the '
                     'operation. Value is per GiB of guest RAM + disk to be '
@@ -140,9 +150,48 @@ libvirt_general_opts = [
                     'steps. Set to 0 to disable timeouts.'),
     cfg.IntOpt('live_migration_progress_timeout',
                default=150,
+               mutable=True,
                help='Time to wait, in seconds, for migration to make forward '
                     'progress in transferring data before aborting the '
                     'operation. Set to 0 to disable timeouts.'),
+    cfg.BoolOpt('live_migration_permit_post_copy',
+                default=False,
+                help="""
+This option allows nova to switch an on-going live migration to post-copy
+mode, i.e., switch the active VM to the one on the destination node before the
+migration is complete, therefore ensuring an upper bound on the memory that
+needs to be transferred. Post-copy requires libvirt>=1.3.3 and QEMU>=2.5.0.
+
+When permitted, post-copy mode will be automatically activated if a
+live-migration memory copy iteration does not make percentage increase of at
+least 10% over the last iteration.
+
+The live-migration force complete API also uses post-copy when permitted. If
+post-copy mode is not available, force complete falls back to pausing the VM
+to ensure the live-migration operation will complete.
+
+When using post-copy mode, if the source and destination hosts loose network
+connectivity, the VM being live-migrated will need to be rebooted. For more
+details, please see the Administration guide.
+
+Related options:
+
+    * live_migration_permit_auto_converge
+"""),
+    cfg.BoolOpt('live_migration_permit_auto_converge',
+                default=False,
+                help="""
+This option allows nova to start live migration with auto converge on.
+Auto converge throttles down CPU if a progress of on-going live migration
+is slow. Auto converge will only be used if this flag is set to True and
+post copy is not permitted or post copy is unavailable due to the version
+of libvirt and QEMU in use. Auto converge requires libvirt>=1.2.3 and
+QEMU>=1.6.0.
+
+Related options:
+
+    * live_migration_permit_post_copy
+"""),
     cfg.StrOpt('snapshot_image_format',
                choices=('raw', 'qcow2', 'vmdk', 'vdi'),
                help='Snapshot image format. Defaults to same as source image'),
@@ -214,7 +263,32 @@ libvirt_general_opts = [
                default=1,
                help='In a realtime host context vCPUs for guest will run in '
                     'that scheduling priority. Priority depends on the host '
-                    'kernel (usually 1-99)')
+                    'kernel (usually 1-99)'),
+    cfg.ListOpt('enabled_perf_events',
+               default=[],
+               help= """
+This is a performance event list which could be used as monitor. These events
+will be passed to libvirt domain xml while creating a new instances.
+Then event statistics data can be collected from libvirt.  The minimum
+libvirt version is 1.3.3.
+
+* Possible values:
+    A string list.
+    For example:
+    ``enabled_perf_events = cmt, mbml, mbmt``
+
+    The supported events list can be found in
+    https://libvirt.org/html/libvirt-libvirt-domain.html , which
+    you may need to search key words ``VIR_PERF_PARAM_*``
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+    None
+
+"""),
 ]
 
 libvirt_imagebackend_opts = [
@@ -404,6 +478,143 @@ libvirt_remotefs_opts = [
                     'removing files on the remote host.'),
 ]
 
+libvirt_volume_vzstorage_opts = [
+    cfg.StrOpt('vzstorage_mount_point_base',
+               default=paths.state_path_def('mnt'),
+               help="""
+Directory where the Virtuozzo Storage clusters are mounted on the compute node.
+
+This option defines non-standard mountpoint for Vzstorage cluster.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    vzstorage_mount_* group of parameters
+"""
+              ),
+    cfg.StrOpt('vzstorage_mount_user',
+               default='stack',
+               help="""
+Mount owner user name.
+
+This option defines the owner user of Vzstorage cluster mountpoint.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    vzstorage_mount_* group of parameters
+"""
+              ),
+    cfg.StrOpt('vzstorage_mount_group',
+               default='qemu',
+               help="""
+Mount owner group name.
+
+This option defines the owner group of Vzstorage cluster mountpoint.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    vzstorage_mount_* group of parameters
+"""
+              ),
+    cfg.StrOpt('vzstorage_mount_perms',
+               default='0770',
+               help="""
+Mount access mode.
+
+This option defines the access bits of Vzstorage cluster mountpoint,
+in the format similar to one of chmod(1) utility, like this: 0770.
+It consists of one to four digits ranging from 0 to 7, with missing
+lead digits assumed to be 0's.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    vzstorage_mount_* group of parameters
+"""
+              ),
+    cfg.StrOpt('vzstorage_log_path',
+               default='/var/log/pstorage/%(cluster_name)s/nova.log.gz',
+               help="""
+Path to vzstorage client log.
+
+This option defines the log of cluster operations,
+it should include "%(cluster_name)s" template to separate
+logs from multiple shares.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    vzstorage_mount_opts may include more detailed logging options.
+"""
+              ),
+    cfg.StrOpt('vzstorage_cache_path',
+               default=None,
+               help="""
+Path to the SSD cache file.
+
+You can attach an SSD drive to a client and configure the drive to store
+a local cache of frequently accessed data. By having a local cache on a
+client's SSD drive, you can increase the overall cluster performance by
+up to 10 and more times.
+WARNING! There is a lot of SSD models which are not server grade and
+may loose arbitrary set of data changes on power loss.
+Such SSDs should not be used in Vstorage and are dangerous as may lead
+to data corruptions and inconsistencies. Please consult with the manual
+on which SSD models are known to be safe or verify it using
+vstorage-hwflush-check(1) utility.
+
+This option defines the path which should include "%(cluster_name)s"
+template to separate caches from multiple shares.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    vzstorage_mount_opts may include more detailed cache options.
+"""
+              ),
+    cfg.ListOpt('vzstorage_mount_opts',
+                default=[],
+               help="""
+Extra mount options for pstorage-mount
+
+For full description of them, see
+https://static.openvz.org/vz-man/man1/pstorage-mount.1.gz.html
+Format is a python string representation of arguments list, like:
+"[\'-v\', \'-R\', \'500\']"
+Shouldn\'t include -c, -l, -C, -u, -g and -m as those have
+explicit vzstorage_* options.
+
+* Services that use this:
+
+    ``nova-compute``
+
+* Related options:
+
+    All other vzstorage_* options
+"""
+              ),
+]
+
 ALL_OPTS = list(itertools.chain(
     libvirt_general_opts,
     libvirt_imagebackend_opts,
@@ -421,7 +632,8 @@ ALL_OPTS = list(itertools.chain(
     libvirt_volume_quobyte_opts,
     libvirt_volume_scality_opts,
     libvirt_volume_smbfs_opts,
-    libvirt_remotefs_opts
+    libvirt_remotefs_opts,
+    libvirt_volume_vzstorage_opts,
 ))
 
 

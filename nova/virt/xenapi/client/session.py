@@ -27,7 +27,9 @@ from eventlet import queue
 from eventlet import timeout
 from oslo_log import log as logging
 from oslo_utils import versionutils
+from six.moves import http_client
 from six.moves import range
+from six.moves import urllib
 
 try:
     import xmlrpclib
@@ -53,6 +55,7 @@ def apply_session_helpers(session):
     session.VM = cli_objects.VM(session)
     session.SR = cli_objects.SR(session)
     session.VDI = cli_objects.VDI(session)
+    session.VIF = cli_objects.VIF(session)
     session.VBD = cli_objects.VBD(session)
     session.PBD = cli_objects.PBD(session)
     session.PIF = cli_objects.PIF(session)
@@ -69,7 +72,7 @@ class XenAPISession(object):
     # changed in development environments.
     # MAJOR VERSION: Incompatible changes with the plugins
     # MINOR VERSION: Compatible changes, new plguins, etc
-    PLUGIN_REQUIRED_VERSION = '1.3'
+    PLUGIN_REQUIRED_VERSION = '1.7'
 
     def __init__(self, url, user, pw):
         version_string = version.version_string_with_package()
@@ -81,9 +84,10 @@ class XenAPISession(object):
         self.XenAPI = XenAPI
         self._sessions = queue.Queue()
         self.is_slave = False
+        self.host_checked = False
         exception = self.XenAPI.Failure(_("Unable to log in to XenAPI "
                                           "(is the Dom0 disk full?)"))
-        url = self._create_first_session(url, user, pw, exception)
+        self.url = self._create_first_session(url, user, pw, exception)
         self._populate_session_pool(url, user, pw, exception)
         self.host_uuid = self._get_host_uuid()
         self.host_ref = self._get_host_ref()
@@ -315,3 +319,33 @@ class XenAPISession(object):
         """
 
         return self.call_xenapi('%s.get_all_records' % record_type).items()
+
+    @contextlib.contextmanager
+    def custom_task(self, label, desc=''):
+        """Return exclusive session for scope of with statement."""
+        name = 'nova-%s' % (label)
+        task_ref = self.call_xenapi("task.create", name,
+                                       desc)
+        try:
+            LOG.debug('Created task %s with ref %s' % (name, task_ref))
+            yield task_ref
+        finally:
+            self.call_xenapi("task.destroy", task_ref)
+            LOG.debug('Destroyed task ref %s' % (task_ref))
+
+    @contextlib.contextmanager
+    def http_connection(session):
+        conn = None
+
+        xs_url = urllib.parse.urlparse(session.url)
+        LOG.debug("Creating http(s) connection to %s" % session.url)
+        if xs_url.scheme == 'http':
+            conn = http_client.HTTPConnection(xs_url.netloc)
+        elif xs_url.scheme == 'https':
+            conn = http_client.HTTPSConnection(xs_url.netloc)
+
+        conn.connect()
+        try:
+            yield conn
+        finally:
+            conn.close()

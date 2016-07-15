@@ -13,6 +13,7 @@
 #    under the License.
 
 
+from oslo_db import exception as db_exc
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 from oslo_utils import uuidutils
@@ -166,9 +167,6 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
             'supported_hv_specs',
             'host',
             'pci_device_pools',
-            'local_gb',
-            'memory_mb',
-            'vcpus',
             ])
         fields = set(compute.fields) - special_cases
         for key in fields:
@@ -183,7 +181,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
             # restored for both cpu (16.0), ram (1.5) and disk (1.0)
             # allocation ratios.
             # TODO(sbauza): Remove that in the next major version bump where
-            # we break compatibilility with old Liberty computes
+            # we break compatibility with old Liberty computes
             if (key == 'cpu_allocation_ratio' or key == 'ram_allocation_ratio'
                 or key == 'disk_allocation_ratio'):
                 if value == 0.0:
@@ -205,13 +203,6 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
                         # It's not specified either on the controller
                         value = 1.0
             setattr(compute, key, value)
-
-        for key in ('vcpus', 'local_gb', 'memory_mb'):
-            inv_key = 'inv_%s' % key
-            if inv_key in db_compute and db_compute[inv_key] is not None:
-                setattr(compute, key, db_compute[inv_key])
-            else:
-                setattr(compute, key, db_compute[key])
 
         stats = db_compute['stats']
         if stats:
@@ -324,6 +315,22 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
 
         return True
 
+    def _ensure_resource_provider(self):
+        shortname = self.host.split('.')[0]
+        rp_name = 'compute-%s-%s' % (shortname, self.uuid)
+        rp = objects.ResourceProvider(
+            context=self._context, uuid=self.uuid,
+            name=rp_name)
+        try:
+            rp.create()
+        except db_exc.DBDuplicateEntry:
+            rp = objects.ResourceProvider.get_by_uuid(self._context, self.uuid)
+            if rp.name != rp_name:
+                rp.name = rp_name
+                rp.save()
+
+        return rp
+
     def create_inventory(self):
         """Create the initial inventory objects for this compute node.
 
@@ -331,8 +338,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
         is created, or after an upgrade where the required services have
         reached the required version.
         """
-        rp = objects.ResourceProvider(context=self._context, uuid=self.uuid)
-        rp.create()
+        rp = self._ensure_resource_provider()
 
         cpu = objects.Inventory(context=self._context,
                                 resource_provider=rp,
@@ -388,12 +394,6 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
         self._convert_pci_stats_to_db_format(updates)
 
         db_compute = db.compute_node_create(self._context, updates)
-        # NOTE(danms): compute_node_create() operates on (and returns) the
-        # compute node model only. We need to get the full inventory-based
-        # result in order to satisfy _from_db_object(). So, we do a double
-        # query here. This can be removed in Newton once we're sure that all
-        # compute nodes are inventory-based
-        db_compute = db.compute_node_get(self._context, db_compute['id'])
         self._from_db_object(self._context, self, db_compute)
 
     @base.remotable
@@ -408,12 +408,6 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject):
         self._convert_pci_stats_to_db_format(updates)
 
         db_compute = db.compute_node_update(self._context, self.id, updates)
-        # NOTE(danms): compute_node_update() operates on (and returns) the
-        # compute node model only. We need to get the full inventory-based
-        # result in order to satisfy _from_db_object(). So, we do a double
-        # query here. This can be removed in Newton once we're sure that all
-        # compute nodes are inventory-based
-        db_compute = db.compute_node_get(self._context, self.id)
         self._from_db_object(self._context, self, db_compute)
 
     @base.remotable
@@ -458,7 +452,8 @@ class ComputeNodeList(base.ObjectListBase, base.NovaObject):
     # Version 1.12 ComputeNode version 1.12
     # Version 1.13 ComputeNode version 1.13
     # Version 1.14 ComputeNode version 1.14
-    VERSION = '1.14'
+    # Version 1.15 Added get_by_pagination()
+    VERSION = '1.15'
     fields = {
         'objects': fields.ListOfObjectsField('ComputeNode'),
         }
@@ -466,6 +461,13 @@ class ComputeNodeList(base.ObjectListBase, base.NovaObject):
     @base.remotable_classmethod
     def get_all(cls, context):
         db_computes = db.compute_node_get_all(context)
+        return base.obj_make_list(context, cls(context), objects.ComputeNode,
+                                  db_computes)
+
+    @base.remotable_classmethod
+    def get_by_pagination(cls, context, limit=None, marker=None):
+        db_computes = db.compute_node_get_all_by_pagination(
+            context, limit=limit, marker=marker)
         return base.obj_make_list(context, cls(context), objects.ComputeNode,
                                   db_computes)
 

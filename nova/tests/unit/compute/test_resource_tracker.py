@@ -456,7 +456,7 @@ class BaseTrackerTestCase(BaseTestCase):
         return updates
 
     def _fake_rp_create(self, context, updates):
-        return dict(updates, id=1)
+        return dict(updates, id=1, name='foo', generation=1)
 
     def _fake_migration_get_in_progress_by_host_and_node(self, ctxt, host,
                                                          node):
@@ -541,227 +541,6 @@ class BaseTrackerTestCase(BaseTestCase):
             self.assertEqual(value, x)
 
 
-class InstanceClaimTestCase(BaseTrackerTestCase):
-    def _instance_topology(self, mem):
-        mem = mem * 1024
-        return objects.InstanceNUMATopology(
-            cells=[objects.InstanceNUMACell(
-                id=0, cpuset=set([1]), memory=mem),
-                   objects.InstanceNUMACell(
-                       id=1, cpuset=set([3]), memory=mem)])
-
-    def _claim_topology(self, mem, cpus=1):
-        if self.tracker.driver.numa_topology is None:
-            return None
-        mem = mem * 1024
-        return objects.NUMATopology(
-            cells=[objects.NUMACell(
-                       id=0, cpuset=set([1, 2]), memory=3072, cpu_usage=cpus,
-                       memory_usage=mem, mempages=[], siblings=[],
-                       pinned_cpus=set([])),
-                   objects.NUMACell(
-                       id=1, cpuset=set([3, 4]), memory=3072, cpu_usage=cpus,
-                       memory_usage=mem, mempages=[], siblings=[],
-                       pinned_cpus=set([]))])
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    def test_instance_claim_with_oversubscription(self, mock_get):
-        memory_mb = FAKE_VIRT_MEMORY_MB * 2
-        root_gb = ephemeral_gb = FAKE_VIRT_LOCAL_GB
-        vcpus = FAKE_VIRT_VCPUS * 2
-        claim_topology = self._claim_topology(3)
-        instance_topology = self._instance_topology(3)
-
-        limits = {'memory_mb': memory_mb + FAKE_VIRT_MEMORY_OVERHEAD,
-                  'disk_gb': root_gb * 2,
-                  'vcpu': vcpus,
-                  'numa_topology': FAKE_VIRT_NUMA_TOPOLOGY_OVERHEAD}
-
-        instance = self._fake_instance_obj(memory_mb=memory_mb,
-                root_gb=root_gb, ephemeral_gb=ephemeral_gb,
-                numa_topology=instance_topology)
-
-        with mock.patch.object(instance, 'save'):
-            self.tracker.instance_claim(self.context, instance, limits)
-        self.assertEqual(memory_mb + FAKE_VIRT_MEMORY_OVERHEAD,
-                self.tracker.compute_node.memory_mb_used)
-        self.assertEqualNUMAHostTopology(
-                claim_topology,
-                objects.NUMATopology.obj_from_db_obj(
-                    self.compute['numa_topology']))
-        self.assertEqual(root_gb * 2,
-                self.tracker.compute_node.local_gb_used)
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    @mock.patch('nova.objects.Instance.save')
-    def test_additive_claims(self, mock_save, mock_get):
-        self.limits['vcpu'] = 2
-        claim_topology = self._claim_topology(2, cpus=2)
-
-        flavor = self._fake_flavor_create(
-                memory_mb=1, root_gb=1, ephemeral_gb=0)
-        instance_topology = self._instance_topology(1)
-        instance = self._fake_instance_obj(
-                flavor=flavor, numa_topology=instance_topology)
-        with self.tracker.instance_claim(self.context, instance, self.limits):
-            pass
-        instance = self._fake_instance_obj(
-                flavor=flavor, numa_topology=instance_topology)
-        with self.tracker.instance_claim(self.context, instance, self.limits):
-            pass
-
-        self.assertEqual(2 * (flavor['memory_mb'] + FAKE_VIRT_MEMORY_OVERHEAD),
-                self.tracker.compute_node.memory_mb_used)
-        self.assertEqual(2 * (flavor['root_gb'] + flavor['ephemeral_gb']),
-                self.tracker.compute_node.local_gb_used)
-        self.assertEqual(2 * flavor['vcpus'],
-                self.tracker.compute_node.vcpus_used)
-
-        self.assertEqualNUMAHostTopology(
-                claim_topology,
-                objects.NUMATopology.obj_from_db_obj(
-                    self.compute['numa_topology']))
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    @mock.patch('nova.objects.Instance.save')
-    def test_context_claim_with_exception(self, mock_save, mock_get):
-        instance = self._fake_instance_obj(memory_mb=1, root_gb=1,
-                                           ephemeral_gb=1)
-        try:
-            with self.tracker.instance_claim(self.context, instance):
-                # <insert exciting things that utilize resources>
-                raise test.TestingException()
-        except test.TestingException:
-            pass
-
-        self.assertEqual(0, self.tracker.compute_node.memory_mb_used)
-        self.assertEqual(0, self.tracker.compute_node.local_gb_used)
-        self.assertEqual(0, self.compute['memory_mb_used'])
-        self.assertEqual(0, self.compute['local_gb_used'])
-        self.assertEqualNUMAHostTopology(
-                FAKE_VIRT_NUMA_TOPOLOGY,
-                objects.NUMATopology.obj_from_db_obj(
-                    self.compute['numa_topology']))
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    def test_update_load_stats_for_instance(self, mock_get):
-        instance = self._fake_instance_obj(task_state=task_states.SCHEDULING)
-        with mock.patch.object(instance, 'save'):
-            with self.tracker.instance_claim(self.context, instance):
-                pass
-
-        self.assertEqual(1, self.tracker.compute_node.current_workload)
-
-        instance['vm_state'] = vm_states.ACTIVE
-        instance['task_state'] = None
-        instance['host'] = 'fakehost'
-
-        self.tracker.update_usage(self.context, instance)
-        self.assertEqual(0, self.tracker.compute_node.current_workload)
-
-    @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid',
-                return_value=objects.InstancePCIRequests(requests=[]))
-    @mock.patch('nova.objects.Instance.save')
-    def test_cpu_stats(self, mock_save, mock_get):
-        limits = {'disk_gb': 100, 'memory_mb': 100}
-        self.assertEqual(0, self.tracker.compute_node.vcpus_used)
-
-        vcpus = 1
-        instance = self._fake_instance_obj(vcpus=vcpus)
-
-        # should not do anything until a claim is made:
-        self.tracker.update_usage(self.context, instance)
-        self.assertEqual(0, self.tracker.compute_node.vcpus_used)
-
-        with self.tracker.instance_claim(self.context, instance, limits):
-            pass
-        self.assertEqual(vcpus, self.tracker.compute_node.vcpus_used)
-
-        # instance state can change without modifying vcpus in use:
-        instance['task_state'] = task_states.SCHEDULING
-        self.tracker.update_usage(self.context, instance)
-        self.assertEqual(vcpus, self.tracker.compute_node.vcpus_used)
-
-        add_vcpus = 10
-        vcpus += add_vcpus
-        instance = self._fake_instance_obj(vcpus=add_vcpus)
-        with self.tracker.instance_claim(self.context, instance, limits):
-            pass
-        self.assertEqual(vcpus, self.tracker.compute_node.vcpus_used)
-
-        instance['vm_state'] = vm_states.DELETED
-        self.tracker.update_usage(self.context, instance)
-        vcpus -= add_vcpus
-        self.assertEqual(vcpus, self.tracker.compute_node.vcpus_used)
-
-    def test_skip_deleted_instances(self):
-        # ensure that the audit process skips instances that have vm_state
-        # DELETED, but the DB record is not yet deleted.
-        self._fake_instance_obj(vm_state=vm_states.DELETED, host=self.host)
-        self.tracker.update_available_resource(self.context)
-
-        self.assertEqual(0, self.tracker.compute_node.memory_mb_used)
-        self.assertEqual(0, self.tracker.compute_node.local_gb_used)
-
-    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
-    def test_deleted_instances_with_migrations(self, mock_migration_list):
-        migration = objects.Migration(context=self.context,
-                                      migration_type='resize',
-                                      instance_uuid='invalid')
-        mock_migration_list.return_value = [migration]
-        self.tracker.update_available_resource(self.context)
-        self.assertEqual(0, self.tracker.compute_node.memory_mb_used)
-        self.assertEqual(0, self.tracker.compute_node.local_gb_used)
-        mock_migration_list.assert_called_once_with(self.context,
-                                                    "fakehost",
-                                                    "fakenode")
-
-    @mock.patch('nova.objects.MigrationList.get_in_progress_by_host_and_node')
-    @mock.patch('nova.objects.InstanceList.get_by_host_and_node')
-    def test_instances_with_live_migrations(self, mock_instance_list,
-                                            mock_migration_list):
-        instance = self._fake_instance_obj()
-        migration = objects.Migration(context=self.context,
-                                      migration_type='live-migration',
-                                      instance_uuid=instance.uuid)
-        mock_migration_list.return_value = [migration]
-        mock_instance_list.return_value = [instance]
-        with mock.patch.object(self.tracker, '_pair_instances_to_migrations'
-                           ) as mock_pair:
-            self.tracker.update_available_resource(self.context)
-            self.assertTrue(mock_pair.called)
-            self.assertEqual(
-                instance.uuid,
-                mock_pair.call_args_list[0][0][0][0].instance_uuid)
-            self.assertEqual(instance.uuid,
-                             mock_pair.call_args_list[0][0][1][0].uuid)
-            self.assertEqual(
-                ['system_metadata', 'numa_topology', 'flavor',
-                 'migration_context'],
-                mock_instance_list.call_args_list[0][1]['expected_attrs'])
-        self.assertEqual(FAKE_VIRT_MEMORY_MB + FAKE_VIRT_MEMORY_OVERHEAD,
-                         self.tracker.compute_node.memory_mb_used)
-        self.assertEqual(ROOT_GB + EPHEMERAL_GB,
-                         self.tracker.compute_node.local_gb_used)
-        mock_migration_list.assert_called_once_with(self.context,
-                                                    "fakehost",
-                                                    "fakenode")
-
-    def test_pair_instances_to_migrations(self):
-        migrations = [objects.Migration(instance_uuid=uuidsentinel.instance1),
-                      objects.Migration(instance_uuid=uuidsentinel.instance2)]
-        instances = [objects.Instance(uuid=uuidsentinel.instance2),
-                     objects.Instance(uuid=uuidsentinel.instance1)]
-        self.tracker._pair_instances_to_migrations(migrations, instances)
-        order = [uuidsentinel.instance1, uuidsentinel.instance2]
-        for i, migration in enumerate(migrations):
-            self.assertEqual(order[i], migration.instance.uuid)
-
-
 class _MoveClaimTestCase(BaseTrackerTestCase):
 
     def setUp(self):
@@ -839,31 +618,6 @@ class ResizeClaimTestCase(_MoveClaimTestCase):
                       "migration record.")
 
 
-class OrphanTestCase(BaseTrackerTestCase):
-    def _driver(self):
-        class OrphanVirtDriver(FakeVirtDriver):
-            def get_per_instance_usage(self):
-                return {
-                    '1-2-3-4-5': {'memory_mb': FAKE_VIRT_MEMORY_MB,
-                                  'uuid': '1-2-3-4-5'},
-                    '2-3-4-5-6': {'memory_mb': FAKE_VIRT_MEMORY_MB,
-                                  'uuid': '2-3-4-5-6'},
-                }
-
-        return OrphanVirtDriver()
-
-    def test_usage(self):
-        self.assertEqual(2 * FAKE_VIRT_MEMORY_WITH_OVERHEAD,
-                self.tracker.compute_node.memory_mb_used)
-
-    def test_find(self):
-        # create one legit instance and verify the 2 orphans remain
-        self._fake_instance_obj()
-        orphans = self.tracker._find_orphaned_instances()
-
-        self.assertEqual(2, len(orphans))
-
-
 class ComputeMonitorTestCase(BaseTestCase):
     def setUp(self):
         super(ComputeMonitorTestCase, self).setUp()
@@ -884,7 +638,7 @@ class ComputeMonitorTestCase(BaseTestCase):
     @mock.patch.object(resource_tracker.LOG, 'warning')
     def test_get_host_metrics_exception(self, mock_LOG_warning):
         monitor = mock.MagicMock()
-        monitor.add_metrics_to_list.side_effect = Exception
+        monitor.populate_metrics.side_effect = Exception
         self.tracker.monitors = [monitor]
         metrics = self.tracker._get_host_metrics(self.context,
                                                  self.node_name)
@@ -904,8 +658,13 @@ class ComputeMonitorTestCase(BaseTestCase):
             def get_metric_names(self):
                 return set(["cpu.frequency"])
 
-            def get_metrics(self):
-                return [("cpu.frequency", 100, self.NOW_TS)]
+            def populate_metrics(self, monitor_list):
+                metric_object = objects.MonitorMetric()
+                metric_object.name = 'cpu.frequency'
+                metric_object.value = 100
+                metric_object.timestamp = self.NOW_TS
+                metric_object.source = self.source
+                monitor_list.objects.append(metric_object)
 
         self.tracker.monitors = [FakeCPUMonitor(None)]
         mock_notifier = mock.Mock()
@@ -939,35 +698,49 @@ class ComputeMonitorTestCase(BaseTestCase):
         self.assertEqual(metrics, expected_metrics)
 
 
-class TrackerPeriodicTestCase(BaseTrackerTestCase):
+class UpdateUsageFromInstanceTestCase(BaseTrackerTestCase):
 
-    def test_periodic_status_update(self):
-        # verify update called on instantiation
-        self.assertEqual(1, self.update_call_count)
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage')
+    def test_building(self, mock_update_usage):
+        instance = self._fake_instance_obj()
+        instance.vm_state = vm_states.BUILDING
+        self.tracker._update_usage_from_instance(self.context, instance)
 
-        # verify update not called if no change to resources
-        self.tracker.update_available_resource(self.context)
-        self.assertEqual(1, self.update_call_count)
+        mock_update_usage.assert_called_once_with(instance, sign=1)
 
-        # verify update is called when resources change
-        driver = self.tracker.driver
-        driver.memory_mb += 1
-        self.tracker.update_available_resource(self.context)
-        self.assertEqual(2, self.update_call_count)
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage')
+    def test_shelve_offloading(self, mock_update_usage):
+        instance = self._fake_instance_obj()
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        self.tracker.tracked_instances = {}
+        self.tracker.tracked_instances[
+            instance.uuid] = obj_base.obj_to_primitive(instance)
+        self.tracker._update_usage_from_instance(self.context, instance)
 
-    def test_update_available_resource_calls_locked_inner(self):
-        @mock.patch.object(self.tracker, 'driver')
-        @mock.patch.object(self.tracker,
-                           '_update_available_resource')
-        @mock.patch.object(self.tracker, '_verify_resources')
-        @mock.patch.object(self.tracker, '_report_hypervisor_resource_view')
-        def _test(mock_rhrv, mock_vr, mock_uar, mock_driver):
-            resources = self._create_compute_node()
-            mock_driver.get_available_resource.return_value = resources
-            self.tracker.update_available_resource(self.context)
-            mock_uar.assert_called_once_with(self.context, resources)
+        mock_update_usage.assert_called_once_with(instance, sign=-1)
 
-        _test()
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage')
+    def test_unshelving(self, mock_update_usage):
+        instance = self._fake_instance_obj()
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        self.tracker._update_usage_from_instance(self.context, instance)
+
+        mock_update_usage.assert_called_once_with(instance, sign=1)
+
+    @mock.patch.object(resource_tracker.ResourceTracker,
+                       '_update_usage')
+    def test_deleted(self, mock_update_usage):
+        instance = self._fake_instance_obj()
+        instance.vm_state = vm_states.DELETED
+        self.tracker.tracked_instances = {}
+        self.tracker.tracked_instances[
+            instance.uuid] = obj_base.obj_to_primitive(instance)
+        self.tracker._update_usage_from_instance(self.context, instance, True)
+
+        mock_update_usage.assert_called_once_with(instance, sign=-1)
 
 
 class UpdateUsageFromMigrationsTestCase(BaseTrackerTestCase):

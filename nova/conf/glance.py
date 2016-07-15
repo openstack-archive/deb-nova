@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -41,6 +48,30 @@ should be fully qualified urls of the form
                 help='A list of url scheme that can be downloaded directly '
                      'via the direct_url.  Currently supported schemes: '
                      '[file].'),
+    cfg.BoolOpt('use_glance_v1',
+                default=False,
+                help="""
+This flag allows reverting to glance v1 if for some reason glance v2 doesn't
+work in your environment. This will only exist in Newton, and a fully working
+Glance v2 will be a hard requirement in Ocata.
+
+* Possible values:
+
+    True or False
+
+* Services that use this:
+
+    ``nova-api``
+    ``nova-compute``
+    ``nova-conductor``
+
+* Related options:
+
+    None
+""",
+                deprecated_for_removal=True,
+                deprecated_reason='Glance v1 support will be removed in '
+                                  'Ocata'),
     cfg.BoolOpt('verify_glance_signatures',
                 default=False,
                 help='Require Nova to perform signature verification on '

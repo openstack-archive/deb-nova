@@ -1,3 +1,10 @@
+# needs:fix_opt_description
+# needs:check_deprecation_status
+# needs:check_opt_group_and_type
+# needs:fix_opt_description_indentation
+# needs:fix_opt_registration_consistency
+
+
 # Copyright 2010 United States Government as represented by the
 # Administrator of the National Aeronautics and Space Administration.
 # All Rights Reserved.
@@ -81,7 +88,8 @@ quota_opts = [
                     'passed since the last reservation'),
     cfg.StrOpt('quota_driver',
                default='nova.quota.DbQuotaDriver',
-               help='Default driver to use for quota checks'),
+               deprecated_for_removal=True,
+               help='DEPRECATED: Default driver to use for quota checks'),
     ]
 
 

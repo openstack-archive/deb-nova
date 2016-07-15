@@ -1,18 +1,17 @@
 .. -*- rst -*-
-.. needs:body_verification
 
 =========================================
  Port interfaces (servers, os-interface)
 =========================================
 
-Creates a port interface and uses it to attach a port to a server and
-detaches a port interface from a server. Also, lists all port interfaces
-and shows details for a port interface.
+List port interfaces, show port interface details of the given server.
+Create a port interface and uses it to attach a port to the given server,
+detach a port interface from the given server.
 
 List Port Interfaces
 ====================
 
-.. rest_method:: GET /v2.1/{tenant_id}/servers/{server_id}/os-interface
+.. rest_method:: GET /servers/{server_id}/os-interface
 
 Lists port interfaces that are attached to a server.
 
@@ -26,7 +25,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
 
 Response
@@ -51,9 +50,9 @@ Response
 Create Interface
 ================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/os-interface
+.. rest_method:: POST /servers/{server_id}/os-interface
 
-Creates a port interface and uses it to attach a port to a server instance.
+Creates a port interface and uses it to attach a port to a server.
 
 Normal response codes: 200
 
@@ -65,7 +64,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
   - interfaceAttachment: interfaceAttachment
   - port_id: port_id
@@ -75,12 +74,12 @@ Request
 
 **Example Create Interface: JSON request**
 
-Create Interface with ``net_id`` and ``fixed_ips``.
+Create interface with ``net_id`` and ``fixed_ips``.
 
 .. literalinclude:: ../../doc/api_samples/os-attach-interfaces/attach-interfaces-create-net_id-req.json
    :language: javascript
 
-Create Interface with ``port_id``.
+Create interface with ``port_id``.
 
 .. literalinclude:: ../../doc/api_samples/os-attach-interfaces/attach-interfaces-create-req.json
    :language: javascript
@@ -107,7 +106,7 @@ Response
 Show Port Interface Details
 ===========================
 
-.. rest_method:: GET /v2.1/{tenant_id}/servers/{server_id}/os-interface/{port_id}
+.. rest_method:: GET /servers/{server_id}/os-interface/{port_id}
 
 Shows details for a port interface that is attached to a server.
 
@@ -120,7 +119,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
   - port_id: port_id_path
 
@@ -146,9 +145,9 @@ Response
 Detach Interface
 ================
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/servers/{server_id}/os-interface/{port_id}
+.. rest_method:: DELETE /servers/{server_id}/os-interface/{port_id}
 
-Detaches a port interface.
+Detaches a port interface from a server.
 
 Normal response codes: 202
 
@@ -160,7 +159,7 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id_path
   - port_id: port_id_path
 

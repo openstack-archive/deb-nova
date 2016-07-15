@@ -35,7 +35,6 @@ from nova.api.openstack import wsgi as os_wsgi
 from nova.compute import api as compute_api
 from nova.compute import flavors
 from nova.compute import vm_states
-import nova.conf
 from nova import context
 from nova.db.sqlalchemy import models
 from nova import exception as exc
@@ -65,7 +64,7 @@ def fake_wsgi(self, req):
 
 def wsgi_app_v21(fake_auth_context=None, init_only=None, v2_compatible=False):
 
-    inner_app_v21 = compute.APIRouterV21(init_only)
+    inner_app_v21 = compute.APIRouterV21()
 
     if v2_compatible:
         inner_app_v21 = openstack_api.LegacyV2CompatibleWrapper(inner_app_v21)
@@ -83,7 +82,7 @@ def wsgi_app_v21(fake_auth_context=None, init_only=None, v2_compatible=False):
     return mapper
 
 
-def stub_out_key_pair_funcs(stubs, have_key_pair=True, **kwargs):
+def stub_out_key_pair_funcs(testcase, have_key_pair=True, **kwargs):
     def key_pair(context, user_id):
         return [dict(test_keypair.fake_keypair,
                      name='key', public_key='public_key', **kwargs)]
@@ -99,10 +98,10 @@ def stub_out_key_pair_funcs(stubs, have_key_pair=True, **kwargs):
         return []
 
     if have_key_pair:
-        stubs.Set(nova.db, 'key_pair_get_all_by_user', key_pair)
-        stubs.Set(nova.db, 'key_pair_get', one_key_pair)
+        testcase.stub_out('nova.db.key_pair_get_all_by_user', key_pair)
+        testcase.stub_out('nova.db.key_pair_get', one_key_pair)
     else:
-        stubs.Set(nova.db, 'key_pair_get_all_by_user', no_key_pair)
+        testcase.stub_out('nova.db.key_pair_get_all_by_user', no_key_pair)
 
 
 def stub_out_instance_quota(test, allowed, quota, resource='instances'):
@@ -166,7 +165,7 @@ def stub_out_nw_api(test, cls=None, private=None, publics=None):
         publics = ['1.2.3.4']
 
     class Fake(object):
-        def __init__(self, skip_policy_check=False):
+        def __init__(self):
             pass
 
         def get_instance_nw_info(*args, **kwargs):
@@ -323,13 +322,14 @@ def get_fake_uuid(token=0):
 
 def fake_instance_get(**kwargs):
     def _return_server(context, uuid, columns_to_join=None, use_slave=False):
+        if 'project_id' not in kwargs:
+            kwargs['project_id'] = 'fake'
         return stub_instance(1, **kwargs)
     return _return_server
 
 
 def fake_compute_get(**kwargs):
-    def _return_server_obj(context, uuid, want_objects=False,
-                           expected_attrs=None):
+    def _return_server_obj(context, uuid, expected_attrs=None):
         return stub_instance_obj(context, **kwargs)
     return _return_server_obj
 
@@ -379,8 +379,7 @@ def fake_instance_get_all_by_filters(num_servers=5, **kwargs):
 
 def fake_compute_get_all(num_servers=5, **kwargs):
     def _return_servers_objs(context, search_opts=None, limit=None,
-                             marker=None, want_objects=False,
-                             expected_attrs=None, sort_keys=None,
+                             marker=None, expected_attrs=None, sort_keys=None,
                              sort_dirs=None):
         db_insts = fake_instance_get_all_by_filters()(None,
                                                       limit=limit,
@@ -471,7 +470,7 @@ def stub_instance(id=1, user_id=None, project_id=None, host=None,
         "key_name": key_name,
         "key_data": key_data,
         "config_drive": config_drive,
-        "vm_state": vm_state or vm_states.BUILDING,
+        "vm_state": vm_state or vm_states.ACTIVE,
         "task_state": task_state,
         "power_state": power_state,
         "memory_mb": memory_mb,
@@ -632,7 +631,8 @@ def stub_snapshot_create(self, context, volume_id, name, description):
 
 
 def stub_compute_volume_snapshot_create(self, context, volume_id, create_info):
-    return {'snapshot': {'id': 100, 'volumeId': volume_id}}
+    return {'snapshot': {'id': "421752a6-acf6-4b2d-bc7a-119f9148cd8c",
+                         'volumeId': volume_id}}
 
 
 def stub_snapshot_delete(self, context, snapshot_id):

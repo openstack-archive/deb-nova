@@ -6,7 +6,7 @@
 Get Rdp Console (os-getRDPConsole Action)
 =========================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Gets an `RDP <https://technet.microsoft.com/en-us/windowsserver/ee236407>`__ console for a server.
 
@@ -22,9 +22,10 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - os-getRDPConsole: os-getRDPConsole
+  - type: os-getRDPConsole-type
 
 **Example Get Rdp Console (os-getRDPConsole Action): JSON request**
 
@@ -42,7 +43,7 @@ Response
 Get Serial Console (os-getSerialConsole Action)
 ===============================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Gets a serial console for a server.
 
@@ -58,9 +59,10 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - os-getSerialConsole: os-getSerialConsole
+  - type: os-getSerialConsole-type
 
 **Example Get Serial Console (os-getSerialConsole Action): JSON request**
 
@@ -78,7 +80,7 @@ Response
 Get Spice Console (os-getSPICEConsole Action)
 =============================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Gets a SPICE console for a server.
 
@@ -94,9 +96,10 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - os-getSPICEConsole: os-getSPICEConsole
+  - type: os-getSPICEConsole-type
 
 **Example Get Spice Console (os-getSPICEConsole Action): JSON request**
 
@@ -114,7 +117,7 @@ Response
 Get Vnc Console (os-getVNCConsole Action)
 =========================================
 
-.. rest_method:: POST /v2.1/{tenant_id}/servers/{server_id}/action
+.. rest_method:: POST /servers/{server_id}/action
 
 Gets a VNC console for a server.
 
@@ -130,9 +133,10 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
+
   - server_id: server_id
   - os-getVNCConsole: os-getVNCConsole
+  - type: os-getVNCConsole-type
 
 **Example Get Vnc Console (os-getVNCConsole Action): JSON request**
 
@@ -146,4 +150,3 @@ Response
 
 .. literalinclude:: ../../doc/api_samples/os-remote-consoles/get-vnc-console-post-resp.json
    :language: javascript
-

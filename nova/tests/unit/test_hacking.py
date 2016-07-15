@@ -531,10 +531,6 @@ class HackingTestCase(test.NoDBTestCase):
         self._assert_has_errors(code, checks.check_http_not_implemented,
                                 expected_errors=errors, filename=filename)
 
-        filename = "nova/api/openstack/compute/legacy_v2/test.py"
-        self._assert_has_no_errors(code, checks.check_http_not_implemented,
-                                   filename=filename)
-
     def test_check_contextlib_use(self):
         code = """
                with test.nested(
@@ -618,7 +614,7 @@ class HackingTestCase(test.NoDBTestCase):
                                    checks.check_config_option_in_central_place,
                                    filename="nova/conf/serial_console.py")
         # option at a location which is not in scope right now
-        # TODO(markus_z): This is remporary until all config options are
+        # TODO(markus_z): This is temporary until all config options are
         # moved to /nova/conf
         self._assert_has_no_errors(code,
                                    checks.check_config_option_in_central_place,
@@ -704,10 +700,10 @@ class HackingTestCase(test.NoDBTestCase):
         """
         self._assert_has_no_errors(code6, checks.cfg_help_with_enough_text)
 
-        # The help text uses a paranthesis (weird, but produces a valid string)
+        # The help text uses a parenthesis (weird, but produces a valid string)
         code7 = """
         opt = cfg.StrOpt("opt7",
-                         help=("help text uses extra paranthesis"))
+                         help=("help text uses extra parenthesis"))
         """
         self._assert_has_no_errors(code7, checks.cfg_help_with_enough_text)
 
@@ -777,3 +773,39 @@ class HackingTestCase(test.NoDBTestCase):
                    self.assertRaises(FakeExcepion, _test)
                """
         self._assert_has_no_errors(code, checker)
+
+    def test_check_policy_registration_in_central_place(self):
+        errors = [(3, 0, "N350")]
+        code = """
+        from nova import policy
+
+        policy.RuleDefault('context_is_admin', 'role:admin')
+        """
+        # registration in the proper place
+        self._assert_has_no_errors(
+            code, checks.check_policy_registration_in_central_place,
+            filename="nova/policies/base.py")
+        # option at a location which is not in scope right now
+        self._assert_has_errors(
+            code, checks.check_policy_registration_in_central_place,
+            filename="nova/api/openstack/compute/non_existent.py",
+            expected_errors=errors)
+
+    def test_check_policy_enforce(self):
+        errors = [(3, 0, "N351")]
+        code = """
+        from nova import policy
+
+        policy._ENFORCER.enforce('context_is_admin', target, credentials)
+        """
+        self._assert_has_errors(code, checks.check_policy_enforce,
+                                expected_errors=errors)
+
+    def test_check_policy_enforce_does_not_catch_other_enforce(self):
+        # Simulate a different enforce method defined in Nova
+        code = """
+        from nova import foo
+
+        foo.enforce()
+        """
+        self._assert_has_no_errors(code, checks.check_policy_enforce)

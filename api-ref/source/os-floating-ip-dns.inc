@@ -3,9 +3,17 @@
 .. needs:example_verification
 .. needs:body_verification
 
-==============================================
- Floating IP DNS records (os-floating-ip-dns)
-==============================================
+==========================================================
+ Floating IP DNS records (os-floating-ip-dns) (DEPRECATED)
+==========================================================
+
+.. warning::
+
+   These APIs are proxy calls to the Network service. Nova has
+   deprecated all the proxy APIs and users should use the native APIs
+   instead.
+   See: `Relevant Network APIs
+   <http://developer.openstack.org/api-ref-networking-v2-ext.html>`__.
 
 Manages DNS records associated with floating IP addresses. The API
 dispatches requests to a DNS driver that is selected at startup.
@@ -13,20 +21,13 @@ dispatches requests to a DNS driver that is selected at startup.
 List Dns Domains
 ================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ip-dns
+.. rest_method:: GET /os-floating-ip-dns
 
 Lists registered DNS domains published by the DNS drivers.
 
 Normal response codes: 200
 
 Error response codes: unauthorized(401), forbidden(403), notImplemented(501)
-
-Request
--------
-
-.. rest_parameters:: parameters.yaml
-
-  - tenant_id: tenant_id
 
 Response
 --------
@@ -39,7 +40,7 @@ Response
 Create Or Update Dns Domain
 ===========================
 
-.. rest_method:: PUT /v2.1/{tenant_id}/os-floating-ip-dns/{domain}
+.. rest_method:: PUT /os-floating-ip-dns/{domain}
 
 Creates or updates a DNS domain.
 
@@ -53,7 +54,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - domain: domain
 
 **Example Create Or Update Dns Domain: JSON request**
@@ -72,7 +72,7 @@ Response
 Delete Dns Domain
 =================
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-floating-ip-dns/{domain}
+.. rest_method:: DELETE /os-floating-ip-dns/{domain}
 
 Deletes a DNS domain and all associated host entries.
 
@@ -86,7 +86,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - domain: domain
 
 Response
@@ -95,7 +94,7 @@ Response
 List Dns Entries
 ================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ip-dns/{domain}/entries/{ip}
+.. rest_method:: GET /os-floating-ip-dns/{domain}/entries/{ip}
 
 Lists DNS entries for a domain and IP.
 
@@ -109,7 +108,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - domain: domain
   - ip: ip
 
@@ -124,7 +122,7 @@ Response
 Find Unique Dns Entry
 =====================
 
-.. rest_method:: GET /v2.1/{tenant_id}/os-floating-ip-dns/{domain}/entries/{name}
+.. rest_method:: GET /os-floating-ip-dns/{domain}/entries/{name}
 
 Finds a unique DNS entry for a domain and name.
 
@@ -138,7 +136,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - domain: domain
   - name: name
 
@@ -153,7 +150,7 @@ Response
 Create Or Update Dns Entry
 ==========================
 
-.. rest_method:: PUT /v2.1/{tenant_id}/os-floating-ip-dns/{domain}/entries/{name}
+.. rest_method:: PUT /os-floating-ip-dns/{domain}/entries/{name}
 
 Creates or updates a DNS entry.
 
@@ -166,7 +163,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - domain: domain
   - name: name
 
@@ -186,7 +182,7 @@ Response
 Delete Dns Entry
 ================
 
-.. rest_method:: DELETE /v2.1/{tenant_id}/os-floating-ip-dns/{domain}/entries/{name}
+.. rest_method:: DELETE /os-floating-ip-dns/{domain}/entries/{name}
 
 Deletes a DNS entry.
 
@@ -200,7 +196,6 @@ Request
 
 .. rest_parameters:: parameters.yaml
 
-  - tenant_id: tenant_id
   - domain: domain
   - name: name
 

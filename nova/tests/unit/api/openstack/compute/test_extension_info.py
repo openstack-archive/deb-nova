@@ -14,6 +14,7 @@
 
 import copy
 
+import mock
 import webob
 
 from nova.api.openstack.compute import extension_info
@@ -24,6 +25,10 @@ from nova.tests.unit.api.openstack import fakes
 
 
 FAKE_UPDATED_DATE = extension_info.FAKE_UPDATED_DATE
+
+# NOTE(sdague): this whole test module is short term while we shift
+# the extensions into main path code. Some short cuts are taken in the
+# interim to keep these extension tests.
 
 
 class fake_extension(object):
@@ -53,15 +58,8 @@ simulated_extension_list = {
 }
 
 
-def fake_policy_enforce(context, action, target, do_raise=True):
-    return True
-
-
-def fake_policy_enforce_selective(context, action, target, do_raise=True):
-    if action == 'os_compute_api:ext1-alias:discoverable':
-        raise exception.Forbidden
-    else:
-        return True
+def fake_policy_authorize_selective(context, action, target):
+    return action != 'os_compute_api:ext1-alias:discoverable'
 
 
 class ExtensionInfoTest(test.NoDBTestCase):
@@ -72,12 +70,19 @@ class ExtensionInfoTest(test.NoDBTestCase):
         ext_info.extensions = fake_extensions
         self.controller = extension_info.ExtensionInfoController(ext_info)
 
+    @mock.patch.object(policy, 'authorize', mock.Mock(return_value=True))
     def test_extension_info_list(self):
-        self.stubs.Set(policy, 'enforce', fake_policy_enforce)
         req = fakes.HTTPRequestV21.blank('/extensions')
         res_dict = self.controller.index(req)
-        self.assertEqual(3, len(res_dict['extensions']))
-        for e in res_dict['extensions']:
+        # NOTE(sdague): because of hardcoded extensions the count is
+        # going to grow, and that's fine. We'll just check that it's
+        # greater than the 3 that we inserted.
+        self.assertGreaterEqual(len(res_dict['extensions']), 3)
+
+        # NOTE(sdague): filter the extension list by only ones that
+        # are the fake alias names, otherwise we get errors as we
+        # migrate extensions into the hardcoded list.
+        for e in [x for x in res_dict['extensions'] if '-alias' in x['alias']]:
             self.assertIn(e['alias'], fake_extensions)
             self.assertEqual(e['name'], fake_extensions[e['alias']].name)
             self.assertEqual(e['alias'], fake_extensions[e['alias']].alias)
@@ -87,8 +92,8 @@ class ExtensionInfoTest(test.NoDBTestCase):
             self.assertEqual(e['links'], [])
             self.assertEqual(6, len(e))
 
+    @mock.patch.object(policy, 'authorize', mock.Mock(return_value=True))
     def test_extension_info_show(self):
-        self.stubs.Set(policy, 'enforce', fake_policy_enforce)
         req = fakes.HTTPRequestV21.blank('/extensions/ext1-alias')
         res_dict = self.controller.show(req, 'ext1-alias')
         self.assertEqual(1, len(res_dict))
@@ -102,12 +107,20 @@ class ExtensionInfoTest(test.NoDBTestCase):
         self.assertEqual(res_dict['extension']['links'], [])
         self.assertEqual(6, len(res_dict['extension']))
 
-    def test_extension_info_list_not_all_discoverable(self):
-        self.stubs.Set(policy, 'enforce', fake_policy_enforce_selective)
+    @mock.patch.object(policy, 'authorize')
+    def test_extension_info_list_not_all_discoverable(self, mock_authorize):
+        mock_authorize.side_effect = fake_policy_authorize_selective
         req = fakes.HTTPRequestV21.blank('/extensions')
         res_dict = self.controller.index(req)
-        self.assertEqual(2, len(res_dict['extensions']))
-        for e in res_dict['extensions']:
+        # NOTE(sdague): because of hardcoded extensions the count is
+        # going to grow, and that's fine. We'll just check that it's
+        # greater than the 2 that we inserted.
+        self.assertGreaterEqual(len(res_dict['extensions']), 2)
+
+        # NOTE(sdague): filter the extension list by only ones that
+        # are the fake alias names, otherwise we get errors as we
+        # migrate extensions into the hardcoded list.
+        for e in [x for x in res_dict['extensions'] if '-alias' in x['alias']]:
             self.assertNotEqual('ext1-alias', e['alias'])
             self.assertIn(e['alias'], fake_extensions)
             self.assertEqual(e['name'], fake_extensions[e['alias']].name)
@@ -126,12 +139,17 @@ class ExtensionInfoV21Test(test.NoDBTestCase):
         ext_info = extension_info.LoadedExtensionInfo()
         ext_info.extensions = simulated_extension_list
         self.controller = extension_info.ExtensionInfoController(ext_info)
-        self.stubs.Set(policy, 'enforce', fake_policy_enforce)
+        patcher = mock.patch.object(policy, 'authorize', return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_extension_info_list(self):
         req = fakes.HTTPRequest.blank('/extensions')
         res_dict = self.controller.index(req)
-        self.assertEqual(12, len(res_dict['extensions']))
+        # NOTE(sdague): because of hardcoded extensions the count is
+        # going to grow, and that's fine. We'll just check that it's
+        # greater than the 12 that we inserted.
+        self.assertGreaterEqual(len(res_dict['extensions']), 12)
 
         expected_output = copy.deepcopy(simulated_extension_list)
         del expected_output['images']
@@ -155,7 +173,10 @@ class ExtensionInfoV21Test(test.NoDBTestCase):
         expected_output['os-server-start-stop'] = fake_extension(
             'ServerStartStop', 'os-server-start-stop', '', -1)
 
-        for e in res_dict['extensions']:
+        # NOTE(sdague): filter the extension list by only ones that
+        # are the fake alias names, otherwise we get errors as we
+        # migrate extensions into the hardcoded list.
+        for e in [x for x in res_dict['extensions'] if '-alias' in x['alias']]:
             self.assertIn(e['alias'], expected_output)
             self.assertEqual(e['name'], expected_output[e['alias']].name)
             self.assertEqual(e['alias'], expected_output[e['alias']].alias)
@@ -186,7 +207,6 @@ class ExtensionInfoV21Test(test.NoDBTestCase):
 
 
 class ExtensionInfoPolicyEnforcementV21(test.NoDBTestCase):
-
     def setUp(self):
         super(ExtensionInfoPolicyEnforcementV21, self).setUp()
         ext_info = extension_info.LoadedExtensionInfo()

@@ -12,8 +12,9 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_versionedobjects import fields
 import re
+
+from oslo_versionedobjects import fields
 import six
 
 # TODO(berrange) Temporary import for Arch class
@@ -567,6 +568,17 @@ class DiskFormat(Enum):
             valid_values=DiskFormat.ALL)
 
 
+class PointerModelType(Enum):
+
+    USBTABLET = "usbtablet"
+
+    ALL = (USBTABLET)
+
+    def __init__(self):
+        super(PointerModelType, self).__init__(
+            valid_values=PointerModelType.ALL)
+
+
 class NotificationPriority(Enum):
     AUDIT = 'audit'
     CRITICAL = 'critical'
@@ -597,12 +609,151 @@ class NotificationPhase(Enum):
 
 class NotificationAction(Enum):
     UPDATE = 'update'
+    EXCEPTION = 'exception'
+    DELETE = 'delete'
+    PAUSE = 'pause'
+    UNPAUSE = 'unpause'
+    RESIZE = 'resize'
+    VOLUME_SWAP = 'volume_swap'
+    SUSPEND = 'suspend'
+    POWER_ON = 'power_on'
+    POWER_OFF = 'power_off'
+    REBOOT = 'reboot'
+    SHUTDOWN = 'shutdown'
+    SNAPSHOT = 'snapshot'
+    ADD_FIXED_IP = 'add_fixed_ip'
+    SHELVE = 'shelve'
+    RESUME = 'resume'
+    RESTORE = 'restore'
 
-    ALL = (UPDATE,)
+    ALL = (UPDATE, EXCEPTION, DELETE, PAUSE, UNPAUSE, RESIZE, VOLUME_SWAP,
+           SUSPEND, POWER_ON, REBOOT, SHUTDOWN, SNAPSHOT, ADD_FIXED_IP,
+           POWER_OFF, SHELVE, RESUME, RESTORE)
 
     def __init__(self):
         super(NotificationAction, self).__init__(
             valid_values=NotificationAction.ALL)
+
+
+class InstanceState(Enum):
+    # TODO(gibi): this is currently a copy of nova.compute.vm_states, remove
+    # the duplication
+    ACTIVE = 'active'
+    BUILDING = 'building'
+    PAUSED = 'paused'
+    SUSPENDED = 'suspended'
+    STOPPED = 'stopped'
+    RESCUED = 'rescued'
+    RESIZED = 'resized'
+    SOFT_DELETED = 'soft-delete'
+    DELETED = 'deleted'
+    ERROR = 'error'
+    SHELVED = 'shelved'
+    SHELVED_OFFLOADED = 'shelved_offloaded'
+
+    ALL = (ACTIVE, BUILDING, PAUSED, SUSPENDED, STOPPED, RESCUED, RESIZED,
+           SOFT_DELETED, DELETED, ERROR, SHELVED, SHELVED_OFFLOADED)
+
+    def __init__(self):
+        super(InstanceState, self).__init__(
+            valid_values=InstanceState.ALL)
+
+
+class InstanceTaskState(Enum):
+    # TODO(gibi): this is currently a copy of nova.compute.task_states, remove
+    # the duplication
+    SCHEDULING = 'scheduling'
+    BLOCK_DEVICE_MAPPING = 'block_device_mapping'
+    NETWORKING = 'networking'
+    SPAWNING = 'spawning'
+    IMAGE_SNAPSHOT = 'image_snapshot'
+    IMAGE_SNAPSHOT_PENDING = 'image_snapshot_pending'
+    IMAGE_PENDING_UPLOAD = 'image_pending_upload'
+    IMAGE_UPLOADING = 'image_uploading'
+    IMAGE_BACKUP = 'image_backup'
+    UPDATING_PASSWORD = 'updating_password'
+    RESIZE_PREP = 'resize_prep'
+    RESIZE_MIGRATING = 'resize_migrating'
+    RESIZE_MIGRATED = 'resize_migrated'
+    RESIZE_FINISH = 'resize_finish'
+    RESIZE_REVERTING = 'resize_reverting'
+    RESIZE_CONFIRMING = 'resize_confirming'
+    REBOOTING = 'rebooting'
+    REBOOT_PENDING = 'reboot_pending'
+    REBOOT_STARTED = 'reboot_started'
+    REBOOTING_HARD = 'rebooting_hard'
+    REBOOT_PENDING_HARD = 'reboot_pending_hard'
+    REBOOT_STARTED_HARD = 'reboot_started_hard'
+    PAUSING = 'pausing'
+    UNPAUSING = 'unpausing'
+    SUSPENDING = 'suspending'
+    RESUMING = 'resuming'
+    POWERING_OFF = 'powering-off'
+    POWERING_ON = 'powering-on'
+    RESCUING = 'rescuing'
+    UNRESCUING = 'unrescuing'
+    REBUILDING = 'rebuilding'
+    REBUILD_BLOCK_DEVICE_MAPPING = "rebuild_block_device_mapping"
+    REBUILD_SPAWNING = 'rebuild_spawning'
+    MIGRATING = "migrating"
+    DELETING = 'deleting'
+    SOFT_DELETING = 'soft-deleting'
+    RESTORING = 'restoring'
+    SHELVING = 'shelving'
+    SHELVING_IMAGE_PENDING_UPLOAD = 'shelving_image_pending_upload'
+    SHELVING_IMAGE_UPLOADING = 'shelving_image_uploading'
+    SHELVING_OFFLOADING = 'shelving_offloading'
+    UNSHELVING = 'unshelving'
+
+    ALL = (SCHEDULING, BLOCK_DEVICE_MAPPING, NETWORKING, SPAWNING,
+           IMAGE_SNAPSHOT, IMAGE_SNAPSHOT_PENDING, IMAGE_PENDING_UPLOAD,
+           IMAGE_UPLOADING, IMAGE_BACKUP, UPDATING_PASSWORD, RESIZE_PREP,
+           RESIZE_MIGRATING, RESIZE_MIGRATED, RESIZE_FINISH, RESIZE_REVERTING,
+           RESIZE_CONFIRMING, REBOOTING, REBOOT_PENDING, REBOOT_STARTED,
+           REBOOTING_HARD, REBOOT_PENDING_HARD, REBOOT_STARTED_HARD, PAUSING,
+           UNPAUSING, SUSPENDING, RESUMING, POWERING_OFF, POWERING_ON,
+           RESCUING, UNRESCUING, REBUILDING, REBUILD_BLOCK_DEVICE_MAPPING,
+           REBUILD_SPAWNING, MIGRATING, DELETING, SOFT_DELETING, RESTORING,
+           SHELVING, SHELVING_IMAGE_PENDING_UPLOAD, SHELVING_IMAGE_UPLOADING,
+           SHELVING_OFFLOADING, UNSHELVING)
+
+    def __init__(self):
+        super(InstanceTaskState, self).__init__(
+            valid_values=InstanceTaskState.ALL)
+
+
+class InstancePowerState(Enum):
+    # TODO(gibi): this is currently a copy of nova.compute.power_state, remove
+    # the duplication
+    NOSTATE = 'pending'
+    RUNNING = 'running'
+    PAUSED = 'paused'
+    SHUTDOWN = 'shutdown'
+    CRASHED = 'crashed'
+    SUSPENDED = 'suspended'
+
+    VALUE_MAP = {
+        0x00: NOSTATE,
+        0x01: RUNNING,
+        0x03: PAUSED,
+        0x04: SHUTDOWN,
+        0x06: CRASHED,
+        0x07: SUSPENDED
+    }
+
+    ALL = (NOSTATE, RUNNING, PAUSED, SHUTDOWN, CRASHED, SUSPENDED)
+
+    def __init__(self):
+        super(InstancePowerState, self).__init__(
+            valid_values=InstancePowerState.ALL)
+
+    def coerce(self, obj, attr, value):
+        try:
+            value = int(value)
+            value = InstancePowerState.VALUE_MAP[value]
+        except (ValueError, KeyError):
+            pass
+        return super(InstancePowerState, self).coerce(obj, attr, value)
 
 
 class IPV4AndV6Address(IPAddress):
@@ -836,6 +987,10 @@ class DiskFormatField(BaseEnumField):
     AUTO_TYPE = DiskFormat()
 
 
+class PointerModelField(BaseEnumField):
+    AUTO_TYPE = PointerModelType()
+
+
 class NotificationPriorityField(BaseEnumField):
     AUTO_TYPE = NotificationPriority()
 
@@ -846,6 +1001,18 @@ class NotificationPhaseField(BaseEnumField):
 
 class NotificationActionField(BaseEnumField):
     AUTO_TYPE = NotificationAction()
+
+
+class InstanceStateField(BaseEnumField):
+    AUTO_TYPE = InstanceState()
+
+
+class InstanceTaskStateField(BaseEnumField):
+    AUTO_TYPE = InstanceTaskState()
+
+
+class InstancePowerStateField(BaseEnumField):
+    AUTO_TYPE = InstancePowerState()
 
 
 class IPV4AndV6AddressField(AutoTypedField):
