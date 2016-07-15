@@ -1,4 +1,4 @@
-nova (2:14.0.0~b1-3) UNRELEASED; urgency=medium
+nova (2:14.0.0~b2-1) experimental; urgency=medium
 
   * Updated Danish translation of the debconf (Closes: #830630).
 
