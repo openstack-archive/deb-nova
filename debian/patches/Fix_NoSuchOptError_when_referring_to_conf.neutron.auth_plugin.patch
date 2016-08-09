@@ -1,0 +1,50 @@
+Description: Fix NoSuchOptError when referring to conf.neutron.auth_plugin
+ We already replaced 'auth_plugin' with 'auth_type'[1], now an
+ oslo_config.cfg.NoSuchOptError will be threw up when referring to
+ conf.neutron.auth_plugin.
+ .
+ This commit replace the usage of conf.neutron.auth_plugin by
+ conf.neutron.auth_type.
+ .
+ [1]https://github.com/openstack/keystoneauth/commit/a56ed4218aef5a2e528aa682cea967e767dca923
+Author: Wenzhi Yu <wenzhi_yu@163.com>
+Date: Tue, 26 Apr 2016 10:55:16 +0000 (+0800)
+X-Git-Url: https://review.openstack.org/gitweb?p=openstack%2Fnova.git;a=commitdiff_plain;h=32a9d01c80ba13dd1321aef33073ad5a0b146fda
+Change-Id: I0b72f278ba8e28508274079ff284042fb9ea3d64
+Bug-Ubuntu: https://bugs.launchpad.net/nova/+bug/1574988
+Bug-Ubuntu: https://bugs.launchpad.net/nova/+bug/1604428
+Bug-Debian: https://bugs.debian.org/832158
+Origin: Upstream, https://review.openstack.org/#/c/344371/
+Last-Update: 2016-08-09
+
+diff --git a/nova/network/neutronv2/api.py b/nova/network/neutronv2/api.py
+index efc1dc2..fafb254 100644
+--- a/nova/network/neutronv2/api.py
++++ b/nova/network/neutronv2/api.py
+@@ -116,7 +116,7 @@ def _load_auth_plugin(conf):
+     if auth_plugin:
+         return auth_plugin
+ 
+-    err_msg = _('Unknown auth plugin: %s') % conf.neutron.auth_plugin
++    err_msg = _('Unknown auth type: %s') % conf.neutron.auth_type
+     raise neutron_client_exc.Unauthorized(message=err_msg)
+ 
+ 
+diff --git a/nova/tests/unit/network/test_neutronv2.py b/nova/tests/unit/network/test_neutronv2.py
+index 8c835ec..d01f506 100644
+--- a/nova/tests/unit/network/test_neutronv2.py
++++ b/nova/tests/unit/network/test_neutronv2.py
+@@ -180,6 +180,13 @@ class TestNeutronClient(test.NoDBTestCase):
+         client1.list_networks(retrieve_all=False)
+         self.assertEqual('new_token2', client1.httpclient.auth.get_token(None))
+ 
++    @mock.patch.object(ks_loading, 'load_auth_from_conf_options')
++    def test_load_auth_plugin_failed(self, mock_load_from_conf):
++        mock_load_from_conf.return_value = None
++        from neutronclient.common import exceptions as neutron_client_exc
++        self.assertRaises(neutron_client_exc.Unauthorized,
++                          neutronapi._load_auth_plugin, CONF)
++
+ 
+ class TestNeutronv2Base(test.TestCase):
+ 

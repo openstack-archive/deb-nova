@@ -3,3 +3,4 @@ Add_nova-idmapshift_to_rootwrap_filters.patch
 Install-missed-files.patch
 support-all-paramiko-versions.patch
 fix-requirements.txt
+Fix_NoSuchOptError_when_referring_to_conf.neutron.auth_plugin.patch

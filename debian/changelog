@@ -1,3 +1,10 @@
+nova (2:13.1.0-3) unstable; urgency=medium
+
+  * Added upstream patch (Closes: #832158):
+    Fix_NoSuchOptError_when_referring_to_conf.neutron.auth_plugin.patch
+
+ -- Thomas Goirand <zigo@debian.org>  Tue, 09 Aug 2016 16:28:54 +0200
+
 nova (2:13.1.0-2) unstable; urgency=medium
 
   * Rebuilt with openstack-pkg-tools to ensure the ALTER DATABASE is made with
