@@ -1,0 +1,11 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 17 Jul 2016 22:43:17 +0000
+Reviewed-on: https://review.openstack.org/332017
+Project: openstack/deb-nova
+Branch: refs/heads/master

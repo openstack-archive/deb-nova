@@ -1,0 +1,9 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 28 Jul 2016 01:08:37 +0000
+Reviewed-on: https://review.openstack.org/348057
+Project: openstack/deb-nova
+Branch: refs/heads/master

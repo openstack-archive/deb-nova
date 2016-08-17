@@ -1,0 +1,13 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Verified+1: Citrix XenServer CI
+Verified+1: DB Datasets CI <turbo-hipster@lists.rcbops.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: melanie witt <melwittt@gmail.com>
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Workflow+1: Andrew Laski <andrew@lascii.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 09:13:22 +0000
+Reviewed-on: https://review.openstack.org/349577
+Project: openstack/deb-nova
+Branch: refs/heads/master

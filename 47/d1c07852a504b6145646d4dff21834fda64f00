@@ -1,0 +1,11 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+1: devdatta-kulkarni <devdatta.kulkarni@rackspace.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 01 Aug 2016 21:35:08 +0000
+Reviewed-on: https://review.openstack.org/349592
+Project: openstack/deb-nova
+Branch: refs/heads/master

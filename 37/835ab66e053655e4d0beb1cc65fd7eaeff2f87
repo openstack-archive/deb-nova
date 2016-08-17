@@ -1,0 +1,10 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Workflow+1: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 04 Aug 2016 18:23:42 +0000
+Reviewed-on: https://review.openstack.org/350901
+Project: openstack/deb-nova
+Branch: refs/heads/master

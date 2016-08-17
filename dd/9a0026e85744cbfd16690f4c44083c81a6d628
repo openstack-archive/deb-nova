@@ -1,0 +1,16 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Verified+1: VMware NSX CI
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: devdatta-kulkarni <devdatta.kulkarni@rackspace.com>
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 12:17:43 +0000
+Reviewed-on: https://review.openstack.org/338736
+Project: openstack/deb-nova
+Branch: refs/heads/master

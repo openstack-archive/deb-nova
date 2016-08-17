@@ -1,0 +1,11 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Paul Murray <pmurray@hpe.com>
+Verified+1: VMware NSX CI
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 19:18:36 +0000
+Reviewed-on: https://review.openstack.org/328366
+Project: openstack/deb-nova
+Branch: refs/heads/master

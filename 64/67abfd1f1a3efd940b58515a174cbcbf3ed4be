@@ -1,0 +1,13 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Joel Coffman <joel.coffman@jhuapl.edu>
+Code-Review+1: Hieu LE <hieulq@vn.fujitsu.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 25 Jul 2016 16:25:21 +0000
+Reviewed-on: https://review.openstack.org/319453
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,12 @@
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Verified+1: VMware NSX CI
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 19 Jul 2016 23:27:19 +0000
+Reviewed-on: https://review.openstack.org/280438
+Project: openstack/deb-nova
+Branch: refs/heads/master

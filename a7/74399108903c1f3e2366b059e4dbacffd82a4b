@@ -1,0 +1,13 @@
+Code-Review+1: Eric Brown <browne@vmware.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Verified-1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 28 Jul 2016 01:33:39 +0000
+Reviewed-on: https://review.openstack.org/348054
+Project: openstack/deb-nova
+Branch: refs/heads/master

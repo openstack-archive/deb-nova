@@ -1,0 +1,10 @@
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 20:11:10 +0000
+Reviewed-on: https://review.openstack.org/344168
+Project: openstack/deb-nova
+Branch: refs/heads/master

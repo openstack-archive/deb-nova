@@ -1,0 +1,17 @@
+Code-Review+1: Ryan Rossiter <rlrossit@us.ibm.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+1: huyupeng <huyp@inspur.com>
+Code-Review+1: Rahul U Nair <rahulunair@gmail.com>
+Code-Review+1: Jay Bryant <jsbryant@us.ibm.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: devdatta-kulkarni <devdatta.kulkarni@rackspace.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 11:20:46 +0000
+Reviewed-on: https://review.openstack.org/347571
+Project: openstack/deb-nova
+Branch: refs/heads/master

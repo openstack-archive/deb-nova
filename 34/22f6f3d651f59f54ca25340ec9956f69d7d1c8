@@ -1,0 +1,13 @@
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Moshe Levi <moshele@mellanox.com>
+Verified+1: DB Datasets CI <turbo-hipster@lists.rcbops.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Jul 2016 13:16:49 +0000
+Reviewed-on: https://review.openstack.org/285322
+Project: openstack/deb-nova
+Branch: refs/heads/master

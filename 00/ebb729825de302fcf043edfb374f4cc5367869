@@ -1,0 +1,11 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+1: devdatta-kulkarni <devdatta.kulkarni@rackspace.com>
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 12:19:22 +0000
+Reviewed-on: https://review.openstack.org/347893
+Project: openstack/deb-nova
+Branch: refs/heads/master

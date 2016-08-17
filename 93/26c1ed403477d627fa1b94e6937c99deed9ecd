@@ -1,0 +1,9 @@
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Jul 2016 15:04:32 +0000
+Reviewed-on: https://review.openstack.org/346989
+Project: openstack/deb-nova
+Branch: refs/heads/master

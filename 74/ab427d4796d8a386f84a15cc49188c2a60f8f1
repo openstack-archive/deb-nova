@@ -1,0 +1,15 @@
+Code-Review+1: Charles Volzka <cjvolzka@us.ibm.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Yingxin Cheng <yingxin.cheng@intel.com>
+Code-Review+1: huyupeng <huyp@inspur.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 19:34:56 +0000
+Reviewed-on: https://review.openstack.org/347387
+Project: openstack/deb-nova
+Branch: refs/heads/master

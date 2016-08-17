@@ -1,0 +1,14 @@
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+1: Jan Stodt <stodtj@de.ibm.com>
+Code-Review+1: Vladik Romanovsky <vromanso@redhat.com>
+Code-Review+1: Joel Coffman <joel.coffman@jhuapl.edu>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 25 Jul 2016 18:19:07 +0000
+Reviewed-on: https://review.openstack.org/336781
+Project: openstack/deb-nova
+Branch: refs/heads/master

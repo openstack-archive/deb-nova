@@ -1,0 +1,16 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Jay Faulkner <jay@jvf.cc>
+Code-Review+1: Michael Davies <michael@the-davies.net>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Julia Kreger <juliaashleykreger@gmail.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Om Kumar <om.kumar@hp.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 09 Aug 2016 17:35:16 +0000
+Reviewed-on: https://review.openstack.org/348443
+Project: openstack/deb-nova
+Branch: refs/heads/master

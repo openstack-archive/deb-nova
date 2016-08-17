@@ -1,0 +1,17 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: Augustina Ragwitz <auggy@cpan.org>
+Code-Review+1: Ivan Chavero <ichavero@redhat.com>
+Code-Review+1: David Moreau Simard <dms@redhat.com>
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 11 Aug 2016 06:31:08 +0000
+Reviewed-on: https://review.openstack.org/353710
+Project: openstack/deb-nova
+Branch: refs/heads/master

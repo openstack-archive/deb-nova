@@ -1,0 +1,11 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 09:17:36 +0000
+Reviewed-on: https://review.openstack.org/347593
+Project: openstack/deb-nova
+Branch: refs/heads/master

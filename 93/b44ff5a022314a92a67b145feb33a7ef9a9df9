@@ -1,0 +1,11 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 00:59:46 +0000
+Reviewed-on: https://review.openstack.org/297350
+Project: openstack/deb-nova
+Branch: refs/heads/master

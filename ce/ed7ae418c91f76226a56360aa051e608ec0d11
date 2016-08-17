@@ -1,0 +1,13 @@
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Code-Review+1: Sivasathurappan Radhakrishnan <siva.radhakrishnan@intel.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Jul 2016 13:08:14 +0000
+Reviewed-on: https://review.openstack.org/341246
+Project: openstack/deb-nova
+Branch: refs/heads/master

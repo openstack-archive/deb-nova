@@ -1,0 +1,12 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Nicolas Simonds <nic@metacloud.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 11:12:04 +0000
+Reviewed-on: https://review.openstack.org/348492
+Project: openstack/deb-nova
+Branch: refs/heads/master

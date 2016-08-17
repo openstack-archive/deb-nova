@@ -1,0 +1,16 @@
+Verified+1: DB Datasets CI <turbo-hipster@lists.rcbops.com>
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: VMware NSX CI
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 18 Jul 2016 19:31:54 +0000
+Reviewed-on: https://review.openstack.org/302182
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Dan Smith <dms@danplanet.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Jul 2016 19:51:13 +0000
+Reviewed-on: https://review.openstack.org/333271
+Project: openstack/deb-nova
+Branch: refs/heads/master

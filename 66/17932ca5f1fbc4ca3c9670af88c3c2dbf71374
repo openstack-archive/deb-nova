@@ -1,0 +1,11 @@
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+1: Diana Clarke <diana.joan.clarke@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Jul 2016 20:04:20 +0000
+Reviewed-on: https://review.openstack.org/337242
+Project: openstack/deb-nova
+Branch: refs/heads/master

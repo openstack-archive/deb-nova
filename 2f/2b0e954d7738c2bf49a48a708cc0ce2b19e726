@@ -1,0 +1,12 @@
+Code-Review+1: Nikhil Komawar <nik.komawar@gmail.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 27 Jul 2016 22:41:33 +0000
+Reviewed-on: https://review.openstack.org/347971
+Project: openstack/deb-nova
+Branch: refs/heads/master

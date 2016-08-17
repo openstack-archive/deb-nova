@@ -1,0 +1,13 @@
+Verified+1: Citrix XenServer CI
+Code-Review+1: Andrea Rosa <andrea.rosa@hpe.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 19 Jul 2016 02:35:29 +0000
+Reviewed-on: https://review.openstack.org/341094
+Project: openstack/deb-nova
+Branch: refs/heads/master

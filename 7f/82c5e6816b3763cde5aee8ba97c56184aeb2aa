@@ -1,0 +1,12 @@
+Verified+1: DB Datasets CI <turbo-hipster@lists.rcbops.com>
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 04:44:44 +0000
+Reviewed-on: https://review.openstack.org/314781
+Project: openstack/deb-nova
+Branch: refs/heads/master

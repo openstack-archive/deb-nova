@@ -1,0 +1,14 @@
+Code-Review+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Verified+1: Citrix XenServer CI
+Verified+1: VMware NSX CI
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+1: Andrea Rosa <andrea.rosa@hpe.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 20 Jul 2016 01:39:54 +0000
+Reviewed-on: https://review.openstack.org/341141
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,12 @@
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Paul Murray <pmurray@hpe.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 12:21:04 +0000
+Reviewed-on: https://review.openstack.org/329930
+Project: openstack/deb-nova
+Branch: refs/heads/master

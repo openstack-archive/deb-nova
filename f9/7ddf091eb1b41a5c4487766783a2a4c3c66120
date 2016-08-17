@@ -1,0 +1,14 @@
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Maciej Szankin <maciej.szankin@intel.com>
+Code-Review+1: Hieu LE <hieulq@vn.fujitsu.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 25 Jul 2016 20:48:37 +0000
+Reviewed-on: https://review.openstack.org/318726
+Project: openstack/deb-nova
+Branch: refs/heads/master

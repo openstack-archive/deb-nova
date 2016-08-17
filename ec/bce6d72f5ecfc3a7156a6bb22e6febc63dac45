@@ -1,0 +1,12 @@
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: devdatta-kulkarni <devdatta.kulkarni@rackspace.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 Aug 2016 11:13:28 +0000
+Reviewed-on: https://review.openstack.org/346689
+Project: openstack/deb-nova
+Branch: refs/heads/master

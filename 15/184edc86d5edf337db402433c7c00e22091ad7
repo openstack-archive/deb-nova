@@ -1,0 +1,14 @@
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Roman Dobosz <roman.dobosz@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 10 Aug 2016 12:24:59 +0000
+Reviewed-on: https://review.openstack.org/350293
+Project: openstack/deb-nova
+Branch: refs/heads/master

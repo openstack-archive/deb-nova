@@ -1,0 +1,11 @@
+Verified+1: Citrix XenServer CI
+Verified+1: VMware NSX CI
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 28 Jul 2016 19:26:22 +0000
+Reviewed-on: https://review.openstack.org/338203
+Project: openstack/deb-nova
+Branch: refs/heads/master

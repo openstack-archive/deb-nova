@@ -1,0 +1,12 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Brian Haley <brian.haley@hpe.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 29 Jul 2016 21:35:07 +0000
+Reviewed-on: https://review.openstack.org/348186
+Project: openstack/deb-nova
+Branch: refs/heads/master
