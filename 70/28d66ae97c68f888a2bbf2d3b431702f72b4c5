@@ -1,0 +1,11 @@
+Code-Review-1: Maru Newby <marun@redhat.com>
+Code-Review+2: Mark McLoughlin <markmc@redhat.com>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: James E. Blair <corvus@inaugust.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 11 May 2012 22:12:25 +0000
+Reviewed-on: https://review.openstack.org/7269
+Project: openstack/deb-nova
+Branch: refs/heads/stable/essex

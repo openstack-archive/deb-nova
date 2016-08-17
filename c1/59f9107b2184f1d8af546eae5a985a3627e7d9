@@ -1,0 +1,10 @@
+Verified+1: Microsoft Hyper-V CI <hyper-v_ci@microsoft.com>
+Code-Review+1: Dave Walker <email@daviey.com>
+Code-Review+2: Ihar Hrachyshka <ihrachys@redhat.com>
+Workflow+1: Ihar Hrachyshka <ihrachys@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 27 Nov 2014 11:21:34 +0000
+Reviewed-on: https://review.openstack.org/130342
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

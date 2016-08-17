@@ -1,0 +1,8 @@
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Workflow+1: Alan Pevec <alan.pevec@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 10 May 2013 17:38:18 +0000
+Reviewed-on: https://review.openstack.org/28798
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

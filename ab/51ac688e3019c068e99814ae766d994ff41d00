@@ -1,0 +1,9 @@
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Workflow+1: Adam Gandelman <adamg@ubuntu.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 31 May 2013 05:02:06 +0000
+Reviewed-on: https://review.openstack.org/30442
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

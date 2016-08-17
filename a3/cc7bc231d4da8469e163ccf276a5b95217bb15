@@ -1,0 +1,12 @@
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Code-Review+1: malini-k-bhandaru <malini.k.bhandaru@intel.com>
+Code-Review+1: Michael Still <mikal@stillhq.com>
+Code-Review+1: Wangpan <hzwangpan@corp.netease.com>
+Code-Review+1: Andrew Laski <andrew@lascii.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 27 Apr 2013 14:30:43 +0000
+Reviewed-on: https://review.openstack.org/26877
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

@@ -1,0 +1,9 @@
+Code-Review+2: Flavio Percoco <fpercoco@redhat.com>
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 26 May 2013 12:31:03 +0000
+Reviewed-on: https://review.openstack.org/30061
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

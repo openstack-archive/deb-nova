@@ -1,0 +1,11 @@
+Code-Review+1: Christopher Yeoh <cbkyeoh@gmail.com>
+Code-Review+1: Aaron Rosen <aaronorosen@gmail.com>
+Code-Review+1: QiangGuan <hzguanqiang@corp.netease.com>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 12 Apr 2013 17:59:05 +0000
+Reviewed-on: https://review.openstack.org/26607
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

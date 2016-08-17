@@ -1,0 +1,9 @@
+Code-Review-1: Phil Day <philip.day@hp.com>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+1: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 31 Mar 2012 23:00:26 +0000
+Reviewed-on: https://review.openstack.org/6015
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

@@ -1,0 +1,11 @@
+Code-Review+2: garyk <gkotton@vmware.com>
+Code-Review+1: Tracy Jones <tjones@vmware.com>
+Code-Review+1: Radoslav Gerganov <rgerganov@vmware.com>
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Workflow+1: Adam Gandelman <adamg@ubuntu.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 31 May 2014 00:17:53 +0000
+Reviewed-on: https://review.openstack.org/90809
+Project: openstack/deb-nova
+Branch: refs/heads/stable/icehouse

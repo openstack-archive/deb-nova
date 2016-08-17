@@ -1,0 +1,11 @@
+Verified+1: Microsoft Hyper-V CI <hyper-v_ci@microsoft.com>
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review-1: Michael Still <mikal@stillhq.com>
+Workflow+1: Alan Pevec <alan.pevec@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 04 Dec 2014 14:02:47 +0000
+Reviewed-on: https://review.openstack.org/137686
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

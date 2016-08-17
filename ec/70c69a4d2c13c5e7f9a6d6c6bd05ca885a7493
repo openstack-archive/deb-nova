@@ -1,0 +1,9 @@
+Code-Review+2: Mark McLoughlin <markmc@redhat.com>
+Code-Review+2: Devin Carlen <devin@openstack.org>
+Workflow+1: Devin Carlen <devin@openstack.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 18 May 2012 00:17:29 +0000
+Reviewed-on: https://review.openstack.org/7441
+Project: openstack/deb-nova
+Branch: refs/heads/stable/essex

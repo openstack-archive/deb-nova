@@ -1,0 +1,12 @@
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Code-Review+1: Brian Elliott <bdelliott@gmail.com>
+Code-Review+1: Zhongyue Luo <zhongyue.luo@gmail.com>
+Code-Review+1: Aaron Rosen <aaronorosen@gmail.com>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 27 Apr 2013 00:17:31 +0000
+Reviewed-on: https://review.openstack.org/26879
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

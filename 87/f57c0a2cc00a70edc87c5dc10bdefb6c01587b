@@ -1,0 +1,9 @@
+Code-Review+1: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 09 Apr 2014 20:53:58 +0000
+Reviewed-on: https://review.openstack.org/86360
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

@@ -1,0 +1,11 @@
+Code-Review+1: Dan Smith <dms@danplanet.com>
+Code-Review+2: Thierry Carrez <thierry@openstack.org>
+Workflow+1: Thierry Carrez <thierry@openstack.org>
+Code-Review+1: Brian Elliott <bdelliott@gmail.com>
+Code-Review+1: Chuck Short <chuck.short@canonical.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 27 Mar 2013 17:28:38 +0000
+Reviewed-on: https://review.openstack.org/25521
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

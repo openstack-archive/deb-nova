@@ -1,0 +1,13 @@
+Code-Review+1: Joe Gordon <joe.gordon0@gmail.com>
+Code-Review+1: Yaguang Tang <yaguang@umcloud.com>
+Code-Review+1: Brian Elliott <bdelliott@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Rafi Khardalian <rafi@metacloud.com>
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 14 May 2013 13:10:20 +0000
+Reviewed-on: https://review.openstack.org/28614
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

@@ -1,0 +1,8 @@
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 06 Jun 2012 19:30:40 +0000
+Reviewed-on: https://review.openstack.org/8238
+Project: openstack/deb-nova
+Branch: refs/heads/stable/essex

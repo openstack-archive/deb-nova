@@ -1,0 +1,11 @@
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Code-Review+1: Boris Pavlovic <boris@pavlovic.me>
+Code-Review+1: Rafi Khardalian <rafi@metacloud.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 13 May 2013 17:16:26 +0000
+Reviewed-on: https://review.openstack.org/28437
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

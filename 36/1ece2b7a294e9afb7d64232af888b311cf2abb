@@ -1,0 +1,10 @@
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Code-Review+1: Dave Walker <email@daviey.com>
+Code-Review+2: garyk <gkotton@vmware.com>
+Workflow+1: garyk <gkotton@vmware.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 01 Dec 2014 15:43:32 +0000
+Reviewed-on: https://review.openstack.org/136396
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

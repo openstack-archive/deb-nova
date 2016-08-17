@@ -1,0 +1,10 @@
+Code-Review+2: Mark McLoughlin <markmc@redhat.com>
+Code-Review+1: Josh Kearney <josh@jk0.org>
+Code-Review+1: Dave Walker <email@daviey.com>
+Workflow+1: Dave Walker <email@daviey.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 15 Jun 2012 09:54:18 +0000
+Reviewed-on: https://review.openstack.org/7551
+Project: openstack/deb-nova
+Branch: refs/heads/stable/essex

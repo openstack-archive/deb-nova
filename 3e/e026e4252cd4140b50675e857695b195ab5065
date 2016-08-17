@@ -1,0 +1,10 @@
+Code-Review+1: Sandy Walsh <sandy.walsh@rackspace.com>
+Code-Review+2: Brian Waldon <brian@waldon.cc>
+Code-Review+2: Chuck Short <chuck.short@canonical.com>
+Workflow+1: Chuck Short <chuck.short@canonical.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 11 Jun 2012 20:21:59 +0000
+Reviewed-on: https://review.openstack.org/8392
+Project: openstack/deb-nova
+Branch: refs/heads/stable/essex

@@ -1,0 +1,11 @@
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Code-Review+1: Qin Zhao <chaochin@gmail.com>
+Code-Review+1: Yaguang Tang <yaguang@umcloud.com>
+Code-Review+2: garyk <gkotton@vmware.com>
+Workflow+1: garyk <gkotton@vmware.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 Oct 2014 14:13:08 +0000
+Reviewed-on: https://review.openstack.org/129697
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

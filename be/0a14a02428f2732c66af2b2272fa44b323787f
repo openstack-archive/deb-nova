@@ -1,0 +1,11 @@
+Code-Review+1: Zhi Yan Liu <lzy.dev@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Aaron Rosen <aaronorosen@gmail.com>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 20 May 2013 21:13:03 +0000
+Reviewed-on: https://review.openstack.org/28312
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

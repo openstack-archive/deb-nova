@@ -1,0 +1,9 @@
+Code-Review+1: p-draigbrady <P@draigBrady.com>
+Code-Review+2: Thierry Carrez <thierry@openstack.org>
+Workflow+1: Thierry Carrez <thierry@openstack.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 10 Oct 2013 22:05:10 +0000
+Reviewed-on: https://review.openstack.org/50937
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

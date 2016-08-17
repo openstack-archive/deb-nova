@@ -1,0 +1,10 @@
+Code-Review+2: Mark McLoughlin <markmc@redhat.com>
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Code-Review+2: Thierry Carrez <thierry@openstack.org>
+Workflow+1: Thierry Carrez <thierry@openstack.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 26 Mar 2013 10:56:44 +0000
+Reviewed-on: https://review.openstack.org/25285
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

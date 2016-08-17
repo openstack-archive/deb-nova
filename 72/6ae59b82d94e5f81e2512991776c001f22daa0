@@ -1,0 +1,11 @@
+Code-Review+1: lifeless <robertc@robertcollins.net>
+Code-Review+1: Wangpan <hzwangpan@corp.netease.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Flavio Percoco <fpercoco@redhat.com>
+Workflow+1: Flavio Percoco <fpercoco@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 May 2013 13:01:31 +0000
+Reviewed-on: https://review.openstack.org/27744
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

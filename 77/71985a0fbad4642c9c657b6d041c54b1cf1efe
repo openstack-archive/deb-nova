@@ -1,0 +1,10 @@
+Code-Review+2: p-draigbrady <P@draigBrady.com>
+Code-Review+1: Nicolas Simonds <nic@metacloud.com>
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Workflow+1: Adam Gandelman <adamg@ubuntu.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 01 May 2013 23:32:14 +0000
+Reviewed-on: https://review.openstack.org/27742
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

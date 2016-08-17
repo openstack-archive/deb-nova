@@ -1,0 +1,14 @@
+Verified+1: Microsoft Hyper-V CI <hyper-v_ci@microsoft.com>
+Code-Review+2: garyk <gkotton@vmware.com>
+Code-Review+1: Dave Walker <email@daviey.com>
+Code-Review+1: Daniel Berrange <berrange@redhat.com>
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Workflow+1: Adam Gandelman <adamg@ubuntu.com>
+Code-Review+2: Chuck Short <chuck.short@canonical.com>
+Workflow+1: Chuck Short <chuck.short@canonical.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 13 Nov 2014 21:11:01 +0000
+Reviewed-on: https://review.openstack.org/130235
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

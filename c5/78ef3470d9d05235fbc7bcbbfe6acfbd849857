@@ -1,0 +1,7 @@
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Verified+1: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 15 Dec 2011 18:14:52 +0000
+Reviewed-on: https://review.openstack.org/2374
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

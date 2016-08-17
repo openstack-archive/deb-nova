@@ -1,0 +1,11 @@
+Code-Review+1: Michael Still <mikal@stillhq.com>
+Code-Review+2: Mark McLoughlin <markmc@redhat.com>
+Code-Review+1: Thierry Carrez <thierry@openstack.org>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+1: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 26 Mar 2012 18:30:40 +0000
+Reviewed-on: https://review.openstack.org/5769
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

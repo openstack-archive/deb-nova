@@ -1,0 +1,9 @@
+Code-Review+2: Mark McLoughlin <markmc@redhat.com>
+Workflow+1: Mark McLoughlin <markmc@redhat.com>
+Code-Review+1: Peng Yong <ppyy@pubyun.com>
+Verified+1: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 27 Apr 2012 13:13:24 +0000
+Reviewed-on: https://review.openstack.org/6830
+Project: openstack/deb-nova
+Branch: refs/heads/stable/essex

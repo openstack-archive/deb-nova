@@ -1,0 +1,8 @@
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 28 Mar 2013 14:09:47 +0000
+Reviewed-on: https://review.openstack.org/25615
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

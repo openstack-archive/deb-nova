@@ -1,0 +1,9 @@
+Code-Review+1: Aaron Rosen <aaronorosen@gmail.com>
+Code-Review+2: Russell Bryant <rbryant@redhat.com>
+Workflow+1: Russell Bryant <rbryant@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 16 May 2013 21:18:48 +0000
+Reviewed-on: https://review.openstack.org/29266
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

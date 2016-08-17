@@ -1,0 +1,9 @@
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Code-Review+2: Ihar Hrachyshka <ihrachys@redhat.com>
+Workflow+1: Ihar Hrachyshka <ihrachys@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 27 Nov 2014 11:21:15 +0000
+Reviewed-on: https://review.openstack.org/135326
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

@@ -1,0 +1,13 @@
+Code-Review+1: Brian Elliott <bdelliott@gmail.com>
+Code-Review+1: Kurt Taylor <kurt.r.taylor@gmail.com>
+Code-Review+1: Christopher Yeoh <cbkyeoh@gmail.com>
+Code-Review+1: Wangpan <hzwangpan@corp.netease.com>
+Code-Review+1: Dan Smith <dms@danplanet.com>
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 17 Apr 2013 12:47:52 +0000
+Reviewed-on: https://review.openstack.org/26611
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

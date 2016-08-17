@@ -1,0 +1,15 @@
+Code-Review+1: Neela Shah <neela@us.ibm.com>
+Code-Review+1: Rafi Khardalian <rafi@metacloud.com>
+Code-Review+1: Flavio Percoco <fpercoco@redhat.com>
+Code-Review+1: Yun Mao <yunmao@gmail.com>
+Code-Review+1: Jiajun Liu <iamljj@gmail.com>
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Code-Review+1: David Ripton <dripton@redhat.com>
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Workflow+1: Alan Pevec <alan.pevec@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 31 May 2013 02:17:24 +0000
+Reviewed-on: https://review.openstack.org/28311
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

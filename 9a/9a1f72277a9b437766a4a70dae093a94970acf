@@ -1,0 +1,10 @@
+Code-Review+2: Vish Ishaya <vishvananda@gmail.com>
+Workflow+1: Vish Ishaya <vishvananda@gmail.com>
+Code-Review+1: Ben Swartzlander <ben@swartzlander.org>
+Code-Review+1: Devin Carlen <devin@openstack.org>
+Verified+1: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 29 Feb 2012 22:27:50 +0000
+Reviewed-on: https://review.openstack.org/4718
+Project: openstack/deb-nova
+Branch: refs/heads/milestone-proposed

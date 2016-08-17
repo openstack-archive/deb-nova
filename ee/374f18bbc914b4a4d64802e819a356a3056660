@@ -1,0 +1,9 @@
+Code-Review+2: Alan Pevec <alan.pevec@redhat.com>
+Code-Review+2: p-draigbrady <P@draigBrady.com>
+Workflow+1: p-draigbrady <P@draigBrady.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 31 May 2014 00:11:28 +0000
+Reviewed-on: https://review.openstack.org/94752
+Project: openstack/deb-nova
+Branch: refs/heads/stable/icehouse

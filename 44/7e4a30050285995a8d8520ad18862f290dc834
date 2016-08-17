@@ -1,0 +1,16 @@
+Code-Review+1: Brian Elliott <bdelliott@gmail.com>
+Code-Review+1: Yaguang Tang <yaguang@umcloud.com>
+Code-Review+1: Andrew Laski <andrew@lascii.com>
+Code-Review+1: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: David Peraza <david_peraza@persistentsys.com>
+Code-Review+1: Mauro Rodrigues <maurosr@linux.vnet.ibm.com>
+Code-Review+1: Neela Shah <neela@us.ibm.com>
+Code-Review+2: Adam Gandelman <adamg@ubuntu.com>
+Code-Review+2: Chuck Short <chuck.short@canonical.com>
+Workflow+1: Chuck Short <chuck.short@canonical.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 02 May 2013 18:37:11 +0000
+Reviewed-on: https://review.openstack.org/27713
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly

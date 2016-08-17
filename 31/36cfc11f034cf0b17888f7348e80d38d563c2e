@@ -1,0 +1,10 @@
+Code-Review+2: Matthew Treinish <mtreinish@kortar.org>
+Verified+1: Microsoft Hyper-V CI <hyper-v_ci@microsoft.com>
+Code-Review+2: Jay Bryant <jsbryant@us.ibm.com>
+Workflow+1: Jay Bryant <jsbryant@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 17 Oct 2014 23:27:32 +0000
+Reviewed-on: https://review.openstack.org/129307
+Project: openstack/deb-nova
+Branch: refs/heads/stable/juno

@@ -1,0 +1,10 @@
+Code-Review+1: Rick Harris <rick.harris@rackspace.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Flavio Percoco <fpercoco@redhat.com>
+Workflow+1: Flavio Percoco <fpercoco@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 May 2013 12:59:21 +0000
+Reviewed-on: https://review.openstack.org/28075
+Project: openstack/deb-nova
+Branch: refs/heads/stable/grizzly
