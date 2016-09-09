@@ -1,0 +1,12 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 23 Aug 2016 06:58:54 +0000
+Reviewed-on: https://review.openstack.org/333098
+Project: openstack/deb-nova
+Branch: refs/heads/master

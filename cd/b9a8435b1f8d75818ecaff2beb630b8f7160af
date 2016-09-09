@@ -1,0 +1,19 @@
+Code-Review+1: Michael Glaser <mg6596@att.com>
+Code-Review+1: Inessa Vasilevskaya <ivasilevskaya@mirantis.com>
+Code-Review+1: Markus Zoeller (markus_z) <mzoeller@linux.vnet.ibm.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: Pavel Kholkin <pkholkin@mirantis.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 18 Aug 2016 04:56:49 +0000
+Reviewed-on: https://review.openstack.org/353687
+Project: openstack/deb-nova
+Branch: refs/heads/master

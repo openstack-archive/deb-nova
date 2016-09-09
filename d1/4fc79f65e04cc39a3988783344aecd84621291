@@ -1,0 +1,12 @@
+Verified+1: Citrix XenServer CI
+Code-Review+1: Julian <js802v@att.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 18 Aug 2016 13:26:19 +0000
+Reviewed-on: https://review.openstack.org/342944
+Project: openstack/deb-nova
+Branch: refs/heads/master

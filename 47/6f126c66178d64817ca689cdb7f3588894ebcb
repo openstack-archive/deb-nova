@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 31 Aug 2016 14:28:46 +0000
+Reviewed-on: https://review.openstack.org/362170
+Project: openstack/deb-nova
+Branch: refs/heads/master

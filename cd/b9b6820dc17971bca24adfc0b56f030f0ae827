@@ -1,0 +1,11 @@
+Verified+1: Citrix XenServer CI
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 08 Sep 2016 04:59:45 +0000
+Reviewed-on: https://review.openstack.org/357494
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Paul Carlton <paul.carlton2@hpe.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 24 Aug 2016 13:25:32 +0000
+Reviewed-on: https://review.openstack.org/333242
+Project: openstack/deb-nova
+Branch: refs/heads/master

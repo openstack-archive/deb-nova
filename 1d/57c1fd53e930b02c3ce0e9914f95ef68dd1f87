@@ -1,0 +1,11 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 13 Aug 2016 04:31:49 +0000
+Reviewed-on: https://review.openstack.org/355098
+Project: openstack/deb-nova
+Branch: refs/heads/master

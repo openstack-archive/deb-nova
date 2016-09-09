@@ -1,0 +1,13 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Workflow+1: Andrew Laski <andrew@lascii.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 13 Aug 2016 02:19:02 +0000
+Reviewed-on: https://review.openstack.org/354261
+Project: openstack/deb-nova
+Branch: refs/heads/master

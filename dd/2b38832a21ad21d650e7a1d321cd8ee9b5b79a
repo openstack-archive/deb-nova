@@ -1,0 +1,15 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Yingxin Cheng <yingxin.cheng@intel.com>
+Code-Review+1: Roman Dobosz <roman.dobosz@intel.com>
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 25 Aug 2016 18:20:54 +0000
+Reviewed-on: https://review.openstack.org/358361
+Project: openstack/deb-nova
+Branch: refs/heads/master

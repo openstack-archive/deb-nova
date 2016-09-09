@@ -1,0 +1,19 @@
+Code-Review+1: Pavlo Shchelokovskyy <pshchelokovskyy@mirantis.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+1: Anna Babich <ababich@mirantis.com>
+Code-Review+1: Oleksii Butenko <obutenko@mirantis.com>
+Code-Review+1: Timur Nurlygayanov <tnurlygayanov@mirantis.com>
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Jim Rollenhagen <jim@jimrollenhagen.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 08 Sep 2016 11:05:59 +0000
+Reviewed-on: https://review.openstack.org/346966
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,15 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Sergey Nikitin <snikitin@mirantis.com>
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Code-Review+1: wangzhen <wangzhen@awcloud.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 24 Aug 2016 12:27:29 +0000
+Reviewed-on: https://review.openstack.org/347444
+Project: openstack/deb-nova
+Branch: refs/heads/master

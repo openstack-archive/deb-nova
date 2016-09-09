@@ -1,0 +1,11 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 25 Aug 2016 04:24:23 +0000
+Reviewed-on: https://review.openstack.org/347436
+Project: openstack/deb-nova
+Branch: refs/heads/master

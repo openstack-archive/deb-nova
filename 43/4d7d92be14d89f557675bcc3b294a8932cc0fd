@@ -1,0 +1,21 @@
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+1: Andrey Pavlov <andrey.mp@gmail.com>
+Code-Review+1: Eric Fried <efried@us.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Drew Thorstensen (thorst) <thorst@us.ibm.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Richard Avelar <csravelar@gmail.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+1: yejiawei <ye.jiawei@99cloud.net>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Zhihai Song <zhhsng@gmail.com>
+Code-Review+1: Adam Reznechek <adreznec@us.ibm.com>
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Workflow+1: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 16 Aug 2016 19:41:10 +0000
+Reviewed-on: https://review.openstack.org/352455
+Project: openstack/deb-nova
+Branch: refs/heads/master

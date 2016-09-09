@@ -1,0 +1,12 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 31 Aug 2016 15:39:15 +0000
+Reviewed-on: https://review.openstack.org/358797
+Project: openstack/deb-nova
+Branch: refs/heads/master

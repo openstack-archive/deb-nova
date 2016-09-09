@@ -1,0 +1,14 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Joel Coffman <joel.coffman@jhuapl.edu>
+Code-Review+1: Pavel Kholkin <pkholkin@mirantis.com>
+Code-Review+1: Prateek Arora <parora@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Sep 2016 03:22:47 +0000
+Reviewed-on: https://review.openstack.org/312887
+Project: openstack/deb-nova
+Branch: refs/heads/master

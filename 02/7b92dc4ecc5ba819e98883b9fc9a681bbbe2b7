@@ -1,0 +1,10 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 18 Aug 2016 13:22:34 +0000
+Reviewed-on: https://review.openstack.org/264719
+Project: openstack/deb-nova
+Branch: refs/heads/master

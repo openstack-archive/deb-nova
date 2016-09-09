@@ -1,0 +1,14 @@
+Code-Review+1: Dmitry Bilunov <kmeaw@kmeaw.com>
+Code-Review+1: Sergey Nechaev <spnechaev@gmail.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 18 Aug 2016 13:17:19 +0000
+Reviewed-on: https://review.openstack.org/340386
+Project: openstack/deb-nova
+Branch: refs/heads/master
