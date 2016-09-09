@@ -1,0 +1,14 @@
+Code-Review+1: Rui Chen <chenrui.momo@gmail.com>
+Code-Review+1: yunfeng zhou <zhouyunfeng@inspur.com>
+Code-Review+1: Ian Cordasco <ian.cordasco@rackspace.com>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Code-Review+1: Joshua Hesketh <joshua.hesketh@rackspace.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Sep 2016 16:56:11 +0000
+Reviewed-on: https://review.openstack.org/329231
+Project: openstack/deb-nova
+Branch: refs/heads/stable/liberty
