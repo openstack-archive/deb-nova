@@ -1,0 +1,13 @@
+Code-Review+1: Markus Zoeller (markus_z) <mzoeller@linux.vnet.ibm.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Pawel Koniszewski <pawel.koniszewski@intel.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 13 Sep 2016 15:39:13 +0000
+Reviewed-on: https://review.openstack.org/368732
+Project: openstack/deb-nova
+Branch: refs/heads/master

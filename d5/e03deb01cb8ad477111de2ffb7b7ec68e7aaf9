@@ -1,0 +1,13 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: VMware NSX CI
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 13 Sep 2016 20:46:24 +0000
+Reviewed-on: https://review.openstack.org/365073
+Project: openstack/deb-nova
+Branch: refs/heads/master

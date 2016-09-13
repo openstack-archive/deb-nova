@@ -1,0 +1,14 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Ghanshyam Mann <ghanshyam.mann@nectechnologies.in>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 13 Sep 2016 14:34:29 +0000
+Reviewed-on: https://review.openstack.org/369054
+Project: openstack/deb-nova
+Branch: refs/heads/master
