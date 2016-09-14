@@ -93,7 +93,7 @@ class NovaException(Exception):
                 # log the issue and the kwargs
                 LOG.exception(_LE('Exception in string format operation'))
                 for name, value in six.iteritems(kwargs):
-                    LOG.error("%s: %s" % (name, value))    # noqa
+                    LOG.error("%s: %s" % (name, value))  # noqa
 
                 if CONF.fatal_exception_format_errors:
                     six.reraise(*exc_info)
@@ -325,7 +325,7 @@ class InvalidGlobalAPIVersion(Invalid):
 
 
 class ApiVersionsIntersect(Invalid):
-    msg_fmt = _("Version of %(name) %(min_ver) %(max_ver) intersects "
+    msg_fmt = _("Version of %(name)s %(min_ver)s %(max_ver)s intersects "
                 "with another versions.")
 
 
@@ -601,7 +601,7 @@ class VolumeBDMPathNotFound(VolumeBDMNotFound):
 
 
 class DeviceDetachFailed(NovaException):
-    msg_fmt = _("Device detach failed for %(device)s: %(reason)s)")
+    msg_fmt = _("Device detach failed for %(device)s: %(reason)s")
 
 
 class DeviceNotFound(NotFound):
@@ -636,14 +636,6 @@ class ImageNotFound(NotFound):
 class PreserveEphemeralNotSupported(Invalid):
     msg_fmt = _("The current driver does not support "
                 "preserving ephemeral partitions.")
-
-
-# NOTE(jruzicka): ImageNotFound is not a valid EC2 error code.
-class ImageNotFoundEC2(ImageNotFound):
-    msg_fmt = _("Image %(image_id)s could not be found. The nova EC2 API "
-                "assigns image ids dynamically when they are listed for the "
-                "first time. Have you listed image ids since adding this "
-                "image?")
 
 
 class ProjectNotFound(NotFound):
@@ -822,6 +814,10 @@ class PortBindingFailed(Invalid):
                 "logs for more information.")
 
 
+class PortUpdateFailed(Invalid):
+    msg_fmt = _("Port update failed for port %(port_id)s: %(reason)s")
+
+
 class FixedIpExists(NovaException):
     msg_fmt = _("Fixed IP %(address)s already exists.")
 
@@ -868,6 +864,11 @@ class FixedIpAssociatedWithMultipleInstances(NovaException):
 
 class FixedIpInvalid(Invalid):
     msg_fmt = _("Fixed IP address %(address)s is invalid.")
+
+
+class FixedIpInvalidOnHost(Invalid):
+    msg_fmt = _("The fixed IP associated with port %(port_id)s is not "
+                "compatible with the host.")
 
 
 class NoMoreFixedIps(NovaException):
@@ -1295,6 +1296,10 @@ class MigrationPreCheckClientException(MigrationError):
 
 class MigrationSchedulerRPCError(MigrationError):
     msg_fmt = _("Migration select destinations error: %(reason)s")
+
+
+class RPCPinnedToOldVersion(NovaException):
+    msg_fmt = _("RPC is pinned to old version")
 
 
 class MalformedRequestBody(NovaException):
@@ -1974,12 +1979,22 @@ class CPUPinningNotSupported(Invalid):
 
 
 class CPUPinningInvalid(Invalid):
-    msg_fmt = _("Cannot pin/unpin cpus %(requested)s from the following "
-                "pinned set %(pinned)s")
+    msg_fmt = _("CPU set to pin %(requested)s must be a subset of "
+                "free CPU set %(free)s")
+
+
+class CPUUnpinningInvalid(Invalid):
+    msg_fmt = _("CPU set to unpin %(requested)s must be a subset of "
+                "pinned CPU set %(pinned)s")
 
 
 class CPUPinningUnknown(Invalid):
-    msg_fmt = _("CPU set to pin/unpin %(requested)s must be a subset of "
+    msg_fmt = _("CPU set to pin %(requested)s must be a subset of "
+                "known CPU set %(cpuset)s")
+
+
+class CPUUnpinningUnknown(Invalid):
+    msg_fmt = _("CPU set to unpin %(requested)s must be a subset of "
                 "known CPU set %(cpuset)s")
 
 
@@ -2098,6 +2113,34 @@ class ResourceProviderInUse(NovaException):
     msg_fmt = _("Resource provider has allocations.")
 
 
+class InvalidInventory(Invalid):
+    msg_fmt = _("Inventory for '%(resource_class)s' on "
+                "resource provider '%(resource_provider)s' invalid.")
+
+
+class InventoryInUse(InvalidInventory):
+    msg_fmt = _("Inventory for '%(resource_classes)s' on "
+                "resource provider '%(resource_provider)s' in use.")
+
+
+class InvalidInventoryCapacity(InvalidInventory):
+    msg_fmt = _("Invalid inventory for '%(resource_class)s' on "
+                "resource provider '%(resource_provider)s'. "
+                "The reserved value is greater than or equal to total.")
+
+
+class InvalidInventoryNewCapacityExceeded(InvalidInventory):
+    msg_fmt = _("Invalid inventory for '%(resource_class)s' on "
+                "resource provider '%(resource_provider)s'. The new total "
+                "minus reserved amount is less than the existing used amount.")
+
+
+class InvalidAllocationCapacityExceeded(InvalidInventory):
+    msg_fmt = _("Unable to create allocation for '%(resource_class)s' on "
+                "resource provider '%(resource_provider)s'. The requested "
+                "amount would exceed the capacity.")
+
+
 class UnsupportedPointerModelRequested(Invalid):
     msg_fmt = _("Pointer model '%(model)s' requested is not supported by "
                 "host.")
@@ -2107,3 +2150,12 @@ class NotSupportedWithOption(Invalid):
     msg_fmt = _("%(operation)s is not supported in conjunction with the "
                 "current %(option)s setting.  Please refer to the nova "
                 "config-reference.")
+
+
+class Unauthorized(NovaException):
+    msg_fmt = _("Not authorized.")
+    code = 401
+
+
+class NeutronAdminCredentialConfigurationInvalid(Invalid):
+    msg_fmt = _("Networking client is experiencing an unauthorized exception.")

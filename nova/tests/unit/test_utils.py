@@ -15,7 +15,6 @@
 import datetime
 import hashlib
 import importlib
-import logging
 import os
 import os.path
 import socket
@@ -29,6 +28,7 @@ from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_context import context as common_context
 from oslo_context import fixture as context_fixture
+from oslo_log import log as logging
 from oslo_utils import encodeutils
 from oslo_utils import fixture as utils_fixture
 from oslo_utils import units
@@ -220,6 +220,19 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         self.assertEqual("[::ffff:127.0.0.1]", utils.safe_ip_format(
                          "::ffff:127.0.0.1"))
         self.assertEqual("localhost", utils.safe_ip_format("localhost"))
+
+    def test_format_remote_path(self):
+        self.assertEqual("[::1]:/foo/bar",
+                         utils.format_remote_path("::1", "/foo/bar"))
+        self.assertEqual("127.0.0.1:/foo/bar",
+                         utils.format_remote_path("127.0.0.1", "/foo/bar"))
+        self.assertEqual("[::ffff:127.0.0.1]:/foo/bar",
+                         utils.format_remote_path("::ffff:127.0.0.1",
+                                                  "/foo/bar"))
+        self.assertEqual("localhost:/foo/bar",
+                         utils.format_remote_path("localhost", "/foo/bar"))
+        self.assertEqual("/foo/bar", utils.format_remote_path(None,
+                                                              "/foo/bar"))
 
     def test_get_hash_str(self):
         base_str = b"foo"

@@ -85,18 +85,6 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         mock_import_object.assert_called_once_with(
             vmops.NOVA_VIF_DRIVER)
 
-    @mock.patch('nova.network.is_neutron')
-    def test_load_vif_driver_unknown(self, is_neutron):
-        # TODO(sdague): delete once network_api_class is removed from
-        # config.
-        is_neutron.return_value = None
-        self.assertRaises(TypeError, self._vmops._load_vif_driver_class)
-
-    @mock.patch('nova.virt.hyperv.vmops.importutils.import_object')
-    def test_load_vif_driver_class_error(self, mock_import_object):
-        mock_import_object.side_effect = KeyError
-        self.assertRaises(TypeError, self._vmops._load_vif_driver_class)
-
     def test_list_instances(self):
         mock_instance = mock.MagicMock()
         self._vmops._vmutils.list_instances.return_value = [mock_instance]
@@ -172,12 +160,12 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
     def _prepare_create_root_device_mocks(self, use_cow_images, vhd_format,
                                        vhd_size):
         mock_instance = fake_instance.fake_instance_obj(self.context)
-        mock_instance.root_gb = self.FAKE_SIZE
+        mock_instance.flavor.root_gb = self.FAKE_SIZE
         self.flags(use_cow_images=use_cow_images)
         self._vmops._vhdutils.get_vhd_info.return_value = {'VirtualSize':
                                                            vhd_size * units.Gi}
         self._vmops._vhdutils.get_vhd_format.return_value = vhd_format
-        root_vhd_internal_size = mock_instance.root_gb * units.Gi
+        root_vhd_internal_size = mock_instance.flavor.root_gb * units.Gi
         get_size = self._vmops._vhdutils.get_internal_vhd_size_by_file_size
         get_size.return_value = root_vhd_internal_size
         self._vmops._pathutils.exists.return_value = True
@@ -213,7 +201,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         mock_get_cached_image.return_value = fake_vhd_path
 
         fake_root_path = self._vmops._pathutils.get_root_vhd_path.return_value
-        root_vhd_internal_size = mock_instance.root_gb * units.Gi
+        root_vhd_internal_size = mock_instance.flavor.root_gb * units.Gi
         get_size = self._vmops._vhdutils.get_internal_vhd_size_by_file_size
 
         response = self._vmops._create_root_vhd(context=self.context,
@@ -248,7 +236,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             mock.sentinel.rescue_image_id if is_rescue_vhd else None)
 
         fake_root_path = self._vmops._pathutils.get_root_vhd_path.return_value
-        root_vhd_internal_size = mock_instance.root_gb * units.Gi
+        root_vhd_internal_size = mock_instance.flavor.root_gb * units.Gi
         get_size = self._vmops._vhdutils.get_internal_vhd_size_by_file_size
 
         response = self._vmops._create_root_vhd(
@@ -456,7 +444,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             mock_configdrive_required.assert_called_once_with(mock_instance)
             if configdrive_required:
                 mock_create_config_drive.assert_called_once_with(
-                    mock_instance, [mock.sentinel.FILE],
+                    self.context, mock_instance, [mock.sentinel.FILE],
                     mock.sentinel.PASSWORD,
                     mock.sentinel.INFO)
                 mock_attach_config_drive.assert_called_once_with(
@@ -518,8 +506,8 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
                                     block_device_info=block_device_info,
                                     vm_gen=vm_gen)
         self._vmops._vmutils.create_vm.assert_called_once_with(
-            mock_instance.name, mock_instance.memory_mb,
-            mock_instance.vcpus, CONF.hyperv.limit_cpu_features,
+            mock_instance.name, mock_instance.flavor.memory_mb,
+            mock_instance.flavor.vcpus, CONF.hyperv.limit_cpu_features,
             CONF.hyperv.dynamic_memory_ratio, vm_gen, instance_path,
             [mock_instance.uuid])
 
@@ -699,19 +687,24 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
         if config_drive_format != self.ISO9660:
             self.assertRaises(exception.ConfigDriveUnsupportedFormat,
                               self._vmops._create_config_drive,
-                              mock_instance, [mock.sentinel.FILE],
+                              self.context,
+                              mock_instance,
+                              [mock.sentinel.FILE],
                               mock.sentinel.PASSWORD,
                               mock.sentinel.NET_INFO,
                               rescue)
         elif side_effect is processutils.ProcessExecutionError:
             self.assertRaises(processutils.ProcessExecutionError,
                               self._vmops._create_config_drive,
-                              mock_instance, [mock.sentinel.FILE],
+                              self.context,
+                              mock_instance,
+                              [mock.sentinel.FILE],
                               mock.sentinel.PASSWORD,
                               mock.sentinel.NET_INFO,
                               rescue)
         else:
-            path = self._vmops._create_config_drive(mock_instance,
+            path = self._vmops._create_config_drive(self.context,
+                                                    mock_instance,
                                                     [mock.sentinel.FILE],
                                                     mock.sentinel.PASSWORD,
                                                     mock.sentinel.NET_INFO,
@@ -719,7 +712,8 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             mock_InstanceMetadata.assert_called_once_with(
                 mock_instance, content=[mock.sentinel.FILE],
                 extra_md={'admin_pass': mock.sentinel.PASSWORD},
-                network_info=mock.sentinel.NET_INFO)
+                network_info=mock.sentinel.NET_INFO,
+                request_context=self.context)
             mock_get_configdrive_path.assert_has_calls(
                 expected_get_configdrive_path_calls)
             mock_ConfigDriveBuilder.assert_called_with(
@@ -1342,7 +1336,7 @@ class VMOpsTestCase(test_base.HyperVBaseTestCase):
             drive_type=constants.DISK)
         mock_detach_config_drive.assert_called_once_with(mock_instance.name)
         mock_create_config_drive.assert_called_once_with(
-            mock_instance,
+            self.context, mock_instance,
             injected_files=None,
             admin_password=mock.sentinel.rescue_password,
             network_info=mock.sentinel.network_info,

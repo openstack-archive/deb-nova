@@ -23,7 +23,6 @@ import fixtures
 import mock
 from oslo_log import log
 from oslo_utils import timeutils
-from oslo_utils import versionutils
 from oslo_versionedobjects import base as ovo_base
 from oslo_versionedobjects import exception as ovo_exc
 from oslo_versionedobjects import fixture
@@ -1101,12 +1100,13 @@ object_data = {
     'Aggregate': '1.3-f315cb68906307ca2d1cca84d4753585',
     'AggregateList': '1.2-fb6e19f3c3a3186b04eceb98b5dadbfa',
     'Allocation': '1.0-864506325f1822f4e4805b56faf51bbe',
-    'AllocationList': '1.0-de53f0fd078c27cc1d43400f4e8bcef8',
+    'AllocationList': '1.1-e43fe4a9c9cbbda7438b0e48332f099e',
     'BandwidthUsage': '1.2-c6e4c779c7f40f2407e3d70022e3cd1c',
     'BandwidthUsageList': '1.2-5fe7475ada6fe62413cbfcc06ec70746',
     'BlockDeviceMapping': '1.17-5e094927f1251770dcada6ab05adfcdb',
     'BlockDeviceMappingList': '1.17-1e568eecb91d06d4112db9fd656de235',
-    'BuildRequest': '1.0-c6cd434db5cbdb4d1ebb935424261377',
+    'BuildRequest': '1.1-5a5ce31c2f4dcd67088342a9164d13b4',
+    'BuildRequestList': '1.0-cd95608eccb89fbc702c8b52f38ec738',
     'CellMapping': '1.0-7f1a7e85a22bbb7559fc730ab658b9bd',
     'CellMappingList': '1.0-4ee0d9efdfd681fed822da88376e04d2',
     'ComputeNode': '1.16-2436e5b836fa0306a3c4e6d9e5ddacec',
@@ -1128,7 +1128,7 @@ object_data = {
     'FloatingIP': '1.10-52a67d52d85eb8b3f324a5b7935a335b',
     'FloatingIPList': '1.11-7f2ba670714e1b7bab462ab3290f7159',
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
-    'HyperVLiveMigrateData': '1.0-0b868dd6228a09c3f3e47016dddf6a1c',
+    'HyperVLiveMigrateData': '1.1-9987a3cec31a81abac6fba7cc722e43f',
     'HVSpec': '1.2-db672e73304da86139086d003f3977e7',
     'IDEDeviceBus': '1.0-29d4c9f27ac44197f01b6ac1b7e16502',
     'ImageMeta': '1.8-642d1b2eb3e880a367f37d72dd76162d',
@@ -1145,7 +1145,7 @@ object_data = {
     'InstanceGroup': '1.10-1a0c8c7447dc7ecb9da53849430c4a5f',
     'InstanceGroupList': '1.7-be18078220513316abd0ae1b2d916873',
     'InstanceInfoCache': '1.5-cd8b96fefe0fc8d4d337243ba0bf0e1e',
-    'InstanceList': '2.0-6c8ba6147cca3082b1e4643f795068bf',
+    'InstanceList': '2.1-e64b9f623db6370b22ec910461f06a52',
     'InstanceMapping': '1.0-65de80c491f54d19374703c0753c4d47',
     'InstanceMappingList': '1.0-9e982e3de1613b9ada85e35f69b23d47',
     'InstanceNUMACell': '1.3-6991a20992c5faa57fae71a45b40241b',
@@ -1191,11 +1191,13 @@ object_data = {
     'SecurityGroupRule': '1.1-ae1da17b79970012e8536f88cb3c6b29',
     'SecurityGroupRuleList': '1.2-0005c47fcd0fb78dd6d7fd32a1409f5b',
     'Service': '1.20-0f9c0bf701e68640b78638fd09e2cddc',
-    'ServiceList': '1.18-6c52cb616621c1af2415dcc11faf5c1a',
+    'ServiceList': '1.19-5325bce13eebcbf22edc9678285270cc',
     'TaskLog': '1.0-78b0534366f29aa3eebb01860fbe18fe',
     'TaskLogList': '1.0-cc8cce1af8a283b9d28b55fcd682e777',
     'Tag': '1.1-8b8d7d5b48887651a0e01241672e2963',
     'TagList': '1.1-55231bdb671ecf7641d6a2e9109b5d8e',
+    'Usage': '1.0-b78f18c3577a38e7a033e46a9725b09b',
+    'UsageList': '1.0-de53f0fd078c27cc1d43400f4e8bcef8',
     'USBDeviceBus': '1.0-e4c7dd6032e46cd74b027df5eb2d4750',
     'VirtCPUFeature': '1.0-3310718d8c72309259a6e39bdefe83ee',
     'VirtCPUModel': '1.0-6a5cc9f322729fc70ddc6733bacd57d3',
@@ -1207,10 +1209,31 @@ object_data = {
 }
 
 
+def get_nova_objects():
+    """Get Nova versioned objects
+
+    This returns a dict of versioned objects which are
+    in the Nova project namespace only. ie excludes
+    objects from os-vif and other 3rd party modules
+
+    :return: a dict mapping class names to lists of versioned objects
+    """
+
+    all_classes = base.NovaObjectRegistry.obj_classes()
+    nova_classes = {}
+    for name in all_classes:
+        objclasses = all_classes[name]
+        if (objclasses[0].OBJ_PROJECT_NAMESPACE !=
+            base.NovaObject.OBJ_PROJECT_NAMESPACE):
+            continue
+        nova_classes[name] = objclasses
+    return nova_classes
+
+
 class TestObjectVersions(test.NoDBTestCase):
     def test_versions(self):
         checker = fixture.ObjectVersionChecker(
-            base.NovaObjectRegistry.obj_classes())
+            get_nova_objects())
         fingerprints = checker.get_hashes()
 
         if os.getenv('GENERATE_HASHES'):
@@ -1238,17 +1261,18 @@ class TestObjectVersions(test.NoDBTestCase):
         # This doesn't actually test the data conversions, but it at least
         # makes sure the method doesn't blow up on something basic like
         # expecting the wrong version format.
-        obj_classes = base.NovaObjectRegistry.obj_classes()
-        for obj_name in obj_classes:
-            versions = ovo_base.obj_tree_get_versions(obj_name)
-            obj_class = obj_classes[obj_name][0]
-            version = versionutils.convert_version_to_tuple(obj_class.VERSION)
-            for n in range(version[1]):
-                test_version = '%d.%d' % (version[0], n)
-                LOG.info('testing obj: %s version: %s' %
-                         (obj_name, test_version))
-                obj_class().obj_to_primitive(target_version=test_version,
-                                             version_manifest=versions)
+
+        # Hold a dictionary of args/kwargs that need to get passed into
+        # __init__() for specific classes. The key in the dictionary is
+        # the obj_class that needs the init args/kwargs.
+        init_args = {}
+        init_kwargs = {}
+
+        checker = fixture.ObjectVersionChecker(
+            base.NovaObjectRegistry.obj_classes())
+        checker.test_compatibility_routines(use_manifest=True,
+                                            init_args=init_args,
+                                            init_kwargs=init_kwargs)
 
     def test_list_obj_make_compatible(self):
         @base.NovaObjectRegistry.register_if(False)

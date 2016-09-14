@@ -1,9 +1,3 @@
-# needs:fix_opt_description
-# needs:check_deprecation_status
-# needs:check_opt_group_and_type
-# needs:fix_opt_description_indentation
-
-
 # Copyright 2015 Intel Corporation
 # All Rights Reserved.
 #
@@ -19,62 +13,94 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from keystoneauth1 import loading as ks_loading
 from oslo_config import cfg
 
 ironic_group = cfg.OptGroup(
     'ironic',
-    title='Ironic Options')
+    title='Ironic Options',
+    help="""
+Configuration options for Ironic driver (Bare Metal).
+If using the Ironic driver following options must be set:
+* auth_type
+* auth_url
+* project_name
+* username
+* password
+* project_domain_id or project_domain_name
+* user_domain_id or user_domain_name
 
+Please note that if you are using Identity v2 API (deprecated),
+you don't need to provide domain information, since domains are
+a v3 concept.
+""")
+
+# FIXME(clenimar): The following deprecated auth options are kept for backwards
+# compatibility. Please remove them as soon as we drop its support:
+# `admin_username`, `admin_password`, `admin_url` and `admin_tenant_name`.
 ironic_options = [
-    cfg.IntOpt('api_version',
-        default=1,
-        deprecated_for_removal=True,
-        help='Version of Ironic API service endpoint. '
-             'DEPRECATED: Setting the API version is not possible anymore.'),
     cfg.StrOpt(
         'api_endpoint',
-        help='URL for Ironic API endpoint.'),
+        sample_default='http://ironic.example.org:6385/',
+        help='URL override for the Ironic API endpoint.'),
     cfg.StrOpt(
         'admin_username',
-        help='Ironic keystone admin name'),
+        deprecated_for_removal=True,
+        help='Ironic keystone admin name. '
+             'Use ``username`` instead.'),
     cfg.StrOpt(
         'admin_password',
         secret=True,
-        help='Ironic keystone admin password.'),
-    cfg.StrOpt(
-        'admin_auth_token',
-        secret=True,
         deprecated_for_removal=True,
-        help='Ironic keystone auth token.'
-             'DEPRECATED: use admin_username, admin_password, and '
-             'admin_tenant_name instead'),
+        help='Ironic keystone admin password. '
+             'Use ``password`` instead.'),
     cfg.StrOpt(
         'admin_url',
-        help='Keystone public API endpoint.'),
-    cfg.StrOpt(
-        'cafile',
-        help='PEM encoded Certificate Authority to use when verifying HTTPs '
-             'connections.'),
+        deprecated_for_removal=True,
+        help='Keystone public API endpoint. '
+             'Use ``auth_url`` instead.'),
     cfg.StrOpt(
         'admin_tenant_name',
-        help='Ironic keystone tenant name.'),
+        deprecated_for_removal=True,
+        help='Ironic keystone tenant name. '
+             'Use ``project_name`` instead.'),
     cfg.IntOpt(
         'api_max_retries',
+        # TODO(raj_singh): Change this default to some sensible number
         default=60,
-        help='How many retries when a request does conflict. '
-              'If <= 0, only try once, no retries.'),
+        min=0,
+        help="""
+The number of times to retry when a request conflicts.
+If set to 0, only try once, no retries.
+
+Related options:
+
+* api_retry_interval
+"""),
     cfg.IntOpt(
         'api_retry_interval',
         default=2,
-        help='How often to retry in seconds when a request '
-             'does conflict'),
+        min=0,
+        help="""
+The number of seconds to wait before retrying the request.
+
+Related options:
+
+* api_max_retries
+"""),
 ]
 
 
 def register_opts(conf):
     conf.register_group(ironic_group)
     conf.register_opts(ironic_options, group=ironic_group)
+    ks_loading.register_auth_conf_options(conf, group=ironic_group.name)
+    ks_loading.register_session_conf_options(conf, group=ironic_group.name)
 
 
 def list_opts():
-    return {ironic_group: ironic_options}
+    return {ironic_group: ironic_options +
+                          ks_loading.get_session_conf_options() +
+                          ks_loading.get_auth_common_conf_options() +
+                          ks_loading.get_auth_plugin_conf_options('v3password')
+            }

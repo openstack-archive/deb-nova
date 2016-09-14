@@ -86,6 +86,34 @@ def _reservation_get(context, uuid):
     return result
 
 
+def _make_compute_node(host, node, hv_type, service_id):
+    compute_node_dict = dict(vcpus=2, memory_mb=1024, local_gb=2048,
+                        uuid=uuidsentinel.fake_compute_node,
+                        vcpus_used=0, memory_mb_used=0,
+                        local_gb_used=0, free_ram_mb=1024,
+                        free_disk_gb=2048, hypervisor_type=hv_type,
+                        hypervisor_version=1, cpu_info="",
+                        running_vms=0, current_workload=0,
+                        service_id=service_id,
+                        host=host,
+                        disk_available_least=100,
+                        hypervisor_hostname=node,
+                        host_ip='127.0.0.1',
+                        supported_instances='',
+                        pci_stats='',
+                        metrics='',
+                        extra_resources='',
+                        cpu_allocation_ratio=16.0,
+                        ram_allocation_ratio=1.5,
+                        disk_allocation_ratio=1.0,
+                        stats='', numa_topology='')
+    # add some random stats
+    stats = dict(num_instances=3, num_proj_12345=2,
+            num_proj_23456=2, num_vm_building=3)
+    compute_node_dict['stats'] = jsonutils.dumps(stats)
+    return compute_node_dict
+
+
 def _quota_reserve(context, project_id, user_id):
     """Create sample Quota, QuotaUsage and Reservation objects.
 
@@ -1976,14 +2004,16 @@ class SecurityGroupTestCase(test.TestCase, ModelsObjectComparatorMixin):
                           self.ctxt, security_group1['id'])
         self._assertEqualObjects(db.security_group_get(
                 self.ctxt, security_group2['id'],
-                columns_to_join=['instances']), security_group2)
+                columns_to_join=['instances',
+                                 'rules']), security_group2)
 
     def test_security_group_get(self):
         security_group1 = self._create_security_group({})
         self._create_security_group({'name': 'fake_sec_group2'})
         real_security_group = db.security_group_get(self.ctxt,
                                               security_group1['id'],
-                                              columns_to_join=['instances'])
+                                              columns_to_join=['instances',
+                                                               'rules'])
         self._assertEqualObjects(security_group1,
                                  real_security_group)
 
@@ -3508,6 +3538,50 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         expected = services[:3]
         real = db.service_get_all_by_binary(self.ctxt, 'b1',
                                             include_disabled=True)
+        self._assertEqualListsOfObjects(expected, real)
+
+    def test_service_get_all_computes_by_hv_type(self):
+        values = [
+            {'host': 'host1', 'binary': 'nova-compute'},
+            {'host': 'host2', 'binary': 'nova-compute', 'disabled': True},
+            {'host': 'host3', 'binary': 'nova-compute'},
+            {'host': 'host4', 'binary': 'b2'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+        compute_nodes = [
+            _make_compute_node('host1', 'node1', 'ironic', services[0]['id']),
+            _make_compute_node('host1', 'node2', 'ironic', services[0]['id']),
+            _make_compute_node('host2', 'node3', 'ironic', services[1]['id']),
+            _make_compute_node('host3', 'host3', 'kvm', services[2]['id']),
+        ]
+        [db.compute_node_create(self.ctxt, cn) for cn in compute_nodes]
+
+        expected = services[:1]
+        real = db.service_get_all_computes_by_hv_type(self.ctxt,
+                                                      'ironic',
+                                                      include_disabled=False)
+        self._assertEqualListsOfObjects(expected, real)
+
+    def test_service_get_all_computes_by_hv_type_include_disabled(self):
+        values = [
+            {'host': 'host1', 'binary': 'nova-compute'},
+            {'host': 'host2', 'binary': 'nova-compute', 'disabled': True},
+            {'host': 'host3', 'binary': 'nova-compute'},
+            {'host': 'host4', 'binary': 'b2'}
+        ]
+        services = [self._create_service(vals) for vals in values]
+        compute_nodes = [
+            _make_compute_node('host1', 'node1', 'ironic', services[0]['id']),
+            _make_compute_node('host1', 'node2', 'ironic', services[0]['id']),
+            _make_compute_node('host2', 'node3', 'ironic', services[1]['id']),
+            _make_compute_node('host3', 'host3', 'kvm', services[2]['id']),
+        ]
+        [db.compute_node_create(self.ctxt, cn) for cn in compute_nodes]
+
+        expected = services[:2]
+        real = db.service_get_all_computes_by_hv_type(self.ctxt,
+                                                      'ironic',
+                                                      include_disabled=True)
         self._assertEqualListsOfObjects(expected, real)
 
     def test_service_get_all_by_host(self):
@@ -8535,6 +8609,60 @@ class BwUsageTestCase(test.TestCase, ModelsObjectComparatorMixin):
         start_period = expected_bw_usage['start_period']
         bw_usage = db.bw_usage_get(self.ctxt, uuid, start_period, mac)
         self._assertEqualObjects(expected_bw_usage, bw_usage,
+                                 ignored_keys=self._ignored_keys)
+
+    def _create_bw_usage(self, context, uuid, mac, start_period, bw_in, bw_out,
+                         last_ctr_in, last_ctr_out, id, last_refreshed=None):
+        with sqlalchemy_api.get_context_manager(context).writer.using(context):
+            bwusage = models.BandwidthUsage()
+            bwusage.start_period = start_period
+            bwusage.uuid = uuid
+            bwusage.mac = mac
+            bwusage.last_refreshed = last_refreshed
+            bwusage.bw_in = bw_in
+            bwusage.bw_out = bw_out
+            bwusage.last_ctr_in = last_ctr_in
+            bwusage.last_ctr_out = last_ctr_out
+            bwusage.id = id
+            bwusage.save(context.session)
+
+    def test_bw_usage_update_exactly_one_record(self):
+        now = timeutils.utcnow()
+        start_period = now - datetime.timedelta(seconds=10)
+        uuid = 'fake_uuid'
+
+        # create two equal bw_usages with IDs 1 and 2
+        for id in range(1, 3):
+            bw_usage = {'uuid': uuid,
+                        'mac': 'fake_mac',
+                        'start_period': start_period,
+                        'bw_in': 100,
+                        'bw_out': 200,
+                        'last_ctr_in': 12345,
+                        'last_ctr_out': 67890,
+                        'last_refreshed': now,
+                        'id': id}
+            self._create_bw_usage(self.ctxt, **bw_usage)
+
+        # check that we have two equal bw_usages
+        self.assertEqual(
+            2, len(db.bw_usage_get_by_uuids(self.ctxt, [uuid], start_period)))
+
+        # update 'last_ctr_in' field in one bw_usage
+        updated_bw_usage = {'uuid': uuid,
+                            'mac': 'fake_mac',
+                            'start_period': start_period,
+                            'bw_in': 100,
+                            'bw_out': 200,
+                            'last_ctr_in': 54321,
+                            'last_ctr_out': 67890,
+                            'last_refreshed': now}
+        result = db.bw_usage_update(
+            self.ctxt, update_cells=False, **updated_bw_usage)
+
+        # check that only bw_usage with ID 1 was updated
+        self.assertEqual(1, result['id'])
+        self._assertEqualObjects(updated_bw_usage, result,
                                  ignored_keys=self._ignored_keys)
 
     def test_bw_usage_get(self):

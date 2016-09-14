@@ -1,10 +1,3 @@
-# needs:fix_opt_description
-# needs:check_deprecation_status
-# needs:check_opt_group_and_type
-# needs:fix_opt_description_indentation
-# needs:fix_opt_registration_consistency
-
-
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -25,44 +18,36 @@ from oslo_config import cfg
 
 from nova.conf import paths
 
-crypto_opts_group = cfg.OptGroup(
-    "crypto",
-    title="Crypto Options")
+crypto_opts_group = cfg.OptGroup("crypto",
+        title="Crypto Options")
 
 crypto_opts = [
-    cfg.StrOpt(
-        "ca_file",
+    cfg.StrOpt("ca_file",
         default="cacert.pem",
         deprecated_group="DEFAULT",
         help="""
 Filename of root CA (Certificate Authority). This is a container format
- and includes root certificates.
+and includes root certificates.
 
-* Possible values:
+Possible values:
 
-    Any file name containing root CA, cacert.pem is default
+* Any file name containing root CA, cacert.pem is default
 
-* Related options:
+Related options:
 
-    ca_path
+* ca_path
 """),
-    cfg.StrOpt(
-        "key_file",
+    cfg.StrOpt("key_file",
         default=os.path.join("private", "cakey.pem"),
         deprecated_group="DEFAULT",
         help="""
 Filename of a private key.
 
-* Possible values:
+Related options:
 
-    Private key file name, private/cakey.pem is default
-
-* Related options:
-
-    keys_path
+* keys_path
 """),
-    cfg.StrOpt(
-        "crl_file",
+    cfg.StrOpt("crl_file",
         default="crl.pem",
         deprecated_group="DEFAULT",
         help="""
@@ -70,92 +55,49 @@ Filename of root Certificate Revocation List (CRL). This is a list of
 certificates that have been revoked, and therefore, entities presenting
 those (revoked) certificates should no longer be trusted.
 
-* Possible values:
+Related options:
 
-    crl.pem is default
-
-* Related options:
-
-    ca_path
+* ca_path
 """),
-    cfg.StrOpt(
-        "keys_path",
+    cfg.StrOpt("keys_path",
         default=paths.state_path_def("keys"),
         deprecated_group="DEFAULT",
         help="""
 Directory path where keys are located.
 
-* Possible values:
+Related options:
 
-    $state_path/keys is default.
-
-* Related options:
-
-    key_file
+* key_file
 """),
-    cfg.StrOpt(
-        "ca_path",
+    cfg.StrOpt("ca_path",
         default=paths.state_path_def("CA"),
         deprecated_group="DEFAULT",
         help="""
 Directory path where root CA is located.
 
-* Possible values:
+Related options:
 
-    $state_path/CA is default
-
-* Related options:
-
-    ca_file
+* ca_file
 """),
-    cfg.BoolOpt(
-        "use_project_ca",
+    cfg.BoolOpt("use_project_ca",
         default=False,
         deprecated_group="DEFAULT",
-        help="""
-Option to enable/disable use of CA for each project.
-
-* Possible values:
-
-    True, False is default
-
-* Related options:
-
-    None
-"""),
-    cfg.StrOpt(
-        "user_cert_subject",
+        help="Option to enable/disable use of CA for each project."),
+    cfg.StrOpt("user_cert_subject",
         default="/C=US/ST=California/O=OpenStack/"
                 "OU=NovaDev/CN=%.16s-%.16s-%s",
         deprecated_group="DEFAULT",
         help="""
 Subject for certificate for users, %s for
 project, user, timestamp
-
-* Possible values:
-
-    Any subject for users certificate.
-
-* Related options:
-
-    None
 """),
-    cfg.StrOpt(
-        "project_cert_subject",
+    cfg.StrOpt("project_cert_subject",
         default="/C=US/ST=California/O=OpenStack/"
                 "OU=NovaDev/CN=project-ca-%.16s-%s",
         deprecated_group="DEFAULT",
         help="""
 Subject for certificate for projects, %s for
 project, timestamp
-
-* Possible values:
-
-    Any subject for projects certificate.
-
-* Related options:
-
-    None
 """),
 ]
 

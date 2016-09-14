@@ -495,6 +495,20 @@ def service_get_all_by_binary(context, binary, include_disabled=False):
 
 
 @pick_context_manager_reader
+def service_get_all_computes_by_hv_type(context, hv_type,
+                                        include_disabled=False):
+    query = model_query(context, models.Service, read_deleted="no").\
+                    filter_by(binary='nova-compute')
+    if not include_disabled:
+        query = query.filter_by(disabled=False)
+    query = query.join(models.ComputeNode,
+                       models.Service.host == models.ComputeNode.host).\
+                  filter(models.ComputeNode.hypervisor_type == hv_type).\
+                  distinct('host')
+    return query.all()
+
+
+@pick_context_manager_reader
 def service_get_by_host_and_binary(context, host, binary):
     result = model_query(context, models.Service, read_deleted="no").\
                     filter_by(host=host).\
@@ -1690,9 +1704,6 @@ def _validate_unique_server_name(context, name):
         instance_with_same_name = base_query.count()
 
     else:
-        LOG.warning(_LW('Unknown osapi_compute_unique_server_name_scope value:'
-                        ' %s. Flag must be empty, "global" or "project"'),
-                    CONF.osapi_compute_unique_server_name_scope)
         return
 
     if instance_with_same_name > 0:
@@ -2133,10 +2144,8 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
                 query_prefix = query_prefix.filter(not_soft_deleted)
 
     if 'cleaned' in filters:
-        if filters.pop('cleaned'):
-            query_prefix = query_prefix.filter(models.Instance.cleaned == 1)
-        else:
-            query_prefix = query_prefix.filter(models.Instance.cleaned == 0)
+        cleaned = 1 if filters.pop('cleaned') else 0
+        query_prefix = query_prefix.filter(models.Instance.cleaned == cleaned)
 
     if 'tags' in filters:
         tags = filters.pop('tags')
@@ -4287,7 +4296,11 @@ def security_group_get_all(context):
 @require_context
 @main_context_manager.reader
 def security_group_get(context, security_group_id, columns_to_join=None):
-    query = _security_group_get_query(context, project_only=True).\
+    join_rules = columns_to_join and 'rules' in columns_to_join
+    if join_rules:
+        columns_to_join.remove('rules')
+    query = _security_group_get_query(context, project_only=True,
+                                      join_rules=join_rules).\
                     filter_by(id=security_group_id)
 
     if columns_to_join is None:
@@ -5458,11 +5471,15 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
               'last_ctr_out': last_ctr_out,
               'bw_in': bw_in,
               'bw_out': bw_out}
+    # NOTE(pkholkin): order_by() is needed here to ensure that the
+    # same record is updated every time. It can be removed after adding
+    # unique constraint to this model.
     bw_usage = model_query(context, models.BandwidthUsage,
             read_deleted='yes').\
                     filter_by(start_period=ts_values['start_period']).\
                     filter_by(uuid=uuid).\
-                    filter_by(mac=mac).first()
+                    filter_by(mac=mac).\
+                    order_by(asc(models.BandwidthUsage.id)).first()
 
     if bw_usage:
         bw_usage.update(values)
@@ -5477,12 +5494,8 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
     bwusage.bw_out = bw_out
     bwusage.last_ctr_in = last_ctr_in
     bwusage.last_ctr_out = last_ctr_out
-    try:
-        bwusage.save(context.session)
-    except db_exc.DBDuplicateEntry:
-        # NOTE(sirp): Possible race if two greenthreads attempt to create
-        # the usage entry at the same time. First one wins.
-        pass
+    bwusage.save(context.session)
+
     return bwusage
 
 

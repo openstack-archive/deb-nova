@@ -25,7 +25,12 @@ base_create = {
             'type': 'object',
             'properties': {
                 'name': parameter_types.name,
-                'imageRef': parameter_types.image_ref,
+                # NOTE(gmann): In case of boot from volume, imageRef was
+                # allowed as the empty string also So keeping the same
+                # behavior and allow empty string in case of boot from
+                # volume only. Python code make sure empty string is
+                # not alowed for other cases.
+                'imageRef': parameter_types.image_id_or_empty_string,
                 'flavorRef': parameter_types.flavor_ref,
                 'adminPass': parameter_types.admin_password,
                 'metadata': parameter_types.metadata,
@@ -74,6 +79,32 @@ base_create_v232['properties']['server'][
     'properties']['tag'] = server_tags.tag
 
 
+# 2.37 builds on 2.32 and makes the following changes:
+# 1. server.networks is required
+# 2. server.networks is now either an enum or a list
+# 3. server.networks.uuid is now required to be a uuid
+base_create_v237 = copy.deepcopy(base_create_v232)
+base_create_v237['properties']['server']['required'].append('networks')
+base_create_v237['properties']['server']['properties']['networks'] = {
+    'oneOf': [
+        {'type': 'array',
+         'items': {
+             'type': 'object',
+             'properties': {
+                 'fixed_ip': parameter_types.ip_address,
+                 'port': {
+                     'oneOf': [{'type': 'string', 'format': 'uuid'},
+                               {'type': 'null'}]
+                 },
+                 'uuid': {'type': 'string', 'format': 'uuid'},
+             },
+             'additionalProperties': False,
+         },
+        },
+        {'type': 'string', 'enum': ['none', 'auto']},
+    ]}
+
+
 base_update = {
     'type': 'object',
     'properties': {
@@ -108,7 +139,7 @@ base_rebuild = {
             'type': 'object',
             'properties': {
                 'name': parameter_types.name,
-                'imageRef': parameter_types.image_ref,
+                'imageRef': parameter_types.image_id,
                 'adminPass': parameter_types.admin_password,
                 'metadata': parameter_types.metadata,
                 'preserve_ephemeral': parameter_types.boolean,

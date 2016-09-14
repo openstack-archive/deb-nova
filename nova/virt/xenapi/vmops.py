@@ -47,7 +47,6 @@ from nova import context as nova_context
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
 from nova import objects
-from nova.objects import migrate_data as migrate_data_obj
 from nova.pci import manager as pci_manager
 from nova import utils
 from nova.virt import configdrive
@@ -456,8 +455,9 @@ class VMOps(object):
             if resize:
                 self._resize_up_vdis(instance, vdis)
 
-            self._attach_disks(instance, image_meta, vm_ref, name_label, vdis,
-                               disk_image_type, network_info, rescue,
+            self._attach_disks(context, instance, image_meta, vm_ref,
+                               name_label, vdis, disk_image_type,
+                               network_info, rescue,
                                admin_password, injected_files)
             if not first_boot:
                 self._attach_mapped_block_devices(instance,
@@ -614,8 +614,8 @@ class VMOps(object):
 
     def _handle_neutron_event_timeout(self, instance, undo_mgr):
         # We didn't get callback from Neutron within given time
-        LOG.warn(_LW('Timeout waiting for vif plugging callback'),
-                 instance=instance)
+        LOG.warning(_LW('Timeout waiting for vif plugging callback'),
+                    instance=instance)
         if CONF.vif_plugging_is_fatal:
             raise exception.VirtualInterfaceCreateException()
 
@@ -627,8 +627,8 @@ class VMOps(object):
             self._update_last_dom_id(vm_ref)
 
     def _neutron_failed_callback(self, event_name, instance):
-        LOG.warn(_LW('Neutron Reported failure on event %(event)s'),
-                {'event': event_name}, instance=instance)
+        LOG.warning(_LW('Neutron Reported failure on event %(event)s'),
+                   {'event': event_name}, instance=instance)
         if CONF.vif_plugging_is_fatal:
             raise exception.VirtualInterfaceCreateException()
 
@@ -718,8 +718,8 @@ class VMOps(object):
                                     use_pv_kernel, device_id)
         return vm_ref
 
-    def _attach_disks(self, instance, image_meta, vm_ref, name_label, vdis,
-                      disk_image_type, network_info, rescue=False,
+    def _attach_disks(self, context, instance, image_meta, vm_ref, name_label,
+                      vdis, disk_image_type, network_info, rescue=False,
                       admin_password=None, files=None):
         flavor = instance.get_flavor()
 
@@ -801,7 +801,8 @@ class VMOps(object):
 
         # Attach (optional) configdrive v2 disk
         if configdrive.required_by(instance):
-            vm_utils.generate_configdrive(self._session, instance, vm_ref,
+            vm_utils.generate_configdrive(self._session, context,
+                                          instance, vm_ref,
                                           DEVICE_CONFIGDRIVE,
                                           network_info,
                                           admin_password=admin_password,
@@ -1212,7 +1213,7 @@ class VMOps(object):
         vm_utils.set_vm_name_label(self._session, vm_ref, name_label)
 
     def _ensure_not_resize_down_ephemeral(self, instance, flavor):
-        old_gb = instance["ephemeral_gb"]
+        old_gb = instance.flavor.ephemeral_gb
         new_gb = flavor.ephemeral_gb
 
         if old_gb > new_gb:
@@ -1235,7 +1236,7 @@ class VMOps(object):
                                        step=0,
                                        total_steps=RESIZE_TOTAL_STEPS)
 
-        old_gb = instance['root_gb']
+        old_gb = instance.flavor.root_gb
         new_gb = flavor.root_gb
         resize_down = old_gb > new_gb
 
@@ -1272,7 +1273,7 @@ class VMOps(object):
                                           mount_device)
 
     def _resize_up_vdis(self, instance, vdis):
-        new_root_gb = instance['root_gb']
+        new_root_gb = instance.flavor.root_gb
         root_vdi = vdis.get('root')
         if new_root_gb and root_vdi:
             if root_vdi.get('osvol', False):  # Don't resize root volumes.
@@ -1289,7 +1290,7 @@ class VMOps(object):
             # to resize, so nothing more to do here.
             return
 
-        total_ephemeral_gb = instance['ephemeral_gb']
+        total_ephemeral_gb = instance.flavor.ephemeral_gb
         if total_ephemeral_gb:
             sizes = vm_utils.get_ephemeral_disk_sizes(total_ephemeral_gb)
             # resize existing (migrated) ephemeral disks,
@@ -2246,11 +2247,6 @@ class VMOps(object):
                 raise exception.MigrationError(reason=_('XAPI supporting '
                                 'relax-xsm-sr-check=true required'))
 
-        if not isinstance(dest_check_data, migrate_data_obj.LiveMigrateData):
-            obj = objects.XenapiLiveMigrateData()
-            obj.from_legacy_dict(dest_check_data)
-            dest_check_data = obj
-
         if ('block_migration' in dest_check_data and
                 dest_check_data.block_migration):
             vm_ref = self._get_vm_opaque_ref(instance_ref)
@@ -2375,10 +2371,6 @@ class VMOps(object):
 
     def pre_live_migration(self, context, instance, block_device_info,
                            network_info, disk_info, migrate_data):
-        if migrate_data is None:
-            raise exception.InvalidParameterValue(
-                    'XenAPI requires migrate data')
-
         migrate_data.sr_uuid_map = self.connect_block_device_volumes(
                 block_device_info)
         return migrate_data

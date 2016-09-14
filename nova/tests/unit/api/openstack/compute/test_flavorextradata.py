@@ -16,7 +16,6 @@
 import datetime
 
 from oslo_serialization import jsonutils
-import webob
 
 from nova.compute import flavors
 from nova import test
@@ -59,9 +58,6 @@ class FlavorExtraDataTestV21(test.NoDBTestCase):
 
     def setUp(self):
         super(FlavorExtraDataTestV21, self).setUp()
-        ext = ('nova.api.openstack.compute.contrib'
-              '.flavorextradata.Flavorextradata')
-        self.flags(osapi_compute_extension=[ext])
         self.stubs.Set(flavors, 'get_flavor_by_flavor_id',
                                         fake_get_flavor_by_flavor_id)
         self.stubs.Set(flavors, 'get_all_flavors_sorted_list',
@@ -88,7 +84,7 @@ class FlavorExtraDataTestV21(test.NoDBTestCase):
         }
 
         url = self.base_url + '/1'
-        req = webob.Request.blank(url)
+        req = fakes.HTTPRequest.blank(url)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(self.app)
         body = jsonutils.loads(res.body)
@@ -119,7 +115,7 @@ class FlavorExtraDataTestV21(test.NoDBTestCase):
         ]
 
         url = self.base_url + '/detail'
-        req = webob.Request.blank(url)
+        req = fakes.HTTPRequest.blank(url)
         req.headers['Content-Type'] = 'application/json'
         res = req.get_response(self.app)
         body = jsonutils.loads(res.body)

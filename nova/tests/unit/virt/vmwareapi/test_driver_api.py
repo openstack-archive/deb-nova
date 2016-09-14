@@ -819,7 +819,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
             cached_image = ds_obj.DatastorePath(self.ds, 'vmware_base',
                                                  iid, '%s.80.vmdk' % iid)
             mock_extend.assert_called_once_with(
-                    self.instance, self.instance.root_gb * units.Mi,
+                    self.instance, self.instance.flavor.root_gb * units.Mi,
                     str(cached_image), "fake_dc_ref")
 
     def test_spawn_disk_extend_failed_copy(self):
@@ -2232,10 +2232,11 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.assertEqual(2, len(ds_util._DS_DC_MAPPING))
 
     def test_pre_live_migration(self):
+        migrate_data = objects.migrate_data.LiveMigrateData()
         self.assertRaises(NotImplementedError,
                           self.conn.pre_live_migration, self.context,
                           'fake_instance', 'fake_block_device_info',
-                          'fake_network_info', 'fake_disk_info')
+                          'fake_network_info', 'fake_disk_info', migrate_data)
 
     def test_live_migration(self):
         self.assertRaises(NotImplementedError,

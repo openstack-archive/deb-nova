@@ -291,8 +291,11 @@ class ResourceProviderTestCase(ResourceProviderBaseCase):
                 total=2048,
                 reserved=2048)
         disk_inv.obj_set_defaults()
-        self.assertRaises(exception.ObjectActionError,
-                          rp.update_inventory, disk_inv)
+        error = self.assertRaises(exception.InvalidInventoryCapacity,
+                                  rp.update_inventory, disk_inv)
+        self.assertIn("Invalid inventory for '%s'"
+                      % fields.ResourceClass.DISK_GB, str(error))
+        self.assertIn("on resource provider '%s'." % rp.uuid, str(error))
 
         # generation has not bumped
         self.assertEqual(saved_generation, rp.generation)
@@ -348,6 +351,21 @@ class ResourceProviderTestCase(ResourceProviderBaseCase):
         self.assertIn('No inventory of class DISK_GB found for delete',
                       str(error))
 
+    def test_delete_inventory_with_allocation(self):
+        rp, allocation = self._make_allocation()
+        disk_inv = objects.Inventory(resource_provider=rp,
+                                     resource_class='DISK_GB',
+                                     total=2048)
+        disk_inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[disk_inv])
+        rp.set_inventory(inv_list)
+        error = self.assertRaises(exception.InventoryInUse,
+                                  rp.delete_inventory,
+                                  'DISK_GB')
+        self.assertIn(
+            "Inventory for 'DISK_GB' on resource provider '%s' in use"
+            % rp.uuid, str(error))
+
     def test_update_inventory_not_found(self):
         rp = objects.ResourceProvider(context=self.context,
                                       uuid=uuidsentinel.rp_uuid,
@@ -362,11 +380,47 @@ class ResourceProviderTestCase(ResourceProviderBaseCase):
         self.assertIn('No inventory of class DISK_GB found for update',
                       str(error))
 
+    def test_update_inventory_violates_allocation(self):
+        rp, allocation = self._make_allocation()
+        disk_inv = objects.Inventory(resource_provider=rp,
+                                     resource_class='DISK_GB',
+                                     total=2048)
+        disk_inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[disk_inv])
+        rp.set_inventory(inv_list)
+        # attempt to set inventory to less than currently allocated
+        # amounts
+        disk_inv = objects.Inventory(
+            resource_provider=rp,
+            resource_class=fields.ResourceClass.DISK_GB, total=1)
+        disk_inv.obj_set_defaults()
+        error = self.assertRaises(
+            exception.InvalidInventoryNewCapacityExceeded,
+            rp.update_inventory, disk_inv)
+        self.assertIn("Invalid inventory for '%s'"
+                      % fields.ResourceClass.DISK_GB, str(error))
+        self.assertIn("on resource provider '%s'." % rp.uuid, str(error))
 
-class ResourceProviderListTestCase(test.NoDBTestCase):
+    def test_add_invalid_inventory(self):
+        rp = objects.ResourceProvider(context=self.context,
+                                      uuid=uuidsentinel.rp_uuid,
+                                      name=uuidsentinel.rp_name)
+        rp.create()
+        disk_inv = objects.Inventory(
+            resource_provider=rp,
+            resource_class=fields.ResourceClass.DISK_GB,
+            total=1024, reserved=2048)
+        disk_inv.obj_set_defaults()
+        error = self.assertRaises(exception.InvalidInventoryCapacity,
+                                  rp.add_inventory,
+                                  disk_inv)
+        self.assertIn("Invalid inventory for '%s'"
+                      % fields.ResourceClass.DISK_GB, str(error))
+        self.assertIn("on resource provider '%s'."
+                      % rp.uuid, str(error))
 
-    USES_DB_SELF = True
 
+class ResourceProviderListTestCase(ResourceProviderBaseCase):
     def setUp(self):
         super(ResourceProviderListTestCase, self).setUp()
         self.useFixture(fixtures.Database())
@@ -389,6 +443,10 @@ class ResourceProviderListTestCase(test.NoDBTestCase):
         resource_providers = objects.ResourceProviderList.get_all_by_filters(
             self.context, filters={'can_host': 1})
         self.assertEqual(0, len(resource_providers))
+        resource_providers = objects.ResourceProviderList.get_all_by_filters(
+            self.context, filters={'uuid': getattr(uuidsentinel, 'rp_uuid_2')})
+        self.assertEqual(1, len(resource_providers))
+        self.assertEqual('rp_name_2', resource_providers[0].name)
 
 
 class TestAllocation(ResourceProviderBaseCase):
@@ -512,3 +570,173 @@ class TestAllocation(ResourceProviderBaseCase):
         self.assertNotIn(fields.ResourceClass.IPV4_ADDRESS,
                       [allocation.resource_class
                        for allocation in allocations])
+
+
+class TestAllocationListCreateDelete(ResourceProviderBaseCase):
+
+    def test_allocation_list_create(self):
+        consumer_uuid = uuidsentinel.consumer
+
+        # Create two resource providers
+        rp1_name = uuidsentinel.rp1_name
+        rp1_uuid = uuidsentinel.rp1_uuid
+        rp1_class = fields.ResourceClass.DISK_GB
+        rp1_used = 6
+
+        rp2_name = uuidsentinel.rp2_name
+        rp2_uuid = uuidsentinel.rp2_uuid
+        rp2_class = fields.ResourceClass.IPV4_ADDRESS
+        rp2_used = 2
+
+        rp1 = objects.ResourceProvider(
+            self.context, name=rp1_name, uuid=rp1_uuid)
+        rp1.create()
+        rp2 = objects.ResourceProvider(
+            self.context, name=rp2_name, uuid=rp2_uuid)
+        rp2.create()
+
+        # Two allocations, one for each resource provider.
+        allocation_1 = objects.Allocation(resource_provider=rp1,
+                                          consumer_id=consumer_uuid,
+                                          resource_class=rp1_class,
+                                          used=rp1_used)
+        allocation_2 = objects.Allocation(resource_provider=rp2,
+                                          consumer_id=consumer_uuid,
+                                          resource_class=rp2_class,
+                                          used=rp2_used)
+        allocation_list = objects.AllocationList(
+            self.context, objects=[allocation_1, allocation_2])
+
+        # There's no inventory, we have a failure.
+        self.assertRaises(exception.InvalidInventory,
+                          allocation_list.create_all)
+
+        # Add inventory for one of the two resource providers. This should also
+        # fail, since rp2 has no inventory.
+        inv = objects.Inventory(resource_provider=rp1,
+                                resource_class=rp1_class,
+                                total=1024)
+        inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[inv])
+        rp1.set_inventory(inv_list)
+        self.assertRaises(exception.InvalidInventory,
+                          allocation_list.create_all)
+
+        # Add inventory for the second resource provider
+        inv = objects.Inventory(resource_provider=rp2,
+                                resource_class=rp2_class,
+                                total=255, reserved=2)
+        inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[inv])
+        rp2.set_inventory(inv_list)
+
+        # Now the allocations will work.
+        allocation_list.create_all()
+
+        # Check that those allocations changed usage on each
+        # resource provider.
+        rp1_usage = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, rp1_uuid)
+        rp2_usage = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, rp2_uuid)
+        self.assertEqual(rp1_used, rp1_usage[0].usage)
+        self.assertEqual(rp2_used, rp2_usage[0].usage)
+
+        # redo one allocation
+        # TODO(cdent): This does not currently behave as expected
+        # because a new allocataion is created, adding to the total
+        # used, not replacing.
+        rp1_used += 1
+        allocation_1 = objects.Allocation(resource_provider=rp1,
+                                          consumer_id=consumer_uuid,
+                                          resource_class=rp1_class,
+                                          used=rp1_used)
+        allocation_list = objects.AllocationList(
+            self.context, objects=[allocation_1])
+        allocation_list.create_all()
+
+        rp1_usage = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, rp1_uuid)
+        self.assertEqual(rp1_used, rp1_usage[0].usage)
+
+        # delete the allocations for the consumer
+        # NOTE(cdent): The database uses 'consumer_id' for the
+        # column, presumably because some ids might not be uuids, at
+        # some point in the future.
+        consumer_allocations = objects.AllocationList.get_all_by_consumer_id(
+            self.context, consumer_uuid)
+        consumer_allocations.delete_all()
+
+        rp1_usage = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, rp1_uuid)
+        rp2_usage = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, rp2_uuid)
+        self.assertEqual(0, rp1_usage[0].usage)
+        self.assertEqual(0, rp2_usage[0].usage)
+
+
+class UsageListTestCase(ResourceProviderBaseCase):
+
+    def test_get_all_null(self):
+        for uuid in [uuidsentinel.rp_uuid_1, uuidsentinel.rp_uuid_2]:
+            rp = objects.ResourceProvider(self.context, name=uuid, uuid=uuid)
+            rp.create()
+
+        usage_list = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, uuidsentinel.rp_uuid_1)
+        self.assertEqual(0, len(usage_list))
+
+    def test_get_all_one_allocation(self):
+        db_rp, _ = self._make_allocation(rp_uuid=uuidsentinel.rp_uuid)
+        inv = objects.Inventory(resource_provider=db_rp,
+                                resource_class=fields.ResourceClass.DISK_GB,
+                                total=1024)
+        inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[inv])
+        db_rp.set_inventory(inv_list)
+
+        usage_list = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, db_rp.uuid)
+        self.assertEqual(1, len(usage_list))
+        self.assertEqual(2, usage_list[0].usage)
+        self.assertEqual(fields.ResourceClass.DISK_GB,
+                         usage_list[0].resource_class)
+
+    def test_get_inventory_no_allocation(self):
+        db_rp = objects.ResourceProvider(self.context,
+                                         name=uuidsentinel.rp_no_inv,
+                                         uuid=uuidsentinel.rp_no_inv)
+        db_rp.create()
+        inv = objects.Inventory(resource_provider=db_rp,
+                                resource_class=fields.ResourceClass.DISK_GB,
+                                total=1024)
+        inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[inv])
+        db_rp.set_inventory(inv_list)
+
+        usage_list = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, db_rp.uuid)
+        self.assertEqual(1, len(usage_list))
+        self.assertEqual(0, usage_list[0].usage)
+        self.assertEqual(fields.ResourceClass.DISK_GB,
+                         usage_list[0].resource_class)
+
+    def test_get_all_multiple_inv(self):
+        db_rp = objects.ResourceProvider(self.context,
+                                         name=uuidsentinel.rp_no_inv,
+                                         uuid=uuidsentinel.rp_no_inv)
+        db_rp.create()
+        disk_inv = objects.Inventory(
+            resource_provider=db_rp,
+            resource_class=fields.ResourceClass.DISK_GB, total=1024)
+        disk_inv.obj_set_defaults()
+        vcpu_inv = objects.Inventory(
+            resource_provider=db_rp,
+            resource_class=fields.ResourceClass.VCPU, total=24)
+        vcpu_inv.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[disk_inv, vcpu_inv])
+        db_rp.set_inventory(inv_list)
+
+        usage_list = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, db_rp.uuid)
+        self.assertEqual(2, len(usage_list))

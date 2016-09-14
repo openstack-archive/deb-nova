@@ -25,6 +25,8 @@ from sqlalchemy.orm import joinedload
 from nova.cells import opts as cells_opts
 from nova.cells import rpcapi as cells_rpcapi
 from nova.cells import utils as cells_utils
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova import db
 from nova.db.sqlalchemy import api as db_api
 from nova.db.sqlalchemy import models
@@ -273,6 +275,21 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             try:
                 base_name = CONF.instance_name_template % info
             except KeyError:
+                base_name = self.uuid
+        except exception.ObjectActionError:
+            # This indicates self.id was not set and could not be lazy loaded.
+            # What this means is the instance has not been persisted to a db
+            # yet, which should indicate it has not been scheduled yet. In this
+            # situation it will have a blank name.
+            if (self.vm_state == vm_states.BUILDING and
+                    self.task_state == task_states.SCHEDULING):
+                base_name = ''
+            else:
+                # If the vm/task states don't indicate that it's being booted
+                # then we have a bug here. Log an error and attempt to return
+                # the uuid which is what an error above would return.
+                LOG.error(_LE('Could not lazy-load instance.id while '
+                              'attempting to generate the instance name.'))
                 base_name = self.uuid
         return base_name
 
@@ -1132,7 +1149,8 @@ def _make_instance_list(context, inst_list, db_inst_list, expected_attrs):
 @base.NovaObjectRegistry.register
 class InstanceList(base.ObjectListBase, base.NovaObject):
     # Version 2.0: Initial Version
-    VERSION = '2.0'
+    # Version 2.1: Add get_uuids_by_host()
+    VERSION = '2.1'
 
     fields = {
         'objects': fields.ListOfObjectsField('Instance'),
@@ -1307,6 +1325,14 @@ class InstanceList(base.ObjectListBase, base.NovaObject):
             instance.obj_reset_changes(['fault'])
 
         return faults_by_uuid.keys()
+
+    @base.remotable_classmethod
+    def get_uuids_by_host(cls, context, host):
+        # NOTE(danms): We could potentially do this a little more efficiently
+        # but for now just pull all the instances and scrape the uuids.
+        db_instances = db.instance_get_all_by_host(context, host,
+                                                   columns_to_join=[])
+        return [inst['uuid'] for inst in db_instances]
 
 
 @db_api.main_context_manager.writer

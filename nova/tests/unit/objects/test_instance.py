@@ -23,6 +23,8 @@ from oslo_utils import timeutils
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova.compute import flavors
+from nova.compute import task_states
+from nova.compute import vm_states
 from nova import context
 from nova import db
 from nova import exception
@@ -145,7 +147,7 @@ class _TestInstanceObject(object):
         exp_cols.remove('migration_context')
         exp_cols.remove('keypairs')
         exp_cols.remove('device_metadata')
-        exp_cols = list(filter(lambda x: 'flavor' not in x, exp_cols))
+        exp_cols = [exp_col for exp_col in exp_cols if 'flavor' not in exp_col]
         exp_cols.extend(['extra', 'extra.numa_topology', 'extra.pci_requests',
                          'extra.flavor', 'extra.vcpu_model',
                          'extra.migration_context', 'extra.keypairs',
@@ -1192,6 +1194,22 @@ class _TestInstanceObject(object):
         self.assertEqual('foo-%s' % db_inst['uuid'], inst.name)
         self.assertFalse(inst.obj_attr_is_set('fault'))
 
+    def test_name_blank_if_no_id_pre_scheduling(self):
+        # inst.id is not set and can't be lazy loaded
+        inst = objects.Instance(context=self.context,
+                                vm_state=vm_states.BUILDING,
+                                task_state=task_states.SCHEDULING)
+        self.assertEqual('', inst.name)
+
+    def test_name_uuid_if_no_id_post_scheduling(self):
+        # inst.id is not set and can't be lazy loaded
+
+        inst = objects.Instance(context=self.context,
+                                uuid=uuids.instance,
+                                vm_state=vm_states.ACTIVE,
+                                task_state=None)
+        self.assertEqual(uuids.instance, inst.name)
+
     def test_from_db_object_not_overwrite_info_cache(self):
         info_cache = instance_info_cache.InstanceInfoCache()
         inst = objects.Instance(context=self.context,
@@ -1821,6 +1839,20 @@ class _TestInstanceListObject(object):
 
         self.assertEqual(2, len(instances))
         self.assertEqual([1, 2], [x.id for x in instances])
+
+    @mock.patch('nova.db.instance_get_all_by_host')
+    def test_get_uuids_by_host(self, mock_get_all):
+        fake_instances = [
+            fake_instance.fake_db_instance(id=1),
+            fake_instance.fake_db_instance(id=2),
+            ]
+        mock_get_all.return_value = fake_instances
+        expected_uuids = [inst['uuid'] for inst in fake_instances]
+        actual_uuids = objects.InstanceList.get_uuids_by_host(
+            self.context, 'b')
+        self.assertEqual(expected_uuids, actual_uuids)
+        mock_get_all.assert_called_once_with(self.context, 'b',
+                                             columns_to_join=[])
 
 
 class TestInstanceListObject(test_objects._LocalTest,

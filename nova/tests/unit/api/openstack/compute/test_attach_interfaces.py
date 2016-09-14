@@ -425,6 +425,23 @@ class InterfaceAttachTestsV21(test.NoDBTestCase):
         get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
                                          expected_attrs=None)
 
+    @mock.patch.object(compute_api.API, 'get')
+    @mock.patch.object(compute_api.API, 'attach_interface')
+    def test_attach_interface_failed_securitygroup_cannot_be_applied(
+        self, attach_mock, get_mock):
+        fake_instance = objects.Instance(uuid=FAKE_UUID1,
+                                         project_id=FAKE_UUID2)
+        get_mock.return_value = fake_instance
+        attach_mock.side_effect = (
+            exception.SecurityGroupCannotBeApplied())
+        self.assertRaises(exc.HTTPBadRequest, self.attachments.create,
+                          self.req, FAKE_UUID1, body={})
+        ctxt = self.req.environ['nova.context']
+        attach_mock.assert_called_once_with(ctxt, fake_instance, None,
+                                            None, None)
+        get_mock.assert_called_once_with(ctxt, FAKE_UUID1,
+                                         expected_attrs=None)
+
     def _test_attach_interface_with_invalid_parameter(self, param):
         self.stubs.Set(compute_api.API, 'attach_interface',
                        fake_attach_interface)
@@ -487,3 +504,25 @@ class AttachInterfacesPolicyEnforcementv21(test.NoDBTestCase):
         self.assertEqual(
             "Policy doesn't allow %s to be performed." % self.rule_name,
             exc.format_message())
+
+    def test_attach_interfaces_create_policy_failed(self):
+        self.policy.set_rules({self.rule_name: "@",
+                               'os_compute_api:os-attach-interfaces:create':
+                               "!"})
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            self.controller.create, self.req, fakes.FAKE_UUID, body={})
+        self.assertEqual(
+            "Policy doesn't allow os_compute_api:os-attach-interfaces:create "
+            "to be performed.", exc.format_message())
+
+    def test_attach_interfaces_delete_policy_failed(self):
+        self.policy.set_rules({self.rule_name: "@",
+                               'os_compute_api:os-attach-interfaces:delete':
+                               "!"})
+        exc = self.assertRaises(
+            exception.PolicyNotAuthorized,
+            self.controller.delete, self.req, fakes.FAKE_UUID, FAKE_PORT_ID1)
+        self.assertEqual(
+            "Policy doesn't allow os_compute_api:os-attach-interfaces:delete "
+            "to be performed.", exc.format_message())

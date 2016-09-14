@@ -54,7 +54,7 @@
 
 from __future__ import print_function
 
-import argparse
+import functools
 import os
 import sys
 
@@ -71,6 +71,7 @@ import six.moves.urllib.parse as urlparse
 
 from nova.api.ec2 import ec2utils
 from nova import availability_zones
+from nova.cmd import common as cmd_common
 import nova.conf
 from nova import config
 from nova import context
@@ -79,8 +80,10 @@ from nova.db import migration
 from nova import exception
 from nova.i18n import _
 from nova import objects
+from nova.objects import aggregate as aggregate_obj
 from nova.objects import flavor as flavor_obj
 from nova.objects import instance as instance_obj
+from nova.objects import instance_group as instance_group_obj
 from nova.objects import keypair as keypair_obj
 from nova.objects import request_spec
 from nova import quota
@@ -96,11 +99,7 @@ _EXTRA_DEFAULT_LOG_LEVELS = ['oslo_db=INFO']
 
 
 # Decorators for actions
-def args(*args, **kwargs):
-    def _decorator(func):
-        func.__dict__.setdefault('args', []).insert(0, (args, kwargs))
-        return func
-    return _decorator
+args = cmd_common.args
 
 
 def param2id(object_id):
@@ -115,6 +114,11 @@ def param2id(object_id):
 
 class VpnCommands(object):
     """Class for managing VPNs."""
+
+    description = ('DEPRECATED: VPN commands are deprecated since '
+                   'nova-network is deprecated in favor of Neutron. The '
+                   'VPN commands will be removed in the Nova 15.0.0 '
+                   'Ocata release.')
 
     @args('--project', dest='project_id', metavar='<Project name>',
             help='Project name')
@@ -319,7 +323,12 @@ class ProjectCommands(object):
     @args('--project', dest='project_id', metavar='<Project name>',
             help='Project name')
     def scrub(self, project_id):
-        """Deletes data associated with project."""
+        """DEPRECATED: Deletes network data associated with project.
+
+        This command is only for nova-network deployments and nova-network is
+        deprecated in favor of Neutron. This command will be removed in the
+        Nova 15.0.0 Ocata release.
+        """
         admin_context = context.get_admin_context()
         networks = db.project_get_networks(admin_context, project_id)
         for network in networks:
@@ -334,6 +343,11 @@ AccountCommands = ProjectCommands
 
 class FixedIpCommands(object):
     """Class for managing fixed IP."""
+
+    description = ('DEPRECATED: Fixed IP commands are deprecated since '
+                   'nova-network is deprecated in favor of Neutron. The '
+                   'fixed IP commands will be removed in the Nova 15.0.0 '
+                   'Ocata release.')
 
     @args('--host', metavar='<host>', help='Host')
     def list(self, host=None):
@@ -428,6 +442,11 @@ class FixedIpCommands(object):
 
 class FloatingIpCommands(object):
     """Class for managing floating IP."""
+
+    description = ('DEPRECATED: Floating IP commands are deprecated since '
+                   'nova-network is deprecated in favor of Neutron. The '
+                   'floating IP commands will be removed in the Nova 15.0.0 '
+                   'Ocata release.')
 
     @staticmethod
     def address_to_hosts(addresses):
@@ -526,6 +545,11 @@ def validate_network_plugin(f, *args, **kwargs):
 
 class NetworkCommands(object):
     """Class for managing networks."""
+
+    description = ('DEPRECATED: Network commands are deprecated since '
+                   'nova-network is deprecated in favor of Neutron. The '
+                   'network commands will be removed in the Nova 15.0.0 Ocata '
+                   'release.')
 
     @validate_network_plugin
     @args('--label', metavar='<label>', help='Label for network (ex: public)')
@@ -662,7 +686,7 @@ class NetworkCommands(object):
 
         # The --disassociate-X are boolean options, but if they user
         # mistakenly provides a value, it will be used as a positional argument
-        # and be erroneously interepreted as some other parameter (e.g.
+        # and be erroneously interpreted as some other parameter (e.g.
         # a project instead of host value). The safest thing to do is error-out
         # with a message indicating that there is probably a problem with
         # how the disassociate modifications are being used.
@@ -766,14 +790,35 @@ class DbCommands(object):
         instance_obj.migrate_instance_keypairs,
         request_spec.migrate_instances_add_request_spec,
         keypair_obj.migrate_keypairs_to_api_db,
+        aggregate_obj.migrate_aggregates,
+        aggregate_obj.migrate_aggregate_reset_autoincrement,
+        instance_group_obj.migrate_instance_groups_to_api_db,
     )
 
     def __init__(self):
         pass
 
     @args('--version', metavar='<version>', help='Database version')
-    def sync(self, version=None):
+    @args('--local_cell', action='store_true',
+          help='Only sync db in the local cell: do not attempt to fan-out'
+               'to all cells')
+    def sync(self, version=None, local_cell=False):
         """Sync the database up to the most recent version."""
+        if not local_cell:
+            ctxt = context.RequestContext()
+            # NOTE(mdoff): Multiple cells not yet implemented. Currently
+            # fanout only looks for cell0.
+            try:
+                cell_mapping = objects.CellMapping.get_by_uuid(ctxt,
+                                            objects.CellMapping.CELL0_UUID)
+                with context.target_cell(ctxt, cell_mapping):
+                    migration.db_sync(version, context=ctxt)
+            except exception.CellMappingNotFound:
+                print(_('WARNING: cell0 mapping not found - not'
+                        ' syncing cell0.'))
+            except Exception:
+                print(_('ERROR: could not access cell mapping database - has'
+                        ' api db been created?'))
         return migration.db_sync(version)
 
     def version(self):
@@ -1156,6 +1201,40 @@ class CellCommands(object):
 class CellV2Commands(object):
     """Commands for managing cells v2."""
 
+    # TODO(melwitt): Remove this when the oslo.messaging function
+    # for assembling a transport url from ConfigOpts is available
+    @args('--transport-url', metavar='<transport url>', required=True,
+          dest='transport_url',
+          help='The transport url for the cell message queue')
+    def simple_cell_setup(self, transport_url):
+        """Simple cellsv2 setup.
+
+        This simplified command is for use by existing non-cells users to
+        configure the default environment. If you are using CellsV1, this
+        will not work for you. Returns 0 if setup is completed (or has
+        already been done), 1 if no hosts are reporting (and this cannot
+        be mapped) and 2 if run in a CellsV1 environment.
+        """
+        if CONF.cells.enable:
+            print('CellsV1 users cannot use this simplified setup command')
+            return 2
+        ctxt = context.RequestContext()
+        try:
+            cell0_mapping = self.map_cell0()
+        except db_exc.DBDuplicateEntry:
+            print('Already setup, nothing to do.')
+            return 0
+        # Run migrations so cell0 is usable
+        with context.target_cell(ctxt, cell0_mapping):
+            migration.db_sync(None, context=ctxt)
+        cell_uuid = self._map_cell_and_hosts(transport_url)
+        if cell_uuid is None:
+            # There are no compute hosts which means no cell_mapping was
+            # created. This should also mean that there are no instances.
+            return 1
+        self.map_instances(cell_uuid)
+        return 0
+
     @args('--database_connection',
           metavar='<database_connection>',
           help='The database connection url for cell0. '
@@ -1195,6 +1274,7 @@ class CellV2Commands(object):
                 transport_url="none:///",
                 database_connection=dbc)
         cell_mapping.create()
+        return cell_mapping
 
     def _get_and_map_instances(self, ctxt, cell_mapping, limit, marker):
         filters = {}
@@ -1291,13 +1371,13 @@ class CellV2Commands(object):
         if not compute_nodes:
             print(_('No hosts found to map to cell, exiting.'))
             return None
-        missing_nodes = []
+        missing_nodes = set()
         for compute_node in compute_nodes:
             try:
                 host_mapping = objects.HostMapping.get_by_host(
                     ctxt, compute_node.host)
             except exception.HostMappingNotFound:
-                missing_nodes.append(compute_node)
+                missing_nodes.add(compute_node.host)
             else:
                 if verbose:
                     print(_(
@@ -1325,9 +1405,9 @@ class CellV2Commands(object):
                 database_connection=CONF.database.connection)
             cell_mapping.create()
         # Pull the hosts from the cell database and create the host mappings
-        for compute_node in missing_nodes:
+        for compute_host in missing_nodes:
             host_mapping = objects.HostMapping(
-                ctxt, host=compute_node.host, cell_mapping=cell_mapping)
+                ctxt, host=compute_host, cell_mapping=cell_mapping)
             host_mapping.create()
         if verbose:
             print(cell_mapping_uuid)
@@ -1361,6 +1441,81 @@ class CellV2Commands(object):
         # partial work so 0 is appropriate.
         return 0
 
+    @args('--uuid', metavar='<uuid>', dest='uuid', required=True,
+          help=_('The instance UUID to verify'))
+    @args('--quiet', action='store_true', dest='quiet',
+          help=_('Do not print anything'))
+    def verify_instance(self, uuid, quiet=False):
+        """Verify instance mapping to a cell.
+
+        This command is useful to determine if the cellsv2 environment is
+        properly setup, specifically in terms of the cell, host, and instance
+        mapping records required.
+
+        This prints one of three strings (and exits with a code) indicating
+        whether the instance is successfully mapped to a cell (0), is unmapped
+        due to an incomplete upgrade (1), or unmapped due to normally transient
+        state (2).
+        """
+        if not uuid:
+            print(_('Must specify --uuid'))
+            return 16
+
+        def say(string):
+            if not quiet:
+                print(string)
+
+        ctxt = context.RequestContext()
+        try:
+            mapping = objects.InstanceMapping.get_by_instance_uuid(
+                ctxt, uuid)
+        except exception.InstanceMappingNotFound:
+            say('Instance %s is not mapped to a cell '
+                '(upgrade is incomplete)' % uuid)
+            return 1
+        if mapping.cell_mapping is None:
+            say('Instance %s is not mapped to a cell' % uuid)
+            return 2
+        else:
+            say('Instance %s is in cell: %s (%s)' % (
+                uuid,
+                mapping.cell_mapping.name,
+                mapping.cell_mapping.uuid))
+            return 0
+
+    @args('--cell_uuid', metavar='<cell_uuid>', dest='cell_uuid',
+          help='If provided only this cell will be searched for new hosts to '
+               'map.')
+    def discover_hosts(self, cell_uuid=None):
+        """Searches cells, or a single cell, and maps found hosts.
+
+        When a new host is added to a deployment it will add a service entry
+        to the db it's configured to use. This command will check the db for
+        each cell, or a single one if passed in, and map any hosts which are
+        not currently mapped. If a host is already mapped nothing will be done.
+        """
+        ctxt = context.RequestContext()
+
+        if cell_uuid:
+            cell_mappings = [objects.CellMapping.get_by_uuid(ctxt, cell_uuid)]
+        else:
+            cell_mappings = objects.CellMappingList.get_all(context)
+
+        for cell_mapping in cell_mappings:
+            # TODO(alaski): Factor this into helper method on CellMapping
+            if cell_mapping.uuid == cell_mapping.CELL0_UUID:
+                continue
+            with context.target_cell(ctxt, cell_mapping):
+                compute_nodes = objects.ComputeNodeList.get_all(ctxt)
+            for compute in compute_nodes:
+                try:
+                    objects.HostMapping.get_by_host(ctxt, compute.host)
+                except exception.HostMappingNotFound:
+                    host_mapping = objects.HostMapping(
+                        ctxt, host=compute.host,
+                        cell_mapping=cell_mapping)
+                    host_mapping.create()
+
 
 CATEGORIES = {
     'account': AccountCommands,
@@ -1381,55 +1536,8 @@ CATEGORIES = {
 }
 
 
-def methods_of(obj):
-    """Get all callable methods of an object that don't start with underscore
-
-    returns a list of tuples of the form (method_name, method)
-    """
-    result = []
-    for i in dir(obj):
-        if callable(getattr(obj, i)) and not i.startswith('_'):
-            result.append((i, getattr(obj, i)))
-    return result
-
-
-def add_command_parsers(subparsers):
-    parser = subparsers.add_parser('version')
-
-    parser = subparsers.add_parser('bash-completion')
-    parser.add_argument('query_category', nargs='?')
-
-    for category in CATEGORIES:
-        command_object = CATEGORIES[category]()
-
-        desc = getattr(command_object, 'description', None)
-        parser = subparsers.add_parser(category, description=desc)
-        parser.set_defaults(command_object=command_object)
-
-        category_subparsers = parser.add_subparsers(dest='action')
-
-        for (action, action_fn) in methods_of(command_object):
-            parser = category_subparsers.add_parser(action, description=desc)
-
-            action_kwargs = []
-            for args, kwargs in getattr(action_fn, 'args', []):
-                # FIXME(markmc): hack to assume dest is the arg name without
-                # the leading hyphens if no dest is supplied
-                kwargs.setdefault('dest', args[0][2:])
-                if kwargs['dest'].startswith('action_kwarg_'):
-                    action_kwargs.append(
-                            kwargs['dest'][len('action_kwarg_'):])
-                else:
-                    action_kwargs.append(kwargs['dest'])
-                    kwargs['dest'] = 'action_kwarg_' + kwargs['dest']
-
-                parser.add_argument(*args, **kwargs)
-
-            parser.set_defaults(action_fn=action_fn)
-            parser.set_defaults(action_kwargs=action_kwargs)
-
-            parser.add_argument('action_args', nargs='*',
-                                help=argparse.SUPPRESS)
+add_command_parsers = functools.partial(cmd_common.add_command_parsers,
+                                        categories=CATEGORIES)
 
 
 category_opt = cfg.SubCommandOpt('category',
@@ -1467,38 +1575,11 @@ def main():
         return(0)
 
     if CONF.category.name == "bash-completion":
-        if not CONF.category.query_category:
-            print(" ".join(CATEGORIES.keys()))
-        elif CONF.category.query_category in CATEGORIES:
-            fn = CATEGORIES[CONF.category.query_category]
-            command_object = fn()
-            actions = methods_of(command_object)
-            print(" ".join([k for (k, v) in actions]))
+        cmd_common.print_bash_completion(CATEGORIES)
         return(0)
 
-    fn = CONF.category.action_fn
-    fn_args = [arg.decode('utf-8') for arg in CONF.category.action_args]
-    fn_kwargs = {}
-    for k in CONF.category.action_kwargs:
-        v = getattr(CONF.category, 'action_kwarg_' + k)
-        if v is None:
-            continue
-        if isinstance(v, six.string_types):
-            v = v.decode('utf-8')
-        fn_kwargs[k] = v
-
-    # call the action with the remaining arguments
-    # check arguments
-    missing = utils.validate_args(fn, *fn_args, **fn_kwargs)
-    if missing:
-        # NOTE(mikal): this isn't the most helpful error message ever. It is
-        # long, and tells you a lot of things you probably don't want to know
-        # if you just got a single arg wrong.
-        print(fn.__doc__)
-        CONF.print_help()
-        print(_("Missing arguments: %s") % ", ".join(missing))
-        return(1)
     try:
+        fn, fn_args, fn_kwargs = cmd_common.get_action_fn()
         ret = fn(*fn_args, **fn_kwargs)
         rpc.cleanup()
         return(ret)

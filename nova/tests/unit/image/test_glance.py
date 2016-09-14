@@ -2413,6 +2413,25 @@ class TestExtractAttributes(test.NoDBTestCase):
         self.assertEqual(v1_output, v2_output)
 
     @mock.patch.object(schemas, 'Schema', side_effect=FakeSchema)
+    def test_extract_image_attributes_empty_images_no_size(self,
+                                                           mocked_schema):
+        image_v1_dict = dict(image_fixtures['empty_image_v1'])
+        # pop the size attribute since it might not be set on a snapshot image
+        image_v1_dict.pop('size')
+        image_v2 = ImageV2(image_fixtures['empty_image_v2'])
+
+        image_v1 = collections.namedtuple('_', image_v1_dict.keys())(
+            **image_v1_dict)
+
+        self.flags(use_glance_v1=True, group='glance')
+        v1_output = glance._translate_from_glance(
+            image_v1, include_locations=False)
+        self.flags(use_glance_v1=False, group='glance')
+        v2_output = glance._translate_from_glance(
+            image_v2, include_locations=False)
+        self.assertEqual(v1_output, v2_output)
+
+    @mock.patch.object(schemas, 'Schema', side_effect=FakeSchema)
     def test_extract_image_attributes_active_images_custom_prop(
             self, mocked_schema):
         image_v1_dict = image_fixtures['custom_property_image_v1']
@@ -2560,14 +2579,12 @@ class TestTranslateToGlance(test.NoDBTestCase):
             'id': 'f8116538-309f-449c-8d49-df252a97a48d',
             'image_type': 'test',
             'instance_uuid': 'ec1ea9c7-8c5e-498d-a753-6ccc2464123c',
-            'kernel_id': None,
             'min_disk': 0,
             'min_ram': 0,
             'name': 'tempest-image-1294122904',
             'os_distro': 'value2',
             'os_version': 'value1',
             'owner': 'd76b51cf8a44427ea404046f4c1d82ab',
-            'ramdisk_id': None,
             'user_id': 'ca2ff78fd33042ceb45fbbe19012ef3f',
             'visibility': 'public'}
         nova_image_dict = self.fixture
