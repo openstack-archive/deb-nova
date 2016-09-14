@@ -11,9 +11,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b2.dev117\n"
+"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-06-08 04:30+0000\n"
+"POT-Creation-Date: 2016-08-25 06:14+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -208,15 +208,6 @@ msgstr "ホスト CPU モデルの要求時に CPU モデル名は設定でき�
 msgid "A NetworkModel is required in field %s"
 msgstr "フィールド %s に NetworkModel が必要です"
 
-msgid ""
-"A unique ID given to each file system.  This is value is set in Glance and "
-"agreed upon here so that the operator knowns they are dealing with the same "
-"file system."
-msgstr ""
-"固有の ID が各ファイルシステムに割り当てられました。この値は Glance に設定さ"
-"れ、ファイルシステムと関連付けされるため、オペレーターはこの IDでファイルシス"
-"テムを識別できます。"
-
 #, python-format
 msgid ""
 "API Version String %(version)s is of invalid format. Must be of format "
@@ -381,10 +372,6 @@ msgid "Bad prefix for to_global_ipv6: %s"
 msgstr "to_global_ipv6 のプレフィックスが正しくありません: %s"
 
 #, python-format
-msgid "Bad project_id for to_global_ipv6: %s"
-msgstr "to_global_ipv6 の project_id が正しくありません: %s"
-
-#, python-format
 msgid ""
 "Binding failed for port %(port_id)s, please check neutron logs for more "
 "information."
@@ -514,14 +501,6 @@ msgstr "CPU 番号 %(cpuset)s はノードに割り当てられていません"
 msgid "CPU pinning is not supported by the host: %(reason)s"
 msgstr "ホストは CPU の固定を行うことができません: %(reason)s"
 
-#, python-format
-msgid ""
-"CPU set to pin/unpin %(requested)s must be a subset of known CPU set "
-"%(cpuset)s"
-msgstr ""
-"固定/固定解除 %(requested)s の設定が行われる CPU は、既知の CPU セット "
-"%(cpuset)s のサブセットである必要があります"
-
 msgid "Can not add access to a public flavor."
 msgstr "パブリックフレーバーにアクセスを追加できません"
 
@@ -629,12 +608,6 @@ msgstr "設定 %(conf)s からスケジューラードライバーをロード�
 
 msgid "Cannot mount Scality SOFS, check syslog for errors"
 msgstr "Scality SOFS をマウントできません。syslog でエラーを確認してください"
-
-#, python-format
-msgid ""
-"Cannot pin/unpin cpus %(requested)s from the following pinned set %(pinned)s"
-msgstr ""
-"固定されたセット %(pinned)s から CPU %(requested)s を固定/固定解除できません"
 
 #, python-format
 msgid "Cannot remove host %(host)s in aggregate %(id)s"
@@ -960,10 +933,6 @@ msgid "Device '%(device)s' not found."
 msgstr "デバイス '%(device)s' が見つかりません。"
 
 #, python-format
-msgid "Device detach failed for %(device)s: %(reason)s)"
-msgstr "%(device)s についてデバイスの切り離しが失敗しました: %(reason)s)"
-
-#, python-format
 msgid ""
 "Device id %(id)s specified is not supported by hypervisor version %(version)s"
 msgstr ""
@@ -1039,11 +1008,6 @@ msgid ""
 msgstr ""
 "ネットワーク UUID %(network_uuid)s が存在しないか、またはプロジェクト "
 "%(project_id)s に割り当てられていません。"
-
-msgid "Ephemeral disks requested are larger than the instance type allows."
-msgstr ""
-"要求された一時ディスクのサイズが、インスタンスタイプで許可されているサイズを"
-"超えています。"
 
 #, python-format
 msgid "Error attempting to run %(method)s"
@@ -1349,15 +1313,6 @@ msgstr "ファイル %(file_path)s が見つかりませんでした。"
 msgid "File path %s not valid"
 msgstr "ファイルパス %s は無効です"
 
-msgid "Filename of private key"
-msgstr "秘密鍵のファイル名"
-
-msgid "Filename of root CA"
-msgstr "ルート CA のファイル名"
-
-msgid "Filename of root Certificate Revocation List"
-msgstr "ルート証明書失効リスト (CRL) のファイル名"
-
 #, python-format
 msgid "Fixed IP %(address)s already exists."
 msgstr "Fixed IP %(address)s が既に存在しています。"
@@ -1446,9 +1401,6 @@ msgid "Flavor access not found for %(flavor_id)s / %(project_id)s combination."
 msgstr ""
 "%(flavor_id)s / %(project_id)s の組み合わせに対応するフレーバーアクセスが見つ"
 "かりません。"
-
-msgid "Flavor for vpn instances"
-msgstr "VPN インスタンスのフレーバー"
 
 msgid ""
 "Flavor id can only contain letters from A-Z (both cases), periods, dashes, "
@@ -1666,16 +1618,6 @@ msgstr ""
 #, python-format
 msgid "Image %(image_id)s could not be found."
 msgstr "イメージ %(image_id)s が見つかりませんでした。"
-
-#, python-format
-msgid ""
-"Image %(image_id)s could not be found. The nova EC2 API assigns image ids "
-"dynamically when they are listed for the first time. Have you listed image "
-"ids since adding this image?"
-msgstr ""
-"イメージ %(image_id)s が見つかりませんでした。Nova EC2 API は、イメージ ID の"
-"初回リスト時に、ID を動的に割り当てます。このイメージの追加後に、イメージ ID "
-"をリストしましたか?"
 
 #, python-format
 msgid "Image %(image_id)s is not active."
@@ -2081,9 +2023,6 @@ msgstr "フィールド名が無効です: %s"
 msgid "Invalid fixed IP Address %s in request"
 msgstr "リクエストに無効な Fixed IP アドレス %s が含まれています"
 
-msgid "Invalid flavorRef provided."
-msgstr "無効な flavorRef が指定されました。"
-
 #, python-format
 msgid "Invalid floating IP %s in request"
 msgstr "リクエストに無効な Floating IP %s が含まれています"
@@ -2119,10 +2058,6 @@ msgstr "フィールド/属性 %(path)s の入力が無効です。値: %(value)
 #, python-format
 msgid "Invalid input received: %(reason)s"
 msgstr "無効な入力を受信しました: %(reason)s"
-
-#, python-format
-msgid "Invalid instance id %s in request"
-msgstr "リクエストに無効なインスタンス ID %s が含まれています"
 
 msgid "Invalid instance image."
 msgstr "インスタンスイメージが無効です。"
@@ -2281,14 +2216,6 @@ msgstr ""
 "Ironic ノード %(id)s を検証できませんでした。(デプロイ: %(deploy)s、電源: "
 "%(power)s)"
 
-#, python-format
-msgid ""
-"Ironic node: %(id)s virtual to physical interface count  mismatch (Vif "
-"count: %(vif_count)d, Pif count: %(pif_count)d)"
-msgstr ""
-"Ironic ノード %(id)s の仮想インターフェース数と物理インターフェース数が一致し"
-"ていません。(Vif 数: %(vif_count)d、Pif 数: %(pif_count)d)"
-
 msgid "Is the appropriate service running?"
 msgstr "適切なサービスが実行されていますか?"
 
@@ -2352,13 +2279,6 @@ msgstr "行 %(linenum)d : %(line)s"
 #, python-format
 msgid "Link Local address is not found.:%s"
 msgstr "リンクローカルアドレスが見つかりません: %s"
-
-msgid ""
-"List of file systems that are configured in this file in the image_file_url:"
-"<list entry name> sections"
-msgstr ""
-"このファイルの image_file_url:<list entry name> セクションで設定されている"
-"ファイルシステムのリスト"
 
 msgid "Listing virtual interfaces is not supported by this cloud."
 msgstr "このクラウドでは仮想インターフェースの一覧表示を行うことができません。"
@@ -2619,9 +2539,6 @@ msgstr "max_number には正の値を指定する必要があります"
 msgid "Must supply a positive value for max_rows"
 msgstr "max_rows には正の値を指定する必要があります"
 
-msgid "Netmask to push into openvpn config"
-msgstr "openvpn の設定に入れるネットマスクの値"
-
 #, python-format
 msgid "Network \"%(val)s\" is not valid in field %(attr)s"
 msgstr "ネットワーク \"%(val)s\" のフィールド %(attr)s が有効ではありません"
@@ -2697,9 +2614,6 @@ msgid "Network set host failed for network %(network_id)s."
 msgstr ""
 "ネットワーク %(network_id)s においてネットワークが設定したホストで障害が発生"
 "しました。"
-
-msgid "Network to push into openvpn config"
-msgstr "openvpn の設定に入れるネットワークの値"
 
 msgid "New volume must be detached in order to swap."
 msgstr "スワップを行うには、新規ボリュームを切断する必要があります。"
@@ -2833,9 +2747,6 @@ msgstr "ネットワークが見つかりません"
 msgid "No nova entries in syslog!"
 msgstr "syslog 内に nova 項目がありません。"
 
-msgid "No nw_info cache associated with instance"
-msgstr "インスタンスに nw_info キャッシュが関連付けられていません"
-
 #, python-format
 msgid "No operating system found in %s"
 msgstr "%s 内にオペレーティングシステムが見つかりません"
@@ -2902,6 +2813,9 @@ msgstr "rbd スナップショットではありません"
 #, python-format
 msgid "Not authorized for image %(image_id)s."
 msgstr "イメージ %(image_id)s への権限がありません。"
+
+msgid "Not authorized."
+msgstr "権限がありません。"
 
 msgid "Not enough parameters to build a valid rule."
 msgstr "有効なルールを作成するだけの十分なパラメータがありません"
@@ -3209,10 +3123,6 @@ msgstr ""
 "でした。"
 
 #, python-format
-msgid "Quota limit %(limit)s for %(resource)s must be -1 or greater."
-msgstr "%(resource)s のクォータ上限 %(limit)s は -1 以上でなければなりません。"
-
-#, python-format
 msgid ""
 "Quota limit %(limit)s for %(resource)s must be greater than or equal to "
 "already used and reserved %(minimum)s."
@@ -3410,25 +3320,9 @@ msgstr ""
 "スケジューラーホストフィルター %(filter_name)s が見つかりませんでした。"
 
 #, python-format
-msgid ""
-"Security group %(name)s added %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"セキュリティーグループ %(name)s に %(protocol)s 受信が追加されました "
-"(%(from_port)s:%(to_port)s)"
-
-#, python-format
 msgid "Security group %(name)s is not found for project %(project)s"
 msgstr ""
 "プロジェクト %(project)s のセキュリティーグループ %(name)s が見つかりません"
-
-#, python-format
-msgid ""
-"Security group %(name)s removed %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"セキュリティーグループ %(name)s から %(protocol)s 受信が削除されました "
-"(%(from_port)s:%(to_port)s)"
 
 #, python-format
 msgid ""
@@ -3511,9 +3405,6 @@ msgstr "サーバーディスクのサイズを変更できませんでした。
 msgid "Server does not exist"
 msgstr "サーバーが存在しません。"
 
-msgid "Server group scheduler hint must be a UUID."
-msgstr "サーバーグループのスケジューラーヒントは UUID でなければなりません。"
-
 #, python-format
 msgid "ServerGroup policy is not supported: %(reason)s"
 msgstr "サーバーグループポリシーはサポートされていません: %(reason)s"
@@ -3569,9 +3460,6 @@ msgstr "シェア '%s' はサポートされません"
 msgid "Share level '%s' cannot have share configured"
 msgstr "シェアレベル '%s' に設定されたシェアがありません"
 
-msgid "Should we use a CA for each project?"
-msgstr "プロジェクトごとに CA を使用するか否かのフラグ"
-
 msgid ""
 "Shrinking the filesystem down with resize2fs has failed, please check if you "
 "have enough free space on your disk."
@@ -3608,14 +3496,6 @@ msgstr "ソート方向の数がソートキーの数より多いです"
 msgid "Sort key supplied was not valid."
 msgstr "指定されたソートキーが無効でした。"
 
-#, python-format
-msgid ""
-"Specified Fixed IP '%(addr)s' cannot be used with port '%(port)s': port "
-"already has a Fixed IP allocated."
-msgstr ""
-"指定された Fixed IP '%(addr)s' は、ポート '%(port)s' と一緒には使用できませ"
-"ん。ポートには既に Fixed IP が割り振られています。"
-
 msgid "Specified fixed address not assigned to instance"
 msgstr "指定された固定アドレスはインスタンスに割り当てられていません"
 
@@ -3640,16 +3520,6 @@ msgstr "ストレージエラー: %(reason)s"
 #, python-format
 msgid "Storage policy %s did not match any datastores"
 msgstr "ストレージポリシー %s がどのデータストアにも一致しませんでした"
-
-#, python-format
-msgid "Subject for certificate for projects, %s for project, timestamp"
-msgstr ""
-"プロジェクトの証明書のサブジェクト、%s はプロジェクト、およびタイムスタンプ"
-
-#, python-format
-msgid "Subject for certificate for users, %s for project, user, timestamp"
-msgstr ""
-"ユーザーの証明書のサブジェクト、%s はプロジェクト、ユーザー、タイムスタンプ"
 
 msgid "Success"
 msgstr "成功"
@@ -3676,9 +3546,6 @@ msgstr "タスク %(task_name)s はホスト %(host)s 上で既に実行中で�
 msgid "Task %(task_name)s is not running on host %(host)s"
 msgstr "タスク %(task_name)s はホスト %(host)s 上で実行されていません"
 
-msgid "Template for cloudpipe instance boot script"
-msgstr "cloudpipe インスタンスのブートスクリプト用テンプレート"
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr "%(project)s 用の CA ファイルが見つかりませんでした"
@@ -3690,10 +3557,6 @@ msgstr "%(project)s 用の CRL ファイルが見つかりませんでした"
 #, python-format
 msgid "The DNS entry %(name)s already exists in domain %(domain)s."
 msgstr "DNS エントリー %(name)s はドメイン %(domain)s 内に既に存在します。"
-
-#, python-format
-msgid "The ID %(id)s is unknown."
-msgstr "ID %(id)s は不明です。"
 
 #, python-format
 msgid "The PCI address %(address)s has an incorrect format."
@@ -3801,9 +3664,6 @@ msgstr "定義したポート %(ports)d の数が上限 %(quota)d を超えて�
 
 msgid "The only partition should be partition 1."
 msgstr "唯一のパーティションはパーティション 1 でなければなりません。"
-
-msgid "The path at which the file system is mounted."
-msgstr "ファイルシステムがマウントされているパス。"
 
 #, python-format
 msgid "The provided RNG device path: (%(path)s) is not present on the host."
@@ -4304,14 +4164,6 @@ msgid "Unknown method '%(method)s' in compute API"
 msgstr "コンピュート API 内の不明なメソッド '%(method)s'"
 
 #, python-format
-msgid ""
-"Unknown osapi_compute_unique_server_name_scope value: %s Flag must be empty, "
-"\"global\" or \"project\""
-msgstr ""
-"不明な osapi_compute_unique_server_name_scope 値: %s フラグは、空、\"global"
-"\"、\"project\" のいずれかでなければいけません"
-
-#, python-format
 msgid "Unknown quota resources %(unknown)s."
 msgstr "不明なクォータリソース %(unknown)s。"
 
@@ -4392,10 +4244,6 @@ msgstr ""
 #, fuzzy, python-format
 msgid "VHD coalesce attempts exceeded (%d), giving up..."
 msgstr "VHD 統合の試行時に (%d) を超過したため、中止します..."
-
-#, python-format
-msgid "VIF driver not found for network_api_class: %s"
-msgstr "network_api_class %s 用の VIF ドライバーが見つかりません"
 
 msgid "VIF plugging is not supported by the Hyper-V driver."
 msgstr "VIF 接続は Hyper-V ドライバーではサポートされていません。"
@@ -4538,12 +4386,6 @@ msgid ""
 msgstr ""
 "サーバーを SSL モードで実行する場合は、設定ファイルで cert_file と key_file "
 "の両方のオプションに値を指定する必要があります"
-
-msgid "Where we keep our keys"
-msgstr "キーを格納するパス"
-
-msgid "Where we keep our root CA"
-msgstr "ルート CA を格納するパス"
 
 #, python-format
 msgid "Wrong quota method %(method)s used on resource %(res)s"

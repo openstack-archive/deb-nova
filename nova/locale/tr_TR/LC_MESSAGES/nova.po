@@ -8,9 +8,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b2.dev117\n"
+"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-06-08 04:30+0000\n"
+"POT-Creation-Date: 2016-08-25 06:14+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -152,15 +152,6 @@ msgstr "İstemci CPU modeli istenirken CPU modeli ismi ayarlanmamalı"
 #, python-format
 msgid "A NetworkModel is required in field %s"
 msgstr "%s alanında bir AğModeli gerekli"
-
-msgid ""
-"A unique ID given to each file system.  This is value is set in Glance and "
-"agreed upon here so that the operator knowns they are dealing with the same "
-"file system."
-msgstr ""
-"Her dosya sistemine verilen benzersiz bir kimlik.  Bu değer Glance içinde "
-"ayarlanır ve burada kabul edilir böylece işleten aynı dosya sistemiyle "
-"karşılaştığını bilir."
 
 #, python-format
 msgid ""
@@ -305,10 +296,6 @@ msgstr "%s cidr'indeki ağ için kötü ön ek"
 #, python-format
 msgid "Bad prefix for to_global_ipv6: %s"
 msgstr "Global ipv6 için yanlış sonek: %s"
-
-#, python-format
-msgid "Bad project_id for to_global_ipv6: %s"
-msgstr "Global ipv6 için yanlış proje numarası: %s"
 
 msgid "Blank components"
 msgstr "Boş bileşenler"
@@ -473,13 +460,6 @@ msgstr "VDI'ya okuma/yazma yapılırken SR(Saklama deposu) bulunamadı."
 
 msgid "Cannot find image for rebuild"
 msgstr "Yeniden kurulum için imaj dosyası bulunamadı."
-
-#, python-format
-msgid ""
-"Cannot pin/unpin cpus %(requested)s from the following pinned set %(pinned)s"
-msgstr ""
-"%(requested)s işlemcileri %(pinned)s iğnelenmiş kümeden iğnelenemiyor/"
-"ayrılamıyor"
 
 #, python-format
 msgid "Cannot remove host %(host)s in aggregate %(id)s"
@@ -808,9 +788,6 @@ msgid ""
 msgstr ""
 "Ya ağ uuid %(network_uuid)s yok ya da %(project_id)s projesine atanmamış."
 
-msgid "Ephemeral disks requested are larger than the instance type allows."
-msgstr "İstenen geçici diskler sunucu türünün izin verdiğinden daha büyük."
-
 #, python-format
 msgid ""
 "Error destroying the instance on node %(node)s. Provision state still "
@@ -1065,15 +1042,6 @@ msgstr "%(file_path)s dosyası bulunamadı."
 msgid "File path %s not valid"
 msgstr "Dosya yolu %s geçerli değil"
 
-msgid "Filename of private key"
-msgstr "Özel anahtarın dosya adı"
-
-msgid "Filename of root CA"
-msgstr "Kök sertifika yetkilisinin dosya adı"
-
-msgid "Filename of root Certificate Revocation List"
-msgstr "Kök sertifika iptali listesinin dosya adı"
-
 #, python-format
 msgid "Fixed IP %(ip)s is not a valid ip address for network %(network_id)s."
 msgstr "Sabit IP %(ip)s %(network_id)s için gereçli bir ip adresi değil."
@@ -1140,9 +1108,6 @@ msgstr ""
 msgid "Flavor access not found for %(flavor_id)s / %(project_id)s combination."
 msgstr ""
 "Nitelik erişimi %(flavor_id)s / %(project_id)s katışımı için bulunamadı."
-
-msgid "Flavor for vpn instances"
-msgstr "Vpn sunucular için nitelik"
 
 msgid ""
 "Flavor id can only contain letters from A-Z (both cases), periods, dashes, "
@@ -1286,16 +1251,6 @@ msgstr "IPv6 ağ maskesi \"%s\" bir ağ maskesi ya da integral ön ek olmalı"
 #, python-format
 msgid "Image %(image_id)s could not be found."
 msgstr "%(image_id)s imaj kaynak dosyası bulunamadı."
-
-#, python-format
-msgid ""
-"Image %(image_id)s could not be found. The nova EC2 API assigns image ids "
-"dynamically when they are listed for the first time. Have you listed image "
-"ids since adding this image?"
-msgstr ""
-"%(image_id)s imajı bulunamadı. Nova EC2 API'si imaj kimliklerini otomatik "
-"olarak ilk defa listelendiklerinde atar. Bu imajı eklediğinizden beri imaj "
-"kimliklerini listelediniz mi?"
 
 #, python-format
 msgid "Image %(image_id)s is not active."
@@ -1645,9 +1600,6 @@ msgstr "Geçersiz alan ismi: %s"
 msgid "Invalid fixed IP Address %s in request"
 msgstr "İstekte %s geçersiz sabit IP Adresi"
 
-msgid "Invalid flavorRef provided."
-msgstr "Geçersiz örnek türü sağlayıcısı"
-
 #, python-format
 msgid "Invalid floating IP %s in request"
 msgstr "İstekte geçersiz değişken IP %s"
@@ -1684,10 +1636,6 @@ msgstr ""
 #, python-format
 msgid "Invalid input received: %(reason)s"
 msgstr "Geçersiz girdi alındı: %(reason)s"
-
-#, python-format
-msgid "Invalid instance id %s in request"
-msgstr "İstekte geçersiz sunucu id'si %s"
 
 msgid "Invalid instance image."
 msgstr "Geçersiz sunucu imajı."
@@ -1833,14 +1781,6 @@ msgid ""
 msgstr ""
 "Ironic düğümü: %(id)s doğrulayamadı. (açılma: %(deploy)s, güç: %(power)s)"
 
-#, python-format
-msgid ""
-"Ironic node: %(id)s virtual to physical interface count  mismatch (Vif "
-"count: %(vif_count)d, Pif count: %(pif_count)d)"
-msgstr ""
-"Ironic düğümü: %(id)s sanaldan fiziksele arayüz sayısı  uyuşmuyor (Vif "
-"sayısı: %(vif_count)d, Pif sayısı: %(pif_count)d)"
-
 msgid "Is the appropriate service running?"
 msgstr "Uygun servis çalışıyor mu?"
 
@@ -1900,13 +1840,6 @@ msgstr "Satır %(linenum)d : %(line)s"
 #, python-format
 msgid "Link Local address is not found.:%s"
 msgstr "Yerel adres bağlantısı bulunamadı.:%s"
-
-msgid ""
-"List of file systems that are configured in this file in the image_file_url:"
-"<list entry name> sections"
-msgstr ""
-"Bu dosyada image_file_url:<list entry name> kısımlarında yapılandırılmış "
-"dosya sistemleri listesi"
 
 msgid ""
 "Live migration of instances with config drives is not supported in libvirt "
@@ -2092,9 +2025,6 @@ msgstr ""
 msgid "Must supply a positive value for max_rows"
 msgstr "max_rows için pozitif bir değer verilmeli"
 
-msgid "Netmask to push into openvpn config"
-msgstr "Openvpn yapılandırmasına gönderilecek ağ maskesi"
-
 #, python-format
 msgid "Network \"%(val)s\" is not valid in field %(attr)s"
 msgstr "Ağ \"%(val)s\" %(attr)s alanında geçerli değil"
@@ -2161,9 +2091,6 @@ msgstr ""
 #, python-format
 msgid "Network set host failed for network %(network_id)s."
 msgstr "%(network_id)s ağı için ağ istemci ayarlaması başarısız."
-
-msgid "Network to push into openvpn config"
-msgstr "Openvpn yapılandırmasına gönderilecek ağ"
 
 msgid "New volume must be detached in order to swap."
 msgstr ""
@@ -2272,9 +2199,6 @@ msgstr "Ağ bulunamadı"
 msgid "No nova entries in syslog!"
 msgstr "Syslog'da nova girdisi yok!"
 
-msgid "No nw_info cache associated with instance"
-msgstr "Sunucu ile ilişkilendirilmiş nw_info zulası yok"
-
 #, python-format
 msgid "No operating system found in %s"
 msgstr "%s içinde işletim sistemi bulunamadı"
@@ -2326,6 +2250,9 @@ msgstr "Rbd anlık görüntüsü değil"
 #, python-format
 msgid "Not authorized for image %(image_id)s."
 msgstr "İmaj %(image_id)s için yetkilendirilmemiş."
+
+msgid "Not authorized."
+msgstr "Yetkiniz yok."
 
 msgid "Not enough parameters to build a valid rule."
 msgstr "Geçerli bir kuralı oluşturmak için yeterli parametre yok."
@@ -2574,10 +2501,6 @@ msgstr ""
 "%(project_id)s projesindeki %(user_id)s kullanıcısı için kota bulunamadı."
 
 #, python-format
-msgid "Quota limit %(limit)s for %(resource)s must be -1 or greater."
-msgstr "%(resource)s için kota sınırı %(limit)s -1 ya da daha büyük olmalı."
-
-#, python-format
 msgid ""
 "Quota limit %(limit)s for %(resource)s must be greater than or equal to "
 "already used and reserved %(minimum)s."
@@ -2724,24 +2647,8 @@ msgid "Scheduler Host Filter %(filter_name)s could not be found."
 msgstr "%(filter_name)s zamanlayıcı sunucu filtresi bulunamadı."
 
 #, python-format
-msgid ""
-"Security group %(name)s added %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"%(name)s güvenlik grubu %(protocol)s girişi ekledi (%(from_port)s:"
-"%(to_port)s)"
-
-#, python-format
 msgid "Security group %(name)s is not found for project %(project)s"
 msgstr "Güvenlik grubu %(name)s %(project)s projesi için bulunamadı"
-
-#, python-format
-msgid ""
-"Security group %(name)s removed %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"%(name)s güvenlik grubu %(protocol)s girişini kaldırdı (%(from_port)s:"
-"%(to_port)s)"
 
 #, python-format
 msgid ""
@@ -2823,9 +2730,6 @@ msgstr "Sunucu diski yeniden boyutlandırılamadı çünkü: %(reason)s"
 msgid "Server does not exist"
 msgstr "Sunucu mevcut değil"
 
-msgid "Server group scheduler hint must be a UUID."
-msgstr "Sunucu grup zamanlayıcı ipucu UUID olmalı."
-
 #, python-format
 msgid "ServerGroup policy is not supported: %(reason)s"
 msgstr "SunucuGrubu ilkesi desteklenmiyor: %(reason)s"
@@ -2871,9 +2775,6 @@ msgstr "Paylaşım '%s' desteklenmiyor"
 msgid "Share level '%s' cannot have share configured"
 msgstr "Paylaşım seviyesi '%s' paylaşım yapılandırmasına sahip olamaz"
 
-msgid "Should we use a CA for each project?"
-msgstr "Her proje için sertifika yetkilisini kullanmalı mıyız?"
-
 msgid ""
 "Shrinking the filesystem down with resize2fs has failed, please check if you "
 "have enough free space on your disk."
@@ -2896,14 +2797,6 @@ msgstr "Sıralama yönü boyutu sııralama anahtarı boyutunu geçiyor"
 
 msgid "Sort key supplied was not valid."
 msgstr "Verilen sıralama anahtarı geçerli değil."
-
-#, python-format
-msgid ""
-"Specified Fixed IP '%(addr)s' cannot be used with port '%(port)s': port "
-"already has a Fixed IP allocated."
-msgstr ""
-"Belirtilen Sabit IP '%(addr)s' '%(port)s' bağlantı noktası ile kullanılamaz: "
-"bağlantı noktasının zaten ayrılmış Sabit IP'si var."
 
 msgid "Specified fixed address not assigned to instance"
 msgstr "Belirtilen sabit adres sunucuya atanmamış"
@@ -2928,15 +2821,6 @@ msgstr "Depolama hatası: %(reason)s"
 msgid "Storage policy %s did not match any datastores"
 msgstr "Depolama ilkesi %s hiçbir verideposuyla eşleşmedi"
 
-#, python-format
-msgid "Subject for certificate for projects, %s for project, timestamp"
-msgstr "Projelerin sertifika konusu, proje ve tarih bilgisi için %s"
-
-#, python-format
-msgid "Subject for certificate for users, %s for project, user, timestamp"
-msgstr ""
-"Kullanıcıların sertifika konusu, proje, kullanıcı ve tarih bilgisi için %s"
-
 msgid "Success"
 msgstr "Başarılı"
 
@@ -2957,9 +2841,6 @@ msgstr "Görev %(task_name)s zaten %(host)s istemcisi üstünde çalışıyor"
 msgid "Task %(task_name)s is not running on host %(host)s"
 msgstr "Görev %(task_name)s %(host)s istemcisi üzerinde çalışmıyor"
 
-msgid "Template for cloudpipe instance boot script"
-msgstr "Cloudpipe sunucusu ön yükleme betiği için şablon"
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr "%(project)s için CA dosyası bulunamadı"
@@ -2971,10 +2852,6 @@ msgstr "%(project)s için CRL dosyası bulunamadı"
 #, python-format
 msgid "The DNS entry %(name)s already exists in domain %(domain)s."
 msgstr "%(domain)s alanında %(name)s DNS girdisi halen var."
-
-#, python-format
-msgid "The ID %(id)s is unknown."
-msgstr "Kimlik %(id)s bilinmiyor."
 
 #, python-format
 msgid "The PCI address %(address)s has an incorrect format."
@@ -3059,9 +2936,6 @@ msgstr ""
 
 msgid "The only partition should be partition 1."
 msgstr "Tek bölüm bölüm 1 olmalı."
-
-msgid "The path at which the file system is mounted."
-msgstr "Dosya sisteminin bağlı olduğu yol."
 
 #, python-format
 msgid "The provided RNG device path: (%(path)s) is not present on the host."
@@ -3461,14 +3335,6 @@ msgid "Unknown method '%(method)s' in compute API"
 msgstr "Hesap API'sinde bilinmeyen metod '%(method)s'"
 
 #, python-format
-msgid ""
-"Unknown osapi_compute_unique_server_name_scope value: %s Flag must be empty, "
-"\"global\" or \"project\""
-msgstr ""
-"Bilinmeyen osapi_compute_unique_server_name_scope değeri: %s Bayrağı boş, "
-"\"genel\" veya \"proje\" olmalı"
-
-#, python-format
 msgid "Unknown quota resources %(unknown)s."
 msgstr "Bilinmeyen kota kaynakları %(unknown)s."
 
@@ -3550,10 +3416,6 @@ msgstr ""
 #, python-format
 msgid "VHD coalesce attempts exceeded (%d), giving up..."
 msgstr "VHD ergitme girişimi aşıldı (%d), vaz geçiliyor..."
-
-#, python-format
-msgid "VIF driver not found for network_api_class: %s"
-msgstr "network_api_class: %s için VIF sürücüsü bulunamadı"
 
 msgid "VIF plugging is not supported by the Hyper-V driver."
 msgstr "VIF takma Hiper-V sürücüs tarafından desteklenmiyor."
@@ -3660,12 +3522,6 @@ msgid ""
 msgstr ""
 "Sunucu SSL kipinde çalıştırıldığında, yapılandırma dosyanızda hem cert_file "
 "hem key_file seçeneklerinin değerlerini belirtmelisiniz"
-
-msgid "Where we keep our keys"
-msgstr "Anahtarlarımızı tuttuğumuz yer"
-
-msgid "Where we keep our root CA"
-msgstr "Kök sertifika yetkilisini tutttuğumuz yer"
 
 #, python-format
 msgid "Wrong quota method %(method)s used on resource %(res)s"

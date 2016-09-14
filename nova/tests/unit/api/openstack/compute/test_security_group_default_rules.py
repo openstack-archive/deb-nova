@@ -50,7 +50,7 @@ class TestSecurityGroupDefaultRulesNeutronV21(test.TestCase):
                       SecurityGroupDefaultRulesController)
 
     def setUp(self):
-        self.flags(security_group_api='neutron')
+        self.flags(use_neutron=True)
         super(TestSecurityGroupDefaultRulesNeutronV21, self).setUp()
         self.controller = self.controller_cls()
 
@@ -339,3 +339,22 @@ class SecurityGroupDefaultRulesPolicyEnforcementV21(test.NoDBTestCase):
 
     def test_index_policy_failed(self):
         self._common_policy_check(self.controller.index, self.req)
+
+
+class TestSecurityGroupDefaultRulesDeprecation(test.NoDBTestCase):
+
+    def setUp(self):
+        super(TestSecurityGroupDefaultRulesDeprecation, self).setUp()
+        self.req = fakes.HTTPRequest.blank('', version='2.36')
+        self.controller = (security_group_default_rules_v21.
+                           SecurityGroupDefaultRulesController())
+
+    def test_all_apis_return_not_found(self):
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.create, self.req, {})
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.show, self.req, fakes.FAKE_UUID)
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.delete, self.req, fakes.FAKE_UUID)
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.index, self.req)

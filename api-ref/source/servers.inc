@@ -224,6 +224,8 @@ keypair to the server when you create it. To create a keypair, make a
 <http://developer.openstack.org/api-ref-compute-v2.1.html#createKeypair>`__
 request.
 
+.. note:: Starting with microversion 2.37 the ``networks`` field is required.
+
 Preconditions
 
 - The user must have sufficient server quota to create the number of
@@ -314,9 +316,9 @@ Request
 .. literalinclude:: ../../doc/api_samples/servers/server-create-req.json
    :language: javascript
 
-**Example Create Server (v2.32)**
+**Example Create Server With Automatic Networking (v2.37)**
 
-.. literalinclude:: ../../doc/api_samples/servers/v2.32/server-create-req.json
+.. literalinclude:: ../../doc/api_samples/servers/v2.37/server-create-req.json
    :language: javascript
 
 Response
@@ -368,6 +370,62 @@ Response
 **Example Create Server: JSON response**
 
 .. literalinclude:: ../../doc/api_samples/servers/server-create-resp.json
+   :language: javascript
+
+Create Multiple Servers
+=======================
+
+.. rest_method:: POST /servers
+
+There is a second kind of create call which can build multiple servers
+at once. This supports all the same parameters as create with a few
+additional attributes specific to multiple create.
+
+Error handling for multiple create is not as consistent as for single
+server create, and there is no guarantee that all the servers will be
+built. This call should generally be avoided in favor of clients doing
+direct individual server creates.
+
+Request (Additional Parameters)
+-------------------------------
+
+These are the parameters beyond single create that are supported.
+
+.. rest_parameters:: parameters.yaml
+
+   - name: servers_multiple_create_name
+   - min_count: servers_min_count
+   - max_count: servers_max_count
+   - return_reservation_id: return_reservation_id
+
+**Example Multiple Create with reservation ID**
+
+.. literalinclude:: ../../doc/api_samples/os-multiple-create/multiple-create-post-req.json
+   :language: javascript
+
+Response
+--------
+
+.. rest_parameters:: parameters.yaml
+
+   - reservation_id: reservation_id
+
+If ``return_reservation_id`` is set to ``true`` only the
+``reservation_id`` will be returned. This can be used as a filter with
+list servers detailed to see the status of all the servers being
+built.
+
+**Example Create multiple servers with reservation ID**
+
+.. literalinclude:: ../../doc/api_samples/os-multiple-create/multiple-create-post-resp.json
+   :language: javascript
+
+If ``return_reservation_id`` is set to ``false`` a representation of
+the ``first`` server will be returned.
+
+**Example Create multiple servers without reservation ID**
+
+.. literalinclude:: ../../doc/api_samples/os-multiple-create/multiple-create-no-resv-post-resp.json
    :language: javascript
 
 
@@ -488,7 +546,7 @@ The server usage information appears in the ``OS-SRV-USG:launched_at`` and ``OS-
 
 To hide ``addresses`` information for instances in a certain state, set the ``osapi_hide_server_address_states`` configuration option. Set this option to a valid VM state in the ``nova.conf`` configuration file.
 
-HostId is unique peraccount and is not globally unique.
+HostId is unique per account and is not globally unique.
 
 Preconditions
 

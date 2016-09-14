@@ -85,10 +85,7 @@ NOVA_VIF_DRIVER = 'nova.virt.hyperv.vif.HyperVNovaNetworkVIFDriver'
 
 def get_network_driver():
     """"Return the correct network module"""
-    if nova.network.is_neutron() is None:
-        # this is an unknown network type, not neutron or nova
-        raise KeyError()
-    elif nova.network.is_neutron():
+    if nova.network.is_neutron():
         return NEUTRON_VIF_DRIVER
     else:
         return NOVA_VIF_DRIVER
@@ -115,13 +112,8 @@ class VMOps(object):
         self._load_vif_driver_class()
 
     def _load_vif_driver_class(self):
-        try:
-            class_name = get_network_driver()
-            self._vif_driver = importutils.import_object(class_name)
-        except KeyError:
-            raise TypeError(_("VIF driver not found for "
-                              "network_api_class: %s") %
-                            CONF.network_api_class)
+        class_name = get_network_driver()
+        self._vif_driver = importutils.import_object(class_name)
 
     def list_instance_uuids(self):
         instance_uuids = []
@@ -179,7 +171,7 @@ class VMOps(object):
         root_vhd_path = self._pathutils.get_root_vhd_path(instance.name,
                                                           format_ext,
                                                           is_rescue_vhd)
-        root_vhd_size = instance.root_gb * units.Gi
+        root_vhd_size = instance.flavor.root_gb * units.Gi
 
         try:
             if CONF.use_cow_images:
@@ -303,7 +295,8 @@ class VMOps(object):
             self._save_device_metadata(context, instance, block_device_info)
 
             if configdrive.required_by(instance):
-                configdrive_path = self._create_config_drive(instance,
+                configdrive_path = self._create_config_drive(context,
+                                                             instance,
                                                              injected_files,
                                                              admin_password,
                                                              network_info)
@@ -321,8 +314,8 @@ class VMOps(object):
         instance_path = os.path.join(CONF.instances_path, instance_name)
 
         self._vmutils.create_vm(instance_name,
-                                instance.memory_mb,
-                                instance.vcpus,
+                                instance.flavor.memory_mb,
+                                instance.flavor.vcpus,
                                 CONF.hyperv.limit_cpu_features,
                                 CONF.hyperv.dynamic_memory_ratio,
                                 vm_gen,
@@ -448,8 +441,8 @@ class VMOps(object):
             raise exception.InstanceUnacceptable(instance_id=instance_id,
                                                  reason=reason)
 
-    def _create_config_drive(self, instance, injected_files, admin_password,
-                             network_info, rescue=False):
+    def _create_config_drive(self, context, instance, injected_files,
+                             admin_password, network_info, rescue=False):
         if CONF.config_drive_format != 'iso9660':
             raise exception.ConfigDriveUnsupportedFormat(
                 format=CONF.config_drive_format)
@@ -460,10 +453,9 @@ class VMOps(object):
         if admin_password and CONF.hyperv.config_drive_inject_password:
             extra_md['admin_pass'] = admin_password
 
-        inst_md = instance_metadata.InstanceMetadata(instance,
-                                                     content=injected_files,
-                                                     extra_md=extra_md,
-                                                     network_info=network_info)
+        inst_md = instance_metadata.InstanceMetadata(
+                      instance, content=injected_files, extra_md=extra_md,
+                      network_info=network_info, request_context=context)
 
         configdrive_path_iso = self._pathutils.get_configdrive_path(
             instance.name, constants.DVD_FORMAT, rescue=rescue)
@@ -830,6 +822,7 @@ class VMOps(object):
         if configdrive.required_by(instance):
             self._detach_config_drive(instance.name)
             rescue_configdrive_path = self._create_config_drive(
+                context,
                 instance,
                 injected_files=None,
                 admin_password=rescue_password,

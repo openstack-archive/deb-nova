@@ -74,9 +74,11 @@ class Aggregate(API_BASE):
     uuid = Column(String(36))
     name = Column(String(255))
     _hosts = orm.relationship(AggregateHost,
-                    primaryjoin='Aggregate.id == AggregateHost.aggregate_id')
+                    primaryjoin='Aggregate.id == AggregateHost.aggregate_id',
+                    cascade='delete')
     _metadata = orm.relationship(AggregateMetadata,
-                primaryjoin='Aggregate.id == AggregateMetadata.aggregate_id')
+                primaryjoin='Aggregate.id == AggregateMetadata.aggregate_id',
+                cascade='delete')
 
     @property
     def _extra_keys(self):
@@ -234,6 +236,7 @@ class BuildRequest(API_BASE):
     instance_uuid = Column(String(36))
     project_id = Column(String(255), nullable=False)
     instance = Column(Text)
+    block_device_mappings = Column(Text)
     # TODO(alaski): Drop these from the db in Ocata
     # columns_to_drop = ['request_spec_id', 'user_id', 'display_name',
     #         'instance_metadata', 'progress', 'vm_state', 'task_state',

@@ -58,7 +58,7 @@ class NovaAPIModelsSync(test_migrations.ModelsMigrationsSync):
     def migrate_engine(self):
         return self.engine
 
-    def get_engine(self):
+    def get_engine(self, context=None):
         return self.migrate_engine
 
     def get_metadata(self):
@@ -440,6 +440,10 @@ class NovaAPIMigrationsWalk(test_migrations.WalkVersionsMixin):
 
         self.assertIndexExists(engine, 'instance_group_member',
                                'instance_group_member_instance_idx')
+
+    def _check_019(self, engine, data):
+        self.assertColumnExists(engine, 'build_requests',
+                                'block_device_mappings')
 
 
 class TestNovaAPIMigrationsWalkSQLite(NovaAPIMigrationsWalk,

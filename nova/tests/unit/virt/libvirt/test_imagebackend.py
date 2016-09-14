@@ -77,8 +77,6 @@ class _ImageTestCase(object):
         self.TEMPLATE = 'template'
         self.CONTEXT = context.get_admin_context()
 
-        self.OLD_STYLE_INSTANCE_PATH = \
-            fake_libvirt_utils.get_instance_path(self.INSTANCE, forceold=True)
         self.PATH = os.path.join(
             fake_libvirt_utils.get_instance_path(self.INSTANCE), self.NAME)
 
@@ -86,6 +84,10 @@ class _ImageTestCase(object):
         # to cached_image_path. This will be less confusing.
         self.TEMPLATE_DIR = os.path.join(CONF.instances_path, '_base')
         self.TEMPLATE_PATH = os.path.join(self.TEMPLATE_DIR, 'template')
+
+        # Ensure can_fallocate is not initialised on the class
+        if hasattr(self.image_class, 'can_fallocate'):
+            del self.image_class.can_fallocate
 
         self.useFixture(fixtures.MonkeyPatch(
             'nova.virt.libvirt.imagebackend.libvirt_utils',
@@ -215,8 +217,6 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(False)
         os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -234,8 +234,6 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_image_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
         os.path.exists(self.PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
@@ -248,8 +246,6 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_base_dir_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
         os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -266,8 +262,6 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_template_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
         os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
@@ -281,7 +275,7 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image(self):
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH, max_size=None, image_id=None)
+        fn(target=self.TEMPLATE_PATH, image_id=None)
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, self.PATH)
         self.mox.ReplayAll()
 
@@ -304,7 +298,7 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
                        return_value=imageutils.QemuImgInfo())
     def test_create_image_extend(self, fake_qemu_img_info):
         fn = self.prepare_mocks()
-        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH, image_id=None)
+        fn(target=self.TEMPLATE_PATH, image_id=None)
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, self.PATH)
         image = imgmodel.LocalFileImage(self.PATH, imgmodel.FORMAT_RAW)
         imagebackend.disk.extend(image, self.SIZE)
@@ -371,8 +365,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(CONF.instances_path).AndReturn(True)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(False)
@@ -391,8 +383,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_image_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
@@ -407,8 +397,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_base_dir_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
@@ -426,8 +414,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_template_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
@@ -443,7 +429,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image(self):
         fn = self.prepare_mocks()
-        fn(max_size=None, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         imagebackend.libvirt_utils.create_cow_image(self.TEMPLATE_PATH,
                                                     self.PATH)
         self.mox.ReplayAll()
@@ -455,12 +441,10 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image_with_size(self):
         fn = self.prepare_mocks()
-        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(imagebackend.Image,
                                  'verify_base_size')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -482,8 +466,6 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         fn = self.prepare_mocks()
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(imagebackend.Qcow2, 'get_disk_size')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
@@ -498,14 +480,12 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_generate_resized_backing_files(self):
         fn = self.prepare_mocks()
-        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(imagebackend.libvirt_utils,
                                  'get_disk_backing_file')
         self.mox.StubOutWithMock(imagebackend.Image,
                                  'verify_base_size')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(CONF.instances_path).AndReturn(True)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -531,14 +511,12 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_qcow2_exists_and_has_no_backing_file(self):
         fn = self.prepare_mocks()
-        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         self.mox.StubOutWithMock(os.path, 'exists')
         self.mox.StubOutWithMock(imagebackend.libvirt_utils,
                                  'get_disk_backing_file')
         self.mox.StubOutWithMock(imagebackend.Image,
                                  'verify_base_size')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.DISK_INFO_PATH).AndReturn(False)
         os.path.exists(self.INSTANCES_PATH).AndReturn(True)
 
@@ -581,7 +559,6 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         self.flags(enabled=False, group='ephemeral_storage_encryption')
         self.INSTANCE['ephemeral_key_uuid'] = None
         self.LV = '%s_%s' % (self.INSTANCE['uuid'], self.NAME)
-        self.OLD_STYLE_INSTANCE_PATH = None
         self.PATH = os.path.join('/dev', self.VG, self.LV)
         self.disk = imagebackend.disk
         self.utils = imagebackend.utils
@@ -597,7 +574,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def _create_image(self, sparse):
         fn = self.prepare_mocks()
-        fn(max_size=None, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         self.lvm.create_volume(self.VG,
                                self.LV,
                                self.TEMPLATE_SIZE,
@@ -629,7 +606,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def _create_image_resize(self, sparse):
         fn = self.prepare_mocks()
-        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         self.lvm.create_volume(self.VG, self.LV,
                                self.SIZE, sparse=sparse)
         self.disk.get_disk_size(self.TEMPLATE_PATH
@@ -647,8 +624,6 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(False)
         os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -667,8 +642,6 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_image_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
         os.path.exists(self.PATH).AndReturn(True)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(True)
@@ -681,8 +654,6 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache_base_dir_exists(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(True)
         os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -720,7 +691,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image_negative(self):
         fn = self.prepare_mocks()
-        fn(max_size=self.SIZE, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
         self.lvm.create_volume(self.VG,
                                self.LV,
                                self.SIZE,
@@ -782,8 +753,8 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
     SIZE = 1024
 
     def setUp(self):
-        super(EncryptedLvmTestCase, self).setUp()
         self.image_class = imagebackend.Lvm
+        super(EncryptedLvmTestCase, self).setUp()
         self.flags(enabled=True, group='ephemeral_storage_encryption')
         self.flags(cipher='aes-xts-plain64',
                    group='ephemeral_storage_encryption')
@@ -793,7 +764,6 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
                    group='key_manager')
         self.flags(images_volume_group=self.VG, group='libvirt')
         self.LV = '%s_%s' % (self.INSTANCE['uuid'], self.NAME)
-        self.OLD_STYLE_INSTANCE_PATH = None
         self.LV_PATH = os.path.join('/dev', self.VG, self.LV)
         self.PATH = os.path.join('/dev/mapper',
             imagebackend.dmcrypt.volume_name(self.LV))
@@ -831,7 +801,6 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
                 context=self.CONTEXT)
 
             fn.assert_called_with(context=self.CONTEXT,
-                max_size=self.TEMPLATE_SIZE,
                 target=self.TEMPLATE_PATH)
             self.lvm.create_volume.assert_called_with(self.VG,
                 self.LV,
@@ -909,8 +878,8 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
             image.create_image(fn, self.TEMPLATE_PATH, self.SIZE,
                 context=self.CONTEXT)
 
-            fn.assert_called_with(context=self.CONTEXT, max_size=self.SIZE,
-                target=self.TEMPLATE_PATH)
+            fn.assert_called_with(context=self.CONTEXT,
+                                  target=self.TEMPLATE_PATH)
             self.disk.get_disk_size.assert_called_with(self.TEMPLATE_PATH)
             self.lvm.create_volume.assert_called_with(
                 self.VG,
@@ -982,7 +951,6 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
             fn.assert_called_with(
                 context=self.CONTEXT,
-                max_size=self.SIZE,
                 target=self.TEMPLATE_PATH)
             self.disk.get_disk_size.assert_called_with(
                 self.TEMPLATE_PATH)
@@ -1024,7 +992,6 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
             fn.assert_called_with(
                 context=self.CONTEXT,
-                max_size=self.SIZE,
                 target=self.TEMPLATE_PATH)
             self.disk.get_disk_size.assert_called_with(self.TEMPLATE_PATH)
             self.lvm.create_volume.assert_called_with(
@@ -1243,7 +1210,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_create_image(self):
         fn = self.mox.CreateMockAnything()
-        fn(max_size=None, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
 
         rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
 
@@ -1269,7 +1236,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
     def test_create_image_resize(self):
         fn = self.mox.CreateMockAnything()
         full_size = self.SIZE * 2
-        fn(max_size=full_size, target=self.TEMPLATE_PATH)
+        fn(target=self.TEMPLATE_PATH)
 
         rbd_utils.rbd.RBD_FEATURE_LAYERING = 1
 
@@ -1595,8 +1562,6 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
 
     def test_cache(self):
         self.mox.StubOutWithMock(os.path, 'exists')
-        if self.OLD_STYLE_INSTANCE_PATH:
-            os.path.exists(self.OLD_STYLE_INSTANCE_PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_DIR).AndReturn(False)
         os.path.exists(self.PATH).AndReturn(False)
         os.path.exists(self.TEMPLATE_PATH).AndReturn(False)
@@ -1615,7 +1580,7 @@ class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
     def test_create_image(self):
         self.stubs.Set(imagebackend.Ploop, 'get_disk_size', lambda a, b: 2048)
         fn = self.prepare_mocks()
-        fn(target=self.TEMPLATE_PATH, max_size=2048, image_id=None)
+        fn(target=self.TEMPLATE_PATH, image_id=None)
         img_path = os.path.join(self.PATH, "root.hds")
         imagebackend.libvirt_utils.copy_image(self.TEMPLATE_PATH, img_path)
         self.utils.execute("ploop", "restore-descriptor", "-f", "raw",

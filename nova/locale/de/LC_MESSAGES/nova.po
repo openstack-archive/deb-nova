@@ -13,9 +13,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b2.dev117\n"
+"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-06-08 04:30+0000\n"
+"POT-Creation-Date: 2016-08-25 06:14+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -210,15 +210,6 @@ msgstr ""
 msgid "A NetworkModel is required in field %s"
 msgstr "Ein NetworkModel ist erforderlich im Feld %s"
 
-msgid ""
-"A unique ID given to each file system.  This is value is set in Glance and "
-"agreed upon here so that the operator knowns they are dealing with the same "
-"file system."
-msgstr ""
-"Eine eindeutige ID für jedes Dateisystem. Dieser Wert wird in Glance "
-"festgelegt und hier abgestimmt, damit der Operator weiß, dass dasselbe "
-"Dateisystem gemeint ist."
-
 #, python-format
 msgid ""
 "API Version String %(version)s is of invalid format. Must be of format "
@@ -382,10 +373,6 @@ msgid "Bad prefix for to_global_ipv6: %s"
 msgstr "Falsches Präfix für 'to_global_ipv6': %s"
 
 #, python-format
-msgid "Bad project_id for to_global_ipv6: %s"
-msgstr "Falsche 'project_id' für 'to_global_ipv6': %s"
-
-#, python-format
 msgid ""
 "Binding failed for port %(port_id)s, please check neutron logs for more "
 "information."
@@ -514,14 +501,6 @@ msgstr "CPU-Nummer %(cpuset)s ist keinem Knoten zugeordnet"
 msgid "CPU pinning is not supported by the host: %(reason)s"
 msgstr "CPU pinning wird nicht unterstützt vom Host: %(reason)s"
 
-#, python-format
-msgid ""
-"CPU set to pin/unpin %(requested)s must be a subset of known CPU set "
-"%(cpuset)s"
-msgstr ""
-"CPU Set zu pin/unpin %(requested)s muss eine Teilmenge bekannter CPU Sets "
-"%(cpuset)s sein"
-
 msgid "Can not add access to a public flavor."
 msgstr "Kann keinen Zugriff auf eine öffentliche Version herstellen. "
 
@@ -641,13 +620,6 @@ msgstr ""
 
 msgid "Cannot mount Scality SOFS, check syslog for errors"
 msgstr "Scality-SoFS kann nicht angehängt werden. Syslog auf Fehler überprüfen"
-
-#, python-format
-msgid ""
-"Cannot pin/unpin cpus %(requested)s from the following pinned set %(pinned)s"
-msgstr ""
-"CPUs %(requested)s können nicht in die folgende gepinnte Gruppe gepinnt oder "
-"davon abgepinnt werden %(pinned)s"
 
 #, python-format
 msgid "Cannot remove host %(host)s in aggregate %(id)s"
@@ -985,10 +957,6 @@ msgid "Device '%(device)s' not found."
 msgstr "Das Gerät '%(device)s' wurde nicht gefunden."
 
 #, python-format
-msgid "Device detach failed for %(device)s: %(reason)s)"
-msgstr "Abhängen des Geräts fehlgeschlagen für %(device)s: %(reason)s)"
-
-#, python-format
 msgid ""
 "Device id %(id)s specified is not supported by hypervisor version %(version)s"
 msgstr ""
@@ -1066,10 +1034,6 @@ msgid ""
 msgstr ""
 "Netz-UUID %(network_uuid)s ist entweder nicht vorhanden oder es fehlt die "
 "Zuordnung zu Projekt %(project_id)s."
-
-msgid "Ephemeral disks requested are larger than the instance type allows."
-msgstr ""
-"Angeforderte flüchtige Platten sind größer als der Instanz-Typ erlaubt."
 
 #, python-format
 msgid "Error attempting to run %(method)s"
@@ -1375,15 +1339,6 @@ msgstr "Datei %(file_path)s konnte nicht gefunden werden."
 msgid "File path %s not valid"
 msgstr "Dateipfad %s nicht gültig"
 
-msgid "Filename of private key"
-msgstr "Dateiname des privaten Schlüssels"
-
-msgid "Filename of root CA"
-msgstr "Dateiname der Root CA"
-
-msgid "Filename of root Certificate Revocation List"
-msgstr "Dateiname der Stammzertifikat-Widerrufliste"
-
 #, python-format
 msgid "Fixed IP %(address)s already exists."
 msgstr "Feste IP %(address)s bereits vorhanden."
@@ -1471,9 +1426,6 @@ msgid "Flavor access not found for %(flavor_id)s / %(project_id)s combination."
 msgstr ""
 "Versionszugriff nicht gefunden für Kombination aus %(flavor_id)s und "
 "%(project_id)s."
-
-msgid "Flavor for vpn instances"
-msgstr "Version für VPN-Instanzen"
 
 msgid ""
 "Flavor id can only contain letters from A-Z (both cases), periods, dashes, "
@@ -1687,16 +1639,6 @@ msgstr ""
 #, python-format
 msgid "Image %(image_id)s could not be found."
 msgstr "Abbild %(image_id)s konnte nicht gefunden werden."
-
-#, python-format
-msgid ""
-"Image %(image_id)s could not be found. The nova EC2 API assigns image ids "
-"dynamically when they are listed for the first time. Have you listed image "
-"ids since adding this image?"
-msgstr ""
-"Image '%(image_id)s' konnte nicht gefunden werden. Die nova-EC2-API ordnet "
-"Image-IDs bei der ersten Auflistung dynamisch zu. Haben Sie Image-IDs "
-"aufgelistet, seitdem Sie dieses Image hinzugefügt haben?"
 
 #, python-format
 msgid "Image %(image_id)s is not active."
@@ -2105,9 +2047,6 @@ msgstr "Ungültiger Feldname: %s"
 msgid "Invalid fixed IP Address %s in request"
 msgstr "Ungültige feste IP-Adresse %s in der Anforderung"
 
-msgid "Invalid flavorRef provided."
-msgstr "Ungültige Angabe für flavorRef."
-
 #, python-format
 msgid "Invalid floating IP %s in request"
 msgstr "Ungültige dynamische IP-Adresse %s in Anforderung"
@@ -2148,10 +2087,6 @@ msgstr ""
 #, python-format
 msgid "Invalid input received: %(reason)s"
 msgstr "Ungültige Eingabe erhalten: %(reason)s"
-
-#, python-format
-msgid "Invalid instance id %s in request"
-msgstr "Ungültige Instanzkennung %s in der Anforderung"
 
 msgid "Invalid instance image."
 msgstr "Ungültiges Instanzabbild."
@@ -2310,15 +2245,6 @@ msgstr ""
 "Ironic-Knoten %(id)s konnte nicht überprüft werden. (Implementieren: "
 "%(deploy)s, Netzstrom: '%(power)s')"
 
-#, python-format
-msgid ""
-"Ironic node: %(id)s virtual to physical interface count  mismatch (Vif "
-"count: %(vif_count)d, Pif count: %(pif_count)d)"
-msgstr ""
-"Ironic-Knoten: %(id)s - Abweichung der Anzahl für virtuelle und physische "
-"Schnittstelle (Anzahl für virtuelle Schnittstelle: %(vif_count)d, Anzahl für "
-"physische Schnittstelle: %(pif_count)d)"
-
 msgid "Is the appropriate service running?"
 msgstr "Ist der entsprechende Dienst aktiv?"
 
@@ -2384,13 +2310,6 @@ msgstr "Zeile %(linenum)d : %(line)s"
 #, python-format
 msgid "Link Local address is not found.:%s"
 msgstr "Link-Local-Adresse nicht gefunden: %s"
-
-msgid ""
-"List of file systems that are configured in this file in the image_file_url:"
-"<list entry name> sections"
-msgstr ""
-"Liste mit Dateisystemen, die in dieser Datei in den Abschnitten "
-"image_file_url:<Listeneintragsname> konfiguriert werden"
 
 msgid "Listing virtual interfaces is not supported by this cloud."
 msgstr ""
@@ -2651,9 +2570,6 @@ msgstr "Für max_number muss ein positiver Wert angegeben werden"
 msgid "Must supply a positive value for max_rows"
 msgstr "Für max_rows muss ein positiver Wert angegeben werden"
 
-msgid "Netmask to push into openvpn config"
-msgstr "Netzmaske für Push-Operation in OpenVPN-Konfiguration"
-
 #, python-format
 msgid "Network \"%(val)s\" is not valid in field %(attr)s"
 msgstr "Netz \"%(val)s\" ist nicht gültig in Feld %(attr)s"
@@ -2727,9 +2643,6 @@ msgstr ""
 #, python-format
 msgid "Network set host failed for network %(network_id)s."
 msgstr "Netz-Set-Host fehlgeschlagen für Netz %(network_id)s."
-
-msgid "Network to push into openvpn config"
-msgstr "Netz für Push-Operation in OpenVPN-Konfiguration"
 
 msgid "New volume must be detached in order to swap."
 msgstr "Neuer Datenträger muss für den Austausch abgehängt werden."
@@ -2864,9 +2777,6 @@ msgstr "Keine Netzwerke gefunden"
 msgid "No nova entries in syslog!"
 msgstr "Keine nova-Einträge im syslog!"
 
-msgid "No nw_info cache associated with instance"
-msgstr "Der Instanz ist kein 'nw_info'-Cache zugeordnet"
-
 #, python-format
 msgid "No operating system found in %s"
 msgstr "Kein Betriebssystem gefunden in %s"
@@ -2932,6 +2842,9 @@ msgstr "Keine RBD-Momentaufnahme"
 #, python-format
 msgid "Not authorized for image %(image_id)s."
 msgstr "Für Abbild %(image_id)s nicht autorisiert."
+
+msgid "Not authorized."
+msgstr "Nicht berechtigt."
 
 msgid "Not enough parameters to build a valid rule."
 msgstr "Nicht genügend Parameter zum Erstellen einer gültigen Regel."
@@ -3248,10 +3161,6 @@ msgstr ""
 "gefunden werden."
 
 #, python-format
-msgid "Quota limit %(limit)s for %(resource)s must be -1 or greater."
-msgstr "Quotengrenzwert %(limit)s für %(resource)s muss mindestens -1 sein"
-
-#, python-format
 msgid ""
 "Quota limit %(limit)s for %(resource)s must be greater than or equal to "
 "already used and reserved %(minimum)s."
@@ -3450,24 +3359,8 @@ msgid "Scheduler Host Filter %(filter_name)s could not be found."
 msgstr "Scheduler-Hostfilter %(filter_name)s konnte nicht gefunden werden."
 
 #, python-format
-msgid ""
-"Security group %(name)s added %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"Sicherheitsgruppe %(name)s hat %(protocol)s-Eingang hinzugefügt "
-"(%(from_port)s:%(to_port)s)"
-
-#, python-format
 msgid "Security group %(name)s is not found for project %(project)s"
 msgstr "Sicherheitsgruppe %(name)s nicht gefunden für Projekt %(project)s"
-
-#, python-format
-msgid ""
-"Security group %(name)s removed %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"Sicherheitsgruppe %(name)s hat %(protocol)s-Eingang entfernt (%(from_port)s:"
-"%(to_port)s)"
 
 #, python-format
 msgid ""
@@ -3555,9 +3448,6 @@ msgstr ""
 msgid "Server does not exist"
 msgstr "Server ist nicht vorhanden"
 
-msgid "Server group scheduler hint must be a UUID."
-msgstr "Schedulerhinweis für Servergruppe muss eine UUID sein."
-
 #, python-format
 msgid "ServerGroup policy is not supported: %(reason)s"
 msgstr "ServerGroup-Richtlinie wird nicht unterstützt: %(reason)s"
@@ -3612,9 +3502,6 @@ msgstr "Das freigegebene Verzeichnis '%s' wird nicht unterstützt"
 msgid "Share level '%s' cannot have share configured"
 msgstr "Geteilte Ebene '%s' kann keine geteilte Konfigration haben"
 
-msgid "Should we use a CA for each project?"
-msgstr "Soll eine eigenständige CA für jedes Projekt verwendet werden?"
-
 msgid ""
 "Shrinking the filesystem down with resize2fs has failed, please check if you "
 "have enough free space on your disk."
@@ -3651,15 +3538,6 @@ msgstr "Größe der Sortierrichtung überschreitet Sortierschlüsselgröße"
 msgid "Sort key supplied was not valid."
 msgstr "Der angegebene Sortierschlüssel war nicht gültig. "
 
-#, python-format
-msgid ""
-"Specified Fixed IP '%(addr)s' cannot be used with port '%(port)s': port "
-"already has a Fixed IP allocated."
-msgstr ""
-"Angegebene statische IP-Adresse '%(addr)s' kann nicht mit Port '%(port)s' "
-"verwendet werden: Dem Port wurde bereits eine statische IP-Adresse "
-"zugeordnet."
-
 msgid "Specified fixed address not assigned to instance"
 msgstr "Angegebene statische Adresse ist nicht der Instanz zugeordnet"
 
@@ -3682,15 +3560,6 @@ msgstr "Speicherfehler: %(reason)s"
 #, python-format
 msgid "Storage policy %s did not match any datastores"
 msgstr "Speicherrichtlinie %s stimmt mit keinem Datenspeicher überein"
-
-#, python-format
-msgid "Subject for certificate for projects, %s for project, timestamp"
-msgstr "Subjekt des Zertfikates für Projekte, %s für Projekt, Zeitstempel"
-
-#, python-format
-msgid "Subject for certificate for users, %s for project, user, timestamp"
-msgstr ""
-"Subjekt des Zertfikates für Benutzer, %s für Projekt, Benutzer, Zeitstempel"
 
 msgid "Success"
 msgstr "Erfolg"
@@ -3716,9 +3585,6 @@ msgstr "Task %(task_name)s wird bereits auf Host %(host)s ausgeführt"
 msgid "Task %(task_name)s is not running on host %(host)s"
 msgstr "Task %(task_name)s wird nicht auf Host %(host)s ausgeführt"
 
-msgid "Template for cloudpipe instance boot script"
-msgstr "Vorlage für Boot-Script von Cloudpipe-Instanz"
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr ""
@@ -3734,10 +3600,6 @@ msgstr ""
 #, python-format
 msgid "The DNS entry %(name)s already exists in domain %(domain)s."
 msgstr "Der DNS-Eintrag %(name)s ist in Domäne %(domain)s bereits vorhanden."
-
-#, python-format
-msgid "The ID %(id)s is unknown."
-msgstr "Die Kennung %(id)s ist unbekannt."
 
 #, python-format
 msgid "The PCI address %(address)s has an incorrect format."
@@ -3855,9 +3717,6 @@ msgstr ""
 
 msgid "The only partition should be partition 1."
 msgstr "Die einzige Partition sollte Partition 1 sein."
-
-msgid "The path at which the file system is mounted."
-msgstr "Der Pfad, unter dem das Dateisystem angehängt wird."
 
 #, python-format
 msgid "The provided RNG device path: (%(path)s) is not present on the host."
@@ -4364,14 +4223,6 @@ msgid "Unknown method '%(method)s' in compute API"
 msgstr "Unbekannte Methode '%(method)s' in Rechen-API"
 
 #, python-format
-msgid ""
-"Unknown osapi_compute_unique_server_name_scope value: %s Flag must be empty, "
-"\"global\" or \"project\""
-msgstr ""
-"Unbekannter Wert für 'osapi_compute_unique_server_name_scope': %s Flag muss "
-"leer sein oder \"global\" oder \"project\" lauten"
-
-#, python-format
 msgid "Unknown quota resources %(unknown)s."
 msgstr "Unbekannte Quotenressourcen %(unknown)s."
 
@@ -4458,12 +4309,6 @@ msgstr ""
 #, python-format
 msgid "VHD coalesce attempts exceeded (%d), giving up..."
 msgstr "Mehr als (%d) VHD-Verbindungsversuche unternommen, Abbruch ..."
-
-#, python-format
-msgid "VIF driver not found for network_api_class: %s"
-msgstr ""
-"Treiber für virtuelle Schnittstelle nicht gefunden für 'network_api_class': "
-"%s"
 
 msgid "VIF plugging is not supported by the Hyper-V driver."
 msgstr ""
@@ -4612,12 +4457,6 @@ msgstr ""
 "Wenn der Server im SSL-Modus läuft, müssen Sie sowohl für die 'cert_file'- "
 "als auch für die 'key_file'-Option in Ihrer Konfigurationsdatei einen Wert "
 "angeben"
-
-msgid "Where we keep our keys"
-msgstr "Wo wir unsere Schlüssel aufbewahren"
-
-msgid "Where we keep our root CA"
-msgstr "Wo sollen wir unsere root CA aufbewahren"
 
 #, python-format
 msgid "Wrong quota method %(method)s used on resource %(res)s"

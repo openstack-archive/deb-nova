@@ -458,7 +458,7 @@ class XenAPIDriver(driver.ComputeDriver):
                                                               disk_over_commit)
 
     def cleanup_live_migration_destination_check(self, context,
-                                                   dest_check_data):
+                                                 dest_check_data):
         """Do required cleanup on dest host after check_can_live_migrate calls
 
         :param context: security context
@@ -538,7 +538,7 @@ class XenAPIDriver(driver.ComputeDriver):
                                                            block_device_info)
 
     def pre_live_migration(self, context, instance, block_device_info,
-                           network_info, disk_info, migrate_data=None):
+                           network_info, disk_info, migrate_data):
         """Preparation live migration.
 
         :param block_device_info:
