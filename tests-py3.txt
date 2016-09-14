@@ -1,4 +1,3 @@
-nova.tests.unit.api.openstack.compute.test_api.APITest
 nova.tests.unit.api.openstack.compute.test_console_output.ConsoleOutputExtensionTestV21
 nova.tests.unit.api.openstack.compute.test_disk_config.DiskConfigTestCaseV21
 nova.tests.unit.api.openstack.compute.test_extended_availability_zone.ExtendedAvailabilityZoneTestV21
@@ -20,8 +19,6 @@ nova.tests.unit.api.openstack.compute.test_security_group_default_rules.TestSecu
 nova.tests.unit.api.openstack.compute.test_security_group_default_rules.TestSecurityGroupDefaultRulesV21
 nova.tests.unit.api.openstack.compute.test_security_groups.SecurityGroupsOutputTestV21
 nova.tests.unit.api.openstack.compute.test_security_groups.TestSecurityGroupRulesV21
-nova.tests.unit.api.openstack.compute.test_server_actions.ServerActionsControllerTestV21
-nova.tests.unit.api.openstack.compute.test_serversV21.Base64ValidationTest
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerCreateTest
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerRebuildInstanceTest
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerRebuildTestV219
@@ -35,7 +32,6 @@ nova.tests.unit.api.openstack.compute.test_versions.VersionsTestV21WithV2Compati
 nova.tests.unit.api.openstack.compute.test_volumes.BootFromVolumeTest
 nova.tests.unit.api.openstack.compute.test_volumes.VolumeApiTestV21
 nova.tests.unit.api.test_compute_req_id.RequestIdTest
-nova.tests.unit.api.test_validator.ValidatorTestCase
 nova.tests.unit.api.test_wsgi.Test
 nova.tests.unit.compute.test_compute.ComputeAPITestCase.test_create_with_base64_user_data
 nova.tests.unit.compute.test_compute.ComputeTestCase.test_finish_resize_with_volumes
@@ -53,12 +49,8 @@ nova.tests.unit.db.test_migrations.TestNovaMigrationsPostgreSQL
 nova.tests.unit.db.test_migrations.TestNovaMigrationsSQLite
 nova.tests.unit.image.test_fake.FakeImageServiceTestCase
 nova.tests.unit.network.test_manager.LdapDNSTestCase
-nova.tests.unit.pci.test_manager.PciDevTrackerTestCase
-nova.tests.unit.pci.test_stats.PciDeviceStatsTestCase
-nova.tests.unit.pci.test_stats.PciDeviceStatsWithTagsTestCase
 nova.tests.unit.test_bdm.BlockDeviceMappingEc2CloudTestCase
 nova.tests.unit.test_configdrive2.ConfigDriveTestCase
-nova.tests.unit.test_hacking.HackingTestCase
 nova.tests.unit.test_matchers.TestDictMatches
 nova.tests.unit.test_metadata.MetadataHandlerTestCase
 nova.tests.unit.test_metadata.MetadataPasswordTestCase

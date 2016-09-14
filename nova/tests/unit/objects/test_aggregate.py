@@ -16,8 +16,6 @@ import mock
 from oslo_utils import timeutils
 
 from nova import db
-from nova.db.sqlalchemy import api as db_api
-from nova.db.sqlalchemy import api_models
 from nova import exception
 from nova.objects import aggregate
 from nova.tests.unit import fake_notifier
@@ -50,117 +48,8 @@ fake_api_aggregate = {
 
 SUBS = {'metadata': 'metadetails'}
 
-fake_db_aggregate_values = {'name': 'fake_aggregate'}
-
-fake_db_aggregate_metadata = {'fake_key1': 'fake_value1',
-                              'fake_key2': 'fake_value2',
-                              'availability_zone': 'fake_avail_zone'}
-
-fake_db_aggregate_hosts = ['foo.openstack.org']
-
-
-@db_api.api_context_manager.writer
-def _create_aggregate(context, values=fake_db_aggregate_values,
-                               metadata=fake_db_aggregate_metadata):
-    aggregate = api_models.Aggregate()
-    aggregate.update(values)
-    aggregate.save(context.session)
-
-    if metadata:
-        for key, value in metadata.items():
-            aggregate_metadata = api_models.AggregateMetadata()
-            aggregate_metadata.update({'key': key,
-                                       'value': value,
-                                       'aggregate_id': aggregate['id']})
-            aggregate_metadata.save(context.session)
-
-    return aggregate
-
-
-@db_api.api_context_manager.writer
-def _create_aggregate_with_hosts(context, values=fake_db_aggregate_values,
-                                          metadata=fake_db_aggregate_metadata,
-                                          hosts=fake_db_aggregate_hosts):
-    aggregate = _create_aggregate(context, values, metadata)
-    for host in hosts:
-        host_model = api_models.AggregateHost()
-        host_model.update({'host': host,
-                           'aggregate_id': aggregate.id})
-        host_model.save(context.session)
-
-    return aggregate
-
 
 class _TestAggregateObject(object):
-    def test_aggregate_get_from_db(self):
-        result = _create_aggregate_with_hosts(self.context)
-        expected = aggregate._aggregate_get_from_db(self.context, result['id'])
-        self.assertEqual(fake_db_aggregate_hosts, expected.hosts)
-        self.assertEqual(fake_db_aggregate_metadata, expected['metadetails'])
-
-    def test_aggregate_get_from_db_by_uuid(self):
-        result = _create_aggregate_with_hosts(self.context)
-        expected = aggregate._aggregate_get_from_db_by_uuid(
-                self.context, result['uuid'])
-        self.assertEqual(result.uuid, expected.uuid)
-        self.assertEqual(fake_db_aggregate_hosts, expected.hosts)
-        self.assertEqual(fake_db_aggregate_metadata, expected['metadetails'])
-
-    def test_aggregate_get_from_db_raise_not_found(self):
-        aggregate_id = 5
-        self.assertRaises(exception.AggregateNotFound,
-                          aggregate._aggregate_get_from_db,
-                          self.context, aggregate_id)
-
-    def test_aggregate_get_all_from_db(self):
-        for c in range(3):
-            _create_aggregate(self.context,
-                              values={'name': 'fake_aggregate_%d' % c})
-        results = aggregate._get_all_from_db(self.context)
-        self.assertEqual(len(results), 3)
-
-    def test_aggregate_get_by_host_from_db(self):
-        _create_aggregate_with_hosts(self.context,
-                                     values={'name': 'fake_aggregate_1'},
-                                     hosts=['host.1.openstack.org'])
-        _create_aggregate_with_hosts(self.context,
-                                     values={'name': 'fake_aggregate_2'},
-                                     hosts=['host.1.openstack.org'])
-        _create_aggregate(self.context,
-                          values={'name': 'no_host_aggregate'})
-        rh1 = aggregate._get_all_from_db(self.context)
-        rh2 = aggregate._get_by_host_from_db(self.context,
-                                             'host.1.openstack.org')
-        self.assertEqual(3, len(rh1))
-        self.assertEqual(2, len(rh2))
-
-    def test_aggregate_get_by_host_with_key_from_db(self):
-        ah1 = _create_aggregate_with_hosts(self.context,
-                                           values={'name': 'fake_aggregate_1'},
-                                           metadata={'goodkey': 'good'},
-                                           hosts=['host.1.openstack.org'])
-        _create_aggregate_with_hosts(self.context,
-                                     values={'name': 'fake_aggregate_2'},
-                                     hosts=['host.1.openstack.org'])
-        rh1 = aggregate._get_by_host_from_db(self.context,
-                                             'host.1.openstack.org',
-                                             key='goodkey')
-        self.assertEqual(1, len(rh1))
-        self.assertEqual(ah1['id'], rh1[0]['id'])
-
-    def test_aggregate_get_by_metadata_key_from_db(self):
-        _create_aggregate(self.context,
-                          values={'name': 'aggregate_1'},
-                          metadata={'goodkey': 'good'})
-        _create_aggregate(self.context,
-                          values={'name': 'aggregate_2'},
-                          metadata={'goodkey': 'bad'})
-        _create_aggregate(self.context,
-                          values={'name': 'aggregate_3'},
-                          metadata={'badkey': 'good'})
-        rl1 = aggregate._get_by_metadata_key_from_db(self.context,
-                                                     key='goodkey')
-        self.assertEqual(2, len(rl1))
 
     @mock.patch('nova.objects.aggregate._aggregate_get_from_db')
     @mock.patch('nova.db.aggregate_get')
@@ -171,7 +60,7 @@ class _TestAggregateObject(object):
         self.compare_obj(agg, fake_aggregate, subs=SUBS)
 
         mock_get_api.assert_called_once_with(self.context, 123)
-        mock_get.assert_not_called()
+        self.assertFalse(mock_get.called)
 
     @mock.patch('nova.objects.aggregate._aggregate_get_from_db')
     @mock.patch('nova.db.aggregate_get')
@@ -221,25 +110,30 @@ class _TestAggregateObject(object):
         self.assertEqual(fake_aggregate['id'], agg.id)
         self.assertFalse(get_by_uuid.called)
 
-    @mock.patch.object(db, 'aggregate_create')
-    def test_create(self, mock_aggregate_create):
-        mock_aggregate_create.return_value = fake_aggregate
-
+    @mock.patch('nova.objects.aggregate._aggregate_create_in_db')
+    @mock.patch('nova.db.aggregate_create')
+    def test_create(self, create_mock, api_create_mock):
+        api_create_mock.return_value = fake_aggregate
         agg = aggregate.Aggregate(context=self.context)
         agg.name = 'foo'
         agg.metadata = {'one': 'two'}
         agg.uuid = uuidsentinel.fake_agg
         agg.create()
+        api_create_mock.assert_called_once_with(
+                self.context,
+                {'name': 'foo', 'uuid': uuidsentinel.fake_agg},
+                metadata={'one': 'two'})
+        self.assertFalse(create_mock.called)
         self.compare_obj(agg, fake_aggregate, subs=SUBS)
 
-        mock_aggregate_create.assert_called_once_with(self.context,
+        api_create_mock.assert_called_once_with(self.context,
             {'name': 'foo', 'uuid': uuidsentinel.fake_agg},
             metadata={'one': 'two'})
 
+    @mock.patch('nova.objects.aggregate._aggregate_create_in_db')
     @mock.patch.object(db, 'aggregate_create')
-    def test_recreate_fails(self, mock_aggregate_create):
-        mock_aggregate_create.return_value = fake_aggregate
-
+    def test_recreate_fails(self, create_mock, api_create_mock):
+        api_create_mock.return_value = fake_aggregate
         agg = aggregate.Aggregate(context=self.context)
         agg.name = 'foo'
         agg.metadata = {'one': 'two'}
@@ -247,22 +141,62 @@ class _TestAggregateObject(object):
         agg.create()
         self.assertRaises(exception.ObjectActionError, agg.create)
 
-        mock_aggregate_create.assert_called_once_with(self.context,
+        api_create_mock.assert_called_once_with(self.context,
             {'name': 'foo', 'uuid': uuidsentinel.fake_agg},
             metadata={'one': 'two'})
 
-    @mock.patch.object(db, 'aggregate_update')
-    def test_save(self, mock_aggregate_update):
-        mock_aggregate_update.return_value = fake_aggregate
-
+    @mock.patch('nova.objects.aggregate._aggregate_delete_from_db')
+    @mock.patch('nova.db.aggregate_delete')
+    def test_destroy(self, delete_mock, api_delete_mock):
         agg = aggregate.Aggregate(context=self.context)
         agg.id = 123
-        agg.name = 'baz'
+        agg.destroy()
+        self.assertFalse(delete_mock.called)
+        api_delete_mock.assert_called_with(self.context, 123)
+
+    @mock.patch('nova.objects.aggregate._aggregate_delete_from_db')
+    @mock.patch('nova.db.aggregate_delete')
+    def test_destroy_cell(self, delete_mock, api_delete_mock):
+        api_delete_mock.side_effect = exception.AggregateNotFound(
+                                                            aggregate_id=123)
+        agg = aggregate.Aggregate(context=self.context)
+        agg.id = 123
+        agg.destroy()
+        delete_mock.assert_called_with(self.context, 123)
+        api_delete_mock.assert_called_with(self.context, 123)
+
+    @mock.patch('nova.objects.aggregate._aggregate_update_to_db')
+    @mock.patch('nova.db.aggregate_update')
+    def test_save_to_cell(self, update_mock, api_update_mock):
+        api_update_mock.side_effect = exception.AggregateNotFound(
+            aggregate_id='foo')
+        update_mock.return_value = fake_aggregate
+        agg = aggregate.Aggregate(context=self.context)
+        agg.id = 123
+        agg.name = 'fake-aggregate'
         agg.save()
         self.compare_obj(agg, fake_aggregate, subs=SUBS)
+        update_mock.assert_called_once_with(self.context,
+                                            123,
+                                            {'name': 'fake-aggregate'})
+        self.assertTrue(api_update_mock.called)
 
-        mock_aggregate_update.aasert_called_once_with(self.context,
-            123, {'name': 'baz'})
+    @mock.patch('nova.objects.aggregate._aggregate_update_to_db')
+    @mock.patch('nova.db.aggregate_update')
+    def test_save_to_api(self, update_mock, api_update_mock):
+        api_update_mock.return_value = fake_aggregate
+        agg = aggregate.Aggregate(context=self.context)
+        agg.id = 123
+        agg.name = 'fake-api-aggregate'
+        agg.save()
+        self.compare_obj(agg, fake_aggregate, subs=SUBS)
+        api_update_mock.assert_called_once_with(self.context,
+                                                123,
+                                                {'name': 'fake-api-aggregate'})
+        self.assertFalse(update_mock.called)
+
+        api_update_mock.assert_called_once_with(self.context,
+            123, {'name': 'fake-api-aggregate'})
 
     def test_save_and_create_no_hosts(self):
         agg = aggregate.Aggregate(context=self.context)
@@ -273,9 +207,15 @@ class _TestAggregateObject(object):
         self.assertRaises(exception.ObjectActionError,
                           agg.save)
 
-    @mock.patch.object(db, 'aggregate_metadata_delete')
-    @mock.patch.object(db, 'aggregate_metadata_add')
-    def test_update_metadata(self, mock_add, mock_delete):
+    @mock.patch('nova.objects.aggregate._metadata_delete_from_db')
+    @mock.patch('nova.objects.aggregate._metadata_add_to_db')
+    @mock.patch('nova.db.aggregate_metadata_delete')
+    @mock.patch('nova.db.aggregate_metadata_add')
+    def test_update_metadata(self,
+                             mock_metadata_add,
+                             mock_metadata_delete,
+                             mock_api_metadata_add,
+                             mock_api_metadata_delete):
         fake_notifier.NOTIFICATIONS = []
         agg = aggregate.Aggregate()
         agg._context = self.context
@@ -293,33 +233,81 @@ class _TestAggregateObject(object):
         self.assertEqual({'todelete': None, 'toadd': 'myval'},
                          msg.payload['meta_data'])
         self.assertEqual({'foo': 'bar', 'toadd': 'myval'}, agg.metadata)
+        mock_metadata_add.assert_called_once_with(self.context, 123,
+                                                  {'toadd': 'myval'})
+        mock_metadata_delete.assert_called_once_with(self.context, 123,
+                                                     'todelete')
+        self.assertFalse(mock_api_metadata_add.called)
+        self.assertFalse(mock_api_metadata_delete.called)
 
-        mock_delete.assert_called_once_with(self.context, 123, 'todelete')
-        mock_add.assert_called_once_with(self.context, 123,
-                                         {'toadd': 'myval'})
-
-    @mock.patch.object(db, 'aggregate_delete')
-    def test_destroy(self, mock_aggregate_delete):
-        agg = aggregate.Aggregate(context=self.context)
+    @mock.patch('nova.objects.Aggregate.in_api')
+    @mock.patch('nova.objects.aggregate._metadata_delete_from_db')
+    @mock.patch('nova.objects.aggregate._metadata_add_to_db')
+    @mock.patch('nova.db.aggregate_metadata_delete')
+    @mock.patch('nova.db.aggregate_metadata_add')
+    def test_update_metadata_api(self,
+                                 mock_metadata_add,
+                                 mock_metadata_delete,
+                                 mock_api_metadata_add,
+                                 mock_api_metadata_delete,
+                                 mock_in_api):
+        mock_in_api.return_value = True
+        fake_notifier.NOTIFICATIONS = []
+        agg = aggregate.Aggregate()
+        agg._context = self.context
         agg.id = 123
-        agg.destroy()
+        agg.metadata = {'foo': 'bar'}
+        agg.obj_reset_changes()
+        agg.update_metadata({'todelete': None, 'toadd': 'myval'})
+        self.assertEqual(2, len(fake_notifier.NOTIFICATIONS))
+        msg = fake_notifier.NOTIFICATIONS[0]
+        self.assertEqual('aggregate.updatemetadata.start', msg.event_type)
+        self.assertEqual({'todelete': None, 'toadd': 'myval'},
+                         msg.payload['meta_data'])
+        msg = fake_notifier.NOTIFICATIONS[1]
+        self.assertEqual('aggregate.updatemetadata.end', msg.event_type)
+        self.assertEqual({'todelete': None, 'toadd': 'myval'},
+                         msg.payload['meta_data'])
+        self.assertEqual({'foo': 'bar', 'toadd': 'myval'}, agg.metadata)
+        mock_api_metadata_delete.assert_called_once_with(self.context, 123,
+                                                         'todelete')
+        mock_api_metadata_add.assert_called_once_with(self.context, 123,
+                                                      {'toadd': 'myval'})
+        self.assertFalse(mock_metadata_add.called)
+        self.assertFalse(mock_metadata_delete.called)
 
-        mock_aggregate_delete.assert_called_once_with(self.context, 123)
+        mock_api_metadata_delete.assert_called_once_with(self.context,
+                                                         123,
+                                                         'todelete')
+        mock_api_metadata_add.assert_called_once_with(self.context,
+                                                      123,
+                                                      {'toadd': 'myval'})
 
     @mock.patch.object(db, 'aggregate_host_add')
     def test_add_host(self, mock_host_add):
         mock_host_add.return_value = {'host': 'bar'}
-
         agg = aggregate.Aggregate()
         agg.id = 123
         agg.hosts = ['foo']
         agg._context = self.context
         agg.add_host('bar')
         self.assertEqual(agg.hosts, ['foo', 'bar'])
+        mock_host_add.assert_called_once_with(self.context, 123, 'bar')
 
-        mock_host_add.assert_called_once_with(self.context,
-                                              123,
-                                             'bar')
+    @mock.patch('nova.db.aggregate_host_add')
+    @mock.patch('nova.objects.aggregate._host_add_to_db')
+    @mock.patch('nova.objects.Aggregate.in_api')
+    def test_add_host_api(self, mock_in_api, mock_host_add_api, mock_host_add):
+        mock_host_add_api.return_value = {'host': 'bar'}
+        mock_in_api.return_value = True
+        agg = aggregate.Aggregate()
+        agg.id = 123
+        agg.hosts = ['foo']
+        agg._context = self.context
+        agg.add_host('bar')
+        self.assertEqual(agg.hosts, ['foo', 'bar'])
+        mock_host_add_api.assert_called_once_with(self.context, 123, 'bar')
+        self.assertFalse(mock_host_add.called)
 
     @mock.patch.object(db, 'aggregate_host_delete')
     def test_delete_host(self, mock_host_delete):
@@ -329,10 +317,23 @@ class _TestAggregateObject(object):
         agg._context = self.context
         agg.delete_host('foo')
         self.assertEqual(agg.hosts, ['bar'])
+        mock_host_delete.assert_called_once_with(self.context, 123, 'foo')
 
-        mock_host_delete.assert_called_once_with(self.context,
-                                                 123,
-                                                'foo')
+    @mock.patch('nova.db.aggregate_host_delete')
+    @mock.patch('nova.objects.aggregate._host_delete_from_db')
+    @mock.patch('nova.objects.Aggregate.in_api')
+    def test_delete_host_api(self, mock_in_api,
+                                   mock_host_delete_api,
+                                   mock_host_delete):
+        mock_in_api.return_value = True
+        agg = aggregate.Aggregate()
+        agg.id = 123
+        agg.hosts = ['foo', 'bar']
+        agg._context = self.context
+        agg.delete_host('foo')
+        self.assertEqual(agg.hosts, ['bar'])
+        mock_host_delete_api.assert_called_once_with(self.context, 123, 'foo')
+        self.assertFalse(mock_host_delete.called)
 
     def test_availability_zone(self):
         agg = aggregate.Aggregate()

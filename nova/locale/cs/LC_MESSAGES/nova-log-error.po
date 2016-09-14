@@ -7,9 +7,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b2.dev117\n"
+"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-06-08 04:31+0000\n"
+"POT-Creation-Date: 2016-08-25 06:15+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -31,14 +31,6 @@ msgid ""
 msgstr ""
 "%(base)s virtuální velikost %(base_size)s větší než velikost kořenového "
 "disku konfigurace %(size)s "
-
-#, python-format
-msgid ""
-"%(base)s virtual size %(disk_size)s larger than flavor root disk size "
-"%(size)s"
-msgstr ""
-"%(base)s virtuální velikost %(disk_size)s větší než velikost kořenového "
-"disku konfigurace %(size)s"
 
 #, python-format
 msgid ""
@@ -426,9 +418,6 @@ msgstr ""
 "Nelze zkopírovat snímek v mezipaměti %(source)s do %(dest)s pro změnu "
 "velikosti: %(error)s"
 
-msgid "Failed to deallocate network for instance."
-msgstr "Nelze zrušit přidělení sítě instance."
-
 msgid "Failed to deallocate networks"
 msgstr "Nelze zrušit přidělení sítí"
 
@@ -496,10 +485,6 @@ msgid ""
 msgstr ""
 "Nelze získat id instance pro žádost o popisná data, poskytovatel "
 "%(provider)s, sítě %(networks)s, žadatel %(requester)s. Chyba: %(error)s"
-
-#, python-format
-msgid "Failed to get metadata for IP: %s"
-msgstr "Nelze získat popisná data pro Ip adresu: %s"
 
 #, python-format
 msgid "Failed to get metadata for instance id: %s"
@@ -812,18 +797,6 @@ msgid "No compute node record for host %s"
 msgstr "nenalezen žádný záznam výpočetního uzle pro hostitele %s"
 
 #, python-format
-msgid "No db access allowed in nova-compute: %s"
-msgstr "Nova-compute nemá povolen přístup k db: %s"
-
-#, python-format
-msgid "No db access allowed in nova-dhcpbridge: %s"
-msgstr "Nova-dhcpbridge nemá povolen přístup k db: %s"
-
-#, python-format
-msgid "No db access allowed in nova-network: %s"
-msgstr "Nova-network nemá povolen přístup k db: %s"
-
-#, python-format
 msgid "No save handler for %s"
 msgstr "Žádná obslužná rutina pro uložení %s"
 
@@ -1012,10 +985,6 @@ msgstr "Nelze vytvořit zásobu: %s"
 
 msgid "Unable to unplug VBD"
 msgstr "Nelze odpojit VBD"
-
-#, python-format
-msgid "Unable to update host of port %s"
-msgstr "Nelze aktualizovat hostitele na portu %s"
 
 #, python-format
 msgid "Unable to update instance VNIC index for port %s."

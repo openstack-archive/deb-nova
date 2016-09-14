@@ -19,6 +19,8 @@ from oslo_utils import strutils
 from webob import exc
 
 from nova.api.openstack import api_version_request
+from nova.api.openstack.api_version_request \
+    import MAX_PROXY_API_SUPPORT_VERSION
 from nova.api.openstack import common
 from nova.api.openstack.compute.schemas import volumes as volumes_schema
 from nova.api.openstack import extensions
@@ -31,7 +33,7 @@ from nova.i18n import _
 from nova import objects
 from nova.policies import volumes as vol_policies
 from nova.policies import volumes_attachments as va_policies
-from nova import volume
+from nova.volume import cinder
 
 ALIAS = "os-volumes"
 
@@ -97,9 +99,10 @@ class VolumeController(wsgi.Controller):
     """The Volumes API controller for the OpenStack API."""
 
     def __init__(self):
-        self.volume_api = volume.API()
+        self.volume_api = cinder.API()
         super(VolumeController, self).__init__()
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(404)
     def show(self, req, id):
         """Return data about the given volume."""
@@ -113,6 +116,7 @@ class VolumeController(wsgi.Controller):
 
         return {'volume': _translate_volume_detail_view(context, vol)}
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @wsgi.response(202)
     @extensions.expected_errors(404)
     def delete(self, req, id):
@@ -125,11 +129,13 @@ class VolumeController(wsgi.Controller):
         except exception.VolumeNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(())
     def index(self, req):
         """Returns a summary list of volumes."""
         return self._items(req, entity_maker=_translate_volume_summary_view)
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(())
     def detail(self, req):
         """Returns a detailed list of volumes."""
@@ -145,6 +151,7 @@ class VolumeController(wsgi.Controller):
         res = [entity_maker(context, vol) for vol in limited_list]
         return {'volumes': res}
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors((400, 403, 404))
     @validation.schema(volumes_schema.create)
     def create(self, req, body):
@@ -214,7 +221,7 @@ def _translate_attachment_summary_view(volume_id, instance_uuid, mountpoint):
     """Maps keys for attachment summary view."""
     d = {}
 
-    # NOTE(justinsb): We use the volume id as the id of the attachment object
+    # NOTE(justinsb): We use the volume id as he id of the attachment object
     d['id'] = volume_id
 
     d['volumeId'] = volume_id
@@ -249,7 +256,7 @@ class VolumeAttachmentController(wsgi.Controller):
 
     def __init__(self):
         self.compute_api = compute.API()
-        self.volume_api = volume.API()
+        self.volume_api = cinder.API()
         super(VolumeAttachmentController, self).__init__()
 
     @extensions.expected_errors(404)
@@ -501,9 +508,10 @@ class SnapshotController(wsgi.Controller):
     """The Snapshots API controller for the OpenStack API."""
 
     def __init__(self):
-        self.volume_api = volume.API()
+        self.volume_api = cinder.API()
         super(SnapshotController, self).__init__()
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(404)
     def show(self, req, id):
         """Return data about the given snapshot."""
@@ -517,6 +525,7 @@ class SnapshotController(wsgi.Controller):
 
         return {'snapshot': _translate_snapshot_detail_view(context, vol)}
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @wsgi.response(202)
     @extensions.expected_errors(404)
     def delete(self, req, id):
@@ -529,11 +538,13 @@ class SnapshotController(wsgi.Controller):
         except exception.SnapshotNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(())
     def index(self, req):
         """Returns a summary list of snapshots."""
         return self._items(req, entity_maker=_translate_snapshot_summary_view)
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors(())
     def detail(self, req):
         """Returns a detailed list of snapshots."""
@@ -549,6 +560,7 @@ class SnapshotController(wsgi.Controller):
         res = [entity_maker(context, snapshot) for snapshot in limited_list]
         return {'snapshots': res}
 
+    @wsgi.Controller.api_version("2.1", MAX_PROXY_API_SUPPORT_VERSION)
     @extensions.expected_errors((400, 403))
     @validation.schema(volumes_schema.snapshot_create)
     def create(self, req, body):

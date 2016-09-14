@@ -17,7 +17,6 @@ import uuid
 
 import mock
 from neutronclient.common import exceptions as n_exc
-from neutronclient.neutron import v2_0 as neutronv20
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import encodeutils
@@ -43,7 +42,7 @@ UUID_SERVER = uuids.server
 class TestNeutronSecurityGroupsTestCase(test.TestCase):
     def setUp(self):
         super(TestNeutronSecurityGroupsTestCase, self).setUp()
-        cfg.CONF.set_override('security_group_api', 'neutron')
+        cfg.CONF.set_override('use_neutron', True)
         self.original_client = neutron_api.get_client
         neutron_api.get_client = get_client
 
@@ -73,7 +72,7 @@ class TestNeutronSecurityGroupsV21(
     def _create_port(self, **kwargs):
         body = {'port': {'binding:vnic_type': model.VNIC_TYPE_NORMAL}}
         fields = ['security_groups', 'device_id', 'network_id',
-                  'port_security_enabled']
+                  'port_security_enabled', 'ip_allocation']
         for field in fields:
             if field in kwargs:
                 body['port'][field] = kwargs[field]
@@ -278,6 +277,22 @@ class TestNeutronSecurityGroupsV21(
                           self.manager._addSecurityGroup,
                           req, UUID_SERVER, body)
 
+    def test_associate_deferred_ip_port(self):
+        sg = self._create_sg_template().get('security_group')
+        net = self._create_network()
+        self._create_port(
+            network_id=net['network']['id'], security_groups=[sg['id']],
+            port_security_enabled=True, ip_allocation='deferred',
+            device_id=UUID_SERVER)
+
+        self.stub_out('nova.db.instance_get_by_uuid',
+                      test_security_groups.return_server)
+        body = dict(addSecurityGroup=dict(name="test"))
+
+        req = fakes.HTTPRequest.blank('/v2/fake/servers/%s/action' %
+                                      UUID_SERVER)
+        self.manager._addSecurityGroup(req, UUID_SERVER, body)
+
     def test_disassociate_by_non_existing_security_group_name(self):
         self.stub_out('nova.db.instance_get_by_uuid',
                       test_security_groups.return_server)
@@ -315,18 +330,6 @@ class TestNeutronSecurityGroupsV21(
         req = fakes.HTTPRequest.blank('/v2/fake/servers/%s/action' %
                                       UUID_SERVER)
         self.manager._removeSecurityGroup(req, UUID_SERVER, body)
-
-    def test_get_raises_no_unique_match_error(self):
-
-        def fake_find_resourceid_by_name_or_id(client, param, name,
-                                               project_id=None):
-            raise n_exc.NeutronClientNoUniqueMatch()
-
-        self.stubs.Set(neutronv20, 'find_resourceid_by_name_or_id',
-                       fake_find_resourceid_by_name_or_id)
-        security_group_api = self.controller.security_group_api
-        self.assertRaises(exception.NoUniqueMatch, security_group_api.get,
-                          context.get_admin_context(), 'foobar')
 
     def test_get_instances_security_groups_bindings(self):
         servers = [{'id': test_security_groups.FAKE_UUID1},
@@ -496,13 +499,9 @@ class TestNeutronSecurityGroupsOutputTest(TestNeutronSecurityGroupsTestCase):
                        'get_instances_security_groups_bindings',
                        (test_security_groups.
                        fake_get_instances_security_groups_bindings))
-        self.flags(
-            osapi_compute_extension=[
-                'nova.api.openstack.compute.contrib.select_extensions'],
-            osapi_compute_ext_list=['Security_groups'])
 
     def _make_request(self, url, body=None):
-        req = webob.Request.blank(url)
+        req = fakes.HTTPRequest.blank(url)
         if body:
             req.method = 'POST'
             req.body = encodeutils.safe_encode(self._encode_body(body))
@@ -696,6 +695,7 @@ class MockClient(object):
                'admin_state_up': p.get('admin_state_up', True),
                'security_groups': p.get('security_groups', []),
                'network_id': p.get('network_id'),
+               'ip_allocation': p.get('ip_allocation'),
                'binding:vnic_type':
                    p.get('binding:vnic_type') or model.VNIC_TYPE_NORMAL}
 
@@ -710,7 +710,7 @@ class MockClient(object):
         if not port_security and ret['security_groups']:
             raise exception.SecurityGroupCannotBeApplied()
 
-        if network['subnets']:
+        if network['subnets'] and p.get('ip_allocation') != 'deferred':
             ret['fixed_ips'] = [{'subnet_id': network['subnets'][0],
                                  'ip_address': '10.0.0.1'}]
         if not ret['security_groups'] and (port_security is None or
@@ -872,3 +872,23 @@ class MockClient(object):
                        'one or more ports still in use on the network'
                        % network)
             raise n_exc.NeutronClientException(message=msg, status_code=409)
+
+    def find_resource(self, resource, name_or_id, project_id=None,
+                      cmd_resource=None, parent_id=None, fields=None):
+        if resource == 'security_group':
+            # lookup first by unique id
+            sg = self._fake_security_groups.get(name_or_id)
+            if sg:
+                return sg
+            # lookup by name, raise an exception on duplicates
+            res = None
+            for sg in self._fake_security_groups.values():
+                if sg['name'] == name_or_id:
+                    if res:
+                        raise n_exc.NeutronClientNoUniqueMatch(
+                            resource=resource, name=name_or_id)
+                    res = sg
+            if res:
+                return res
+        raise n_exc.NotFound("Fake %s '%s' not found." %
+                             (resource, name_or_id))

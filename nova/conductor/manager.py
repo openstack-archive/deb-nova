@@ -166,6 +166,7 @@ class ComputeTaskManager(base.Base):
     @messaging.expected_exceptions(
         exception.NoValidHost,
         exception.ComputeServiceUnavailable,
+        exception.ComputeHostNotFound,
         exception.InvalidHypervisorType,
         exception.InvalidCPUInfo,
         exception.UnableToMigrateToSelf,
@@ -217,10 +218,17 @@ class ComputeTaskManager(base.Base):
         # it only provides filter_properties legacy dict back to the
         # conductor with no RequestSpec part of the payload.
         if not request_spec:
+            # Make sure we hydrate a new RequestSpec object with the new flavor
+            # and not the nested one from the instance
             request_spec = objects.RequestSpec.from_components(
                 context, instance.uuid, image,
-                instance.flavor, instance.numa_topology, instance.pci_requests,
+                flavor, instance.numa_topology, instance.pci_requests,
                 filter_properties, None, instance.availability_zone)
+        else:
+            # NOTE(sbauza): Resizes means new flavor, so we need to update the
+            # original RequestSpec object for make sure the scheduler verifies
+            # the right one and not the original flavor
+            request_spec.flavor = flavor
 
         task = self._build_cold_migrate_task(context, instance, flavor,
                                              request_spec,
@@ -261,6 +269,10 @@ class ComputeTaskManager(base.Base):
                 self._set_vm_state_and_notify(context, instance.uuid,
                                               'migrate_server',
                                               updates, ex, legacy_spec)
+        # NOTE(sbauza): Make sure we persist the new flavor in case we had
+        # a successful scheduler call if and only if nothing bad happened
+        if request_spec.obj_what_changed():
+            request_spec.save()
 
     def _set_vm_state_and_notify(self, context, instance_uuid, method, updates,
                                  ex, request_spec):
@@ -333,6 +345,7 @@ class ComputeTaskManager(base.Base):
         try:
             task.execute()
         except (exception.NoValidHost,
+                exception.ComputeHostNotFound,
                 exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
                 exception.InvalidCPUInfo,
@@ -383,22 +396,31 @@ class ComputeTaskManager(base.Base):
                                      self.scheduler_client)
 
     def _destroy_build_request(self, context, instance):
-        try:
-            build_request = objects.BuildRequest.get_by_instance_uuid(context,
-                    instance.uuid)
-        except exception.BuildRequestNotFound:
-            LOG.debug('BuildRequest not found for instance %(uuid)s, likely '
-                      'due to an older nova-api service running.',
-                      {'uuid': instance.uuid})
-            return
-
         # The BuildRequest needs to be stored until the instance is mapped to
         # an instance table. At that point it will never be used again and
         # should be deleted.
-        # TODO(alaski): Sync API updates to the build_request to the
-        # instance before it is destroyed. Right now only locked_by can
-        # be updated before this is destroyed.
-        build_request.destroy()
+        try:
+            build_request = objects.BuildRequest.get_by_instance_uuid(context,
+                    instance.uuid)
+            # TODO(alaski): Sync API updates of the build_request to the
+            # instance before it is destroyed. Right now only locked_by can
+            # be updated before this is destroyed.
+            build_request.destroy()
+        except exception.BuildRequestNotFound:
+            with excutils.save_and_reraise_exception() as exc_ctxt:
+                service_version = objects.Service.get_minimum_version(
+                    context, 'nova-osapi_compute')
+                if service_version >= 12:
+                    # A BuildRequest was created during the boot process, the
+                    # NotFound exception indicates a delete happened which
+                    # should abort the boot.
+                    pass
+                else:
+                    LOG.debug('BuildRequest not found for instance %(uuid)s, '
+                              'likely due to an older nova-api service '
+                              'running.', {'uuid': instance.uuid})
+                    exc_ctxt.reraise = False
+            return
 
     def _populate_instance_mapping(self, context, instance, host):
         try:
@@ -412,6 +434,7 @@ class ComputeTaskManager(base.Base):
             LOG.debug('Instance was not mapped to a cell, likely due '
                       'to an older nova-api service running.',
                       instance=instance)
+            return None
         else:
             try:
                 host_mapping = objects.HostMapping.get_by_host(context,
@@ -423,9 +446,11 @@ class ComputeTaskManager(base.Base):
                 # Eventually this will indicate a failure to properly map a
                 # host to a cell and we may want to reschedule.
                 inst_mapping.destroy()
+                return None
             else:
                 inst_mapping.cell_mapping = host_mapping.cell_mapping
                 inst_mapping.save()
+        return inst_mapping
 
     def build_instances(self, context, instances, image, filter_properties,
             admin_password, injected_files, requested_networks,
@@ -463,6 +488,12 @@ class ComputeTaskManager(base.Base):
                 self._set_vm_state_and_notify(
                     context, instance.uuid, 'build_instances', updates,
                     exc, request_spec)
+                try:
+                    # If the BuildRequest stays around then instance show/lists
+                    # will pull from it rather than the errored instance.
+                    self._destroy_build_request(context, instance)
+                except exception.BuildRequestNotFound:
+                    pass
                 self._cleanup_allocated_networks(
                     context, instance, requested_networks)
             return
@@ -482,8 +513,18 @@ class ComputeTaskManager(base.Base):
             bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                     context, instance.uuid)
 
-            self._populate_instance_mapping(context, instance, host)
-            self._destroy_build_request(context, instance)
+            inst_mapping = self._populate_instance_mapping(context, instance,
+                                                           host)
+            try:
+                self._destroy_build_request(context, instance)
+            except exception.BuildRequestNotFound:
+                # This indicates an instance delete has been requested in the
+                # API. Stop the build, cleanup the instance_mapping and
+                # potentially the block_device_mappings
+                # TODO(alaski): Handle block_device_mapping cleanup
+                if inst_mapping:
+                    inst_mapping.destroy()
+                return
 
             self.compute_rpcapi.build_and_run_instance(context,
                     instance=instance, host=host['host'], image=image,

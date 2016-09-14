@@ -23,7 +23,6 @@ from nova.conf import api
 # from nova.conf import api_database
 from nova.conf import availability_zone
 # from nova.conf import aws
-from nova.conf import barbican
 from nova.conf import base
 from nova.conf import cache
 from nova.conf import cells
@@ -55,7 +54,6 @@ from nova.conf import ipv6
 from nova.conf import ironic
 from nova.conf import key_manager
 # from nova.conf import keystone_authtoken
-from nova.conf import legacy_api
 from nova.conf import libvirt
 from nova.conf import mks
 # from nova.conf import matchmaker_redis
@@ -69,6 +67,7 @@ from nova.conf import novnc
 from nova.conf import osapi_v21
 from nova.conf import paths
 from nova.conf import pci
+from nova.conf import placement
 from nova.conf import quota
 from nova.conf import rdp
 from nova.conf import remote_debug
@@ -99,7 +98,6 @@ api.register_opts(CONF)
 # api_database.register_opts(CONF)
 availability_zone.register_opts(CONF)
 # aws.register_opts(CONF)
-barbican.register_opts(CONF)
 base.register_opts(CONF)
 cache.register_opts(CONF)
 cells.register_opts(CONF)
@@ -132,7 +130,6 @@ ipv6.register_opts(CONF)
 ironic.register_opts(CONF)
 key_manager.register_opts(CONF)
 # keystone_authtoken.register_opts(CONF)
-legacy_api.register_opts(CONF)
 libvirt.register_opts(CONF)
 # matchmaker_redis.register_opts(CONF)
 # metadata.register_opts(CONF)
@@ -145,6 +142,7 @@ novnc.register_opts(CONF)
 osapi_v21.register_opts(CONF)
 paths.register_opts(CONF)
 pci.register_opts(CONF)
+placement.register_opts(CONF)
 quota.register_opts(CONF)
 rdp.register_opts(CONF)
 rpc.register_opts(CONF)

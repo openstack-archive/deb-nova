@@ -1,3 +1,13 @@
+nova (2:14.0.0~b3-1) experimental; urgency=medium
+
+  * New upstream release.
+  * Fixed (build-)depends for this release.
+  * Using OpenStack's Gerrit as VCS URLs.
+  * Points .gitreview to OpenStack's Gerrit packaging-deb.
+  * Fixed nova.conf generation.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 14 Sep 2016 09:40:05 +0200
+
 nova (2:14.0.0~b2-1) experimental; urgency=medium
 
   * New upstream release.

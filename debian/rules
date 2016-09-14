@@ -57,17 +57,16 @@ override_dh_install:
 	PYTHONPATH=$(CURDIR)/debian/tmp/usr/lib/python2.7/dist-packages oslo-config-generator \
 		--output-file=$(CURDIR)/debian/nova-common/usr/share/nova-common/nova.conf \
 		--wrap-width 140 \
-		--namespace nova \
 		--namespace nova.conf \
 		--namespace nova.api \
 		--namespace nova.cells \
-		--namespace nova.network \
 		--namespace oslo.log \
 		--namespace oslo.messaging \
 		--namespace oslo.policy \
 		--namespace oslo.service.periodic_task \
 		--namespace oslo.service.service \
 		--namespace oslo.db \
+		--namespace oslo.db.concurrency \
 		--namespace oslo.middleware \
 		--namespace oslo.concurrency \
 		--namespace keystonemiddleware.auth_token
