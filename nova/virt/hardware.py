@@ -25,7 +25,7 @@ import six
 import nova.conf
 from nova import context
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LI
 from nova import objects
 from nova.objects import fields
 from nova.objects import instance as obj_instance
@@ -766,6 +766,9 @@ def _pack_instance_onto_cores(available_siblings,
             fields.CPUThreadAllocationPolicy.ISOLATE):
         # make sure we have at least one fully free core
         if threads_per_core not in sibling_sets:
+            LOG.debug('Host does not have any fully free thread sibling sets.'
+                      'It is not possible to emulate a non-SMT behavior '
+                      'for the isolate policy without this.')
             return
 
         pinning = _get_pinning(1,  # we only want to "use" one thread per core
@@ -817,23 +820,45 @@ def _numa_fit_instance_cell_with_pinning(host_cell, instance_cell):
     :returns: objects.InstanceNUMACell instance with pinning information,
               or None if instance cannot be pinned to the given host
     """
-    if (host_cell.avail_cpus < len(instance_cell.cpuset) or
-        host_cell.avail_memory < instance_cell.memory):
-        # If we do not have enough CPUs available or not enough memory
-        # on the host cell, we quit early (no oversubscription).
+    if host_cell.avail_cpus < len(instance_cell.cpuset):
+        LOG.debug('Not enough available CPUs to schedule instance. '
+                  'Oversubscription is not possible with pinned instances. '
+                  'Required: %(required)s, actual: %(actual)s',
+                  {'required': len(instance_cell.cpuset),
+                   'actual': host_cell.avail_cpus})
+        return
+
+    if host_cell.avail_memory < instance_cell.memory:
+        LOG.debug('Not enough available memory to schedule instance. '
+                  'Oversubscription is not possible with pinned instances. '
+                  'Required: %(required)s, actual: %(actual)s',
+                  {'required': instance_cell.memory,
+                   'actual': host_cell.memory})
         return
 
     if host_cell.siblings:
         # Try to pack the instance cell onto cores
-        return _pack_instance_onto_cores(
+        numa_cell = _pack_instance_onto_cores(
             host_cell.free_siblings, instance_cell, host_cell.id,
             max(map(len, host_cell.siblings)))
     else:
+        if (instance_cell.cpu_thread_policy ==
+                fields.CPUThreadAllocationPolicy.REQUIRE):
+            LOG.info(_LI("Host does not support hyperthreading or "
+                         "hyperthreading is disabled, but 'require' "
+                         "threads policy was requested."))
+            return
+
         # Straightforward to pin to available cpus when there is no
         # hyperthreading on the host
         free_cpus = [set([cpu]) for cpu in host_cell.free_cpus]
-        return _pack_instance_onto_cores(
+        numa_cell = _pack_instance_onto_cores(
             free_cpus, instance_cell, host_cell.id)
+
+    if not numa_cell:
+        LOG.debug('Failed to map instance cell CPUs to host cell CPUs')
+
+    return numa_cell
 
 
 def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
@@ -851,9 +876,19 @@ def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
     """
     # NOTE (ndipanov): do not allow an instance to overcommit against
     # itself on any NUMA cell
-    if (instance_cell.memory > host_cell.memory or
-            len(instance_cell.cpuset) > len(host_cell.cpuset)):
-        return None
+    if instance_cell.memory > host_cell.memory:
+        LOG.debug('Not enough host cell memory to fit instance cell. '
+                  'Required: %(required)d, actual: %(actual)d',
+                  {'required': instance_cell.memory,
+                   'actual': host_cell.memory})
+        return
+
+    if len(instance_cell.cpuset) > len(host_cell.cpuset):
+        LOG.debug('Not enough host cell CPUs to fit instance cell. Required: '
+                  '%(required)d, actual: %(actual)d',
+                  {'required': len(instance_cell.cpuset),
+                   'actual': len(host_cell.cpuset)})
+        return
 
     if instance_cell.cpu_pinning_requested:
         new_instance_cell = _numa_fit_instance_cell_with_pinning(
@@ -868,14 +903,26 @@ def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
         cpu_usage = host_cell.cpu_usage + len(instance_cell.cpuset)
         cpu_limit = len(host_cell.cpuset) * limit_cell.cpu_allocation_ratio
         ram_limit = host_cell.memory * limit_cell.ram_allocation_ratio
-        if memory_usage > ram_limit or cpu_usage > cpu_limit:
-            return None
+        if memory_usage > ram_limit:
+            LOG.debug('Host cell has limitations on usable memory. There is '
+                      'not enough free memory to schedule this instance. '
+                      'Usage: %(usage)d, limit: %(limit)d',
+                      {'usage': memory_usage, 'limit': ram_limit})
+            return
+        if cpu_usage > cpu_limit:
+            LOG.debug('Host cell has limitations on usable CPUs. There are '
+                      'not enough free CPUs to schedule this instance. '
+                      'Usage: %(usage)d, limit: %(limit)d',
+                      {'usage': memory_usage, 'limit': cpu_limit})
+            return
 
     pagesize = None
     if instance_cell.pagesize:
         pagesize = _numa_cell_supports_pagesize_request(
             host_cell, instance_cell)
         if not pagesize:
+            LOG.debug('Host does not support requested memory pagesize. '
+                      'Requested: %d kB', instance_cell.pagesize)
             return
 
     instance_cell.id = host_cell.id
@@ -941,7 +988,6 @@ def _numa_get_pagesize_constraints(flavor, image_meta):
 
 def _numa_get_flavor_cpu_map_list(flavor):
     hw_numa_cpus = []
-    hw_numa_cpus_set = False
     extra_specs = flavor.get("extra_specs", {})
     for cellid in range(objects.ImageMetaProps.NUMA_NODES_MAX):
         cpuprop = "hw:numa_cpus.%d" % cellid
@@ -949,9 +995,8 @@ def _numa_get_flavor_cpu_map_list(flavor):
             break
         hw_numa_cpus.append(
             parse_cpu_spec(extra_specs[cpuprop]))
-        hw_numa_cpus_set = True
 
-    if hw_numa_cpus_set:
+    if hw_numa_cpus:
         return hw_numa_cpus
 
 
@@ -970,16 +1015,14 @@ def _numa_get_cpu_map_list(flavor, image_meta):
 
 def _numa_get_flavor_mem_map_list(flavor):
     hw_numa_mem = []
-    hw_numa_mem_set = False
     extra_specs = flavor.get("extra_specs", {})
     for cellid in range(objects.ImageMetaProps.NUMA_NODES_MAX):
         memprop = "hw:numa_mem.%d" % cellid
         if memprop not in extra_specs:
             break
         hw_numa_mem.append(int(extra_specs[memprop]))
-        hw_numa_mem_set = True
 
-    if hw_numa_mem_set:
+    if hw_numa_mem:
         return hw_numa_mem
 
 
@@ -1256,11 +1299,11 @@ def numa_get_reserved_huge_pages():
     method will return a well formatted list of dict which can be used
     to build NUMATopology.
 
-    :raises: exceptionInvalidReservedMemoryPagesOption is option is
-             not correctly set.
+    :raises: exception.InvalidReservedMemoryPagesOption when
+             reserved_huge_pages option is not correctly set.
 
     :returns: a list of dict ordered by NUMA node ids; keys of dict
-              are pages size where values are the number reserved.
+              are pages size and values of the number reserved.
     """
     bucket = {}
     if CONF.reserved_huge_pages:

@@ -72,6 +72,44 @@ class PathUtilsTestCase(test_base.HyperVBaseTestCase):
             self.fake_instance_name)
         self.assertIsNone(configdrive_path)
 
+    def test_get_instances_dir_local(self):
+        self.flags(instances_path=self.fake_instance_dir)
+        instances_dir = self._pathutils.get_instances_dir()
+
+        self.assertEqual(self.fake_instance_dir, instances_dir)
+
+    def test_get_instances_dir_remote_instance_share(self):
+        # The Hyper-V driver allows using a pre-configured share exporting
+        # the instances dir. The same share name should be used across nodes.
+        fake_instances_dir_share = 'fake_instances_dir_share'
+        fake_remote = 'fake_remote'
+        expected_instance_dir = r'\\%s\%s' % (fake_remote,
+                                              fake_instances_dir_share)
+
+        self.flags(instances_path_share=fake_instances_dir_share,
+                   group='hyperv')
+        instances_dir = self._pathutils.get_instances_dir(
+            remote_server=fake_remote)
+        self.assertEqual(expected_instance_dir, instances_dir)
+
+    def test_get_instances_dir_administrative_share(self):
+        self.flags(instances_path=r'C:\fake_instance_dir')
+        fake_remote = 'fake_remote'
+        expected_instance_dir = r'\\fake_remote\C$\fake_instance_dir'
+
+        instances_dir = self._pathutils.get_instances_dir(
+            remote_server=fake_remote)
+        self.assertEqual(expected_instance_dir, instances_dir)
+
+    def test_get_instances_dir_unc_path(self):
+        fake_instance_dir = r'\\fake_addr\fake_share\fake_instance_dir'
+        self.flags(instances_path=fake_instance_dir)
+        fake_remote = 'fake_remote'
+
+        instances_dir = self._pathutils.get_instances_dir(
+            remote_server=fake_remote)
+        self.assertEqual(fake_instance_dir, instances_dir)
+
     @mock.patch('os.path.join')
     def test_get_instances_sub_dir(self, fake_path_join):
 
@@ -138,3 +176,39 @@ class PathUtilsTestCase(test_base.HyperVBaseTestCase):
         self.assertEqual(42, actual_age)
         mock_time.time.assert_called_once_with()
         mock_getmtime.assert_called_once_with(mock.sentinel.filename)
+
+    @mock.patch('os.path.exists')
+    @mock.patch('tempfile.NamedTemporaryFile')
+    def test_check_dirs_shared_storage(self, mock_named_tempfile,
+                                       mock_exists):
+        fake_src_dir = 'fake_src_dir'
+        fake_dest_dir = 'fake_dest_dir'
+
+        mock_exists.return_value = True
+        mock_tmpfile = mock_named_tempfile.return_value.__enter__.return_value
+        mock_tmpfile.name = 'fake_tmp_fname'
+        expected_src_tmp_path = os.path.join(fake_src_dir,
+                                             mock_tmpfile.name)
+
+        self._pathutils.check_dirs_shared_storage(
+            fake_src_dir, fake_dest_dir)
+
+        mock_named_tempfile.assert_called_once_with(dir=fake_dest_dir)
+        mock_exists.assert_called_once_with(expected_src_tmp_path)
+
+    @mock.patch.object(pathutils.PathUtils, 'check_dirs_shared_storage')
+    @mock.patch.object(pathutils.PathUtils, 'get_instances_dir')
+    def test_check_remote_instances_shared(self, mock_get_instances_dir,
+                                           mock_check_dirs_shared_storage):
+        mock_get_instances_dir.side_effect = [mock.sentinel.local_inst_dir,
+                                              mock.sentinel.remote_inst_dir]
+
+        shared_storage = self._pathutils.check_remote_instances_dir_shared(
+            mock.sentinel.dest)
+
+        self.assertEqual(mock_check_dirs_shared_storage.return_value,
+                         shared_storage)
+        mock_get_instances_dir.assert_has_calls(
+            [mock.call(), mock.call(mock.sentinel.dest)])
+        mock_check_dirs_shared_storage.assert_called_once_with(
+            mock.sentinel.local_inst_dir, mock.sentinel.remote_inst_dir)

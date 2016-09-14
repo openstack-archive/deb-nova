@@ -39,7 +39,6 @@ LOG = logging.getLogger(__name__)
 
 class MigrationOps(object):
     def __init__(self):
-        self._hostutils = utilsfactory.get_hostutils()
         self._vmutils = utilsfactory.get_vmutils()
         self._vhdutils = utilsfactory.get_vhdutils()
         self._pathutils = pathutils.PathUtils()
@@ -51,29 +50,27 @@ class MigrationOps(object):
     def _migrate_disk_files(self, instance_name, disk_files, dest):
         # TODO(mikal): it would be nice if this method took a full instance,
         # because it could then be passed to the log messages below.
-        same_host = False
-        if dest in self._hostutils.get_local_ips():
-            same_host = True
-            LOG.debug("Migration target is the source host")
-        else:
-            LOG.debug("Migration target host: %s", dest)
 
         instance_path = self._pathutils.get_instance_dir(instance_name)
+        dest_path = self._pathutils.get_instance_dir(instance_name, dest)
         revert_path = self._pathutils.get_instance_migr_revert_dir(
             instance_name, remove_dir=True, create_dir=True)
-        dest_path = None
+
+        shared_storage = (self._pathutils.exists(dest_path) and
+                          self._pathutils.check_dirs_shared_storage(
+                              instance_path, dest_path))
 
         try:
-            if same_host:
+            if shared_storage:
                 # Since source and target are the same, we copy the files to
-                # a temporary location before moving them into place
+                # a temporary location before moving them into place.
+                # This applies when the migration target is the source host or
+                # when shared storage is used for the instance files.
                 dest_path = '%s_tmp' % instance_path
-                if self._pathutils.exists(dest_path):
-                    self._pathutils.rmtree(dest_path)
-                self._pathutils.makedirs(dest_path)
-            else:
-                dest_path = self._pathutils.get_instance_dir(
-                    instance_name, dest, remove_dir=True)
+
+            self._pathutils.check_remove_dir(dest_path)
+            self._pathutils.makedirs(dest_path)
+
             for disk_file in disk_files:
                 # Skip the config drive as the instance is already configured
                 if os.path.basename(disk_file).lower() != 'configdrive.vhd':
@@ -84,8 +81,9 @@ class MigrationOps(object):
 
             self._pathutils.move_folder_files(instance_path, revert_path)
 
-            if same_host:
+            if shared_storage:
                 self._pathutils.move_folder_files(dest_path, instance_path)
+                self._pathutils.rmtree(dest_path)
         except Exception:
             with excutils.save_and_reraise_exception():
                 self._cleanup_failed_disk_migration(instance_path, revert_path,
@@ -106,7 +104,7 @@ class MigrationOps(object):
 
     def _check_target_flavor(self, instance, flavor):
         new_root_gb = flavor.root_gb
-        curr_root_gb = instance.root_gb
+        curr_root_gb = instance.flavor.root_gb
 
         if new_root_gb < curr_root_gb:
             raise exception.InstanceFaultRollback(
@@ -290,7 +288,7 @@ class MigrationOps(object):
                                       src_base_disk_path)
 
             if resize_instance:
-                new_size = instance.root_gb * units.Gi
+                new_size = instance.flavor.root_gb * units.Gi
                 self._check_resize_vhd(root_vhd_path, root_vhd_info, new_size)
 
         ephemerals = block_device_info['ephemerals']
@@ -318,8 +316,8 @@ class MigrationOps(object):
         elif sum(eph['size'] for eph in ephemerals) != new_eph_gb:
             # New ephemeral size is different from the original ephemeral size
             # and there are multiple ephemerals.
-            LOG.warn(_LW("Cannot resize multiple ephemeral disks for "
-                         "instance."), instance=instance)
+            LOG.warning(_LW("Cannot resize multiple ephemeral disks for "
+                            "instance."), instance=instance)
 
         for index, eph in enumerate(ephemerals):
             eph_name = "eph%s" % index

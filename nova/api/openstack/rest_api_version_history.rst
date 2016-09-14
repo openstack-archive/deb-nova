@@ -361,3 +361,57 @@ user documentation.
   the generic request format is::
 
     GET /os-keypairs?limit={limit}&marker={kp_name}
+
+2.36
+----
+
+  All the APIs which proxy to another service were deprecated in this version,
+  also the fping API. Those APIs will return 404 with Microversion 2.36. The
+  network related quotas and limits are removed from API also. The deprecated
+  API endpoints as below::
+
+    '/images'
+    '/os-networks'
+    '/os-tenant-networks'
+    '/os-fixed-ips'
+    '/os-floating-ips'
+    '/os-floating-ips-bulk'
+    '/os-floating-ip-pools'
+    '/os-floating-ip-dns'
+    '/os-security-groups'
+    '/os-security-group-rules'
+    '/os-security-group-default-rules'
+    '/os-volumes'
+    '/os-snapshots'
+    '/os-baremetal-nodes'
+    '/os-fping'
+
+2.37
+----
+
+  Added support for automatic allocation of networking, also known as "Get Me a
+  Network". With this microversion, when requesting the creation of a new
+  server (or servers) the ``networks`` entry in the ``server`` portion of the
+  request body is required. The ``networks`` object in the request can either
+  be a list or an enum with values:
+
+  #. *none* which means no networking will be allocated for the created
+     server(s).
+  #. *auto* which means either a network that is already available to the
+     project will be used, or if one does not exist, will be automatically
+     created for the project. Automatic network allocation for a project only
+     happens once for a project. Subsequent requests using *auto* for the same
+     project will reuse the network that was previously allocated.
+
+  Also, the ``uuid`` field in the ``networks`` object in the server create
+  request is now strictly enforced to be in UUID format.
+
+2.38
+----
+
+  Before version 2.38, the command ``nova list --status invalid_status`` was
+  returning empty list for non admin user and 500 InternalServerError for admin
+  user. As there are sufficient statuses defined already, any invalid status
+  should not be accepted. From this version of the API admin as well as non
+  admin user will get 400 HTTPBadRequest if invalid status is passed to nova
+  list command.

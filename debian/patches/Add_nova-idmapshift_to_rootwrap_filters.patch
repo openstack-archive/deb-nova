@@ -10,11 +10,11 @@ Closes-Bug: #1452143
  etc/nova/rootwrap.d/compute.filters | 3 +++
  1 file changed, 3 insertions(+)
 
-Index: nova/etc/nova/rootwrap.d/compute.filters
+Index: deb-nova/etc/nova/rootwrap.d/compute.filters
 ===================================================================
---- nova.orig/etc/nova/rootwrap.d/compute.filters
-+++ nova/etc/nova/rootwrap.d/compute.filters
-@@ -165,6 +165,9 @@ mkswap: CommandFilter, mkswap, root
+--- deb-nova.orig/etc/nova/rootwrap.d/compute.filters
++++ deb-nova/etc/nova/rootwrap.d/compute.filters
+@@ -168,6 +168,9 @@ mkswap: CommandFilter, mkswap, root
  # nova/virt/libvirt/utils.py: 'nova-idmapshift'
  nova-idmapshift: CommandFilter, nova-idmapshift, root
  

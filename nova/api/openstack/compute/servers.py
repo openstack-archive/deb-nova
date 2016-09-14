@@ -14,7 +14,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import base64
 import re
 
 from oslo_log import log as logging
@@ -78,6 +77,7 @@ class ServersController(wsgi.Controller):
     schema_server_rebuild_v219 = schema_servers.base_rebuild_v219
 
     schema_server_create_v232 = schema_servers.base_create_v232
+    schema_server_create_v237 = schema_servers.base_create_v237
 
     @staticmethod
     def _add_location(robj):
@@ -171,6 +171,9 @@ class ServersController(wsgi.Controller):
                 propagate_map_exceptions=True)
         if list(self.create_schema_manager):
             self.create_schema_manager.map(self._create_extension_schema,
+                                           self.schema_server_create_v237,
+                                           '2.37')
+            self.create_schema_manager.map(self._create_extension_schema,
                                            self.schema_server_create_v232,
                                           '2.32')
             self.create_schema_manager.map(self._create_extension_schema,
@@ -218,12 +221,19 @@ class ServersController(wsgi.Controller):
 
         # Verify search by 'status' contains a valid status.
         # Convert it to filter by vm_state or task_state for compute_api.
+        # For non-admin user, vm_state and task_state are filtered through
+        # remove_invalid_options function, based on value of status field.
+        # Set value to vm_state and task_state to make search simple.
         search_opts.pop('status', None)
         if 'status' in req.GET.keys():
             statuses = req.GET.getall('status')
             states = common.task_and_vm_state_from_status(statuses)
             vm_state, task_state = states
             if not vm_state and not task_state:
+                if api_version_request.is_supported(req, min_version='2.38'):
+                    msg = _('Invalid status value')
+                    raise exc.HTTPBadRequest(explanation=msg)
+
                 return {'servers': []}
             search_opts['vm_state'] = vm_state
             # When we search by vm state, task state will return 'default'.
@@ -262,6 +272,14 @@ class ServersController(wsgi.Controller):
             else:
                 msg = _("Only administrators may list deleted instances")
                 raise exc.HTTPForbidden(explanation=msg)
+
+        # Verify the value of the 'name' option is a correct regex.
+        if 'name' in search_opts:
+            try:
+                re.compile(search_opts['name'])
+            except re.error:
+                msg = _("The regex for server name is incorrect")
+                raise exc.HTTPBadRequest(explanation=msg)
 
         if api_version_request.is_supported(req, min_version='2.26'):
             for tag_filter in TAG_SEARCH_FILTERS:
@@ -313,6 +331,7 @@ class ServersController(wsgi.Controller):
 
         expected_attrs = ['pci_devices']
         if is_detail:
+            expected_attrs.append('services')
             if api_version_request.is_supported(req, '2.26'):
                 expected_attrs.append("tags")
 
@@ -393,9 +412,51 @@ class ServersController(wsgi.Controller):
             expl = _("Duplicate networks (%s) are not allowed") % net_id
             raise exc.HTTPBadRequest(explanation=expl)
 
+    @staticmethod
+    def _validate_auto_or_none_network_request(requested_networks):
+        """Validates a set of network requests with 'auto' or 'none' in it.
+
+        :param requested_networks: nova.objects.NetworkRequestList
+        :returns: nova.objects.NetworkRequestList - the same list as the input
+            if validation is OK, None if the request can't be honored due to
+            the minimum nova-compute service version in the deployment is not
+            new enough to support auto-allocated networking.
+        """
+
+        # Check the minimum nova-compute service version since Mitaka
+        # computes can't handle network IDs that aren't UUIDs.
+        # TODO(mriedem): Remove this check in Ocata.
+        min_compute_version = objects.Service.get_minimum_version(
+            nova_context.get_admin_context(), 'nova-compute')
+
+        # NOTE(mriedem): If the minimum compute version is not new enough
+        # for supporting auto-allocation, change the network request to
+        # None so it works the same as it did in Mitaka when you don't
+        # request anything.
+        if min_compute_version < 12:
+            LOG.debug("User requested network '%s' but the minimum "
+                      "nova-compute version in the deployment is not new "
+                      "enough to support that request, so treating it as "
+                      "though a specific network was not requested.",
+                      requested_networks[0].network_id)
+            return None
+        return requested_networks
+
     def _get_requested_networks(self, requested_networks,
                                 supports_device_tagging=False):
         """Create a list of requested networks from the networks attribute."""
+
+        # Starting in the 2.37 microversion, requested_networks is either a
+        # list or a string enum with value 'auto' or 'none'. The auto/none
+        # values are verified via jsonschema so we don't check them again here.
+        if isinstance(requested_networks, six.string_types):
+            req_nets = objects.NetworkRequestList(
+                objects=[objects.NetworkRequest(
+                    network_id=requested_networks)])
+            # Check the minimum nova-compute service version for supporting
+            # these special values.
+            return self._validate_auto_or_none_network_request(req_nets)
+
         networks = []
         network_uuids = []
         for network in requested_networks:
@@ -420,8 +481,8 @@ class ServersController(wsgi.Controller):
                         raise exc.HTTPBadRequest(explanation=msg)
                     if request.address is not None:
                         msg = _("Specified Fixed IP '%(addr)s' cannot be used "
-                                "with port '%(port)s': port already has "
-                                "a Fixed IP allocated.") % {
+                                "with port '%(port)s': the two cannot be "
+                                "specified together.") % {
                                     "addr": request.address,
                                     "port": request.port_id}
                         raise exc.HTTPBadRequest(explanation=msg)
@@ -441,22 +502,6 @@ class ServersController(wsgi.Controller):
 
         return objects.NetworkRequestList(objects=networks)
 
-    # NOTE(vish): Without this regex, b64decode will happily
-    #             ignore illegal bytes in the base64 encoded
-    #             data.
-    B64_REGEX = re.compile('^(?:[A-Za-z0-9+\/]{4})*'
-                           '(?:[A-Za-z0-9+\/]{2}=='
-                           '|[A-Za-z0-9+\/]{3}=)?$')
-
-    def _decode_base64(self, data):
-        data = re.sub(r'\s', '', data)
-        if not self.B64_REGEX.match(data):
-            return None
-        try:
-            return base64.b64decode(data)
-        except TypeError:
-            return None
-
     @extensions.expected_errors(404)
     def show(self, req, id):
         """Returns server details by server id."""
@@ -470,7 +515,8 @@ class ServersController(wsgi.Controller):
     @validation.schema(schema_server_create_v20, '2.0', '2.0')
     @validation.schema(schema_server_create, '2.1', '2.18')
     @validation.schema(schema_server_create_v219, '2.19', '2.31')
-    @validation.schema(schema_server_create_v232, '2.32')
+    @validation.schema(schema_server_create_v232, '2.32', '2.36')
+    @validation.schema(schema_server_create_v237, '2.37')
     def create(self, req, body):
         """Creates a new server for a given user."""
 
@@ -566,12 +612,7 @@ class ServersController(wsgi.Controller):
             context.can(server_policies.SERVERS % 'create:attach_network',
                         target)
 
-        try:
-            flavor_id = self._flavor_id_from_req_data(body)
-        except ValueError:
-            msg = _("Invalid flavorRef provided.")
-            raise exc.HTTPBadRequest(explanation=msg)
-
+        flavor_id = self._flavor_id_from_req_data(body)
         try:
             inst_type = flavors.get_flavor_by_flavor_id(
                     flavor_id, ctxt=context, read_deleted="no")
@@ -595,9 +636,6 @@ class ServersController(wsgi.Controller):
         except exception.ImageNotFound:
             msg = _("Can not find requested image")
             raise exc.HTTPBadRequest(explanation=msg)
-        except exception.FlavorNotFound:
-            msg = _("Invalid flavorRef provided.")
-            raise exc.HTTPBadRequest(explanation=msg)
         except exception.KeypairNotFound:
             msg = _("Invalid key_name provided.")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -616,6 +654,7 @@ class ServersController(wsgi.Controller):
         except (exception.ImageNotActive,
                 exception.ImageBadRequest,
                 exception.FixedIpNotFoundForAddress,
+                exception.FlavorNotFound,
                 exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
                 exception.InvalidMetadata,
@@ -711,8 +750,10 @@ class ServersController(wsgi.Controller):
         rebuild_schema['properties']['rebuild']['properties'].update(schema)
 
     def _delete(self, context, req, instance_uuid):
-        context.can(server_policies.SERVERS % 'delete')
         instance = self._get_server(context, req, instance_uuid)
+        context.can(server_policies.SERVERS % 'delete',
+                    target={'user_id': instance.user_id,
+                            'project_id': instance.project_id})
         if CONF.reclaim_instance_interval:
             try:
                 self.compute_api.soft_delete(context, instance)
@@ -733,7 +774,10 @@ class ServersController(wsgi.Controller):
 
         ctxt = req.environ['nova.context']
         update_dict = {}
-        ctxt.can(server_policies.SERVERS % 'update')
+        instance = self._get_server(ctxt, req, id, is_detail=True)
+        ctxt.can(server_policies.SERVERS % 'update',
+                 target={'user_id': instance.user_id,
+                         'project_id': instance.project_id})
 
         server = body['server']
 
@@ -747,7 +791,6 @@ class ServersController(wsgi.Controller):
 
         helpers.translate_attributes(helpers.UPDATE, server, update_dict)
 
-        instance = self._get_server(ctxt, req, id, is_detail=True)
         try:
             # NOTE(mikal): this try block needs to stay because save() still
             # might throw an exception.
@@ -827,8 +870,10 @@ class ServersController(wsgi.Controller):
     def _resize(self, req, instance_id, flavor_id, **kwargs):
         """Begin the resize process with given instance/flavor."""
         context = req.environ["nova.context"]
-        context.can(server_policies.SERVERS % 'resize')
         instance = self._get_server(context, req, instance_id)
+        context.can(server_policies.SERVERS % 'resize',
+                    target={'user_id': instance.user_id,
+                            'project_id': instance.project_id})
 
         try:
             self.compute_api.resize(context, instance, flavor_id, **kwargs)
@@ -890,8 +935,7 @@ class ServersController(wsgi.Controller):
         if not image_href and create_kwargs.get('block_device_mapping'):
             return ''
         elif image_href:
-            return common.image_uuid_from_href(six.text_type(image_href),
-                                               'imageRef')
+            return image_href
         else:
             msg = _("Missing imageRef attribute")
             raise exc.HTTPBadRequest(explanation=msg)
@@ -925,14 +969,14 @@ class ServersController(wsgi.Controller):
         rebuild_dict = body['rebuild']
 
         image_href = rebuild_dict["imageRef"]
-        image_href = common.image_uuid_from_href(image_href, 'imageRef')
 
         password = self._get_server_admin_password(rebuild_dict)
 
         context = req.environ['nova.context']
-        context.can(server_policies.SERVERS % 'rebuild')
         instance = self._get_server(context, req, id)
-
+        context.can(server_policies.SERVERS % 'rebuild',
+                    target={'user_id': instance.user_id,
+                            'project_id': instance.project_id})
         attr_map = {
             'name': 'display_name',
             'description': 'display_description',
@@ -1050,9 +1094,9 @@ class ServersController(wsgi.Controller):
 
     def _get_server_admin_password(self, server):
         """Determine the admin password for a server on creation."""
-        try:
+        if 'adminPass' in server:
             password = server['adminPass']
-        except KeyError:
+        else:
             password = utils.generate_password()
         return password
 
@@ -1100,7 +1144,9 @@ class ServersController(wsgi.Controller):
         """Stop an instance."""
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
-        context.can(server_policies.SERVERS % 'stop', instance)
+        context.can(server_policies.SERVERS % 'stop',
+                    target={'user_id': instance.user_id,
+                            'project_id': instance.project_id})
         LOG.debug('stop instance', instance=instance)
         try:
             self.compute_api.stop(context, instance)
@@ -1121,14 +1167,16 @@ class ServersController(wsgi.Controller):
         """Trigger crash dump in an instance"""
         context = req.environ['nova.context']
         instance = self._get_instance(context, id)
-        context.can(server_policies.SERVERS % 'trigger_crash_dump', instance)
+        context.can(server_policies.SERVERS % 'trigger_crash_dump',
+                    target={'user_id': instance.user_id,
+                            'project_id': instance.project_id})
         try:
             self.compute_api.trigger_crash_dump(context, instance)
+        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
+            raise webob.exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
                 'trigger_crash_dump', id)
-        except (exception.InstanceNotReady, exception.InstanceIsLocked) as e:
-            raise webob.exc.HTTPConflict(explanation=e.format_message())
         except exception.TriggerCrashDumpNotSupported as e:
             raise webob.exc.HTTPBadRequest(explanation=e.format_message())
 

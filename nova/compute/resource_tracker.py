@@ -67,6 +67,15 @@ def _instance_in_resize_state(instance):
     return False
 
 
+def _is_trackable_migration(migration):
+    # Only look at resize/migrate migration and evacuation records
+    # NOTE(danms): RT should probably examine live migration
+    # records as well and do something smart. However, ignore
+    # those for now to avoid them being included in below calculations.
+    return migration.migration_type in ('resize', 'migration',
+                                        'evacuation')
+
+
 class ResourceTracker(object):
     """Compute helper class for keeping track of resource usage as instances
     are built and destroyed.
@@ -126,10 +135,10 @@ class ResourceTracker(object):
         # get the overhead required to build this instance:
         overhead = self.driver.estimate_instance_overhead(instance)
         LOG.debug("Memory overhead for %(flavor)d MB instance; %(overhead)d "
-                  "MB", {'flavor': instance.memory_mb,
+                  "MB", {'flavor': instance.flavor.memory_mb,
                           'overhead': overhead['memory_mb']})
         LOG.debug("Disk overhead for %(flavor)d GB instance; %(overhead)d "
-                  "GB", {'flavor': instance.root_gb,
+                  "GB", {'flavor': instance.flavor.root_gb,
                          'overhead': overhead.get('disk_gb', 0)})
 
         pci_requests = objects.InstancePCIRequests.get_by_instance_uuid(
@@ -215,7 +224,7 @@ class ResourceTracker(object):
                   "MB", {'flavor': new_instance_type.memory_mb,
                           'overhead': overhead['memory_mb']})
         LOG.debug("Disk overhead for %(flavor)d GB instance; %(overhead)d "
-                  "GB", {'flavor': instance.root_gb,
+                  "GB", {'flavor': instance.flavor.root_gb,
                          'overhead': overhead.get('disk_gb', 0)})
 
         # TODO(moshele): we are recreating the pci requests even if
@@ -265,8 +274,7 @@ class ResourceTracker(object):
 
         # Mark the resources in-use for the resize landing on this
         # compute host:
-        self._update_usage_from_migration(context, instance, image_meta,
-                                          migration)
+        self._update_usage_from_migration(context, instance, migration)
         elevated = context.elevated()
         self._update(elevated)
 
@@ -358,11 +366,11 @@ class ResourceTracker(object):
                 usage = self._get_usage_dict(
                         itype, numa_topology=numa_topology)
                 if self.pci_tracker:
-                    # free old allocated pci devices
-                    old_pci_devices = self._get_migration_context_resource(
-                        'pci_devices', instance, prefix='old_')
-                    if old_pci_devices:
-                        for pci_device in old_pci_devices:
+                    # free old/new allocated pci devices
+                    pci_devices = self._get_migration_context_resource(
+                        'pci_devices', instance, prefix=prefix)
+                    if pci_devices:
+                        for pci_device in pci_devices:
                             self.pci_tracker.free_device(pci_device, instance)
                 self._update_usage(usage, sign=-1)
 
@@ -392,7 +400,7 @@ class ResourceTracker(object):
         return self.compute_node is None
 
     def _init_compute_node(self, context, resources):
-        """Initialise the compute node if it does not already exist.
+        """Initialize the compute node if it does not already exist.
 
         The resource tracker will be inoperable if compute_node
         is not defined. The compute_node will remain undefined if
@@ -423,7 +431,7 @@ class ResourceTracker(object):
 
         # there was no local copy and none in the database
         # so we need to create a new compute node. This needs
-        # to be initialised with resource values.
+        # to be initialized with resource values.
         self.compute_node = objects.ComputeNode(context)
         self.compute_node.host = self.host
         self._copy_resources(resources)
@@ -447,7 +455,7 @@ class ResourceTracker(object):
             self.compute_node.pci_device_pools = dev_pools_obj
 
     def _copy_resources(self, resources):
-        """Copy resource values to initialise compute_node and related
+        """Copy resource values to initialize compute_node and related
         data structures.
         """
         # purge old stats and init with anything passed in by the driver
@@ -477,7 +485,7 @@ class ResourceTracker(object):
                                 "error: %(exc)s"),
                             {'mon': monitor, 'exc': exc})
         # TODO(jaypipes): Remove this when compute_node.metrics doesn't need
-        # to be populated as a JSON-ified string.
+        # to be populated as a JSONified string.
         metrics = metrics.to_list()
         if len(metrics):
             metrics_info['nodename'] = nodename
@@ -531,7 +539,7 @@ class ResourceTracker(object):
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def _update_available_resource(self, context, resources):
 
-        # initialise the compute node object, creating it
+        # initialize the compute node object, creating it
         # if it does not already exist.
         self._init_compute_node(context, resources)
 
@@ -612,11 +620,6 @@ class ResourceTracker(object):
         else:
             free_vcpus = 'unknown'
             LOG.debug("Hypervisor: VCPU information unavailable")
-
-        if ('pci_passthrough_devices' in resources and
-                resources['pci_passthrough_devices']):
-            LOG.debug("Hypervisor: assignable PCI devices: %s",
-                      resources['pci_passthrough_devices'])
 
         pci_devices = resources.get('pci_passthrough_devices')
 
@@ -712,14 +715,6 @@ class ResourceTracker(object):
                 self.compute_node, usage, free)
         self.compute_node.numa_topology = updated_numa_topology
 
-    def _is_trackable_migration(self, migration):
-        # Only look at resize/migrate migration and evacuation records
-        # NOTE(danms): RT should probably examine live migration
-        # records as well and do something smart. However, ignore
-        # those for now to avoid them being included in below calculations.
-        return migration.migration_type in ('resize', 'migration',
-                                            'evacuation')
-
     def _get_migration_context_resource(self, resource, instance,
                                         prefix='new_'):
         migration_context = instance.migration_context
@@ -728,12 +723,11 @@ class ResourceTracker(object):
             return getattr(migration_context, resource)
         return None
 
-    def _update_usage_from_migration(self, context, instance, image_meta,
-                                     migration):
+    def _update_usage_from_migration(self, context, instance, migration):
         """Update usage for a single migration.  The record may
         represent an incoming or outbound migration.
         """
-        if not self._is_trackable_migration(migration):
+        if not _is_trackable_migration(migration):
             return
 
         uuid = migration.instance_uuid
@@ -758,6 +752,7 @@ class ResourceTracker(object):
                         migration)
                 numa_topology = self._get_migration_context_resource(
                     'numa_topology', instance)
+                # Allocate pci device(s) for the instance.
                 sign = 1
             else:
                 # instance record already has new flavor, hold space for a
@@ -773,6 +768,8 @@ class ResourceTracker(object):
                     migration)
             numa_topology = self._get_migration_context_resource(
                 'numa_topology', instance)
+            # Allocate pci device(s) for the instance.
+            sign = 1
 
         elif outbound and not record:
             # instance migrated, but record usage for a possible revert:
@@ -831,8 +828,7 @@ class ResourceTracker(object):
         for migration in filtered.values():
             instance = instances[migration.instance_uuid]
             try:
-                self._update_usage_from_migration(context, instance, None,
-                                                  migration)
+                self._update_usage_from_migration(context, instance, migration)
             except exception.FlavorNotFound:
                 LOG.warning(_LW("Flavor could not be found, skipping "
                                 "migration."), instance_uuid=instance.uuid)
@@ -865,8 +861,10 @@ class ResourceTracker(object):
                 self.pci_tracker.update_pci_for_instance(context,
                                                          instance,
                                                          sign=sign)
+            self.scheduler_client.reportclient.update_instance_allocation(
+                self.compute_node, instance, sign)
             # new instance, update compute node resource usage:
-            self._update_usage(instance, sign=sign)
+            self._update_usage(self._get_usage_dict(instance), sign=sign)
 
         self.compute_node.current_workload = self.stats.calculate_workload()
         if self.pci_tracker:
@@ -971,7 +969,11 @@ class ResourceTracker(object):
         """
         usage = {}
         if isinstance(object_or_dict, objects.Instance):
-            usage = obj_base.obj_to_primitive(object_or_dict)
+            usage = {'memory_mb': object_or_dict.flavor.memory_mb,
+                     'vcpus': object_or_dict.flavor.vcpus,
+                     'root_gb': object_or_dict.flavor.root_gb,
+                     'ephemeral_gb': object_or_dict.flavor.ephemeral_gb,
+                     'numa_topology': object_or_dict.numa_topology}
         elif isinstance(object_or_dict, objects.Flavor):
             usage = obj_base.obj_to_primitive(object_or_dict)
         else:

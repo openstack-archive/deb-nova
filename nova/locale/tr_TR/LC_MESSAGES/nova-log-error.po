@@ -6,9 +6,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b2.dev117\n"
+"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-06-08 04:31+0000\n"
+"POT-Creation-Date: 2016-08-25 06:15+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -29,14 +29,6 @@ msgid ""
 "%(size)s"
 msgstr ""
 "%(base)s sanal boyutu %(base_size)s nitelik kök diski boyutu %(size)s den "
-"büyük"
-
-#, python-format
-msgid ""
-"%(base)s virtual size %(disk_size)s larger than flavor root disk size "
-"%(size)s"
-msgstr ""
-"%(base)s sanal boyutu %(disk_size)s nitelik kök disk boyutu %(size)s den "
 "büyük"
 
 #, python-format
@@ -371,9 +363,6 @@ msgstr ""
 "Zuladaki imaj %(source)s %(dest)s e yeniden boyutlandırma için "
 "kopyalanamadı: %(error)s"
 
-msgid "Failed to deallocate network for instance."
-msgstr "Sunucu için ağ ilişiği kesilemedi"
-
 msgid "Failed to deallocate networks"
 msgstr "Ağ ilişikleri kesilemedi"
 
@@ -704,18 +693,6 @@ msgid "No compute node record for host %s"
 msgstr "%s istemcisi için hesap düğüm kaydı yok"
 
 #, python-format
-msgid "No db access allowed in nova-compute: %s"
-msgstr "nova-compute'de db erişimine izin verilmiyor: %s"
-
-#, python-format
-msgid "No db access allowed in nova-dhcpbridge: %s"
-msgstr "nova-dhcpbridge'de db erişimine izin verilmiyor: %s"
-
-#, python-format
-msgid "No db access allowed in nova-network: %s"
-msgstr "nova-network'de db erişimine izin verilmiyor: %s"
-
-#, python-format
 msgid "No save handler for %s"
 msgstr "%s için kaydetme işleyicisi yok"
 
@@ -886,10 +863,6 @@ msgstr "Havuz ayarlanamıyor: %s."
 
 msgid "Unable to unplug VBD"
 msgstr "VBD sökülemedi"
-
-#, python-format
-msgid "Unable to update host of port %s"
-msgstr "%s bağlantı noktasının istemcisi güncellenemiyor"
 
 msgid "Unexpected build failure, not rescheduling build."
 msgstr "Beklenmeyen inşa başarısızlığı, inşa tekrar zamanlanmıyor."

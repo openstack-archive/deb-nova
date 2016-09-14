@@ -70,6 +70,50 @@ def _load_auth_plugin(conf):
     raise neutron_client_exc.Unauthorized(message=err_msg)
 
 
+class ClientWrapper(clientv20.Client):
+    """A Neutron client wrapper class.
+
+    Wraps the callable methods, catches Unauthorized,Forbidden from Neutron and
+    convert it to a 401,403 for Nova clients.
+    """
+    def __init__(self, base_client, admin):
+        # Expose all attributes from the base_client instance
+        self.__dict__ = base_client.__dict__
+        self.base_client = base_client
+        self.admin = admin
+
+    def __getattribute__(self, name):
+        obj = object.__getattribute__(self, name)
+        if callable(obj):
+            obj = object.__getattribute__(self, 'proxy')(obj)
+        return obj
+
+    def proxy(self, obj):
+        def wrapper(*args, **kwargs):
+            try:
+                ret = obj(*args, **kwargs)
+            except neutron_client_exc.Unauthorized:
+                if not self.admin:
+                    # Token is expired so Neutron is raising a
+                    # unauthorized exception, we should convert it to
+                    # raise a 401 to make client to handle a retry by
+                    # renegerating a valid token and trying a new
+                    # attempt.
+                    raise exception.Unauthorized()
+                # In admin context if token is invalid Neutron client
+                # should be able to regenerate a valid by using the
+                # Neutron admin credential configuration located in
+                # nova.conf.
+                LOG.error(_LE("Neutron client was not able to generate a "
+                              "valid admin token, please verify Neutron "
+                              "admin credential located in nova.conf"))
+                raise exception.NeutronAdminCredentialConfigurationInvalid()
+            except neutron_client_exc.Forbidden as e:
+                raise exception.Forbidden(e)
+            return ret
+        return wrapper
+
+
 def get_client(context, admin=False):
     # NOTE(dprince): In the case where no auth_token is present we allow use of
     # neutron admin tenant credentials if it is an admin context.  This is to
@@ -95,12 +139,14 @@ def get_client(context, admin=False):
     if not auth_plugin:
         # We did not get a user token and we should not be using
         # an admin token so log an error
-        raise neutron_client_exc.Unauthorized()
+        raise exception.Unauthorized()
 
-    return clientv20.Client(session=_SESSION,
-                            auth=auth_plugin,
-                            endpoint_override=CONF.neutron.url,
-                            region_name=CONF.neutron.region_name)
+    return ClientWrapper(
+        clientv20.Client(session=_SESSION,
+                         auth=auth_plugin,
+                         endpoint_override=CONF.neutron.url,
+                         region_name=CONF.neutron.region_name),
+        admin=admin or context.is_admin)
 
 
 def _is_not_duplicate(item, items, items_list_name, instance):
@@ -174,6 +220,18 @@ def _filter_hypervisor_macs(instance, ports, hypervisor_macs):
             available_macs.discard(mac)
 
     return available_macs
+
+
+def get_pci_device_profile(pci_dev):
+    dev_spec = pci_whitelist.get_pci_device_devspec(pci_dev)
+    if dev_spec:
+        return {'pci_vendor_info': "%s:%s" %
+                    (pci_dev.vendor_id, pci_dev.product_id),
+                'pci_slot': pci_dev.address,
+                'physical_network':
+                    dev_spec.get_tags().get('physical_network')}
+    raise exception.PciDeviceNotFound(node_id=pci_dev.compute_node_id,
+                                      address=pci_dev.address)
 
 
 class API(base_api.NetworkAPI):
@@ -312,6 +370,13 @@ class API(base_api.NetworkAPI):
                         {'mac': mac_address, 'network': network_id},
                         instance=instance)
             raise exception.PortInUse(port_id=mac_address)
+        except neutron_client_exc.HostNotCompatibleWithFixedIpsClient:
+            network_id = port_req_body['port'].get('network_id')
+            LOG.warning(_LW('Neutron error: Tried to bind a port with '
+                            'fixed_ips to a host in the wrong segment on '
+                            'network %(network)s.'),
+                        {'network': network_id}, instance=instance)
+            raise exception.FixedIpInvalidOnHost(port_id=port_id)
 
     @staticmethod
     def _populate_mac_address(instance, port_req_body, available_macs):
@@ -785,6 +850,7 @@ class API(base_api.NetworkAPI):
         created_port_ids = []
         ports_in_requested_order = []
         nets_in_requested_order = []
+        created_vifs = []   # this list is for cleanups if we fail
         for request, created_port_id in requests_and_created_ports:
             vifobj = objects.VirtualInterface(context)
             vifobj.instance_uuid = instance.uuid
@@ -836,6 +902,7 @@ class API(base_api.NetworkAPI):
                                             updated_port['id'])
                 vifobj.uuid = port_id
                 vifobj.create()
+                created_vifs.append(vifobj)
 
                 if not created_port_id:
                     # only add if update worked and port create not called
@@ -850,6 +917,8 @@ class API(base_api.NetworkAPI):
                                        preexisting_port_ids,
                                        neutron, port_client)
                     self._delete_ports(neutron, instance, created_port_ids)
+                    for vif in created_vifs:
+                        vif.destroy()
 
         return (nets_in_requested_order, ports_in_requested_order,
             preexisting_port_ids, created_port_ids)
@@ -888,13 +957,7 @@ class API(base_api.NetworkAPI):
         if pci_request_id:
             pci_dev = pci_manager.get_instance_pci_devs(
                 instance, pci_request_id).pop()
-            devspec = pci_whitelist.get_pci_device_devspec(pci_dev)
-            profile = {'pci_vendor_info': "%s:%s" % (pci_dev.vendor_id,
-                                                     pci_dev.product_id),
-                       'pci_slot': pci_dev.address,
-                       'physical_network':
-                           devspec.get_tags().get('physical_network')
-                      }
+            profile = get_pci_device_profile(pci_dev)
             port_req_body['port']['binding:profile'] = profile
 
     @staticmethod
@@ -1409,7 +1472,12 @@ class API(base_api.NetworkAPI):
                                            neutron_client=neutron)
                     if port.get('device_id', None):
                         raise exception.PortInUse(port_id=request.port_id)
-                    if not port.get('fixed_ips'):
+                    deferred_ip = port.get('ip_allocation') == 'deferred'
+                    # NOTE(carl_baldwin) A deferred IP port doesn't have an
+                    # address here. If it fails to get one later when nova
+                    # updates it with host info, Neutron will error which
+                    # raises an exception.
+                    if not deferred_ip and not port.get('fixed_ips'):
                         raise exception.PortRequiresFixedIP(
                             port_id=request.port_id)
                     request.network_id = port['network_id']
@@ -1479,7 +1547,7 @@ class API(base_api.NetworkAPI):
         # from the hypervisor.  So we just check the quota and return
         # how many of the requested number of instances can be created
         if ports_needed_per_instance:
-            quotas = neutron.show_quota(tenant_id=context.project_id)['quota']
+            quotas = neutron.show_quota(context.project_id)['quota']
             if quotas.get('port', -1) == -1:
                 # Unlimited Port Quota
                 return num_instances
@@ -1724,7 +1792,20 @@ class API(base_api.NetworkAPI):
         fip = self._get_floating_ip_by_address(client, address)
         if not fip['port_id']:
             return None
-        port = self._show_port(context, fip['port_id'], neutron_client=client)
+
+        try:
+            port = self._show_port(context, fip['port_id'],
+                                   neutron_client=client)
+        except exception.PortNotFound:
+            # NOTE: Here is a potential race condition between _show_port() and
+            # _get_floating_ip_by_address(). fip['port_id'] shows a port which
+            # is the server instance's. At _get_floating_ip_by_address(),
+            # Neutron returns the list which includes the instance. Just after
+            # that, the deletion of the instance happens and Neutron returns
+            # 404 on _show_port().
+            LOG.debug('The port(%s) is not found', fip['port_id'])
+            return None
+
         return port['device_id']
 
     def get_vifs_by_instance(self, context, instance):
@@ -1860,7 +1941,8 @@ class API(base_api.NetworkAPI):
     def migrate_instance_finish(self, context, instance, migration):
         """Finish migrating the network of an instance."""
         self._update_port_binding_for_instance(context, instance,
-                                               migration['dest_compute'])
+                                               migration['dest_compute'],
+                                               migration=migration)
 
     def add_network_to_project(self, context, project_id, network_uuid=None):
         """Force add a network to the project."""
@@ -2151,25 +2233,102 @@ class API(base_api.NetworkAPI):
         """Cleanup network for specified instance on host."""
         pass
 
-    def _update_port_binding_for_instance(self, context, instance, host):
+    def _get_pci_devices_from_migration_context(self, migration_context,
+                                                migration):
+        if migration and migration.get('status') == 'reverted':
+            # In case of revert, swap old and new devices to
+            # update the ports back to the original devices.
+            return (migration_context.new_pci_devices,
+                    migration_context.old_pci_devices)
+        return (migration_context.old_pci_devices,
+                migration_context.new_pci_devices)
+
+    def _get_pci_mapping_for_migration(self, context, instance, migration):
+        """Get the mapping between the old PCI devices and the new PCI
+        devices that have been allocated during this migration.  The
+        correlation is based on PCI request ID which is unique per PCI
+        devices for SR-IOV ports.
+
+        :param context:  The request context.
+        :param instance: Get PCI mapping for this instance.
+        :param migration: The migration for this instance.
+        :Returns: dictionary of mapping {'<old pci address>': <New PciDevice>}
+        """
+        migration_context = instance.migration_context
+        if not migration_context:
+            return {}
+
+        old_pci_devices, new_pci_devices = \
+            self._get_pci_devices_from_migration_context(migration_context,
+                                                         migration)
+        if old_pci_devices and new_pci_devices:
+            LOG.debug("Determining PCI devices mapping using migration"
+                      "context: old_pci_devices: %(old)s, "
+                      "new_pci_devices: %(new)s" %
+                      {'old': [dev for dev in old_pci_devices],
+                      'new': [dev for dev in new_pci_devices]})
+            return {old.address: new
+                    for old in old_pci_devices
+                        for new in new_pci_devices
+                            if old.request_id == new.request_id}
+        return {}
+
+    def _update_port_binding_for_instance(self, context, instance, host,
+                                          migration=None):
         if not self._has_port_binding_extension(context, refresh_cache=True):
             return
         neutron = get_client(context, admin=True)
         search_opts = {'device_id': instance.uuid,
                        'tenant_id': instance.project_id}
         data = neutron.list_ports(**search_opts)
+        pci_mapping = None
+        port_updates = []
         ports = data['ports']
         for p in ports:
+            updates = {}
+
             # If the host hasn't changed, like in the case of resizing to the
             # same host, there is nothing to do.
             if p.get('binding:host_id') != host:
+                updates['binding:host_id'] = host
+
+            # Update port with newly allocated PCI devices.  Even if the
+            # resize is happening on the same host, a new PCI device can be
+            # allocated.
+            vnic_type = p.get('binding:vnic_type')
+            if vnic_type in network_model.VNIC_TYPES_SRIOV:
+                if not pci_mapping:
+                    pci_mapping = self._get_pci_mapping_for_migration(context,
+                        instance, migration)
+
+                binding_profile = p.get('binding:profile', {})
+                pci_slot = binding_profile.get('pci_slot')
+                new_dev = pci_mapping.get(pci_slot)
+                if new_dev:
+                    updates['binding:profile'] = \
+                        get_pci_device_profile(new_dev)
+                else:
+                    raise exception.PortUpdateFailed(port_id=p['id'],
+                        reason=_("Unable to correlate PCI slot %s") %
+                                 pci_slot)
+
+            port_updates.append((p['id'], updates))
+
+        # Avoid rolling back updates if we catch an error above.
+        # TODO(lbeliveau): Batch up the port updates in one neutron call.
+        for port_id, updates in port_updates:
+            if updates:
+                LOG.info(_LI("Updating port %(port)s with "
+                             "attributes %(attributes)s"),
+                         {"port": p['id'], "attributes": updates},
+                         instance=instance)
                 try:
-                    neutron.update_port(p['id'],
-                                        {'port': {'binding:host_id': host}})
+                    neutron.update_port(port_id, {'port': updates})
                 except Exception:
                     with excutils.save_and_reraise_exception():
-                        LOG.exception(_LE("Unable to update host of port %s"),
-                                      p['id'], instance=instance)
+                        LOG.exception(_LE("Unable to update binding details "
+                                          "for port %s"),
+                                      port_id, instance=instance)
 
     def update_instance_vnic_index(self, context, instance, vif, index):
         """Update instance vnic index.

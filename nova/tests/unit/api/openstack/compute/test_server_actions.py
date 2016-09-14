@@ -112,12 +112,14 @@ class ServerActionsControllerTestV21(test.TestCase):
             compute_api.API.rebuild(context, mox.IgnoreArg(), image_ref,
                                     mox.IgnoreArg())
 
-    def _stub_instance_get(self, uuid=None):
+    def _stub_instance_get(self, context, uuid=None):
         self.mox.StubOutWithMock(compute_api.API, 'get')
         if uuid is None:
             uuid = uuidutils.generate_uuid()
         instance = fake_instance.fake_db_instance(
-            id=1, uuid=uuid, vm_state=vm_states.ACTIVE, task_state=None)
+            id=1, uuid=uuid, vm_state=vm_states.ACTIVE, task_state=None,
+            project_id=context.project_id,
+            user_id=context.user_id)
         instance = objects.Instance._from_db_object(
             self.context, objects.Instance(), instance)
 
@@ -134,7 +136,7 @@ class ServerActionsControllerTestV21(test.TestCase):
         if compute_api_args_map is None:
             compute_api_args_map = {}
 
-        instance = self._stub_instance_get()
+        instance = self._stub_instance_get(self.req.environ['nova.context'])
         args, kwargs = compute_api_args_map.get(action, ((), {}))
 
         getattr(compute_api.API, method)(self.context, instance,
@@ -315,7 +317,7 @@ class ServerActionsControllerTestV21(test.TestCase):
         self.assertEqual(len(body['server']['adminPass']),
                          CONF.password_length)
 
-        self.assertEqual(robj['location'], self_href)
+        self.assertEqual(robj['location'], self_href.encode('utf-8'))
 
     def test_rebuild_instance_with_image_uuid(self):
         info = dict(image_href_in_call=None)
@@ -338,15 +340,6 @@ class ServerActionsControllerTestV21(test.TestCase):
         self.assertEqual(info['image_href_in_call'], self.image_uuid)
 
     def test_rebuild_instance_with_image_href_uses_uuid(self):
-        info = dict(image_href_in_call=None)
-
-        def rebuild(self2, context, instance, image_href, *args, **kwargs):
-            info['image_href_in_call'] = image_href
-
-        self.stub_out('nova.db.instance_get',
-                fakes.fake_instance_get(vm_state=vm_states.ACTIVE))
-        self.stubs.Set(compute_api.API, 'rebuild', rebuild)
-
         # proper local hrefs must start with 'http://localhost/v2/'
         body = {
             'rebuild': {
@@ -354,8 +347,9 @@ class ServerActionsControllerTestV21(test.TestCase):
             },
         }
 
-        self.controller._action_rebuild(self.req, FAKE_UUID, body=body)
-        self.assertEqual(info['image_href_in_call'], self.image_uuid)
+        self.assertRaises(exception.ValidationError,
+                          self.controller._action_rebuild,
+                          self.req, FAKE_UUID, body=body)
 
     def test_rebuild_accepted_minimum_pass_disabled(self):
         # run with enable_instance_password disabled to verify adminPass
@@ -379,7 +373,7 @@ class ServerActionsControllerTestV21(test.TestCase):
         self.assertEqual(body['server']['image']['id'], '2')
         self.assertNotIn("adminPass", body['server'])
 
-        self.assertEqual(robj['location'], self_href)
+        self.assertEqual(robj['location'], self_href.encode('utf-8'))
 
     def test_rebuild_raises_conflict_on_invalid_state(self):
         body = {
@@ -517,7 +511,7 @@ class ServerActionsControllerTestV21(test.TestCase):
                 "imageRef": "foo",
             },
         }
-        self.assertRaises(webob.exc.HTTPBadRequest,
+        self.assertRaises(exception.ValidationError,
                           self.controller._action_rebuild,
                           self.req, FAKE_UUID, body=body)
 

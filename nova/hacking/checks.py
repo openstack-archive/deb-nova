@@ -18,6 +18,7 @@ import os
 import re
 
 import pep8
+import six
 
 """
 Guidelines for writing new hacking checks
@@ -106,8 +107,6 @@ spawn_re = re.compile(
 contextlib_nested = re.compile(r"^with (contextlib\.)?nested\(")
 doubled_words_re = re.compile(
     r"\b(then?|[iao]n|i[fst]|but|f?or|at|and|[dt]o)\s+\1\b")
-
-opt_help_text_min_char_count = 10
 
 
 class BaseASTChecker(ast.NodeVisitor):
@@ -431,14 +430,26 @@ class CheckForStrUnicodeExc(BaseASTChecker):
         self.name = []
         self.already_checked = []
 
-    def visit_TryExcept(self, node):
-        for handler in node.handlers:
-            if handler.name:
-                self.name.append(handler.name.id)
-                super(CheckForStrUnicodeExc, self).generic_visit(node)
-                self.name = self.name[:-1]
-            else:
-                super(CheckForStrUnicodeExc, self).generic_visit(node)
+    # Python 2 produces ast.TryExcept and ast.TryFinally nodes, but Python 3
+    # only produces ast.Try nodes.
+    if six.PY2:
+        def visit_TryExcept(self, node):
+            for handler in node.handlers:
+                if handler.name:
+                    self.name.append(handler.name.id)
+                    super(CheckForStrUnicodeExc, self).generic_visit(node)
+                    self.name = self.name[:-1]
+                else:
+                    super(CheckForStrUnicodeExc, self).generic_visit(node)
+    else:
+        def visit_Try(self, node):
+            for handler in node.handlers:
+                if handler.name:
+                    self.name.append(handler.name)
+                    super(CheckForStrUnicodeExc, self).generic_visit(node)
+                    self.name = self.name[:-1]
+                else:
+                    super(CheckForStrUnicodeExc, self).generic_visit(node)
 
     def visit_Call(self, node):
         if self._check_call_names(node, ['str', 'unicode']):
@@ -719,75 +730,6 @@ def check_python3_no_itervalues(logical_line):
         yield(0, msg)
 
 
-def cfg_help_with_enough_text(logical_line, tokens):
-    # TODO(markus_z): The count of 10 chars is the *highest* number I could
-    # use to introduce this new check without breaking the gate. IOW, if I
-    # use a value of 15 for example, the gate checks will fail because we have
-    # a few config options which use fewer chars than 15 to explain their
-    # usage (for example the options "ca_file" and "cert").
-    # As soon as the implementation of bp centralize-config-options is
-    # finished, I wanted to increase that magic number to a higher (to be
-    # defined) value.
-    # This check is an attempt to programmatically check a part of the review
-    #  guidelines http://docs.openstack.org/developer/nova/code-review.html
-
-    msg = ("N347: A config option is a public interface to the cloud admins "
-           "and should be properly documented. A part of that is to provide "
-           "enough help text to describe this option. Use at least %s chars "
-           "for that description. Is is likely that this minimum will be "
-           "increased in the future." % opt_help_text_min_char_count)
-
-    if not cfg_opt_re.match(logical_line):
-        return
-
-    # ignore DeprecatedOpt objects. They get mentioned in the release notes
-    # and don't need a lengthy help text anymore
-    if "DeprecatedOpt" in logical_line:
-        return
-
-    def get_token_value(idx):
-        return tokens[idx][1]
-
-    def get_token_values(start_index, length):
-        values = ""
-        for offset in range(length):
-            values += get_token_value(start_index + offset)
-        return values
-
-    def get_help_token_index():
-        for idx in range(len(tokens)):
-            if get_token_value(idx) == "help":
-                return idx
-        return -1
-
-    def has_help():
-        return get_help_token_index() >= 0
-
-    def get_trimmed_help_text(t):
-        txt = ""
-        # len(["help", "=", "_", "("]) ==> 4
-        if get_token_values(t, 4) == "help=_(":
-            txt = get_token_value(t + 4)
-        # len(["help", "=", "("]) ==> 3
-        elif get_token_values(t, 3) == "help=(":
-            txt = get_token_value(t + 3)
-        # len(["help", "="]) ==> 2
-        else:
-            txt = get_token_value(t + 2)
-        return " ".join(txt.strip('\"\'').split())
-
-    def has_enough_help_text(txt):
-        return len(txt) >= opt_help_text_min_char_count
-
-    if has_help():
-        t = get_help_token_index()
-        txt = get_trimmed_help_text(t)
-        if not has_enough_help_text(txt):
-            yield(0, msg)
-    else:
-        yield(0, msg)
-
-
 def no_os_popen(logical_line):
     """Disallow 'os.popen('
 
@@ -800,6 +742,20 @@ def no_os_popen(logical_line):
     if 'os.popen(' in logical_line:
         yield(0, 'N348 Deprecated library function os.popen(). '
                  'Replace it using subprocess module. ')
+
+
+def no_log_warn(logical_line):
+    """Disallow 'LOG.warn('
+
+    Deprecated LOG.warn(), instead use LOG.warning
+    https://bugs.launchpad.net/senlin/+bug/1508442
+
+    N352
+    """
+
+    msg = ("N352: LOG.warn is deprecated, please use LOG.warning!")
+    if "LOG.warn(" in logical_line:
+        yield (0, msg)
 
 
 def factory(register):
@@ -837,6 +793,6 @@ def factory(register):
     register(check_python3_no_iteritems)
     register(check_python3_no_iterkeys)
     register(check_python3_no_itervalues)
-    register(cfg_help_with_enough_text)
     register(no_os_popen)
+    register(no_log_warn)
     register(CheckForUncalledTestClosure)

@@ -10,9 +10,9 @@
 
    These APIs are proxy calls to the Network service. Nova has
    deprecated all the proxy APIs and users should use the native APIs
-   instead.
+   instead. These will fail with a 404 after microversion 2.35.
    See: `Relevant Network APIs
-   <http://developer.openstack.org/api-ref-networking-v2-ext.html#security_group_rules>`__.
+   <http://developer.openstack.org/api-ref/networking/v2-ext/index.html#security-group-rules-security-group-rules>`__.
 
 Creates and deletes security group rules.
 

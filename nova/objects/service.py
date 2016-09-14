@@ -30,7 +30,7 @@ LOG = logging.getLogger(__name__)
 
 
 # NOTE(danms): This is the global service version counter
-SERVICE_VERSION = 14
+SERVICE_VERSION = 15
 
 
 # NOTE(danms): This is our SERVICE_VERSION history. The idea is that any
@@ -82,11 +82,15 @@ SERVICE_VERSION_HISTORY = (
     # Version 11: Compute RPC version 4.12
     {'compute_rpc': '4.12'},
     # Version 12: The network APIs and compute manager support a NetworkRequest
-    # object where the network_id value is 'auto' or 'none'.
+    # object where the network_id value is 'auto' or 'none'. BuildRequest
+    # objects are populated by nova-api during instance boot.
     {'compute_rpc': '4.12'},
     # Version 13: Compute RPC version 4.13
     {'compute_rpc': '4.13'},
     # Version 14: The compute manager supports setting device tags.
+    {'compute_rpc': '4.13'},
+    # Version 15: Indicate that nova-conductor will stop a boot if BuildRequest
+    # is deleted before RPC to nova-compute.
     {'compute_rpc': '4.13'},
 )
 
@@ -406,7 +410,8 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
     # Version 1.16: Service version 1.18
     # Version 1.17: Service version 1.19
     # Version 1.18: Added include_disabled parameter to get_by_binary()
-    VERSION = '1.18'
+    # Version 1.19: Added get_all_computes_by_hv_type()
+    VERSION = '1.19'
 
     fields = {
         'objects': fields.ListOfObjectsField('Service'),
@@ -439,5 +444,12 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
         if set_zones:
             db_services = availability_zones.set_availability_zones(
                 context, db_services)
+        return base.obj_make_list(context, cls(context), objects.Service,
+                                  db_services)
+
+    @base.remotable_classmethod
+    def get_all_computes_by_hv_type(cls, context, hv_type):
+        db_services = db.service_get_all_computes_by_hv_type(
+            context, hv_type, include_disabled=False)
         return base.obj_make_list(context, cls(context), objects.Service,
                                   db_services)

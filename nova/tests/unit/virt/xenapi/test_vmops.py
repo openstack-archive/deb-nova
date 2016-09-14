@@ -208,7 +208,7 @@ class VMOpsTestCase(VMOpsTestBase):
             {'properties': {'auto_disk_config': 'false'}})
         vdis = {'root': {'ref': 'fake-ref'}}
         self.assertRaises(test.TestingException, self._vmops._attach_disks,
-                instance, image_meta=image_meta, vm_ref=None,
+                ctxt, instance, image_meta=image_meta, vm_ref=None,
                 name_label=None, vdis=vdis, disk_image_type='fake',
                 network_info=[], rescue=True)
         self.assertFalse(try_auto_config.called)
@@ -224,7 +224,7 @@ class VMOpsTestCase(VMOpsTestBase):
             {'properties': {'auto_disk_config': 'true'}})
         vdis = {'root': {'ref': 'fake-ref'}}
         self.assertRaises(test.TestingException, self._vmops._attach_disks,
-                instance, image_meta=image_meta, vm_ref=None,
+                ctxt, instance, image_meta=image_meta, vm_ref=None,
                 name_label=None, vdis=vdis, disk_image_type='fake',
                 network_info=[], rescue=True)
         try_auto_config.assert_called_once_with(self._vmops._session,
@@ -397,8 +397,8 @@ class SpawnTestCase(VMOpsTestBase):
         step += 1
         self.vmops._update_instance_progress(context, instance, step, steps)
 
-        self.vmops._attach_disks(instance, image_meta, vm_ref, name_label,
-                            vdis, di_type, network_info, rescue,
+        self.vmops._attach_disks(context, instance, image_meta, vm_ref,
+                            name_label, vdis, di_type, network_info, rescue,
                             admin_password, injected_files)
         if attach_pci_dev:
             fake_dev = {
@@ -579,8 +579,9 @@ class SpawnTestCase(VMOpsTestBase):
 
         if resize_instance:
             self.vmops._resize_up_vdis(instance, vdis)
-        self.vmops._attach_disks(instance, image_meta, vm_ref, name_label,
-                            vdis, di_type, network_info, False, None, None)
+        self.vmops._attach_disks(context, instance, image_meta, vm_ref,
+                            name_label, vdis, di_type, network_info, False,
+                            None, None)
         self.vmops._attach_mapped_block_devices(instance, block_device_info)
         pci_manager.get_instance_pci_devs(instance).AndReturn([])
 
@@ -894,7 +895,9 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
 
     def test_migrate_disk_and_power_off_works_down(self,
                 migrate_up, migrate_down, *mocks):
-        instance = {"root_gb": 2, "ephemeral_gb": 0, "uuid": "uuid"}
+        instance = objects.Instance(
+            flavor=objects.Flavor(root_gb=2, ephemeral_gb=0),
+            uuid=uuids.instance)
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=1,
                                              ephemeral_gb=0)
 
@@ -906,7 +909,10 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
 
     def test_migrate_disk_and_power_off_works_up(self,
                 migrate_up, migrate_down, *mocks):
-        instance = {"root_gb": 1, "ephemeral_gb": 1, "uuid": "uuid"}
+        instance = objects.Instance(
+            flavor=objects.Flavor(root_gb=1,
+                                  ephemeral_gb=1),
+            uuid=uuids.instance)
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=2,
                                              ephemeral_gb=2)
 
@@ -918,7 +924,7 @@ class MigrateDiskAndPowerOffTestCase(VMOpsTestBase):
 
     def test_migrate_disk_and_power_off_resize_down_ephemeral_fails(self,
                 migrate_up, migrate_down, *mocks):
-        instance = {"ephemeral_gb": 2}
+        instance = objects.Instance(flavor=objects.Flavor(ephemeral_gb=2))
         flavor = fake_flavor.fake_flavor_obj(self.context, ephemeral_gb=1)
 
         self.assertRaises(exception.ResizeError,
@@ -1184,19 +1190,22 @@ class BootableTestCase(VMOpsTestBase):
 @mock.patch.object(vm_utils, 'update_vdi_virtual_size', autospec=True)
 class ResizeVdisTestCase(VMOpsTestBase):
     def test_dont_resize_root_volumes_osvol_false(self, mock_resize):
-        instance = fake_instance.fake_db_instance(root_gb=20)
+        instance = fake_instance.fake_instance_obj(
+            None, flavor=objects.Flavor(root_gb=20))
         vdis = {'root': {'osvol': False, 'ref': 'vdi_ref'}}
         self.vmops._resize_up_vdis(instance, vdis)
         self.assertTrue(mock_resize.called)
 
     def test_dont_resize_root_volumes_osvol_true(self, mock_resize):
-        instance = fake_instance.fake_db_instance(root_gb=20)
+        instance = fake_instance.fake_instance_obj(
+            None, flavor=objects.Flavor(root_gb=20))
         vdis = {'root': {'osvol': True}}
         self.vmops._resize_up_vdis(instance, vdis)
         self.assertFalse(mock_resize.called)
 
     def test_dont_resize_root_volumes_no_osvol(self, mock_resize):
-        instance = fake_instance.fake_db_instance(root_gb=20)
+        instance = fake_instance.fake_instance_obj(
+            None, flavor=objects.Flavor(root_gb=20))
         vdis = {'root': {}}
         self.vmops._resize_up_vdis(instance, vdis)
         self.assertFalse(mock_resize.called)
@@ -1205,7 +1214,8 @@ class ResizeVdisTestCase(VMOpsTestBase):
     def test_ensure_ephemeral_resize_with_root_volume(self, mock_sizes,
                                                        mock_resize):
         mock_sizes.return_value = [2000, 1000]
-        instance = fake_instance.fake_db_instance(root_gb=20, ephemeral_gb=20)
+        instance = fake_instance.fake_instance_obj(
+            None, flavor=objects.Flavor(root_gb=20, ephemeral_gb=20))
         ephemerals = {"4": {"ref": 4}, "5": {"ref": 5}}
         vdis = {'root': {'osvol': True, 'ref': 'vdi_ref'},
                 'ephemerals': ephemerals}
@@ -1220,18 +1230,21 @@ class ResizeVdisTestCase(VMOpsTestBase):
             self.assertFalse(g.called)
 
     def test_resize_up_vdis_root(self, mock_resize):
-        instance = {"root_gb": 20, "ephemeral_gb": 0}
+        instance = objects.Instance(flavor=objects.Flavor(root_gb=20,
+                                                          ephemeral_gb=0))
         self.vmops._resize_up_vdis(instance, {"root": {"ref": "vdi_ref"}})
         mock_resize.assert_called_once_with(self.vmops._session, instance,
                                             "vdi_ref", 20)
 
     def test_resize_up_vdis_zero_disks(self, mock_resize):
-        instance = {"root_gb": 0, "ephemeral_gb": 0}
+        instance = objects.Instance(flavor=objects.Flavor(root_gb=0,
+                                                          ephemeral_gb=0))
         self.vmops._resize_up_vdis(instance, {"root": {}})
         self.assertFalse(mock_resize.called)
 
     def test_resize_up_vdis_no_vdis_like_initial_spawn(self, mock_resize):
-        instance = {"root_gb": 0, "ephemeral_gb": 3000}
+        instance = objects.Instance(flavor=objects.Flavor(root_gb=0,
+                                                          ephemeral_gb=3000))
         vdis = {}
 
         self.vmops._resize_up_vdis(instance, vdis)
@@ -1241,7 +1254,8 @@ class ResizeVdisTestCase(VMOpsTestBase):
     @mock.patch.object(vm_utils, 'get_ephemeral_disk_sizes')
     def test_resize_up_vdis_ephemeral(self, mock_sizes, mock_resize):
         mock_sizes.return_value = [2000, 1000]
-        instance = {"root_gb": 0, "ephemeral_gb": 3000}
+        instance = objects.Instance(flavor=objects.Flavor(root_gb=0,
+                                                          ephemeral_gb=3000))
         ephemerals = {"4": {"ref": 4}, "5": {"ref": 5}}
         vdis = {"ephemerals": ephemerals}
 
@@ -1258,7 +1272,9 @@ class ResizeVdisTestCase(VMOpsTestBase):
                                                     mock_generate,
                                                     mock_resize):
         mock_sizes.return_value = [2000, 1000]
-        instance = {"root_gb": 0, "ephemeral_gb": 3000, "uuid": "a"}
+        instance = objects.Instance(uuid=uuids.instance,
+                                    flavor=objects.Flavor(root_gb=0,
+                                                          ephemeral_gb=3000))
         ephemerals = {"4": {"ref": 4}}
         vdis = {"ephemerals": ephemerals}
 
@@ -1401,11 +1417,6 @@ class LiveMigrateTestCase(VMOpsTestBase):
         self.assertTrue(result.block_migration)
         self.assertEqual(result.sr_uuid_map, sr_uuid_map)
         mock_connect.assert_called_once_with("bdi")
-
-    def test_pre_live_migration_raises_with_no_data(self):
-        self.assertRaises(exception.InvalidParameterValue,
-                self.vmops.pre_live_migration,
-                None, None, "bdi", None, None, None)
 
 
 class LiveMigrateFakeVersionTestCase(VMOpsTestBase):

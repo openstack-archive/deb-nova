@@ -10,9 +10,9 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b2.dev117\n"
+"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-06-08 04:30+0000\n"
+"POT-Creation-Date: 2016-08-25 06:14+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
@@ -189,15 +189,6 @@ msgstr ""
 msgid "A NetworkModel is required in field %s"
 msgstr "NetworkModel je v poli %s vyžadováno"
 
-msgid ""
-"A unique ID given to each file system.  This is value is set in Glance and "
-"agreed upon here so that the operator knowns they are dealing with the same "
-"file system."
-msgstr ""
-"Jedinečné ID dané každému souborovému systému. Tato hodnota je nastavena v "
-"Glance a zde dohodnuta, aby operátoři věděli že pracují se stejným "
-"souborovým systémem."
-
 #, python-format
 msgid ""
 "API Version String %(version)s is of invalid format. Must be of format "
@@ -343,10 +334,6 @@ msgid "Bad prefix for to_global_ipv6: %s"
 msgstr "Špatná předpona pro to_global_ipv6: %s"
 
 #, python-format
-msgid "Bad project_id for to_global_ipv6: %s"
-msgstr "Špatné id projektu pro to_global_ipv6: %s"
-
-#, python-format
 msgid ""
 "Binding failed for port %(port_id)s, please check neutron logs for more "
 "information."
@@ -456,14 +443,6 @@ msgstr "Počet CPU %(cpuset)s není přidělen k žádným uzlům"
 msgid "CPU pinning is not supported by the host: %(reason)s"
 msgstr "Připnutí CPU není hostitelem podporováno: %(reason)s"
 
-#, python-format
-msgid ""
-"CPU set to pin/unpin %(requested)s must be a subset of known CPU set "
-"%(cpuset)s"
-msgstr ""
-"CPU nastaveno na připnutí/odepnutí %(requested)s musí být podsadou známé "
-"sady CPU %(cpuset)s"
-
 msgid "Can not add access to a public flavor."
 msgstr "Nelze zpřístupnit veřejnou konfiguraci"
 
@@ -549,13 +528,6 @@ msgstr "Nelze najít obraz ke znovu sestavení"
 msgid "Cannot mount Scality SOFS, check syslog for errors"
 msgstr ""
 "Nelze připojit Scality SOFS, zkontrolujte záznam systému pro možné chyby"
-
-#, python-format
-msgid ""
-"Cannot pin/unpin cpus %(requested)s from the following pinned set %(pinned)s"
-msgstr ""
-"Nelze připnout/odepnout cpu %(requested)s z následující připnuté sady "
-"%(pinned)s"
 
 #, python-format
 msgid "Cannot remove host %(host)s in aggregate %(id)s"
@@ -873,10 +845,6 @@ msgid "Device '%(device)s' not found."
 msgstr "Zařízení '%(device)s' nenalezeno."
 
 #, python-format
-msgid "Device detach failed for %(device)s: %(reason)s)"
-msgstr "Odpojení zařízení selhalo u %(device)s: %(reason)s)"
-
-#, python-format
 msgid ""
 "Device id %(id)s specified is not supported by hypervisor version %(version)s"
 msgstr ""
@@ -948,9 +916,6 @@ msgid ""
 msgstr ""
 "Buď síť uuid %(network_uuid)s není přítomna nebo není přidělena k projektu "
 "%(project_id)s."
-
-msgid "Ephemeral disks requested are larger than the instance type allows."
-msgstr "Požadované efemerní disky jsou větší, než typ instance umožňuje."
 
 #, python-format
 msgid ""
@@ -1231,15 +1196,6 @@ msgstr "Soubor %(file_path)s nemohl být nalezen."
 msgid "File path %s not valid"
 msgstr "Cesta souboru %s není paltná"
 
-msgid "Filename of private key"
-msgstr "Jméno souboru soukromého klíče"
-
-msgid "Filename of root CA"
-msgstr "Jméno souboru kořenové CA"
-
-msgid "Filename of root Certificate Revocation List"
-msgstr "Název souboru seznamu zrušení kořenového certifikátu"
-
 #, python-format
 msgid "Fixed IP %(address)s already exists."
 msgstr "Pevná IP adresa %(address)s již existuje."
@@ -1316,9 +1272,6 @@ msgid "Flavor access not found for %(flavor_id)s / %(project_id)s combination."
 msgstr ""
 "Přístup ke konfiguraci nelze nalézt pro kombinaci %(flavor_id)s / "
 "%(project_id)s."
-
-msgid "Flavor for vpn instances"
-msgstr "Konfigurace pro instance vpn"
 
 msgid ""
 "Flavor id can only contain letters from A-Z (both cases), periods, dashes, "
@@ -1523,16 +1476,6 @@ msgstr ""
 #, python-format
 msgid "Image %(image_id)s could not be found."
 msgstr "Obraz %(image_id)s nemohl být nalezen."
-
-#, python-format
-msgid ""
-"Image %(image_id)s could not be found. The nova EC2 API assigns image ids "
-"dynamically when they are listed for the first time. Have you listed image "
-"ids since adding this image?"
-msgstr ""
-"Obraz %(image_id)s nemohl být nalezen. Nova EC2 API přiděluje id obrazům "
-"dynamicky, při jejich prvním uvedení. Uvedli jste id obrazu od přidání "
-"tohoto obrazu?"
 
 #, python-format
 msgid "Image %(image_id)s is not active."
@@ -1907,9 +1850,6 @@ msgstr "Neplatný název pole: %s"
 msgid "Invalid fixed IP Address %s in request"
 msgstr "Neplatná pevná IP adresa %s v požadavku"
 
-msgid "Invalid flavorRef provided."
-msgstr "Zadáno neplatné flavorRef."
-
 #, python-format
 msgid "Invalid floating IP %s in request"
 msgstr "Neplatná plovoucí IP adresa %s v požadavku"
@@ -1946,10 +1886,6 @@ msgstr ""
 #, python-format
 msgid "Invalid input received: %(reason)s"
 msgstr "Obdržen neplatný vstup: %(reason)s"
-
-#, python-format
-msgid "Invalid instance id %s in request"
-msgstr "Neplatné Id instance %s v požadavku"
 
 msgid "Invalid instance image."
 msgstr "Neplatný obraz instance."
@@ -2105,14 +2041,6 @@ msgid ""
 msgstr ""
 "Uzel Ironic: nelze ověřit %(id)s. (nasazení: %(deploy)s, napájení %(power)s)"
 
-#, python-format
-msgid ""
-"Ironic node: %(id)s virtual to physical interface count  mismatch (Vif "
-"count: %(vif_count)d, Pif count: %(pif_count)d)"
-msgstr ""
-"Uzel Ironic: %(id)s nesoulad v počtu virtuálních a fyzických rozhraní (Počet "
-"virt. rozhraní: %(vif_count)d, počet fyz. rozhraní: %(pif_count)d)"
-
 msgid "Is the appropriate service running?"
 msgstr "Běží odpovídající služba?"
 
@@ -2174,13 +2102,6 @@ msgstr "Řádek %(linenum)d : %(line)s"
 #, python-format
 msgid "Link Local address is not found.:%s"
 msgstr "Adresa místního spojení nenalezena.: %s"
-
-msgid ""
-"List of file systems that are configured in this file in the image_file_url:"
-"<list entry name> sections"
-msgstr ""
-"Seznam souborových systémů které jsou nastaveny v tomto v části url souboru "
-"obrazu:<název položky seznamu>"
 
 msgid ""
 "Live migration can not be used without shared storage except a booted from "
@@ -2393,9 +2314,6 @@ msgstr ""
 msgid "Must supply a positive value for max_rows"
 msgstr "Musíte zadat kladnou hodnotu pro maximum řádků"
 
-msgid "Netmask to push into openvpn config"
-msgstr "Síťovou masku kterou odeslat do nastavení openvpn"
-
 #, python-format
 msgid "Network \"%(val)s\" is not valid in field %(attr)s"
 msgstr "Síť \"%(val)s\" není v poli %(attr)s platná"
@@ -2464,9 +2382,6 @@ msgstr ""
 #, python-format
 msgid "Network set host failed for network %(network_id)s."
 msgstr "Nastavení hostitele sítě selhalo u sítě %(network_id)s."
-
-msgid "Network to push into openvpn config"
-msgstr "Síť kterou odeslat do nastavení openvpn"
 
 msgid "New volume must be detached in order to swap."
 msgstr "Pro výměnu musí být nový svazek odpojen."
@@ -2584,9 +2499,6 @@ msgstr "Nenalezeny žádné sítě"
 msgid "No nova entries in syslog!"
 msgstr "Žádné položky nova v záznamu systému!"
 
-msgid "No nw_info cache associated with instance"
-msgstr "K instanci není přidružena žádná mezipaměť informací o síti"
-
 #, python-format
 msgid "No operating system found in %s"
 msgstr "V %s nenalezen žádný operační systém"
@@ -2637,6 +2549,9 @@ msgstr "Není snímkem rbd"
 #, python-format
 msgid "Not authorized for image %(image_id)s."
 msgstr "Nemáte oprávnění k použití obrazu %(image_id)s."
+
+msgid "Not authorized."
+msgstr "Neschváleno."
 
 msgid "Not enough parameters to build a valid rule."
 msgstr "Není dostatek parametrů k sestavení platného pravidla."
@@ -2917,10 +2832,6 @@ msgstr ""
 "nalezena."
 
 #, python-format
-msgid "Quota limit %(limit)s for %(resource)s must be -1 or greater."
-msgstr "Limit kvóty %(limit)s pro %(resource)s musí být -1 nebo větší."
-
-#, python-format
 msgid ""
 "Quota limit %(limit)s for %(resource)s must be greater than or equal to "
 "already used and reserved %(minimum)s."
@@ -3089,24 +3000,8 @@ msgid "Scheduler Host Filter %(filter_name)s could not be found."
 msgstr "Filtr hostitelů plánovače %(filter_name)s nemohl být nalezen."
 
 #, python-format
-msgid ""
-"Security group %(name)s added %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"Bezpečnostní skupina %(name)s přidána %(protocol)s přístup (%(from_port)s:"
-"%(to_port)s)"
-
-#, python-format
 msgid "Security group %(name)s is not found for project %(project)s"
 msgstr "Bezpečnostní skupina %(name)s nenalezena v projektu %(project)s"
-
-#, python-format
-msgid ""
-"Security group %(name)s removed %(protocol)s ingress (%(from_port)s:"
-"%(to_port)s)"
-msgstr ""
-"Bezpečnostní skupina %(name)s odebrána %(protocol)s přístup (%(from_port)s:"
-"%(to_port)s)"
 
 #, python-format
 msgid ""
@@ -3190,9 +3085,6 @@ msgstr ""
 msgid "Server does not exist"
 msgstr "Server neexistuje"
 
-msgid "Server group scheduler hint must be a UUID."
-msgstr "Naznačení plánovače skupiny serveru musí být UUID"
-
 #, python-format
 msgid "ServerGroup policy is not supported: %(reason)s"
 msgstr "Zásada ServerGroup není podporována: %(reason)s"
@@ -3241,9 +3133,6 @@ msgstr "Sdílení '%s' není podporováno"
 msgid "Share level '%s' cannot have share configured"
 msgstr "Úroveň sdílení '%s' nemůže mít sdílení nastavena"
 
-msgid "Should we use a CA for each project?"
-msgstr "Použijeme CA pro každý projekt?"
-
 msgid ""
 "Shrinking the filesystem down with resize2fs has failed, please check if you "
 "have enough free space on your disk."
@@ -3279,14 +3168,6 @@ msgstr "Velikost směru řazení převyšuje velikost klíče řazení"
 msgid "Sort key supplied was not valid."
 msgstr "Zadaný klíč řazení byl neplatný."
 
-#, python-format
-msgid ""
-"Specified Fixed IP '%(addr)s' cannot be used with port '%(port)s': port "
-"already has a Fixed IP allocated."
-msgstr ""
-"zadaná pevná IP adresa '%(addr)s' nemůže být použita s portem '%(port)s': "
-"port již má přidělenu pevnou IP adresu."
-
 msgid "Specified fixed address not assigned to instance"
 msgstr "Zadaná pevná adresa není k instanci přidělena"
 
@@ -3309,15 +3190,6 @@ msgstr "Chyba úložiště: %(reason)s"
 #, python-format
 msgid "Storage policy %s did not match any datastores"
 msgstr "Zásada uložení %s neodpovídá žádným datovým úložištím"
-
-#, python-format
-msgid "Subject for certificate for projects, %s for project, timestamp"
-msgstr "Předmět certifikátu pro projekty, %s pro projekt, časové razítko"
-
-#, python-format
-msgid "Subject for certificate for users, %s for project, user, timestamp"
-msgstr ""
-"Předmět certifikátu pro uživatele, %s pro projekt, uživatel, časové razítko"
 
 msgid "Success"
 msgstr "Úspěch"
@@ -3342,9 +3214,6 @@ msgstr "Úkol %(task_name)s již je spuštěn na hostiteli %(host)s"
 msgid "Task %(task_name)s is not running on host %(host)s"
 msgstr "Úkol %(task_name)s není spuštěn na hostiteli %(host)s"
 
-msgid "Template for cloudpipe instance boot script"
-msgstr "Šablona pro zaváděcí skript instance cloudpipe"
-
 #, python-format
 msgid "The CA file for %(project)s could not be found"
 msgstr "Soubor CA pro %(project)s nemohl být nalezen"
@@ -3356,10 +3225,6 @@ msgstr "Soubor CRL pro %(project)s nemohl být nalezen"
 #, python-format
 msgid "The DNS entry %(name)s already exists in domain %(domain)s."
 msgstr "Záznam DNS %(name)s již v doméně %(domain)s existuje."
-
-#, python-format
-msgid "The ID %(id)s is unknown."
-msgstr "ID %(id)s je neznámé."
 
 #, python-format
 msgid "The PCI address %(address)s has an incorrect format."
@@ -3460,9 +3325,6 @@ msgstr "Počet zadaných portů: %(ports)d přesahuje limit: %(quota)d"
 
 msgid "The only partition should be partition 1."
 msgstr "Jediným oddílem by měl být oddíl 1."
-
-msgid "The path at which the file system is mounted."
-msgstr "Cesta na které je souborový systém připojen."
 
 #, python-format
 msgid "The provided RNG device path: (%(path)s) is not present on the host."
@@ -3941,14 +3803,6 @@ msgid "Unknown method '%(method)s' in compute API"
 msgstr "Neznámá metoda '%(method)s' ve výpočetním API"
 
 #, python-format
-msgid ""
-"Unknown osapi_compute_unique_server_name_scope value: %s Flag must be empty, "
-"\"global\" or \"project\""
-msgstr ""
-"Neznámá hodnota osapi_compute_unique_server_name_scope: Příznak %s musí být "
-"prázdný, \"global\" nebo \"project\""
-
-#, python-format
 msgid "Unknown quota resources %(unknown)s."
 msgstr "Neznámý zdroj kvóty %(unknown)s."
 
@@ -4029,10 +3883,6 @@ msgstr ""
 #, python-format
 msgid "VHD coalesce attempts exceeded (%d), giving up..."
 msgstr "Překročen počet pokusů (%d) o splynutí VHD, operace zrušena..."
-
-#, python-format
-msgid "VIF driver not found for network_api_class: %s"
-msgstr "Ovladač VIF nenalezen v třídě api sítě: %s"
 
 msgid "VIF plugging is not supported by the Hyper-V driver."
 msgstr "Zapojení VIF není podporováno ovladačem Hyper-V."
@@ -4172,12 +4022,6 @@ msgid ""
 msgstr ""
 "Při provozování serveru v režimu SSL musíte zadat konfigurační volby "
 "cert_file a key_file ve vašem souboru s nastavení"
-
-msgid "Where we keep our keys"
-msgstr "Kde uchováváme naše klíče"
-
-msgid "Where we keep our root CA"
-msgstr "Kde uchováváme naši kořenovou CA"
 
 #, python-format
 msgid "Wrong quota method %(method)s used on resource %(res)s"

@@ -12,7 +12,9 @@
 
 import six
 import sqlalchemy as sa
+from sqlalchemy import func
 from sqlalchemy.orm import contains_eager
+from sqlalchemy import sql
 
 from nova.db.sqlalchemy import api as db_api
 from nova.db.sqlalchemy import api_models as models
@@ -21,6 +23,7 @@ from nova import objects
 from nova.objects import base
 from nova.objects import fields
 
+_ALLOC_TBL = models.Allocation.__table__
 _INV_TBL = models.Inventory.__table__
 _RP_TBL = models.ResourceProvider.__table__
 
@@ -42,11 +45,26 @@ def _delete_inventory_from_provider(conn, rp, to_delete):
     """Deletes any inventory records from the supplied provider and set() of
     resource class identifiers.
 
+    If there are allocations for any of the inventories to be deleted raise
+    InventoryInUse exception.
+
     :param conn: DB connection to use.
     :param rp: Resource provider from which to delete inventory.
     :param to_delete: set() containing resource class IDs for records to
                       delete.
     """
+    allocation_query = sa.select(
+        [_ALLOC_TBL.c.resource_class_id.label('resource_class')]).where(
+             sa.and_(_ALLOC_TBL.c.resource_provider_id == rp.id,
+                     _ALLOC_TBL.c.resource_class_id.in_(to_delete))
+         ).group_by(_ALLOC_TBL.c.resource_class_id)
+    allocations = conn.execute(allocation_query).fetchall()
+    if allocations:
+        resource_classes = ', '.join([fields.ResourceClass.from_index(
+            allocation.resource_class) for allocation in allocations])
+        raise exception.InventoryInUse(resource_classes=resource_classes,
+                                       resource_provider=rp.uuid)
+
     del_stmt = _INV_TBL.delete().where(sa.and_(
             _INV_TBL.c.resource_provider_id == rp.id,
             _INV_TBL.c.resource_class_id.in_(to_delete)))
@@ -66,8 +84,9 @@ def _add_inventory_to_provider(conn, rp, inv_list, to_add):
     for res_class in to_add:
         inv_record = inv_list.find(res_class)
         if inv_record.capacity <= 0:
-            raise exception.ObjectActionError(
-                action='add inventory', reason='invalid resource capacity')
+            raise exception.InvalidInventoryCapacity(
+                resource_class=fields.ResourceClass.from_index(res_class),
+                resource_provider=rp.uuid)
         ins_stmt = _INV_TBL.insert().values(
                 resource_provider_id=rp.id,
                 resource_class_id=res_class,
@@ -92,8 +111,19 @@ def _update_inventory_for_provider(conn, rp, inv_list, to_update):
     for res_class in to_update:
         inv_record = inv_list.find(res_class)
         if inv_record.capacity <= 0:
-            raise exception.ObjectActionError(
-                action='update inventory', reason='invalid resource capacity')
+            raise exception.InvalidInventoryCapacity(
+                resource_class=fields.ResourceClass.from_index(res_class),
+                resource_provider=rp.uuid)
+        allocation_query = sa.select(
+            [func.sum(_ALLOC_TBL.c.used).label('usage')]).\
+            where(sa.and_(
+                _ALLOC_TBL.c.resource_provider_id == rp.id,
+                _ALLOC_TBL.c.resource_class_id == res_class))
+        allocations = conn.execute(allocation_query).first()
+        if allocations and allocations['usage'] > inv_record.capacity:
+            raise exception.InvalidInventoryNewCapacityExceeded(
+                resource_class=fields.ResourceClass.from_index(res_class),
+                resource_provider=rp.uuid)
         upd_stmt = _INV_TBL.update().where(sa.and_(
                 _INV_TBL.c.resource_provider_id == rp.id,
                 _INV_TBL.c.resource_class_id == res_class)).values(
@@ -358,14 +388,20 @@ class ResourceProviderList(base.ObjectListBase, base.NovaObject):
         'objects': fields.ListOfObjectsField('ResourceProvider'),
     }
 
+    allowed_filters = (
+        'name', 'uuid'
+    )
+
     @staticmethod
     @db_api.api_context_manager.reader
     def _get_all_by_filters_from_db(context, filters):
         if not filters:
             filters = {}
         query = context.session.query(models.ResourceProvider)
-        if 'name' in filters:
-            query = query.filter_by(name=filters['name'])
+        for attr in ResourceProviderList.allowed_filters:
+            if attr in filters:
+                query = query.filter(
+                    getattr(models.ResourceProvider, attr) == filters[attr])
         query = query.filter_by(can_host=filters.get('can_host', 0))
         return query.all()
 
@@ -508,7 +544,11 @@ class InventoryList(base.ObjectListBase, base.NovaObject):
                           string.
         """
         if isinstance(res_class, six.string_types):
-            res_class = fields.ResourceClass.index(res_class)
+            try:
+                res_class = fields.ResourceClass.index(res_class)
+            except ValueError:
+                raise exception.NotFound("No such resource class '%s'" %
+                                         res_class)
 
         for inv_rec in self.objects:
             if fields.ResourceClass.index(inv_rec.resource_class) == res_class:
@@ -517,10 +557,10 @@ class InventoryList(base.ObjectListBase, base.NovaObject):
     @staticmethod
     @db_api.api_context_manager.reader
     def _get_all_by_resource_provider(context, rp_uuid):
-        return context.session.query(db_api.models.Inventory).\
-            join(db_api.models.Inventory.resource_provider).\
+        return context.session.query(models.Inventory).\
+            join(models.Inventory.resource_provider).\
             options(contains_eager('resource_provider')).\
-            filter(db_api.models.ResourceProvider.uuid == rp_uuid).all()
+            filter(models.ResourceProvider.uuid == rp_uuid).all()
 
     @base.remotable_classmethod
     def get_all_by_resource_provider_uuid(cls, context, rp_uuid):
@@ -549,6 +589,9 @@ class Allocation(_HasAResourceProvider):
         db_allocation = models.Allocation()
         db_allocation.update(updates)
         context.session.add(db_allocation)
+        # We may be in a nested context manager so must flush so the
+        # caller receives an id.
+        context.session.flush()
         return db_allocation
 
     @staticmethod
@@ -573,27 +616,282 @@ class Allocation(_HasAResourceProvider):
         self._destroy(self._context, self.id)
 
 
+def _delete_current_allocs(conn, allocs):
+    """Deletes any existing allocations that correspond to the allocations to
+    be written. This is wrapped in a transaction, so if the write subsequently
+    fails, the deletion will also be rolled back.
+    """
+    for alloc in allocs:
+        rp_id = alloc.resource_provider.id
+        consumer_id = alloc.consumer_id
+        del_sql = _ALLOC_TBL.delete().where(
+                sa.and_(_ALLOC_TBL.c.resource_provider_id == rp_id,
+                        _ALLOC_TBL.c.consumer_id == consumer_id))
+        conn.execute(del_sql)
+
+
+def _check_capacity_exceeded(conn, allocs):
+    """Checks to see if the supplied allocation records would result in any of
+    the inventories involved having their capacity exceeded.
+
+    Raises an InvalidAllocationCapacityExceeded exception if any inventory
+    would be exhausted by the allocation. If no inventories would be exceeded
+    by the allocation, the function returns a list of `ResourceProvider`
+    objects that contain the generation at the time of the check.
+
+    :param conn: SQLalchemy Connection object to use
+    :param allocs: List of `Allocation` objects to check
+    """
+    # The SQL generated below looks like this:
+    # SELECT
+    #   rp.id,
+    #   rp.uuid,
+    #   rp.generation,
+    #   inv.resource_class_id,
+    #   inv.total,
+    #   inv.reserved,
+    #   inv.allocation_ratio,
+    #   allocs.used
+    # FROM resource_providers AS rp
+    # JOIN inventories AS i1
+    # ON rp.id = i1.resource_provider_id
+    # LEFT JOIN (
+    #    SELECT resource_provider_id, resource_class_id, SUM(used) AS used
+    #    FROM allocations
+    #    WHERE resource_class_id IN ($RESOURCE_CLASSES)
+    #    GROUP BY resource_provider_id, resource_class_id
+    # ) AS allocs
+    # ON inv.resource_provider_id = allocs.resource_provider_id
+    # AND inv.resource_class_id = allocs.resource_class_id
+    # WHERE rp.uuid IN ($RESOURCE_PROVIDERS)
+    # AND inv.resource_class_id IN ($RESOURCE_CLASSES)
+    #
+    # We then take the results of the above and determine if any of the
+    # inventory will have its capacity exceeded.
+    res_classes = set([fields.ResourceClass.index(a.resource_class)
+                       for a in allocs])
+    provider_uuids = set([a.resource_provider.uuid for a in allocs])
+
+    usage = sa.select([_ALLOC_TBL.c.resource_provider_id,
+                       _ALLOC_TBL.c.consumer_id,
+                       _ALLOC_TBL.c.resource_class_id,
+                       sql.func.sum(_ALLOC_TBL.c.used).label('used')])
+    usage = usage.where(_ALLOC_TBL.c.resource_class_id.in_(res_classes))
+    usage = usage.group_by(_ALLOC_TBL.c.resource_provider_id,
+                           _ALLOC_TBL.c.resource_class_id)
+    usage = sa.alias(usage, name='usage')
+
+    inv_join = sql.join(_RP_TBL, _INV_TBL,
+            sql.and_(_RP_TBL.c.id == _INV_TBL.c.resource_provider_id,
+                     _INV_TBL.c.resource_class_id.in_(res_classes)))
+    primary_join = sql.outerjoin(inv_join, usage,
+            _INV_TBL.c.resource_provider_id == usage.c.resource_provider_id)
+
+    cols_in_output = [
+        _RP_TBL.c.id.label('resource_provider_id'),
+        _RP_TBL.c.uuid,
+        _RP_TBL.c.generation,
+        _INV_TBL.c.resource_class_id,
+        _INV_TBL.c.total,
+        _INV_TBL.c.reserved,
+        _INV_TBL.c.allocation_ratio,
+        usage.c.used,
+    ]
+
+    sel = sa.select(cols_in_output).select_from(primary_join)
+    sel = sel.where(
+            sa.and_(_RP_TBL.c.uuid.in_(provider_uuids),
+                    _INV_TBL.c.resource_class_id.in_(res_classes)))
+    records = conn.execute(sel)
+    # Create a map keyed by (rp_uuid, res_class) for the records in the DB
+    usage_map = {}
+    provs_with_inv = set()
+    for record in records:
+        usage_map[(record['uuid'], record['resource_class_id'])] = record
+        provs_with_inv.add(record["uuid"])
+    # Ensure that all providers have existing inventory
+    missing_provs = provider_uuids - provs_with_inv
+    if missing_provs:
+        raise exception.InvalidInventory(resource_class=str(res_classes),
+                resource_provider=missing_provs)
+
+    res_providers = {}
+    for alloc in allocs:
+        res_class = fields.ResourceClass.index(alloc.resource_class)
+        rp_uuid = alloc.resource_provider.uuid
+        key = (rp_uuid, res_class)
+        usage = usage_map[key]
+        amount_needed = alloc.used
+        allocation_ratio = usage['allocation_ratio']
+        # usage["used"] can be returned as None
+        used = usage['used'] or 0
+        capacity = (usage['total'] - usage['reserved']) * allocation_ratio
+        if capacity < (used + amount_needed):
+            raise exception.InvalidAllocationCapacityExceeded(
+                resource_class=fields.ResourceClass.from_index(res_class),
+                resource_provider=rp_uuid)
+        if rp_uuid not in res_providers:
+            rp = ResourceProvider(id=usage['resource_provider_id'],
+                                  uuid=rp_uuid,
+                                  generation=usage['generation'])
+            res_providers[rp_uuid] = rp
+    return list(res_providers.values())
+
+
 @base.NovaObjectRegistry.register
 class AllocationList(base.ObjectListBase, base.NovaObject):
     # Version 1.0: Initial Version
-    VERSION = '1.0'
+    # Version 1.1: Add create_all() and delete_all()
+    VERSION = '1.1'
 
     fields = {
         'objects': fields.ListOfObjectsField('Allocation'),
     }
 
     @staticmethod
+    @db_api.api_context_manager.writer
+    def _delete_allocations(context, allocations):
+        for allocation in allocations:
+            allocation._context = context
+            allocation.destroy()
+
+    @staticmethod
     @db_api.api_context_manager.reader
-    def _get_allocations_from_db(context, rp_uuid):
+    def _get_allocations_from_db(context, resource_provider_uuid=None,
+                                 consumer_id=None):
         query = (context.session.query(models.Allocation)
                  .join(models.Allocation.resource_provider)
-                 .options(contains_eager('resource_provider'))
-                 .filter(models.ResourceProvider.uuid == rp_uuid))
+                 .options(contains_eager('resource_provider')))
+        if resource_provider_uuid:
+            query = query.filter(
+                models.ResourceProvider.uuid == resource_provider_uuid)
+        if consumer_id:
+            query = query.filter(
+                models.Allocation.consumer_id == consumer_id)
         return query.all()
+
+    @staticmethod
+    @db_api.api_context_manager.writer
+    def _set_allocations(context, allocs):
+        """Write a set of allocations.
+
+        We must check that there is capacity for each allocation.
+        If there is not we roll back the entire set.
+        """
+        conn = context.session.connection()
+        # Before writing any allocation records, we check that the submitted
+        # allocations do not cause any inventory capacity to be exceeded for
+        # any resource provider and resource class involved in the allocation
+        # transaction. _check_capacity_exceeded() raises an exception if any
+        # inventory capacity is exceeded. If capacity is not exceeeded, the
+        # function returns a list of ResourceProvider objects containing the
+        # generation of the resource provider at the time of the check. These
+        # objects are used at the end of the allocation transaction as a guard
+        # against concurrent updates.
+        with conn.begin():
+            # First delete any existing allocations for that rp/consumer combo.
+            _delete_current_allocs(conn, allocs)
+            before_gens = _check_capacity_exceeded(conn, allocs)
+            # Now add the allocations that were passed in.
+            for alloc in allocs:
+                rp = alloc.resource_provider
+                res_class = fields.ResourceClass.index(alloc.resource_class)
+                ins_stmt = _ALLOC_TBL.insert().values(
+                        resource_provider_id=rp.id,
+                        resource_class_id=res_class,
+                        consumer_id=alloc.consumer_id,
+                        used=alloc.used)
+                conn.execute(ins_stmt)
+
+            # Generation checking happens here. If the inventory for
+            # this resource provider changed out from under us,
+            # this will raise a ConcurrentUpdateDetected which can be caught
+            # by the caller to choose to try again. It will also rollback the
+            # transaction so that these changes always happen atomically.
+            for rp in before_gens:
+                _increment_provider_generation(conn, rp)
 
     @base.remotable_classmethod
     def get_all_by_resource_provider_uuid(cls, context, rp_uuid):
         db_allocation_list = cls._get_allocations_from_db(
-            context, rp_uuid)
+            context, resource_provider_uuid=rp_uuid)
         return base.obj_make_list(
             context, cls(context), objects.Allocation, db_allocation_list)
+
+    @base.remotable_classmethod
+    def get_all_by_consumer_id(cls, context, consumer_id):
+        db_allocation_list = cls._get_allocations_from_db(
+            context, consumer_id=consumer_id)
+        return base.obj_make_list(
+            context, cls(context), objects.Allocation, db_allocation_list)
+
+    @base.remotable
+    def create_all(self):
+        """Create the supplied allocations."""
+        # TODO(jaypipes): Retry the allocation writes on
+        # ConcurrentUpdateDetected
+        self._set_allocations(self._context, self.objects)
+
+    @base.remotable
+    def delete_all(self):
+        self._delete_allocations(self._context, self.objects)
+
+
+@base.NovaObjectRegistry.register
+class Usage(base.NovaObject):
+    # Version 1.0: Initial version
+    VERSION = '1.0'
+
+    fields = {
+        'resource_class': fields.ResourceClassField(read_only=True),
+        'usage': fields.NonNegativeIntegerField(),
+    }
+
+    @staticmethod
+    def _from_db_object(context, target, source):
+        for field in target.fields:
+            if field not in ('resource_class'):
+                setattr(target, field, source[field])
+
+        if 'resource_class' not in target:
+            target.resource_class = (
+                target.fields['resource_class'].from_index(
+                    source['resource_class_id']))
+
+        target._context = context
+        target.obj_reset_changes()
+        return target
+
+
+@base.NovaObjectRegistry.register
+class UsageList(base.ObjectListBase, base.NovaObject):
+    # Version 1.0: Initial version
+    VERSION = '1.0'
+
+    fields = {
+        'objects': fields.ListOfObjectsField('Usage'),
+    }
+
+    @staticmethod
+    @db_api.api_context_manager.reader
+    def _get_all_by_resource_provider_uuid(context, rp_uuid):
+        query = (context.session.query(models.Inventory.resource_class_id,
+                 func.coalesce(func.sum(models.Allocation.used), 0))
+                 .join(models.ResourceProvider,
+                       models.Inventory.resource_provider_id ==
+                       models.ResourceProvider.id)
+                 .outerjoin(models.Allocation,
+                            sql.and_(models.Inventory.resource_provider_id ==
+                                     models.Allocation.resource_provider_id,
+                                     models.Inventory.resource_class_id ==
+                                     models.Allocation.resource_class_id))
+                 .filter(models.ResourceProvider.uuid == rp_uuid)
+                 .group_by(models.Inventory.resource_class_id))
+        result = [dict(resource_class_id=item[0], usage=item[1])
+                  for item in query.all()]
+        return result
+
+    @base.remotable_classmethod
+    def get_all_by_resource_provider_uuid(cls, context, rp_uuid):
+        usage_list = cls._get_all_by_resource_provider_uuid(context, rp_uuid)
+        return base.obj_make_list(context, cls(context), Usage, usage_list)
