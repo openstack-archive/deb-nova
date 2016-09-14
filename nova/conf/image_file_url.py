@@ -1,10 +1,3 @@
-# needs:fix_opt_description
-# needs:check_deprecation_status
-# needs:check_opt_group_and_type
-# needs:fix_opt_description_indentation
-# needs:fix_opt_registration_consistency
-
-
 # Copyright 2013 Red Hat, Inc.
 # All Rights Reserved.
 #
@@ -22,7 +15,6 @@
 
 from oslo_config import cfg
 
-from nova.i18n import _
 
 image_file_url_group = cfg.OptGroup(
     'image_file_url',
@@ -30,35 +22,41 @@ image_file_url_group = cfg.OptGroup(
 
 filesystems = cfg.ListOpt(
     name='filesystems',
-    deprecated_for_removal=True,
-    deprecated_reason='The feature to download images from glance via '
-                      'filesystem is not used and will be removed in the '
-                      'future.',
     default=[],
-    help=_('List of file systems that are configured '
-           'in this file in the '
-           'image_file_url:<list entry name> '
-           'sections'))
+    deprecated_for_removal=True,
+    deprecated_reason="""
+The feature to download images from glance via filesystem is not used and will
+be removed in the future.
+""",
+    help="""
+List of file systems that are configured in this file in the
+image_file_url:<list entry name> sections
+""")
 
 # NOTE(jbresnah) because the group under which these options are added is
-# dyncamically determined these options need to stay out of global space
+# dynamically determined these options need to stay out of global space
 # or they will confuse generate_sample.sh
 filesystem_opts = [
      cfg.StrOpt('id',
-                help=_('A unique ID given to each file system.  This is '
-                       'value is set in Glance and agreed upon here so '
-                       'that the operator knowns they are dealing with '
-                       'the same file system.'),
                 deprecated_for_removal=True,
-                deprecated_reason='The feature to download images from glance '
-                                  'via filesystem is not used and will be '
-                                  'removed in the future.'),
+                deprecated_reason="""
+The feature to download images from glance via filesystem is not used and will
+be removed in the future.
+""",
+                help="""
+A unique ID given to each file system.  This is value is set in Glance and
+agreed upon here so that the operator knowns they are dealing with the same
+file system.
+"""),
      cfg.StrOpt('mountpoint',
-                help=_('The path at which the file system is mounted.'),
                 deprecated_for_removal=True,
-                deprecated_reason='The feature to download images from glance '
-                                  'via filesystem is not used and will be '
-                                  'removed in the future.'),
+                deprecated_reason="""
+The feature to download images from glance via filesystem is not used and will
+be removed in the future.
+""",
+                help="""
+The path at which the file system is mounted.
+"""),
 ]
 
 ALL_OPTS = [filesystems]
@@ -78,6 +76,6 @@ def list_opts():
     # list the "filesystem_opts" for the "nova.conf.sample" file here. A
     # follow up patch will deprecate those. Due to their dynamic creation
     # they never got shown in "nova.conf.sample" nor the config reference
-    # manual. I see no need to change this here with a dummy group or somehing
+    # manual. I see no need to change this here with a dummy group or something
     # like that.
     return {image_file_url_group: ALL_OPTS}

@@ -306,7 +306,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             objects.BlockDeviceMapping(source_type='volume',
                                        destination_type='volume',
                                        instance_uuid=uuids.instance)])
-        net_req = net_req_obj.NetworkRequest(port_id='bar', tag='foo')
+        net_req = net_req_obj.NetworkRequest(port_id=uuids.bar, tag='foo')
         net_req_list = net_req_obj.NetworkRequestList(objects=[net_req])
         with mock.patch.dict(self.compute.driver.capabilities,
                              supports_device_tagging=False):
@@ -345,7 +345,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                                        destination_type='volume',
                                        tag='foo',
                                        instance_uuid=uuids.instance)])
-        net_req = net_req_obj.NetworkRequest(network_id='bar')
+        net_req = net_req_obj.NetworkRequest(network_id=uuids.bar)
         net_req_list = net_req_obj.NetworkRequestList(objects=[net_req])
         with mock.patch.dict(self.compute.driver.capabilities,
                              supports_device_tagging=True):
@@ -356,7 +356,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             objects.BlockDeviceMapping(source_type='volume',
                                        destination_type='volume',
                                        instance_uuid=uuids.instance)])
-        net_req = net_req_obj.NetworkRequest(network_id='bar', tag='foo')
+        net_req = net_req_obj.NetworkRequest(network_id=uuids.bar, tag='foo')
         net_req_list = net_req_obj.NetworkRequestList(objects=[net_req])
         with mock.patch.dict(self.compute.driver.capabilities,
                              supports_device_tagging=True):
@@ -421,33 +421,6 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         mock_allocate.assert_called_once_with(
             self.context, instance, vpn=is_vpn,
             requested_networks=req_networks, macs=macs,
-            security_groups=sec_groups,
-            dhcp_options=dhcp_options,
-            bind_host_id=instance.get('host'))
-
-    @mock.patch.object(network_api.API, 'allocate_for_instance')
-    def test_allocate_network_neg_conf_value_treated_as_zero(self,
-                                                             mock_allocate):
-        self.flags(network_allocate_retries=-1)
-
-        mock_allocate.side_effect = test.TestingException
-
-        instance = {}
-        is_vpn = 'fake-is-vpn'
-        req_networks = objects.NetworkRequestList(
-            objects=[objects.NetworkRequest(network_id='fake')])
-        macs = 'fake-macs'
-        sec_groups = 'fake-sec-groups'
-        dhcp_options = None
-
-        self.assertRaises(test.TestingException,
-                          self.compute._allocate_network_async,
-                          self.context, instance, req_networks, macs,
-                          sec_groups, is_vpn, dhcp_options)
-
-        mock_allocate.assert_called_once_with(
-            self.context, instance, vpn=is_vpn,
-            requested_networks=req_networks, macs = macs,
             security_groups=sec_groups,
             dhcp_options=dhcp_options,
             bind_host_id=instance.get('host'))
@@ -773,8 +746,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertFalse(instance.deleted)
 
         deltas = {'instances': -1,
-                  'cores': -instance.vcpus,
-                  'ram': -instance.memory_mb}
+                  'cores': -instance.flavor.vcpus,
+                  'ram': -instance.flavor.memory_mb}
 
         def fake_inst_destroy():
             instance.deleted = True
@@ -2319,6 +2292,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
     @mock.patch('nova.objects.Instance._from_db_object')
     def test_remove_volume_connection(self, inst_from_db, detach, bdm_get):
         bdm = mock.sentinel.bdm
+        bdm.connection_info = jsonutils.dumps({})
         inst_obj = mock.Mock()
         inst_obj.uuid = 'uuid'
         bdm_get.return_value = bdm
@@ -2326,7 +2300,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         with mock.patch.object(self.compute, 'volume_api'):
             self.compute.remove_volume_connection(self.context, 'vol',
                                                   inst_obj)
-        detach.assert_called_once_with(self.context, inst_obj, bdm)
+        detach.assert_called_once_with(self.context, inst_obj, bdm, {})
         bdm_get.assert_called_once_with(self.context, 'vol', 'uuid')
 
     def test_detach_volume(self):
@@ -2344,10 +2318,12 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         volume_id = uuids.volume
         inst_obj = mock.Mock()
         inst_obj.uuid = uuids.instance
+        inst_obj.host = CONF.host
         attachment_id = uuids.attachment
 
         bdm = mock.MagicMock(spec=objects.BlockDeviceMapping)
         bdm.device_name = 'vdb'
+        bdm.connection_info = jsonutils.dumps({})
         bdm_get.return_value = bdm
 
         detach.return_value = {}
@@ -2362,7 +2338,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                                             destroy_bdm=destroy_bdm,
                                             attachment_id=attachment_id)
 
-                detach.assert_called_once_with(self.context, inst_obj, bdm)
+                detach.assert_called_once_with(self.context, inst_obj, bdm, {})
                 driver.get_volume_connector.assert_called_once_with(inst_obj)
                 volume_api.terminate_connection.assert_called_once_with(
                     self.context, volume_id, connector_sentinel)
@@ -2438,6 +2414,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                                             instance,
                                             destroy_bdm=False)
 
+                driver._driver_detach_volume.assert_not_called()
                 driver.get_volume_connector.assert_called_once_with(instance)
                 volume_api.terminate_connection.assert_called_once_with(
                     self.context, volume_id, expected_connector)
@@ -2449,22 +2426,6 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                     self.context, instance, "volume.detach",
                     extra_usage_info={'volume_id': volume_id}
                 )
-
-    def test__driver_detach_volume_return(self):
-        """_driver_detach_volume returns the connection_info from loads()."""
-        with mock.patch.object(jsonutils, 'loads') as loads:
-            conn_info_str = 'test-expected-loads-param'
-            bdm = mock.Mock()
-            bdm.connection_info = conn_info_str
-            loads.return_value = {'test-loads-key': 'test loads return value'}
-            instance = fake_instance.fake_instance_obj(self.context)
-
-            ret = self.compute._driver_detach_volume(self.context,
-                                                     instance,
-                                                     bdm)
-
-            self.assertEqual(loads.return_value, ret)
-            loads.assert_called_once_with(conn_info_str)
 
     def _test_rescue(self, clean_shutdown=True):
         instance = fake_instance.fake_instance_obj(
@@ -2763,6 +2724,15 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertTrue(mock_log.warning.called)
         msg = mock_log.warning.call_args_list[0]
         self.assertIn('appears to not be owned by this host', msg[0][0])
+
+    def test_init_host_pci_passthrough_whitelist_validation_failure(self):
+        # Tests that we fail init_host if there is a pci_passthrough_whitelist
+        # configured incorrectly.
+        self.flags(pci_passthrough_whitelist=[
+            # it's invalid to specify both in the same devspec
+            jsonutils.dumps({'address': 'foo', 'devname': 'bar'})])
+        self.assertRaises(exception.PciDeviceInvalidDeviceName,
+                          self.compute.init_host)
 
     @mock.patch('nova.compute.manager.ComputeManager._instance_update')
     def test_error_out_instance_on_exception_not_implemented_err(self,
@@ -3897,6 +3867,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
             exception.UnableToAutoAllocateNetwork(
                 project_id=self.context.project_id))
 
+    def test_spawn_network_fixed_ip_not_valid_on_host_failure(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.FixedIpInvalidOnHost(port_id='fake-port-id'))
+
     def test_build_and_run_no_more_fixedips_exception(self):
         self._test_build_and_run_spawn_exceptions(
             exception.NoMoreFixedIps("error messge"))
@@ -4554,6 +4528,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
         # revert_resize() and the return value is passed to driver.destroy().
         # Otherwise we could regress this.
 
+        @mock.patch('nova.compute.rpcapi.ComputeAPI.finish_revert_resize')
         @mock.patch.object(self.instance, 'revert_migration_context')
         @mock.patch.object(self.compute.network_api, 'get_instance_nw_info')
         @mock.patch.object(self.compute, '_is_instance_storage_shared')
@@ -4578,7 +4553,8 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
                     finish_revert_resize,
                     _is_instance_storage_shared,
                     get_instance_nw_info,
-                    revert_migration_context):
+                    revert_migration_context,
+                    mock_finish_revert):
 
             self.migration.source_compute = self.instance['host']
 
@@ -4598,6 +4574,9 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
             # should not destroy disks otherwise it should destroy disks.
             destroy.assert_called_once_with(self.context, self.instance,
                                             mock.ANY, mock.ANY, not is_shared)
+            mock_finish_revert.assert_called_once_with(
+                    self.context, self.instance, self.migration,
+                    self.migration.source_compute, mock.ANY)
 
         do_test()
 
@@ -4606,6 +4585,47 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
 
     def test_revert_resize_instance_destroy_disks_non_shared_storage(self):
         self._test_revert_resize_instance_destroy_disks(is_shared=False)
+
+    def test_finish_revert_resize_network_calls_order(self):
+        self.nw_info = None
+
+        def _migrate_instance_finish(context, instance, migration):
+            self.nw_info = 'nw_info'
+
+        def _get_instance_nw_info(context, instance):
+            return self.nw_info
+
+        @mock.patch.object(self.compute, '_get_resource_tracker')
+        @mock.patch.object(self.compute.driver, 'finish_revert_migration')
+        @mock.patch.object(self.compute.network_api, 'get_instance_nw_info',
+                           side_effect=_get_instance_nw_info)
+        @mock.patch.object(self.compute.network_api, 'migrate_instance_finish',
+                           side_effect=_migrate_instance_finish)
+        @mock.patch.object(self.compute.network_api, 'setup_networks_on_host')
+        @mock.patch.object(self.migration, 'save')
+        @mock.patch.object(self.instance, 'save')
+        @mock.patch.object(self.compute, '_set_instance_info')
+        @mock.patch.object(compute_utils, 'notify_about_instance_usage')
+        def do_test(notify_about_instance_usage,
+                    set_instance_info,
+                    instance_save,
+                    migration_save,
+                    setup_networks_on_host,
+                    migrate_instance_finish,
+                    get_instance_nw_info,
+                    finish_revert_migration,
+                    get_resource_tracker):
+
+            self.migration.source_compute = self.instance['host']
+            self.migration.source_node = self.instance['host']
+            self.compute.finish_revert_resize(context=self.context,
+                                              migration=self.migration,
+                                              instance=self.instance,
+                                              reservations=None)
+            finish_revert_migration.assert_called_with(self.context,
+                self.instance, 'nw_info', mock.ANY, mock.ANY)
+
+        do_test()
 
     def test_consoles_enabled(self):
         self.flags(enabled=False, group='vnc')
@@ -5016,6 +5036,22 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
     def test_live_migration_cleanup_flags_live_migrate(self):
         do_cleanup, destroy_disks = self.compute._live_migration_cleanup_flags(
             {})
+        self.assertFalse(do_cleanup)
+        self.assertFalse(destroy_disks)
+
+    def test_live_migration_cleanup_flags_block_migrate_hyperv(self):
+        migrate_data = objects.HyperVLiveMigrateData(
+            is_shared_instance_path=False)
+        do_cleanup, destroy_disks = self.compute._live_migration_cleanup_flags(
+            migrate_data)
+        self.assertTrue(do_cleanup)
+        self.assertTrue(destroy_disks)
+
+    def test_live_migration_cleanup_flags_shared_hyperv(self):
+        migrate_data = objects.HyperVLiveMigrateData(
+            is_shared_instance_path=True)
+        do_cleanup, destroy_disks = self.compute._live_migration_cleanup_flags(
+            migrate_data)
         self.assertFalse(do_cleanup)
         self.assertFalse(destroy_disks)
 

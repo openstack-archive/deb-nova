@@ -114,7 +114,8 @@ def return_non_running_server(context, server_id, columns_to_join=None):
            'uuid': server_id, 'host': "localhost", 'name': 'asdf'})
 
 
-def return_security_group_by_name(context, project_id, group_name):
+def return_security_group_by_name(context, project_id, group_name,
+                                  columns_to_join=None):
     return {'id': 1, 'name': group_name,
             "instances": [{'id': 1, 'uuid': UUID_SERVER}]}
 
@@ -473,7 +474,7 @@ class TestSecurityGroupsV21(test.TestCase):
     def test_get_security_group_by_id(self):
         sg = security_group_template(id=2, rules=[])
 
-        def return_security_group(context, group_id):
+        def return_security_group(context, group_id, columns_to_join=None):
             self.assertEqual(sg['id'], group_id)
             return security_group_db(sg)
 
@@ -498,7 +499,7 @@ class TestSecurityGroupsV21(test.TestCase):
         sg_update = security_group_template(id=2, rules=[],
                         name='update_name', description='update_desc')
 
-        def return_security_group(context, group_id):
+        def return_security_group(context, group_id, columns_to_join=None):
             self.assertEqual(sg['id'], group_id)
             return security_group_db(sg)
 
@@ -523,7 +524,7 @@ class TestSecurityGroupsV21(test.TestCase):
     def test_update_security_group_name_to_default(self):
         sg = security_group_template(id=2, rules=[], name='default')
 
-        def return_security_group(context, group_id):
+        def return_security_group(context, group_id, columns_to_join=None):
             self.assertEqual(sg['id'], group_id)
             return security_group_db(sg)
 
@@ -548,7 +549,7 @@ class TestSecurityGroupsV21(test.TestCase):
         def security_group_destroy(context, id):
             self.called = True
 
-        def return_security_group(context, group_id):
+        def return_security_group(context, group_id, columns_to_join=None):
             self.assertEqual(sg['id'], group_id)
             return security_group_db(sg)
 
@@ -592,7 +593,7 @@ class TestSecurityGroupsV21(test.TestCase):
         def security_group_in_use(context, id):
             return True
 
-        def return_security_group(context, group_id):
+        def return_security_group(context, group_id, columns_to_join=None):
             self.assertEqual(sg['id'], group_id)
             return security_group_db(sg)
 
@@ -1312,17 +1313,13 @@ class SecurityGroupsOutputTestV21(test.TestCase):
         self.stubs.Set(compute.api.API, 'get', fake_compute_get)
         self.stubs.Set(compute.api.API, 'get_all', fake_compute_get_all)
         self.stubs.Set(compute.api.API, 'create', fake_compute_create)
-        self.flags(
-            osapi_compute_extension=[
-                'nova.api.openstack.compute.contrib.select_extensions'],
-            osapi_compute_ext_list=['Security_groups'])
         self.app = self._setup_app()
 
     def _setup_app(self):
         return fakes.wsgi_app_v21(init_only=('os-security-groups', 'servers'))
 
     def _make_request(self, url, body=None):
-        req = webob.Request.blank(url)
+        req = fakes.HTTPRequest.blank(url)
         if body:
             req.method = 'POST'
             req.body = encodeutils.safe_encode(self._encode_body(body))
@@ -1511,3 +1508,37 @@ class SecurityGroupActionPolicyEnforcementV21(PolicyEnforcementV21):
     def test_remove_security_group_policy_failed(self):
         self._common_policy_check(
             self.controller._removeSecurityGroup, self.req, FAKE_UUID1, {})
+
+
+class TestSecurityGroupsDeprecation(test.NoDBTestCase):
+
+    def setUp(self):
+        super(TestSecurityGroupsDeprecation, self).setUp()
+        self.controller = secgroups_v21.SecurityGroupController()
+        self.req = fakes.HTTPRequest.blank('', version='2.36')
+
+    def test_all_apis_return_not_found(self):
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.show, self.req, fakes.FAKE_UUID)
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.delete, self.req, fakes.FAKE_UUID)
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.index, self.req)
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.update, self.req, fakes.FAKE_UUID, {})
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.create, self.req, {})
+
+
+class TestSecurityGroupRulesDeprecation(test.NoDBTestCase):
+
+    def setUp(self):
+        super(TestSecurityGroupRulesDeprecation, self).setUp()
+        self.controller = secgroups_v21.SecurityGroupRulesController()
+        self.req = fakes.HTTPRequest.blank('', version='2.36')
+
+    def test_all_apis_return_not_found(self):
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.create, self.req, {})
+        self.assertRaises(exception.VersionNotFoundForAPIMethod,
+            self.controller.delete, self.req, fakes.FAKE_UUID)

@@ -415,39 +415,30 @@ def get_fs_info(path):
             'used': used}
 
 
-def fetch_image(context, target, image_id, max_size=0):
+def fetch_image(context, target, image_id):
     """Grab image."""
-    images.fetch_to_raw(context, image_id, target, max_size=max_size)
+    images.fetch_to_raw(context, image_id, target)
 
 
-def fetch_raw_image(context, target, image_id, max_size=0):
+def fetch_raw_image(context, target, image_id):
     """Grab initrd or kernel image.
 
     This function does not attempt raw conversion, as these images will
     already be in raw format.
     """
-    images.fetch(context, image_id, target, max_size=max_size)
+    images.fetch(context, image_id, target)
 
 
-def get_instance_path(instance, forceold=False, relative=False):
+def get_instance_path(instance, relative=False):
     """Determine the correct path for instance storage.
 
-    This method determines the directory name for instance storage, while
-    handling the fact that we changed the naming style to something more
-    unique in the grizzly release.
+    This method determines the directory name for instance storage.
 
     :param instance: the instance we want a path for
-    :param forceold: force the use of the pre-grizzly format
     :param relative: if True, just the relative path is returned
 
     :returns: a path to store information about that instance
     """
-    pre_grizzly_name = os.path.join(CONF.instances_path, instance.name)
-    if forceold or os.path.exists(pre_grizzly_name):
-        if relative:
-            return instance.name
-        return pre_grizzly_name
-
     if relative:
         return instance.uuid
     return os.path.join(CONF.instances_path, instance.uuid)

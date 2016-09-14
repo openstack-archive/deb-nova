@@ -722,14 +722,16 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
                        fake_inject_instance_metadata)
 
         if create_record:
+            flavor = objects.Flavor.get_by_id(self.context,
+                                              instance_type_id)
             instance = objects.Instance(context=self.context)
             instance.project_id = self.project_id
             instance.user_id = self.user_id
             instance.image_ref = image_ref
             instance.kernel_id = kernel_id
             instance.ramdisk_id = ramdisk_id
-            instance.root_gb = 20
-            instance.ephemeral_gb = 0
+            instance.root_gb = flavor.root_gb
+            instance.ephemeral_gb = flavor.ephemeral_gb
             instance.instance_type_id = instance_type_id
             instance.os_type = os_type
             instance.hostname = hostname
@@ -737,8 +739,6 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             instance.architecture = architecture
             instance.system_metadata = {}
 
-            flavor = objects.Flavor.get_by_id(self.context,
-                                              instance_type_id)
             instance.flavor = flavor
             instance.create()
         else:
@@ -1704,6 +1704,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         values = self.instance_values.copy()
         values.update(kw)
         instance = objects.Instance(context=self.context, **values)
+        instance.flavor = objects.Flavor(root_gb=80,
+                                         ephemeral_gb=0)
         instance.create()
         return instance
 
@@ -1750,6 +1752,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         flavor = fake_flavor.fake_flavor_obj(self.context, root_gb=0,
                                              ephemeral_gb=0)
         instance = self._create_instance(root_gb=0, ephemeral_gb=0)
+        instance.flavor.root_gb = 0
+        instance.flavor.ephemeral_gb = 0
         xenapi_fake.create_vm(instance['name'], 'Running')
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
         vm_ref = vm_utils.lookup(conn._session, instance['name'])
@@ -1851,6 +1855,8 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         values["root_gb"] = 0
         values["ephemeral_gb"] = 0
         instance = create_instance_with_system_metadata(self.context, values)
+        instance.flavor.root_gb = 0
+        instance.flavor.ephemeral_gb = 0
 
         def fake_vdi_resize(*args, **kwargs):
             raise Exception("This shouldn't be called")
@@ -2350,8 +2356,9 @@ class XenAPIAutoDiskConfigTestCase(stubs.XenAPITestBase):
              'properties': {'vm_mode': 'xen'}})
 
         self.mox.ReplayAll()
-        self.conn._vmops._attach_disks(instance, image_meta, vm_ref,
-                instance['name'], vdis, disk_image_type, "fake_nw_inf")
+        self.conn._vmops._attach_disks(self.context, instance, image_meta,
+                vm_ref, instance['name'], vdis, disk_image_type,
+                "fake_nw_inf")
 
         self.assertEqual(marker["partition_called"], called)
 
@@ -2471,8 +2478,9 @@ class XenAPIGenerateLocal(stubs.XenAPITestBase):
             {'id': uuids.image_id,
              'disk_format': 'vhd',
              'properties': {'vm_mode': 'xen'}})
-        self.conn._vmops._attach_disks(instance, image_meta, vm_ref,
-                    instance['name'], vdis, disk_image_type, "fake_nw_inf")
+        self.conn._vmops._attach_disks(self.context, instance, image_meta,
+                    vm_ref, instance['name'], vdis, disk_image_type,
+                    "fake_nw_inf")
         self.assertTrue(self.called)
 
     def test_generate_swap(self):
@@ -2722,8 +2730,7 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         return secgroup
 
     def _validate_security_group(self):
-        in_rules = filter(lambda l: not l.startswith('#'),
-                          self._in_rules)
+        in_rules = [l for l in self._in_rules if not l.startswith('#')]
         for rule in in_rules:
             if 'nova' not in rule:
                 self.assertIn(rule, self._out_rules,
@@ -3026,10 +3033,10 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
 
         aggregate = self._aggregate_setup()
         self.conn._pool.add_to_aggregate(self.context, aggregate, "host")
-        result = db.aggregate_get(self.context, aggregate.id)
+        result = objects.Aggregate.get_by_id(self.context, aggregate.id)
         self.assertTrue(fake_init_pool.called)
         self.assertThat(self.fake_metadata,
-                        matchers.DictMatches(result['metadetails']))
+                        matchers.DictMatches(result.metadata))
 
     def test_join_slave(self):
         # Ensure join_slave gets called when the request gets to master.
@@ -3105,12 +3112,12 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
 
         aggregate = self._aggregate_setup(metadata=self.fake_metadata)
         self.conn._pool.remove_from_aggregate(self.context, aggregate, "host")
-        result = db.aggregate_get(self.context, aggregate.id)
+        result = objects.Aggregate.get_by_id(self.context, aggregate.id)
         self.assertTrue(fake_clear_pool.called)
         self.assertThat({'availability_zone': 'fake_zone',
                 pool_states.POOL_FLAG: 'XenAPI',
                 pool_states.KEY: pool_states.ACTIVE},
-                matchers.DictMatches(result['metadetails']))
+                matchers.DictMatches(result.metadata))
 
     def test_remote_master_non_empty_pool(self):
         # Ensure AggregateError is raised if removing the master.
@@ -3177,7 +3184,9 @@ class XenAPIAggregateTestCase(stubs.XenAPITestBase):
         # let's mock the fact that the aggregate is ready!
         metadata = {pool_states.POOL_FLAG: "XenAPI",
                     pool_states.KEY: pool_states.ACTIVE}
-        db.aggregate_metadata_add(self.context, aggr.id, metadata)
+        self.api.update_aggregate_metadata(self.context,
+                                           aggr.id,
+                                           metadata)
         for aggregate_host in values[fake_zone]:
             aggr = self.api.add_host_to_aggregate(self.context,
                                                   aggr.id, aggregate_host)
@@ -3484,16 +3493,13 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
 
         self._add_default_live_migrate_stubs(self.conn)
 
-        dest_check_data = {'block_migration': True,
-                           'is_volume_backed': False,
-                           'migrate_data': {
-                            'destination_sr_ref': None,
-                            'migrate_send_data': {'key': 'value'}
-                           }}
+        dest_check_data = objects.XenapiLiveMigrateData(
+            block_migration=True, is_volume_backed=False,
+            destination_sr_ref=None, migrate_send_data={'key': 'value'})
         result = self.conn.check_can_live_migrate_source(self.context,
                                                          {'host': 'host'},
                                                          dest_check_data)
-        self.assertEqual(dest_check_data, result.to_legacy_dict())
+        self.assertEqual(dest_check_data, result)
 
     def test_check_can_live_migrate_source_with_block_migrate_iscsi(self):
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
@@ -3550,12 +3556,9 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
 
         self._add_default_live_migrate_stubs(self.conn)
 
-        dest_check_data = {'block_migration': True,
-                           'is_volume_backed': True,
-                           'migrate_data': {
-                            'destination_sr_ref': None,
-                            'migrate_send_data': {'key': 'value'}
-                           }}
+        dest_check_data = objects.XenapiLiveMigrateData(
+            block_migration=True, is_volume_backed=True,
+            migrate_send_data={'key': 'value'}, destination_sr_ref=None)
         self.assertRaises(exception.MigrationError,
                           self.conn.check_can_live_migrate_source,
                           self.context,

@@ -84,10 +84,6 @@ class KeypairsTestV21(test.TestCase):
                       db_key_pair_create)
         self.stub_out("nova.db.key_pair_destroy",
                       db_key_pair_destroy)
-        self.flags(
-            osapi_compute_extension=[
-                'nova.api.openstack.compute.contrib.select_extensions'],
-            osapi_compute_ext_list=['Keypairs'])
         self._setup_app_and_controller()
 
         self.req = fakes.HTTPRequest.blank('', version=self.wsgi_api_version)
@@ -291,7 +287,8 @@ class KeypairsTestV21(test.TestCase):
         self.stub_out('nova.api.openstack.wsgi.Request.get_db_instance',
                       fakes.fake_compute_get())
 
-        req = webob.Request.blank(self.base_url + '/servers/' + uuids.server)
+        req = fakes.HTTPRequest.blank(
+            self.base_url + '/servers/' + uuids.server)
         req.headers['Content-Type'] = 'application/json'
         response = req.get_response(self.app_server)
         self.assertEqual(response.status_int, 200)

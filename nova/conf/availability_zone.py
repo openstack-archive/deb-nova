@@ -1,10 +1,3 @@
-# needs:fix_opt_description
-# needs:check_deprecation_status
-# needs:check_opt_group_and_type
-# needs:fix_opt_description_indentation
-# needs:fix_opt_registration_consistency
-
-
 # Copyright (c) 2013 Intel, Inc.
 # Copyright (c) 2013 OpenStack Foundation
 # All Rights Reserved.
@@ -37,13 +30,6 @@ Possible values:
     * Any string representing an availability zone name
     * 'internal' is the default value
 
-Services that use this:
-
-    * ``nova-api``
-
-Related options:
-
-    * None
 """),
     cfg.StrOpt('default_availability_zone',
         default='nova',
@@ -59,14 +45,6 @@ Possible values:
     * Any string representing an availability zone name
     * 'nova' is the default value
 
-Services that use this:
-
-    * ``nova-api``
-    * ``nova-scheduler``
-
-Related options:
-
-    * None
 """)
 ]
 

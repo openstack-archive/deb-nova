@@ -26,6 +26,7 @@ from mox3 import mox
 from oslo_policy import policy as oslo_policy
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
+import six
 from six.moves import range
 import six.moves.urllib.parse as urlparse
 import testtools
@@ -148,42 +149,6 @@ class MockSetAdminPassword(object):
     def __call__(self, context, instance_id, password):
         self.instance_id = instance_id
         self.password = password
-
-
-class Base64ValidationTest(test.TestCase):
-    def setUp(self):
-        super(Base64ValidationTest, self).setUp()
-        ext_info = extension_info.LoadedExtensionInfo()
-        self.controller = servers.ServersController(extension_info=ext_info)
-
-    def test_decode_base64(self):
-        value = "A random string"
-        result = self.controller._decode_base64(base64.b64encode(value))
-        self.assertEqual(result, value)
-
-    def test_decode_base64_binary(self):
-        value = "\x00\x12\x75\x99"
-        result = self.controller._decode_base64(base64.b64encode(value))
-        self.assertEqual(result, value)
-
-    def test_decode_base64_whitespace(self):
-        value = "A random string"
-        encoded = base64.b64encode(value)
-        white = "\n \n%s\t%s\n" % (encoded[:2], encoded[2:])
-        result = self.controller._decode_base64(white)
-        self.assertEqual(result, value)
-
-    def test_decode_base64_invalid(self):
-        invalid = "A random string"
-        result = self.controller._decode_base64(invalid)
-        self.assertIsNone(result)
-
-    def test_decode_base64_illegal_bytes(self):
-        value = "A random string"
-        encoded = base64.b64encode(value)
-        white = ">\x01%s*%s()" % (encoded[:2], encoded[2:])
-        result = self.controller._decode_base64(white)
-        self.assertIsNone(result)
 
 
 class ControllerTest(test.TestCase):
@@ -621,6 +586,11 @@ class ServersControllerTest(ControllerTest):
         num_servers = len(res_dict['servers'])
         self.assertEqual(0, num_servers)
 
+    def test_get_server_details_with_bad_name(self):
+        req = self.req('/fake/servers/detail?name=%2Binstance')
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.index, req)
+
     def test_get_server_details_with_limit(self):
         req = self.req('/fake/servers/detail?limit=3')
         res = self.controller.detail(req)
@@ -1010,10 +980,8 @@ class ServersControllerTest(ControllerTest):
         # Assert that 'deleted' filter value is converted to boolean
         # while calling get_all() method.
         expected_search_opts = {'deleted': True, 'project_id': 'fake'}
-        mock_get_all.assert_called_once_with(
-            mock.ANY, search_opts=expected_search_opts, limit=mock.ANY,
-            expected_attrs=['flavor', 'info_cache', 'metadata', 'pci_devices'],
-            marker=mock.ANY, sort_keys=mock.ANY, sort_dirs=mock.ANY)
+        self.assertEqual(expected_search_opts,
+                         mock_get_all.call_args[1]['search_opts'])
 
     @mock.patch.object(compute_api.API, 'get_all')
     def test_get_servers_deleted_filter_invalid_str(self, mock_get_all):
@@ -1033,10 +1001,8 @@ class ServersControllerTest(ControllerTest):
         # Assert that invalid 'deleted' filter value is converted to boolean
         # False while calling get_all() method.
         expected_search_opts = {'deleted': False, 'project_id': 'fake'}
-        mock_get_all.assert_called_once_with(
-            mock.ANY, search_opts=expected_search_opts, limit=mock.ANY,
-            expected_attrs=['flavor', 'info_cache', 'metadata', 'pci_devices'],
-            marker=mock.ANY, sort_keys=mock.ANY, sort_dirs=mock.ANY)
+        self.assertEqual(expected_search_opts,
+                         mock_get_all.call_args[1]['search_opts'])
 
     def test_get_servers_allows_name(self):
         server_uuid = str(uuid.uuid4())
@@ -1304,6 +1270,18 @@ class ServersControllerTest(ControllerTest):
         req = self.req('/fake/servers', use_admin_context=True)
         self.assertIn('servers', self.controller.index(req))
 
+    def test_get_servers_joins_services(self):
+        def fake_get_all(compute_self, context, search_opts=None,
+                         limit=None, marker=None,
+                         expected_attrs=None, sort_keys=None, sort_dirs=None):
+            self.assertIn('services', expected_attrs)
+            return objects.InstanceList()
+
+        self.stubs.Set(compute_api.API, 'get_all', fake_get_all)
+
+        req = self.req('/fake/servers/detail', use_admin_context=True)
+        self.assertIn('servers', self.controller.detail(req))
+
 
 class ServersControllerTestV29(ServersControllerTest):
     wsgi_api_version = '2.9'
@@ -1520,6 +1498,23 @@ class ServersControllerTestV226(ControllerTest):
         self._test_get_servers_allows_tag_filters('not-tags-any')
 
 
+class ServerControllerTestV238(ControllerTest):
+    wsgi_api_version = '2.38'
+
+    def _test_invalid_status(self, is_admin):
+        req = fakes.HTTPRequest.blank('/fake/servers/detail?status=invalid',
+                                      version=self.wsgi_api_version,
+                                      use_admin_context=is_admin)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.detail, req)
+
+    def test_list_servers_detail_invalid_status_for_admin(self):
+        self._test_invalid_status(True)
+
+    def test_list_servers_detail_invalid_status_for_non_admin(self):
+        self._test_invalid_status(False)
+
+
 class ServersControllerDeleteTest(ControllerTest):
 
     def setUp(self):
@@ -1537,14 +1532,17 @@ class ServersControllerDeleteTest(ControllerTest):
         fakes.stub_out_instance_quota(self, 0, 10)
         req = fakes.HTTPRequestV21.blank('/fake/servers/%s' % uuid)
         req.method = 'DELETE'
+        fake_get = fakes.fake_compute_get(
+            uuid=uuid,
+            vm_state=vm_states.ACTIVE,
+            project_id=req.environ['nova.context'].project_id,
+            user_id=req.environ['nova.context'].user_id)
+        self.stub_out('nova.compute.api.API.get',
+                      lambda api, *a, **k: fake_get(*a, **k))
         return req
 
     def _delete_server_instance(self, uuid=FAKE_UUID):
         req = self._create_delete_request(uuid)
-        fake_get = fakes.fake_compute_get(uuid=uuid,
-                                          vm_state=vm_states.ACTIVE)
-        self.stubs.Set(compute_api.API, 'get',
-                       lambda api, *a, **k: fake_get(*a, **k))
         self.controller.delete(req, uuid)
 
     def test_delete_server_instance(self):
@@ -1574,8 +1572,11 @@ class ServersControllerDeleteTest(ControllerTest):
 
     def test_delete_server_instance_while_resize(self):
         req = self._create_delete_request(FAKE_UUID)
-        fake_get = fakes.fake_compute_get(vm_state=vm_states.ACTIVE,
-                                          task_state=task_states.RESIZE_PREP)
+        fake_get = fakes.fake_compute_get(
+            vm_state=vm_states.ACTIVE,
+            task_state=task_states.RESIZE_PREP,
+            project_id=req.environ['nova.context'].project_id,
+            user_id=req.environ['nova.context'].user_id)
         self.stubs.Set(compute_api.API, 'get',
                        lambda api, *a, **k: fake_get(*a, **k))
 
@@ -1588,7 +1589,10 @@ class ServersControllerDeleteTest(ControllerTest):
 
         self.server_delete_called = False
 
-        fake_get = fakes.fake_compute_get(launched_at=None)
+        fake_get = fakes.fake_compute_get(
+            launched_at=None,
+            project_id=req.environ['nova.context'].project_id,
+            user_id=req.environ['nova.context'].user_id)
         self.stubs.Set(compute_api.API, 'get',
                        lambda api, *a, **k: fake_get(*a, **k))
 
@@ -1607,38 +1611,65 @@ class ServersControllerDeleteTest(ControllerTest):
 class ServersControllerRebuildInstanceTest(ControllerTest):
 
     image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-    image_href = 'http://localhost/v2/fake/images/%s' % image_uuid
 
     def setUp(self):
         super(ServersControllerRebuildInstanceTest, self).setUp()
+        self.req = fakes.HTTPRequest.blank('/fake/servers/a/action')
+        self.req.method = 'POST'
+        self.req.headers["content-type"] = "application/json"
+        self.req_user_id = self.req.environ['nova.context'].user_id
+        self.req_project_id = self.req.environ['nova.context'].project_id
 
         def fake_get(ctrl, ctxt, uuid):
             if uuid == 'test_inst':
                 raise webob.exc.HTTPNotFound(explanation='fakeout')
             return fakes.stub_instance_obj(None,
                                            vm_state=vm_states.ACTIVE,
-                                           project_id='fake')
+                                           project_id=self.req_project_id,
+                                           user_id=self.req_user_id)
 
         self.useFixture(
             fixtures.MonkeyPatch('nova.api.openstack.compute.servers.'
                                  'ServersController._get_instance',
                                  fake_get))
-        fake_get = fakes.fake_compute_get(vm_state=vm_states.ACTIVE)
+        fake_get = fakes.fake_compute_get(vm_state=vm_states.ACTIVE,
+                                          project_id=self.req_project_id,
+                                          user_id=self.req_user_id)
         self.stubs.Set(compute_api.API, 'get',
                        lambda api, *a, **k: fake_get(*a, **k))
 
         self.body = {
             'rebuild': {
                 'name': 'new_name',
-                'imageRef': self.image_href,
+                'imageRef': self.image_uuid,
                 'metadata': {
                     'open': 'stack',
                 },
             },
         }
-        self.req = fakes.HTTPRequest.blank('/fake/servers/a/action')
-        self.req.method = 'POST'
-        self.req.headers["content-type"] = "application/json"
+
+    def test_rebuild_server_with_image_not_uuid(self):
+        self.body['rebuild']['imageRef'] = 'not-uuid'
+        self.assertRaises(exception.ValidationError,
+                          self.controller._action_rebuild,
+                          self.req, FAKE_UUID,
+                          body=self.body)
+
+    def test_rebuild_server_with_image_as_full_url(self):
+        image_href = ('http://localhost/v2/fake/images/'
+            '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6')
+        self.body['rebuild']['imageRef'] = image_href
+        self.assertRaises(exception.ValidationError,
+                          self.controller._action_rebuild,
+                          self.req, FAKE_UUID,
+                          body=self.body)
+
+    def test_rebuild_server_with_image_as_empty_string(self):
+        self.body['rebuild']['imageRef'] = ''
+        self.assertRaises(exception.ValidationError,
+                          self.controller._action_rebuild,
+                          self.req, FAKE_UUID,
+                          body=self.body)
 
     def test_rebuild_instance_name_with_spaces_in_the_middle(self):
         self.body['rebuild']['name'] = 'abc   def'
@@ -1787,7 +1818,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
     def test_rebuild_bad_personality(self):
         body = {
             "rebuild": {
-                "imageRef": self.image_href,
+                "imageRef": self.image_uuid,
                 "personality": [{
                     "path": "/path/to/file",
                     "contents": "INVALID b64",
@@ -1802,7 +1833,7 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
     def test_rebuild_personality(self):
         body = {
             "rebuild": {
-                "imageRef": self.image_href,
+                "imageRef": self.image_uuid,
                 "personality": [{
                     "path": "/path/to/file",
                     "contents": base64.b64encode("Test String"),
@@ -1823,18 +1854,6 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
         req = fakes.HTTPRequestV21.blank('/fake/servers/%s/action' % FAKE_UUID)
         body = dict(start="")
         self.controller._start_server(req, FAKE_UUID, body)
-
-    def test_start_policy_failed(self):
-        rules = {
-            "os_compute_api:servers:start": "project_id:non_fake"
-        }
-        policy.set_rules(oslo_policy.Rules.from_dict(rules))
-        req = fakes.HTTPRequestV21.blank('/fake/servers/%s/action' % FAKE_UUID)
-        body = dict(start="")
-        exc = self.assertRaises(exception.PolicyNotAuthorized,
-                                self.controller._start_server,
-                                req, FAKE_UUID, body)
-        self.assertIn("os_compute_api:servers:start", exc.format_message())
 
     def test_start_not_ready(self):
         self.stubs.Set(compute_api.API, 'start', fake_start_stop_not_ready)
@@ -1866,18 +1885,6 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
         req = fakes.HTTPRequestV21.blank('/fake/servers/%s/action' % FAKE_UUID)
         body = dict(stop="")
         self.controller._stop_server(req, FAKE_UUID, body)
-
-    def test_stop_policy_failed(self):
-        rules = {
-            "os_compute_api:servers:stop": "project_id:non_fake"
-        }
-        policy.set_rules(oslo_policy.Rules.from_dict(rules))
-        req = fakes.HTTPRequestV21.blank('/fake/servers/%s/action' % FAKE_UUID)
-        body = dict(stop='')
-        exc = self.assertRaises(exception.PolicyNotAuthorized,
-                                self.controller._stop_server,
-                                req, FAKE_UUID, body)
-        self.assertIn("os_compute_api:servers:stop", exc.format_message())
 
     def test_stop_not_ready(self):
         self.stubs.Set(compute_api.API, 'stop', fake_start_stop_not_ready)
@@ -1927,7 +1934,9 @@ class ServersControllerRebuildTestV219(ServersControllerRebuildInstanceTest):
 
     def _rebuild_server(self, set_desc, desc):
         fake_get = fakes.fake_compute_get(vm_state=vm_states.ACTIVE,
-                                          display_description=desc)
+                                          display_description=desc,
+                                          project_id=self.req_project_id,
+                                          user_id=self.req_user_id)
         self.stubs.Set(compute_api.API, 'get',
                        lambda api, *a, **k: fake_get(*a, **k))
 
@@ -1969,22 +1978,23 @@ class ServersControllerRebuildTestV219(ServersControllerRebuildInstanceTest):
 
 class ServersControllerUpdateTest(ControllerTest):
 
-    def _get_request(self, body=None, options=None):
-        if options:
-            fake_get = fakes.fake_compute_get(**options)
-            self.stubs.Set(compute_api.API, 'get',
-                           lambda api, *a, **k: fake_get(*a, **k))
+    def _get_request(self, body=None):
         req = fakes.HTTPRequestV21.blank('/fake/servers/%s' % FAKE_UUID)
         req.method = 'PUT'
         req.content_type = 'application/json'
         req.body = jsonutils.dump_as_bytes(body)
+        fake_get = fakes.fake_compute_get(
+            project_id=req.environ['nova.context'].project_id,
+            user_id=req.environ['nova.context'].user_id)
+        self.stub_out('nova.compute.api.API.get',
+                      lambda api, *a, **k: fake_get(*a, **k))
         return req
 
     def test_update_server_all_attributes(self):
         body = {'server': {
                   'name': 'server_test',
                }}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         res_dict = self.controller.update(req, FAKE_UUID, body=body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -1992,7 +2002,7 @@ class ServersControllerUpdateTest(ControllerTest):
 
     def test_update_server_name(self):
         body = {'server': {'name': 'server_test'}}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         res_dict = self.controller.update(req, FAKE_UUID, body=body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -2000,7 +2010,7 @@ class ServersControllerUpdateTest(ControllerTest):
 
     def test_update_server_name_too_long(self):
         body = {'server': {'name': 'x' * 256}}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         self.assertRaises(exception.ValidationError, self.controller.update,
                           req, FAKE_UUID, body=body)
 
@@ -2016,13 +2026,8 @@ class ServersControllerUpdateTest(ControllerTest):
                           req, FAKE_UUID, body=body)
 
     def test_update_server_name_with_spaces_in_the_middle(self):
-        self.stub_out('nova.db.instance_get',
-                fakes.fake_instance_get(name='server_test'))
-        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
-        req.method = 'PUT'
-        req.content_type = 'application/json'
         body = {'server': {'name': 'abc   def'}}
-        req.body = jsonutils.dump_as_bytes(body)
+        req = self._get_request(body)
         self.controller.update(req, FAKE_UUID, body=body)
 
     def test_update_server_name_with_leading_trailing_spaces(self):
@@ -2037,13 +2042,8 @@ class ServersControllerUpdateTest(ControllerTest):
                           self.controller.update, req, FAKE_UUID, body=body)
 
     def test_update_server_name_with_leading_trailing_spaces_compat_mode(self):
-        self.stub_out('nova.db.instance_get',
-                fakes.fake_instance_get(name='server_test'))
-        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
-        req.method = 'PUT'
-        req.content_type = 'application/json'
         body = {'server': {'name': '  abc   def  '}}
-        req.body = jsonutils.dump_as_bytes(body)
+        req = self._get_request(body)
         req.set_legacy_v2()
         self.controller.update(req, FAKE_UUID, body=body)
 
@@ -2075,7 +2075,10 @@ class ServersControllerUpdateTest(ControllerTest):
 
         self.stubs.Set(compute_api.API, 'get', fake_get)
         body = {'server': {'name': 'server_test'}}
-        req = self._get_request(body)
+        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = "application/json"
+        req.body = jsonutils.dump_as_bytes(body)
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
                           req, FAKE_UUID, body=body)
 
@@ -2093,7 +2096,7 @@ class ServersControllerUpdateTest(ControllerTest):
         rule = {'compute:update': 'role:admin'}
         policy.set_rules(oslo_policy.Rules.from_dict(rule))
         body = {'server': {'name': 'server_test'}}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         self.assertRaises(exception.PolicyNotAuthorized,
                 self.controller.update, req, FAKE_UUID, body=body)
 
@@ -2185,10 +2188,9 @@ class ServersControllerTriggerCrashDumpTest(ControllerTest):
 
 
 class ServersControllerUpdateTestV219(ServersControllerUpdateTest):
-    def _get_request(self, body=None, options=None):
+    def _get_request(self, body=None):
         req = super(ServersControllerUpdateTestV219, self)._get_request(
-            body=body,
-            options=options)
+            body=body)
         req.api_version_request = api_version_request.APIVersionRequest('2.19')
         return req
 
@@ -2225,7 +2227,7 @@ class ServersControllerUpdateTestV219(ServersControllerUpdateTest):
                   'name': 'server_test',
                   'description': 'server_desc'
                }}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         res_dict = self.controller.update(req, FAKE_UUID, body=body)
 
         self.assertEqual(res_dict['server']['id'], FAKE_UUID)
@@ -2234,14 +2236,14 @@ class ServersControllerUpdateTestV219(ServersControllerUpdateTest):
 
     def test_update_server_description_too_long(self):
         body = {'server': {'description': 'x' * 256}}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         self.assertRaises(exception.ValidationError, self.controller.update,
                           req, FAKE_UUID, body=body)
 
     def test_update_server_description_invalid(self):
         # Invalid non-printable control char in the desc.
         body = {'server': {'description': "123\0d456"}}
-        req = self._get_request(body, {'name': 'server_test'})
+        req = self._get_request(body)
         self.assertRaises(exception.ValidationError, self.controller.update,
                           req, FAKE_UUID, body=body)
 
@@ -2497,10 +2499,9 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest, self._test_create_instance,
                           flavor=1324)
 
-    def test_create_server_bad_image_href(self):
-        image_href = 1
+    def test_create_server_bad_image_uuid(self):
         self.body['server']['min_count'] = 1
-        self.body['server']['imageRef'] = image_href,
+        self.body['server']['imageRef'] = 1,
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
                           self.controller.create,
@@ -2565,23 +2566,24 @@ class ServersControllerCreateTest(test.TestCase):
                 "Flavor's disk is too small for requested image."):
             self.controller.create(self.req, body=self.body)
 
-    def test_create_instance_image_ref_is_bookmark(self):
-        image_href = 'http://localhost/fake/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
-        self.req.body = jsonutils.dump_as_bytes(self.body)
-        res = self.controller.create(self.req, body=self.body).obj
+    def test_create_instance_with_image_non_uuid(self):
+        self.body['server']['imageRef'] = 'not-uuid'
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create,
+                          self.req, body=self.body)
 
-        server = res['server']
-        self.assertEqual(FAKE_UUID, server['id'])
-
-    def test_create_instance_image_ref_is_invalid(self):
-        image_uuid = 'this_is_not_a_valid_uuid'
-        image_href = 'http://localhost/fake/images/%s' % image_uuid
-        flavor_ref = 'http://localhost/fake/flavors/3'
+    def test_create_instance_with_image_as_full_url(self):
+        image_href = ('http://localhost/v2/fake/images/'
+            '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6')
         self.body['server']['imageRef'] = image_href
-        self.body['server']['flavorRef'] = flavor_ref
-        self.req.body = jsonutils.dump_as_bytes(self.body)
-        self.assertRaises(webob.exc.HTTPBadRequest, self.controller.create,
+        self.assertRaises(exception.ValidationError,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    def test_create_instance_with_image_as_empty_string(self):
+        self.body['server']['imageRef'] = ''
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
                           self.req, body=self.body)
 
     def test_create_instance_no_key_pair(self):
@@ -2742,10 +2744,7 @@ class ServersControllerCreateTest(test.TestCase):
         # test with admin passwords disabled See lp bug 921814
         self.flags(enable_instance_password=False)
 
-        # proper local hrefs must start with 'http://localhost/v2/'
         self.flags(enable_instance_password=False)
-        image_href = 'http://localhost/v2/fake/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, body=self.body).obj
 
@@ -2754,50 +2753,36 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_name_too_long(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
         self.body['server']['name'] = 'X' * 256
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError, self.controller.create,
                           self.req, body=self.body)
 
     def test_create_instance_name_with_spaces_in_the_middle(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
         self.body['server']['name'] = 'abc    def'
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.controller.create(self.req, body=self.body)
 
     def test_create_instance_name_with_leading_trailing_spaces(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
         self.body['server']['name'] = '   abc    def   '
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
                           self.controller.create, self.req, body=self.body)
 
     def test_create_instance_name_with_leading_trailing_spaces_in_compat_mode(
             self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
         self.body['server']['name'] = '   abc    def   '
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.req.set_legacy_v2()
         self.controller.create(self.req, body=self.body)
 
     def test_create_instance_name_all_blank_spaces(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        image_href = 'http://localhost/v2/images/%s' % image_uuid
         flavor_ref = 'http://localhost/fake/flavors/3'
         body = {
             'server': {
                 'name': ' ' * 64,
-                'imageRef': image_href,
+                'imageRef': image_uuid,
                 'flavorRef': flavor_ref,
                 'metadata': {
                     'hello': 'world',
@@ -2814,9 +2799,6 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, req, body=body)
 
     def test_create_az_with_leading_trailing_spaces(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['availability_zone'] = '  zone1  '
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
@@ -2824,10 +2806,7 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_az_with_leading_trailing_spaces_in_compat_mode(
             self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
         self.body['server']['name'] = '   abc    def   '
-        self.body['server']['imageRef'] = image_href
         self.body['server']['availability_zones'] = '  zone1  '
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.req.set_legacy_v2()
@@ -2836,9 +2815,6 @@ class ServersControllerCreateTest(test.TestCase):
             self.controller.create(self.req, body=self.body)
 
     def test_create_instance(self):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, body=self.body).obj
 
@@ -2853,14 +2829,12 @@ class ServersControllerCreateTest(test.TestCase):
 
         self.stubs.Set(keypairs.Keypairs, 'server_create',
                        fake_keypair_server_create)
-        # proper local hrefs must start with 'http://localhost/v2/'
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
-        image_href = 'http://localhost/v2/images/%s' % image_uuid
         flavor_ref = 'http://localhost/123/flavors/3'
         body = {
             'server': {
                 'name': 'server_test',
-                'imageRef': image_href,
+                'imageRef': image_uuid,
                 'flavorRef': flavor_ref,
                 'metadata': {
                     'hello': 'world',
@@ -2878,9 +2852,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_pass_disabled(self):
         self.flags(enable_instance_password=False)
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, body=self.body).obj
 
@@ -2897,8 +2868,6 @@ class ServersControllerCreateTest(test.TestCase):
                                                    'cpuset': None,
                                                    'memsize': 0,
                                                    'memtotal': 0})
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, self.req, body=self.body)
@@ -2915,8 +2884,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_too_much_metadata(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata']['vote'] = 'fiddletown'
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(webob.exc.HTTPForbidden,
@@ -2924,8 +2891,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_metadata_key_too_long(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata'] = {('a' * 260): '12345'}
 
         self.req.body = jsonutils.dump_as_bytes(self.body)
@@ -2934,8 +2899,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_metadata_value_too_long(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata'] = {'key1': ('a' * 260)}
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
@@ -2943,8 +2906,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_metadata_key_blank(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata'] = {'': 'abcd'}
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
@@ -2952,8 +2913,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_metadata_not_dict(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata'] = 'string'
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
@@ -2961,8 +2920,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_metadata_key_not_string(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata'] = {1: 'test'}
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
@@ -2970,8 +2927,6 @@ class ServersControllerCreateTest(test.TestCase):
 
     def test_create_instance_metadata_value_not_string(self):
         self.flags(quota_metadata_items=1)
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         self.body['server']['metadata'] = {'test': ['a', 'list']}
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(exception.ValidationError,
@@ -2983,8 +2938,6 @@ class ServersControllerCreateTest(test.TestCase):
                           self._test_create_extra, params)
 
     def test_create_instance_invalid_key_name(self):
-        image_href = 'http://localhost/v2/images/2'
-        self.body['server']['imageRef'] = image_href
         self.body['server']['key_name'] = 'nonexistentkey'
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -2999,18 +2952,14 @@ class ServersControllerCreateTest(test.TestCase):
         self._check_admin_password_len(res["server"])
 
     def test_create_instance_invalid_flavor_href(self):
-        image_href = 'http://localhost/v2/images/2'
         flavor_ref = 'http://localhost/v2/flavors/asdf'
-        self.body['server']['imageRef'] = image_href
         self.body['server']['flavorRef'] = flavor_ref
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, self.req, body=self.body)
 
     def test_create_instance_invalid_flavor_id_int(self):
-        image_href = 'http://localhost/v2/images/2'
         flavor_ref = -1
-        self.body['server']['imageRef'] = image_href
         self.body['server']['flavorRef'] = flavor_ref
         self.req.body = jsonutils.dump_as_bytes(self.body)
         self.assertRaises(webob.exc.HTTPBadRequest,
@@ -3024,19 +2973,9 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, self.req, body=self.body)
 
     def test_create_instance_bad_flavor_href(self):
-        image_href = 'http://localhost/v2/images/2'
         flavor_ref = 'http://localhost/v2/flavors/17'
-        self.body['server']['imageRef'] = image_href
         self.body['server']['flavorRef'] = flavor_ref
         self.req.body = jsonutils.dump_as_bytes(self.body)
-        self.assertRaises(webob.exc.HTTPBadRequest,
-                          self.controller.create, self.req, body=self.body)
-
-    def test_create_instance_bad_href(self):
-        image_href = 'asdf'
-        self.body['server']['imageRef'] = image_href
-        self.req.body = jsonutils.dump_as_bytes(self.body)
-
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, self.req, body=self.body)
 
@@ -3400,9 +3339,6 @@ class ServersControllerCreateTest(test.TestCase):
 
 class ServersControllerCreateTestV219(ServersControllerCreateTest):
     def _create_instance_req(self, set_desc, desc=None):
-        # proper local hrefs must start with 'http://localhost/v2/'
-        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
-        self.body['server']['imageRef'] = image_href
         if set_desc:
             self.body['server']['description'] = desc
         self.req.body = jsonutils.dump_as_bytes(self.body)
@@ -3529,6 +3465,124 @@ class ServersControllerCreateTestV232(test.NoDBTestCase):
         ):
             self.body['server']['block_device_mapping_v2'][0]['tag'] = 'foo'
             self._create_server()
+
+
+class ServersControllerCreateTestV237(test.NoDBTestCase):
+    """Tests server create scenarios with the v2.37 microversion.
+
+    These tests are mostly about testing the validation on the 2.37
+    server create request with emphasis on negative scenarios.
+    """
+    def setUp(self):
+        super(ServersControllerCreateTestV237, self).setUp()
+        # Set the use_neutron flag to process requested networks.
+        self.flags(use_neutron=True)
+        # Create the server controller.
+        ext_info = extension_info.LoadedExtensionInfo()
+        self.controller = servers.ServersController(extension_info=ext_info)
+        # Define a basic server create request body which tests can customize.
+        self.body = {
+            'server': {
+                'name': 'auto-allocate-test',
+                'imageRef': '6b0edabb-8cde-4684-a3f4-978960a51378',
+                'flavorRef': '2',
+            },
+        }
+        # Create a fake request using the 2.37 microversion.
+        self.req = fakes.HTTPRequestV21.blank('/fake/servers', version='2.37')
+        self.req.method = 'POST'
+        self.req.headers['content-type'] = 'application/json'
+
+    def _create_server(self, networks):
+        self.body['server']['networks'] = networks
+        self.req.body = jsonutils.dump_as_bytes(self.body)
+        return self.controller.create(self.req, body=self.body).obj['server']
+
+    def test_create_server_auth_pre_2_37_fails(self):
+        """Negative test to make sure you can't pass 'auto' before 2.37"""
+        self.req.api_version_request = \
+            api_version_request.APIVersionRequest('2.36')
+        self.assertRaises(exception.ValidationError, self._create_server,
+                          'auto')
+
+    def test_create_server_no_requested_networks_fails(self):
+        """Negative test for a server create request with no networks requested
+        which should fail with the v2.37 schema validation.
+        """
+        self.assertRaises(exception.ValidationError, self._create_server, None)
+
+    def test_create_server_network_id_not_uuid_fails(self):
+        """Negative test for a server create request where the requested
+        network id is not one of the auto/none enums.
+        """
+        self.assertRaises(exception.ValidationError, self._create_server,
+                          'not-auto-or-none')
+
+    def test_create_server_network_id_empty_string_fails(self):
+        """Negative test for a server create request where the requested
+        network id is the empty string.
+        """
+        self.assertRaises(exception.ValidationError, self._create_server, '')
+
+    @mock.patch.object(objects.Flavor, 'get_by_flavor_id',
+                       side_effect=exception.FlavorNotFound(flavor_id='2'))
+    def test_create_server_auto_flavornotfound(self,
+                                                                 get_flavor):
+        """Tests that requesting auto networking is OK. This test
+        short-circuits on a FlavorNotFound error.
+        """
+        ex = self.assertRaises(
+            webob.exc.HTTPBadRequest, self._create_server, 'auto')
+        # make sure it was a flavor not found error and not something else
+        self.assertIn('Flavor 2 could not be found', six.text_type(ex))
+
+    @mock.patch.object(objects.Flavor, 'get_by_flavor_id',
+                       side_effect=exception.FlavorNotFound(flavor_id='2'))
+    def test_create_server_none_flavornotfound(self,
+                                                                 get_flavor):
+        """Tests that requesting none for networking is OK. This test
+        short-circuits on a FlavorNotFound error.
+        """
+        ex = self.assertRaises(
+            webob.exc.HTTPBadRequest, self._create_server, 'none')
+        # make sure it was a flavor not found error and not something else
+        self.assertIn('Flavor 2 could not be found', six.text_type(ex))
+
+    @mock.patch.object(objects.Flavor, 'get_by_flavor_id',
+                       side_effect=exception.FlavorNotFound(flavor_id='2'))
+    def test_create_server_multiple_specific_nics_flavornotfound(self,
+                                                                 get_flavor):
+        """Tests that requesting multiple specific network IDs is OK. This test
+        short-circuits on a FlavorNotFound error.
+        """
+        ex = self.assertRaises(
+            webob.exc.HTTPBadRequest, self._create_server,
+                [{'uuid': 'e3b686a8-b91d-4a61-a3fc-1b74bb619ddb'},
+                 {'uuid': 'e0f00941-f85f-46ec-9315-96ded58c2f14'}])
+        # make sure it was a flavor not found error and not something else
+        self.assertIn('Flavor 2 could not be found', six.text_type(ex))
+
+    def test_create_server_legacy_neutron_network_id_fails(self):
+        """Tests that we no longer support the legacy br-<uuid> format for
+           a network id.
+        """
+        uuid = 'br-00000000-0000-0000-0000-000000000000'
+        self.assertRaises(exception.ValidationError, self._create_server,
+                          [{'uuid': uuid}])
+
+    @mock.patch.object(objects.Service, 'get_minimum_version',
+                       return_value=11)
+    def test_validate_auto_or_none_network_request_old_computes(self,
+                                                                mock_get_ver):
+        """Tests that the network request is nulled out when the minimum
+           nova-compute is not running new enough code to support 'auto'.
+        """
+        req_nets = objects.NetworkRequestList(
+            objects=[objects.NetworkRequest(network_id='auto')])
+        self.assertIsNone(
+            self.controller._validate_auto_or_none_network_request(
+                req_nets))
+        mock_get_ver.assert_called_once_with(mock.ANY, 'nova-compute')
 
 
 class ServersControllerCreateTestWithMock(test.TestCase):
@@ -4220,7 +4274,7 @@ class FakeExt(extensions.V21APIExtensionBase):
         pass
 
     def fake_schema_extension_point(self, version):
-        if version in ('2.1', '2.19', '2.32'):
+        if version in ('2.1', '2.19', '2.32', '2.37'):
             return self.fake_schema
         elif version == '2.0':
             return {}
@@ -4295,24 +4349,73 @@ class ServersPolicyEnforcementV21(test.NoDBTestCase):
             self.req, FAKE_UUID, body={})
 
     @mock.patch.object(servers.ServersController, '_get_instance')
-    def test_stop_policy_failed(self, _get_instance_mock):
-        _get_instance_mock.return_value = None
-        rule_name = "os_compute_api:servers:stop"
-        rule = {rule_name: "project:non_fake"}
-        self._common_policy_check(
-            rule, rule_name, self.controller._stop_server,
-            self.req, FAKE_UUID, body={})
-
-    @mock.patch.object(servers.ServersController, '_get_instance')
-    def test_trigger_crash_dump_policy_failed(self, _get_instance_mock):
-        _get_instance_mock.return_value = None
+    def test_trigger_crash_dump_policy_failed_with_other_project(
+        self, _get_instance_mock):
+        _get_instance_mock.return_value = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'])
         rule_name = "os_compute_api:servers:trigger_crash_dump"
-        rule = {rule_name: "project:non_fake"}
+        rule = {rule_name: "project_id:%(project_id)s"}
         self.req.api_version_request =\
             api_version_request.APIVersionRequest('2.17')
+        # Change the project_id in request context.
+        self.req.environ['nova.context'].project_id = 'other-project'
         self._common_policy_check(
             rule, rule_name, self.controller._action_trigger_crash_dump,
             self.req, FAKE_UUID, body={'trigger_crash_dump': None})
+
+    @mock.patch('nova.compute.api.API.trigger_crash_dump')
+    @mock.patch.object(servers.ServersController, '_get_instance')
+    def test_trigger_crash_dump_overridden_policy_pass_with_same_project(
+        self, _get_instance_mock, trigger_crash_dump_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            project_id=self.req.environ['nova.context'].project_id)
+        _get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:trigger_crash_dump"
+        self.policy.set_rules({rule_name: "project_id:%(project_id)s"})
+        self.req.api_version_request = (
+            api_version_request.APIVersionRequest('2.17'))
+        self.controller._action_trigger_crash_dump(
+            self.req, fakes.FAKE_UUID, body={'trigger_crash_dump': None})
+        trigger_crash_dump_mock.assert_called_once_with(
+            self.req.environ['nova.context'], instance)
+
+    @mock.patch.object(servers.ServersController, '_get_instance')
+    def test_trigger_crash_dump_overridden_policy_failed_with_other_user(
+        self, _get_instance_mock):
+        _get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+        rule_name = "os_compute_api:servers:trigger_crash_dump"
+        self.policy.set_rules({rule_name: "user_id:%(user_id)s"})
+        # Change the user_id in request context.
+        self.req.environ['nova.context'].user_id = 'other-user'
+        self.req.api_version_request = (
+            api_version_request.APIVersionRequest('2.17'))
+        exc = self.assertRaises(exception.PolicyNotAuthorized,
+                                self.controller._action_trigger_crash_dump,
+                                self.req,
+                                fakes.FAKE_UUID,
+                                body={'trigger_crash_dump': None})
+        self.assertEqual(
+                      "Policy doesn't allow %s to be performed." % rule_name,
+                      exc.format_message())
+
+    @mock.patch('nova.compute.api.API.trigger_crash_dump')
+    @mock.patch.object(servers.ServersController, '_get_instance')
+    def test_trigger_crash_dump_overridden_policy_pass_with_same_user(
+        self, _get_instance_mock, trigger_crash_dump_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            user_id=self.req.environ['nova.context'].user_id)
+        _get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:trigger_crash_dump"
+        self.policy.set_rules({rule_name: "user_id:%(user_id)s"})
+        self.req.api_version_request = (
+            api_version_request.APIVersionRequest('2.17'))
+        self.controller._action_trigger_crash_dump(
+            self.req, fakes.FAKE_UUID, body={'trigger_crash_dump': None})
+        trigger_crash_dump_mock.assert_called_once_with(
+            self.req.environ['nova.context'], instance)
 
     def test_index_policy_failed(self):
         rule_name = "os_compute_api:servers:index"
@@ -4350,19 +4453,117 @@ class ServersPolicyEnforcementV21(test.NoDBTestCase):
         self._common_policy_check(
             rule, rule_name, self.controller.show, self.req, FAKE_UUID)
 
-    def test_delete_policy_failed(self):
+    @mock.patch.object(common, 'get_instance')
+    def test_delete_policy_failed_with_other_project(self, get_instance_mock):
+        get_instance_mock.return_value = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'])
         rule_name = "os_compute_api:servers:delete"
-        rule = {rule_name: "project:non_fake"}
+        rule = {rule_name: "project_id:%(project_id)s"}
+        # Change the project_id in request context.
+        self.req.environ['nova.context'].project_id = 'other-project'
         self._common_policy_check(
             rule, rule_name, self.controller.delete, self.req, FAKE_UUID)
 
-    def test_update_policy_failed(self):
+    @mock.patch('nova.compute.api.API.soft_delete')
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_delete_overridden_policy_pass_with_same_project(self,
+                                                             get_instance_mock,
+                                                             soft_delete_mock):
+        self.flags(reclaim_instance_interval=3600)
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            project_id=self.req.environ['nova.context'].project_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:delete"
+        self.policy.set_rules({rule_name: "project_id:%(project_id)s"})
+        self.controller.delete(self.req, fakes.FAKE_UUID)
+        soft_delete_mock.assert_called_once_with(
+            self.req.environ['nova.context'], instance)
+
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_delete_overridden_policy_failed_with_other_user_in_same_project(
+        self, get_instance_mock):
+        get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+        rule_name = "os_compute_api:servers:delete"
+        rule = {rule_name: "user_id:%(user_id)s"}
+        # Change the user_id in request context.
+        self.req.environ['nova.context'].user_id = 'other-user'
+        self._common_policy_check(
+            rule, rule_name, self.controller.delete, self.req, FAKE_UUID)
+
+    @mock.patch('nova.compute.api.API.soft_delete')
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_delete_overridden_policy_pass_with_same_user(self,
+                                                        get_instance_mock,
+                                                        soft_delete_mock):
+        self.flags(reclaim_instance_interval=3600)
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            user_id=self.req.environ['nova.context'].user_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:delete"
+        self.policy.set_rules({rule_name: "user_id:%(user_id)s"})
+        self.controller.delete(self.req, fakes.FAKE_UUID)
+        soft_delete_mock.assert_called_once_with(
+            self.req.environ['nova.context'], instance)
+
+    @mock.patch.object(common, 'get_instance')
+    def test_update_policy_failed_with_other_project(self, get_instance_mock):
+        get_instance_mock.return_value = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'])
         rule_name = "os_compute_api:servers:update"
-        rule = {rule_name: "project:non_fake"}
+        rule = {rule_name: "project_id:%(project_id)s"}
+        body = {'server': {'name': 'server_test'}}
+        # Change the project_id in request context.
+        self.req.environ['nova.context'].project_id = 'other-project'
+        self._common_policy_check(
+            rule, rule_name, self.controller.update, self.req,
+            FAKE_UUID, body=body)
+
+    @mock.patch('nova.api.openstack.compute.views.servers.ViewBuilder.show')
+    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch.object(common, 'get_instance')
+    def test_update_overridden_policy_pass_with_same_project(
+        self, get_instance_mock, save_mock, view_show_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            project_id=self.req.environ['nova.context'].project_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:update"
+        self.policy.set_rules({rule_name: "project_id:%(project_id)s"})
+        body = {'server': {'name': 'server_test'}}
+        self.controller.update(self.req, fakes.FAKE_UUID, body=body)
+
+    @mock.patch.object(common, 'get_instance')
+    def test_update_overridden_policy_failed_with_other_user_in_same_project(
+        self, get_instance_mock):
+        get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+        rule_name = "os_compute_api:servers:update"
+        rule = {rule_name: "user_id:%(user_id)s"}
+        # Change the user_id in request context.
+        self.req.environ['nova.context'].user_id = 'other-user'
         body = {'server': {'name': 'server_test'}}
         self._common_policy_check(
             rule, rule_name, self.controller.update, self.req,
             FAKE_UUID, body=body)
+
+    @mock.patch('nova.api.openstack.compute.views.servers.ViewBuilder.show')
+    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch.object(common, 'get_instance')
+    def test_update_overridden_policy_pass_with_same_user(self,
+                                                          get_instance_mock,
+                                                          save_mock,
+                                                          view_show_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            user_id=self.req.environ['nova.context'].user_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:update"
+        self.policy.set_rules({rule_name: "user_id:%(user_id)s"})
+        body = {'server': {'name': 'server_test'}}
+        self.controller.update(self.req, fakes.FAKE_UUID, body=body)
 
     def test_confirm_resize_policy_failed(self):
         rule_name = "os_compute_api:servers:confirm_resize"
@@ -4388,13 +4589,110 @@ class ServersPolicyEnforcementV21(test.NoDBTestCase):
             rule, rule_name, self.controller._action_reboot,
             self.req, FAKE_UUID, body=body)
 
-    def test_resize_policy_failed(self):
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_resize_policy_failed_with_other_project(self, get_instance_mock):
+        get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
         rule_name = "os_compute_api:servers:resize"
-        rule = {rule_name: "project:non_fake"}
-        flavor_id = 1
+        rule = {rule_name: "project_id:%(project_id)s"}
+        body = {'resize': {'flavorRef': '1'}}
+        # Change the project_id in request context.
+        self.req.environ['nova.context'].project_id = 'other-project'
         self._common_policy_check(
-            rule, rule_name, self.controller._resize, self.req,
-            FAKE_UUID, flavor_id)
+            rule, rule_name, self.controller._action_resize, self.req,
+            FAKE_UUID, body=body)
+
+    @mock.patch('nova.compute.api.API.resize')
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_resize_overridden_policy_pass_with_same_project(self,
+                                                             get_instance_mock,
+                                                             resize_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            project_id=self.req.environ['nova.context'].project_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:resize"
+        self.policy.set_rules({rule_name: "project_id:%(project_id)s"})
+        body = {'resize': {'flavorRef': '1'}}
+        self.controller._action_resize(self.req, fakes.FAKE_UUID, body=body)
+        resize_mock.assert_called_once_with(self.req.environ['nova.context'],
+                                            instance, '1')
+
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_resize_overridden_policy_failed_with_other_user_in_same_project(
+        self, get_instance_mock):
+        get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+        rule_name = "os_compute_api:servers:resize"
+        rule = {rule_name: "user_id:%(user_id)s"}
+        # Change the user_id in request context.
+        self.req.environ['nova.context'].user_id = 'other-user'
+        body = {'resize': {'flavorRef': '1'}}
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_resize, self.req,
+            FAKE_UUID, body=body)
+
+    @mock.patch('nova.compute.api.API.resize')
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_resize_overridden_policy_pass_with_same_user(self,
+                                                        get_instance_mock,
+                                                        resize_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            user_id=self.req.environ['nova.context'].user_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:resize"
+        self.policy.set_rules({rule_name: "user_id:%(user_id)s"})
+        body = {'resize': {'flavorRef': '1'}}
+        self.controller._action_resize(self.req, fakes.FAKE_UUID, body=body)
+        resize_mock.assert_called_once_with(self.req.environ['nova.context'],
+                                            instance, '1')
+
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_rebuild_policy_failed(self, get_instance_mock):
+        get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+        rule_name = "os_compute_api:servers:rebuild"
+        rule = {rule_name: "project:non_fake"}
+        body = {'rebuild': {'imageRef': self.image_uuid}}
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_rebuild,
+            self.req, FAKE_UUID, body=body)
+
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_rebuild_overridden_policy_failed_with_other_user_in_same_project(
+        self, get_instance_mock):
+        get_instance_mock.return_value = (
+            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+        rule_name = "os_compute_api:servers:rebuild"
+        rule = {rule_name: "user_id:%(user_id)s"}
+        body = {'rebuild': {'imageRef': self.image_uuid}}
+        # Change the user_id in request context.
+        self.req.environ['nova.context'].user_id = 'other-user'
+        self._common_policy_check(
+            rule, rule_name, self.controller._action_rebuild,
+            self.req, FAKE_UUID, body=body)
+
+    @mock.patch('nova.api.openstack.compute.views.servers.ViewBuilder.show')
+    @mock.patch('nova.compute.api.API.rebuild')
+    @mock.patch('nova.api.openstack.common.get_instance')
+    def test_rebuild_overridden_policy_pass_with_same_user(self,
+                                                           get_instance_mock,
+                                                           rebuild_mock,
+                                                           view_show_mock):
+        instance = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            user_id=self.req.environ['nova.context'].user_id)
+        get_instance_mock.return_value = instance
+        rule_name = "os_compute_api:servers:rebuild"
+        self.policy.set_rules({rule_name: "user_id:%(user_id)s"})
+        body = {'rebuild': {'imageRef': self.image_uuid,
+                            'adminPass': 'dumpy_password'}}
+        self.controller._action_rebuild(self.req, fakes.FAKE_UUID, body=body)
+        rebuild_mock.assert_called_once_with(self.req.environ['nova.context'],
+                                             instance,
+                                             self.image_uuid,
+                                             'dumpy_password')
 
     def test_create_image_policy_failed(self):
         rule_name = "os_compute_api:servers:create_image"

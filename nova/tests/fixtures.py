@@ -435,16 +435,16 @@ class OSAPIFixture(fixtures.Fixture):
         # host, and dynamically allocate ports
         conf_overrides = {
             'osapi_compute_listen': '127.0.0.1',
-            'metadata_listen': '127.0.0.1',
             'osapi_compute_listen_port': 0,
-            'metadata_listen_port': 0,
             'verbose': True,
-            'debug': True
+            'debug': True,
         }
         self.useFixture(ConfPatcher(**conf_overrides))
+
         self.osapi = service.WSGIService("osapi_compute")
         self.osapi.start()
         self.addCleanup(self.osapi.stop)
+
         self.auth_url = 'http://%(host)s:%(port)s/%(api_version)s' % ({
             'host': self.osapi.host, 'port': self.osapi.port,
             'api_version': self.api_version})
@@ -452,6 +452,43 @@ class OSAPIFixture(fixtures.Fixture):
                                               self.project_id)
         self.admin_api = client.TestOpenStackClient(
             'admin', 'admin', self.auth_url, self.project_id)
+
+
+class OSMetadataServer(fixtures.Fixture):
+    """Create an OS Metadata API server as a fixture.
+
+    This spawns an OS Metadata API server as a fixture in a new
+    greenthread in the current test.
+
+    TODO(sdague): ideally for testing we'd have something like the
+    test client which acts like requests, but connects any of the
+    interactions needed.
+
+    """
+    def setUp(self):
+        super(OSMetadataServer, self).setUp()
+        # in order to run these in tests we need to bind only to local
+        # host, and dynamically allocate ports
+        conf_overrides = {
+            'metadata_listen': '127.0.0.1',
+            'metadata_listen_port': 0,
+            'verbose': True,
+            'debug': True
+        }
+        self.useFixture(ConfPatcher(**conf_overrides))
+
+        # NOTE(mikal): we don't have root to manipulate iptables, so just
+        # zero that bit out.
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.network.linux_net.IptablesManager._apply',
+            lambda _: None))
+
+        self.metadata = service.WSGIService("metadata")
+        self.metadata.start()
+        self.addCleanup(self.metadata.stop)
+        self.md_url = "http://%s:%s/" % (
+            conf_overrides['metadata_listen'],
+            self.metadata.port)
 
 
 class PoisonFunctions(fixtures.Fixture):
@@ -566,34 +603,6 @@ class BannedDBSchemaOperations(fixtures.Fixture):
             self.useFixture(fixtures.MonkeyPatch(
                 'sqlalchemy.%s.alter' % thing,
                 lambda *a, **k: self._explode(thing, 'alter')))
-
-
-class StableObjectJsonFixture(fixtures.Fixture):
-    """Fixture that makes sure we get stable JSON object representations.
-
-    Since objects contain things like set(), which can't be converted to
-    JSON, we have some situations where the representation isn't fully
-    deterministic. This doesn't matter at all at runtime, but does to
-    unit tests that try to assert things at a low level.
-
-    This fixture mocks the obj_to_primitive() call and makes sure to
-    sort the list of changed fields (which came from a set) before
-    returning it to the caller.
-    """
-    def __init__(self):
-        self._original_otp = obj_base.NovaObject.obj_to_primitive
-
-    def setUp(self):
-        super(StableObjectJsonFixture, self).setUp()
-
-        def _doit(obj, *args, **kwargs):
-            result = self._original_otp(obj, *args, **kwargs)
-            if 'nova_object.changes' in result:
-                result['nova_object.changes'].sort()
-            return result
-
-        self.useFixture(fixtures.MonkeyPatch(
-            'nova.objects.base.NovaObject.obj_to_primitive', _doit))
 
 
 class EngineFacadeFixture(fixtures.Fixture):
@@ -752,3 +761,21 @@ class NeutronFixture(fixtures.Fixture):
         self.test.stub_out(
             'nova.network.neutronv2.api.get_client',
             lambda *args, **kwargs: mock_neutron_client)
+
+
+class _NoopConductor(object):
+    def __getattr__(self, key):
+        def _noop_rpc(*args, **kwargs):
+            return None
+        return _noop_rpc
+
+
+class NoopConductorFixture(fixtures.Fixture):
+    """Stub out the conductor API to do nothing"""
+
+    def setUp(self):
+        super(NoopConductorFixture, self).setUp()
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.conductor.ComputeTaskAPI', _NoopConductor))
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.conductor.API', _NoopConductor))

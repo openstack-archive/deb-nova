@@ -20,7 +20,7 @@ import errno
 from oslo_log import log as logging
 from oslo_serialization import jsonutils
 
-from nova.api.metadata import base
+from nova.api.metadata import vendordata
 import nova.conf
 from nova.i18n import _LW
 
@@ -28,7 +28,7 @@ CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 
-class JsonFileVendorData(base.VendorDataDriver):
+class JsonFileVendorData(vendordata.VendorDataDriver):
     def __init__(self, *args, **kwargs):
         super(JsonFileVendorData, self).__init__(*args, **kwargs)
         data = {}
@@ -45,7 +45,7 @@ class JsonFileVendorData(base.VendorDataDriver):
                 else:
                     LOG.warning(_LW("%(logprefix)s unexpected IOError when "
                                     "reading"), {'logprefix': logprefix})
-                raise e
+                raise
             except ValueError:
                 LOG.warning(_LW("%(logprefix)s failed to load json"),
                             {'logprefix': logprefix})

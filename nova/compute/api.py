@@ -50,6 +50,7 @@ from nova.compute import vm_states
 from nova import conductor
 import nova.conf
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
+from nova import context as nova_context
 from nova import crypto
 from nova.db import base
 from nova import exception
@@ -81,7 +82,7 @@ from nova.scheduler import utils as scheduler_utils
 from nova import servicegroup
 from nova import utils
 from nova.virt import hardware
-from nova import volume
+from nova.volume import cinder
 
 LOG = logging.getLogger(__name__)
 
@@ -197,7 +198,7 @@ class API(base.Base):
                  security_group_api=None, **kwargs):
         self.image_api = image_api or image.API()
         self.network_api = network_api or network.API()
-        self.volume_api = volume_api or volume.API()
+        self.volume_api = volume_api or cinder.API()
         self.security_group_api = (security_group_api or
             openstack_driver.get_openstack_security_group_driver())
         self.consoleauth_rpcapi = consoleauth_rpcapi.ConsoleAuthAPI()
@@ -695,10 +696,10 @@ class API(base.Base):
 
         return flavor_defined_bdms
 
-    def _merge_bdms_lists(self, overrideable_mappings, overrider_mappings):
+    def _merge_bdms_lists(self, overridable_mappings, overrider_mappings):
         """Override any block devices from the first list by device name
 
-        :param overridable_mappings: list which items are overriden
+        :param overridable_mappings: list which items are overridden
         :param overrider_mappings: list which items override
 
         :returns: A merged list of bdms
@@ -706,7 +707,7 @@ class API(base.Base):
         device_names = set(bdm['device_name'] for bdm in overrider_mappings
                            if bdm['device_name'])
         return (overrider_mappings +
-                [bdm for bdm in overrideable_mappings
+                [bdm for bdm in overridable_mappings
                  if bdm['device_name'] not in device_names])
 
     def _check_and_transform_bdm(self, context, base_options, instance_type,
@@ -914,6 +915,8 @@ class API(base.Base):
         self.security_group_api.ensure_default(context)
         LOG.debug("Going to run %s instances...", num_instances)
         instances = []
+        instance_mappings = []
+        build_requests = []
         try:
             for i in range(num_instances):
                 # Create a uuid for the instance so we can store the
@@ -942,12 +945,12 @@ class API(base.Base):
                     self._bdm_validate_set_size_and_instance(context,
                         instance, instance_type, block_device_mapping))
 
-                # TODO(alaski): Pass block_device_mapping here when the object
-                # supports it.
                 build_request = objects.BuildRequest(context,
                         instance=instance, instance_uuid=instance.uuid,
-                        project_id=instance.project_id)
+                        project_id=instance.project_id,
+                        block_device_mappings=block_device_mapping)
                 build_request.create()
+                build_requests.append(build_request)
                 # Create an instance_mapping.  The null cell_mapping indicates
                 # that the instance doesn't yet exist in a cell, and lookups
                 # for it need to instead look for the RequestSpec.
@@ -959,6 +962,7 @@ class API(base.Base):
                 inst_mapping.project_id = context.project_id
                 inst_mapping.cell_mapping = None
                 inst_mapping.create()
+                instance_mappings.append(inst_mapping)
                 # TODO(alaski): Cast to conductor here which will call the
                 # scheduler and defer instance creation until the scheduler
                 # has picked a cell/host. Set the instance_mapping to the cell
@@ -1002,6 +1006,16 @@ class API(base.Base):
                         try:
                             instance.destroy()
                         except exception.ObjectActionError:
+                            pass
+                    for instance_mapping in instance_mappings:
+                        try:
+                            instance_mapping.destroy()
+                        except exception.InstanceMappingNotFound:
+                            pass
+                    for build_request in build_requests:
+                        try:
+                            build_request.destroy()
+                        except exception.BuildRequestNotFound:
                             pass
                 finally:
                     quotas.rollback()
@@ -1406,7 +1420,7 @@ class API(base.Base):
 
         self._populate_instance_names(instance, num_instances)
         instance.shutdown_terminate = shutdown_terminate
-        if num_instances > 1:
+        if num_instances > 1 and self.cell_type != 'api':
             instance = self._apply_instance_name_template(context, instance,
                                                           index)
 
@@ -1533,11 +1547,149 @@ class API(base.Base):
                                                auto_disk_config,
                                                image_ref)
 
+    def _lookup_instance(self, context, uuid):
+        '''Helper method for pulling an instance object from a database.
+
+        During the transition to cellsv2 there is some complexity around
+        retrieving an instance from the database which this method hides. If
+        there is an instance mapping then query the cell for the instance, if
+        no mapping exists then query the configured nova database.
+
+        Once we are past the point that all deployments can be assumed to be
+        migrated to cellsv2 this method can go away.
+        '''
+        inst_map = None
+        try:
+            inst_map = objects.InstanceMapping.get_by_instance_uuid(
+                context, uuid)
+        except exception.InstanceMappingNotFound:
+            # TODO(alaski): This exception block can be removed once we're
+            # guaranteed everyone is using cellsv2.
+            pass
+
+        if inst_map is None or inst_map.cell_mapping is None:
+            # If inst_map is None then the deployment has not migrated to
+            # cellsv2 yet.
+            # If inst_map.cell_mapping is None then the instance is not in a
+            # cell yet. Until instance creation moves to the conductor the
+            # instance can be found in the configured database, so attempt
+            # to look it up.
+            try:
+                instance = objects.Instance.get_by_uuid(context, uuid)
+            except exception.InstanceNotFound:
+                # If we get here then the conductor is in charge of writing the
+                # instance to the database and hasn't done that yet. It's up to
+                # the caller of this method to determine what to do with that
+                # information.
+                return
+        else:
+            with nova_context.target_cell(context, inst_map.cell_mapping):
+                try:
+                    instance = objects.Instance.get_by_uuid(context,
+                                                            uuid)
+                except exception.InstanceNotFound:
+                    # Since the cell_mapping exists we know the instance is in
+                    # the cell, however InstanceNotFound means it's already
+                    # deleted.
+                    return
+        return instance
+
+    def _delete_while_booting(self, context, instance):
+        """Handle deletion if the instance has not reached a cell yet
+
+        Deletion before an instance reaches a cell needs to be handled
+        differently. What we're attempting to do is delete the BuildRequest
+        before the api level conductor does.  If we succeed here then the boot
+        request stops before reaching a cell.  If not then the instance will
+        need to be looked up in a cell db and the normal delete path taken.
+        """
+        deleted = self._attempt_delete_of_buildrequest(context, instance)
+
+        # After service version 15 deletion of the BuildRequest will halt the
+        # build process in the conductor. In that case run the rest of this
+        # method and consider the instance deleted. If we have not yet reached
+        # service version 15 then just return False so the rest of the delete
+        # process will proceed usually.
+        service_version = objects.Service.get_minimum_version(
+            context, 'nova-osapi_compute')
+        if service_version < 15:
+            return False
+
+        if deleted:
+            # If we've reached this block the successful deletion of the
+            # buildrequest indicates that the build process should be halted by
+            # the conductor.
+
+            # Since conductor has halted the build process no cleanup of the
+            # instance is necessary, but quotas must still be decremented.
+            project_id, user_id = quotas_obj.ids_from_instance(
+                context, instance)
+            # This is confusing but actually decrements quota.
+            quotas = self._create_reservations(context,
+                                               instance,
+                                               instance.task_state,
+                                               project_id, user_id)
+            try:
+                quotas.commit()
+
+                # NOTE(alaski): Though the conductor halts the build process it
+                # does not currently delete the instance record. This is
+                # because in the near future the instance record will not be
+                # created if the buildrequest has been deleted here. For now we
+                # ensure the instance has been set to deleted at this point.
+                # Yes this directly contradicts the comment earlier in this
+                # method, but this is a temporary measure.
+                # Look up the instance because the current instance object was
+                # stashed on the buildrequest and therefore not complete enough
+                # to run .destroy().
+                instance = self._lookup_instance(context, instance.uuid)
+                if instance is not None:
+                    # If instance is None it has already been deleted.
+                    instance.destroy()
+            except exception.InstanceNotFound:
+                quotas.rollback()
+
+            return True
+        return False
+
+    def _attempt_delete_of_buildrequest(self, context, instance):
+        # If there is a BuildRequest then the instance may not have been
+        # written to a cell db yet. Delete the BuildRequest here, which
+        # will indicate that the Instance build should not proceed.
+        try:
+            build_req = objects.BuildRequest.get_by_instance_uuid(
+                context, instance.uuid)
+            build_req.destroy()
+        except exception.BuildRequestNotFound:
+            # This means that conductor has deleted the BuildRequest so the
+            # instance is now in a cell and the delete needs to proceed
+            # normally.
+            return False
+        return True
+
     def _delete(self, context, instance, delete_type, cb, **instance_attrs):
         if instance.disable_terminate:
             LOG.info(_LI('instance termination disabled'),
                      instance=instance)
             return
+
+        # If there is an instance.host the instance has been scheduled and
+        # sent to a cell/compute which means it was pulled from the cell db.
+        # Normal delete should be attempted.
+        if not instance.host:
+            if self._delete_while_booting(context, instance):
+                return
+            # If instance.host was not set it's possible that the Instance
+            # object here was pulled from a BuildRequest object and is not
+            # fully populated. Notably it will be missing an 'id' field which
+            # will prevent instance.destroy from functioning properly. A lookup
+            # is attempted which will either return a full Instance or None if
+            # not found. If not found then it's acceptable to skip the rest of
+            # the delete processing.
+            instance = self._lookup_instance(context, instance.uuid)
+            if not instance:
+                # Instance is already deleted.
+                return
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
@@ -1601,6 +1753,10 @@ class API(base.Base):
                             "%s.end" % delete_type,
                             system_metadata=instance.system_metadata)
                     quotas.commit()
+                    LOG.info(_LI('Instance deleted and does not have host '
+                                 'field, its vm_state is %(state)s.'),
+                                 {'state': instance.vm_state},
+                                 instance=instance)
                     return
                 except exception.ObjectActionError:
                     instance.refresh()
@@ -1717,8 +1873,8 @@ class API(base.Base):
             vram_mb = old_flavor.extra_specs.get('hw_video:ram_max_mb', 0)
             instance_memory_mb = old_flavor.memory_mb + vram_mb
         else:
-            instance_vcpus = instance.vcpus
-            instance_memory_mb = instance.memory_mb
+            instance_vcpus = instance.flavor.vcpus
+            instance_memory_mb = instance.flavor.memory_mb
 
         quotas = objects.Quotas(context=context)
         quotas.reserve(project_id=project_id,
@@ -1728,31 +1884,60 @@ class API(base.Base):
                        ram=-instance_memory_mb)
         return quotas
 
+    def _get_stashed_volume_connector(self, bdm, instance):
+        """Lookup a connector dict from the bdm.connection_info if set
+
+        Gets the stashed connector dict out of the bdm.connection_info if set
+        and the connector host matches the instance host.
+
+        :param bdm: nova.objects.block_device.BlockDeviceMapping
+        :param instance: nova.objects.instance.Instance
+        :returns: volume connector dict or None
+        """
+        if 'connection_info' in bdm and bdm.connection_info is not None:
+            # NOTE(mriedem): We didn't start stashing the connector in the
+            # bdm.connection_info until Mitaka so it might not be there on old
+            # attachments. Also, if the volume was attached when the instance
+            # was in shelved_offloaded state and it hasn't been unshelved yet
+            # we don't have the attachment/connection information either.
+            connector = jsonutils.loads(bdm.connection_info).get('connector')
+            if connector:
+                if connector.get('host') == instance.host:
+                    return connector
+                LOG.debug('Found stashed volume connector for instance but '
+                          'connector host %(connector_host)s does not match '
+                          'the instance host %(instance_host)s.',
+                          {'connector_host': connector.get('host'),
+                           'instance_host': instance.host}, instance=instance)
+
     def _local_cleanup_bdm_volumes(self, bdms, instance, context):
         """The method deletes the bdm records and, if a bdm is a volume, call
         the terminate connection and the detach volume via the Volume API.
-        Note that at this point we do not have the information about the
-        correct connector so we pass a fake one.
         """
         elevated = context.elevated()
         for bdm in bdms:
             if bdm.is_volume:
-                # NOTE(vish): We don't have access to correct volume
-                #             connector info, so just pass a fake
-                #             connector. This can be improved when we
-                #             expose get_volume_connector to rpc.
-                connector = {'ip': '127.0.0.1', 'initiator': 'iqn.fake'}
                 try:
-                    self.volume_api.terminate_connection(context,
-                                                         bdm.volume_id,
-                                                         connector)
+                    connector = self._get_stashed_volume_connector(
+                        bdm, instance)
+                    if connector:
+                        self.volume_api.terminate_connection(context,
+                                                             bdm.volume_id,
+                                                             connector)
+                    else:
+                        LOG.debug('Unable to find connector for volume %s, '
+                                  'not attempting terminate_connection.',
+                                  bdm.volume_id, instance=instance)
+                    # Attempt to detach the volume. If there was no connection
+                    # made in the first place this is just cleaning up the
+                    # volume state in the Cinder database.
                     self.volume_api.detach(elevated, bdm.volume_id,
                                            instance.uuid)
                     if bdm.delete_on_termination:
                         self.volume_api.delete(context, bdm.volume_id)
                 except Exception as exc:
                     err_str = _LW("Ignoring volume cleanup failure due to %s")
-                    LOG.warn(err_str % exc, instance=instance)
+                    LOG.warning(err_str % exc, instance=instance)
             bdm.destroy()
 
     def _local_delete(self, context, instance, bdms, delete_type, cb):
@@ -1945,6 +2130,72 @@ class API(base.Base):
 
         self.compute_rpcapi.trigger_crash_dump(context, instance)
 
+    def _get_instance_map_or_none(self, context, instance_uuid):
+        try:
+            inst_map = objects.InstanceMapping.get_by_instance_uuid(
+                    context, instance_uuid)
+        except exception.InstanceMappingNotFound:
+            # InstanceMapping should always be found generally. This exception
+            # may be raised if a deployment has partially migrated the nova-api
+            # services.
+            inst_map = None
+        return inst_map
+
+    def _get_instance(self, context, instance_uuid, expected_attrs):
+        # Before service version 15 the BuildRequest is not cleaned up during
+        # a delete request so there is no reason to look it up here as we can't
+        # trust that it's not referencing a deleted instance. Also even if
+        # there is an instance mapping we don't need to honor it for older
+        # service versions.
+        service_version = objects.Service.get_minimum_version(
+            context, 'nova-osapi_compute')
+        if service_version < 15:
+            return objects.Instance.get_by_uuid(context, instance_uuid,
+                                                expected_attrs=expected_attrs)
+        inst_map = self._get_instance_map_or_none(context, instance_uuid)
+        if inst_map and (inst_map.cell_mapping is not None):
+            with nova_context.target_cell(context, inst_map.cell_mapping):
+                instance = objects.Instance.get_by_uuid(
+                    context, instance_uuid, expected_attrs=expected_attrs)
+        elif inst_map and (inst_map.cell_mapping is None):
+            # This means the instance has not been scheduled and put in
+            # a cell yet. For now it also may mean that the deployer
+            # has not created their cell(s) yet.
+            try:
+                build_req = objects.BuildRequest.get_by_instance_uuid(
+                        context, instance_uuid)
+                instance = build_req.instance
+            except exception.BuildRequestNotFound:
+                # Instance was mapped and the BuildRequest was deleted
+                # while fetching. Try again.
+                inst_map = self._get_instance_map_or_none(context,
+                                                          instance_uuid)
+                if inst_map and (inst_map.cell_mapping is not None):
+                    with nova_context.target_cell(context,
+                                                  inst_map.cell_mapping):
+                        instance = objects.Instance.get_by_uuid(
+                            context, instance_uuid,
+                            expected_attrs=expected_attrs)
+                else:
+                    # If BuildRequest is not found but inst_map.cell_mapping
+                    # does not point at a cell then cell migration has not
+                    # happened yet. This will be a failure case later.
+                    # TODO(alaski): Make this a failure case after we put in
+                    # a block that requires migrating to cellsv2.
+                    instance = objects.Instance.get_by_uuid(
+                        context, instance_uuid, expected_attrs=expected_attrs)
+        else:
+            # This should not happen if we made it past the service_version
+            # check above. But it does not need to be an exception yet.
+            LOG.warning(_LW('No instance_mapping found for instance %s. This '
+                            'should not be happening and will lead to errors '
+                            'in the future. Please open a bug at '
+                            'https://bugs.launchpad.net/nova'), instance_uuid)
+            instance = objects.Instance.get_by_uuid(
+                context, instance_uuid, expected_attrs=expected_attrs)
+
+        return instance
+
     def get(self, context, instance_id, expected_attrs=None):
         """Get a single instance with the given instance_id."""
         if not expected_attrs:
@@ -1956,8 +2207,9 @@ class API(base.Base):
             if uuidutils.is_uuid_like(instance_id):
                 LOG.debug("Fetching instance by UUID",
                            instance_uuid=instance_id)
-                instance = objects.Instance.get_by_uuid(
-                    context, instance_id, expected_attrs=expected_attrs)
+
+                instance = self._get_instance(context, instance_id,
+                                              expected_attrs)
             else:
                 LOG.debug("Failed to fetch instance by id %s", instance_id)
                 raise exception.InstanceNotFound(instance_id=instance_id)
@@ -2048,9 +2300,61 @@ class API(base.Base):
             LOG.debug('Removing limit for DB query due to IP filter')
             limit = None
 
-        instances = self._get_instances_by_filters(context, filters,
-                limit=limit, marker=marker, expected_attrs=expected_attrs,
-                sort_keys=sort_keys, sort_dirs=sort_dirs)
+        # The ordering of instances will be
+        # [sorted instances with no host] + [sorted instances with host].
+        # This means BuildRequest and cell0 instances first, then cell
+        # instances
+        build_requests = objects.BuildRequestList.get_by_filters(
+            context, filters, limit=limit, marker=marker, sort_keys=sort_keys,
+            sort_dirs=sort_dirs)
+        build_req_instances = objects.InstanceList(
+            objects=[build_req.instance for build_req in build_requests])
+        # Only subtract from limit if it is not None
+        limit = (limit - len(build_req_instances)) if limit else limit
+
+        try:
+            cell0_mapping = objects.CellMapping.get_by_uuid(context,
+                objects.CellMapping.CELL0_UUID)
+        except exception.CellMappingNotFound:
+            cell0_instances = objects.InstanceList(objects=[])
+        else:
+            with nova_context.target_cell(context, cell0_mapping):
+                cell0_instances = self._get_instances_by_filters(
+                    context, filters, limit=limit, marker=marker,
+                    expected_attrs=expected_attrs, sort_keys=sort_keys,
+                    sort_dirs=sort_dirs)
+        # Only subtract from limit if it is not None
+        limit = (limit - len(cell0_instances)) if limit else limit
+
+        # There is only planned support for a single cell here. Multiple cell
+        # instance lists should be proxied to project Searchlight, or a similar
+        # alternative.
+        if limit is None or limit > 0:
+            cell_instances = self._get_instances_by_filters(context, filters,
+                    limit=limit, marker=marker, expected_attrs=expected_attrs,
+                    sort_keys=sort_keys, sort_dirs=sort_dirs)
+        else:
+            cell_instances = objects.InstanceList(objects=[])
+
+        def _get_unique_filter_method():
+            seen_uuids = set()
+
+            def _filter(instance):
+                if instance.uuid in seen_uuids:
+                    return False
+                seen_uuids.add(instance.uuid)
+                return True
+
+            return _filter
+
+        filter_method = _get_unique_filter_method()
+        # TODO(alaski): Clean up the objects concatenation when List objects
+        # support it natively.
+        instances = objects.InstanceList(
+            objects=list(filter(filter_method,
+                           build_req_instances.objects +
+                           cell0_instances.objects +
+                           cell_instances.objects)))
 
         if filter_ip:
             instances = self._ip_filter(instances, filters, orig_limit)
@@ -2732,10 +3036,12 @@ class API(base.Base):
         self._record_action_start(context, instance, instance_actions.UNPAUSE)
         self.compute_rpcapi.unpause_instance(context, instance)
 
+    @check_instance_host
     def get_diagnostics(self, context, instance):
         """Retrieve diagnostics for the given instance."""
         return self.compute_rpcapi.get_diagnostics(context, instance=instance)
 
+    @check_instance_host
     def get_instance_diagnostics(self, context, instance):
         """Retrieve diagnostics for the given instance."""
         return self.compute_rpcapi.get_instance_diagnostics(context,
@@ -2988,7 +3294,8 @@ class API(base.Base):
 
     def _check_attach_and_reserve_volume(self, context, volume_id, instance):
         volume = self.volume_api.get(context, volume_id)
-        self.volume_api.check_attach(context, volume, instance=instance)
+        self.volume_api.check_availability_zone(context, volume,
+                                                instance=instance)
         self.volume_api.reserve_volume(context, volume_id)
 
     def _attach_volume(self, context, instance, volume_id, device,
@@ -3619,6 +3926,10 @@ class HostAPI(base.Base):
                 ret_services.append(service)
         return ret_services
 
+    def service_get_by_id(self, context, service_id):
+        """Get service entry for the given service id."""
+        return objects.Service.get_by_id(context, service_id)
+
     def service_get_by_compute_host(self, context, host_name):
         """Get service entry for the given compute hostname."""
         return objects.Service.get_by_compute_host(context, host_name)
@@ -3720,6 +4031,10 @@ class AggregateAPI(base.Base):
     def get_aggregate_list(self, context):
         """Get all the aggregates."""
         return objects.AggregateList.get_all(context)
+
+    def get_aggregates_by_host(self, context, compute_host):
+        """Get all the aggregates where the given host is presented."""
+        return objects.AggregateList.get_by_host(context, compute_host)
 
     @wrap_exception()
     def update_aggregate(self, context, aggregate_id, values):
@@ -4089,13 +4404,16 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
 
     def get(self, context, name=None, id=None, map_exception=False):
         self.ensure_default(context)
+        cols = ['rules']
         try:
             if name:
                 return self.db.security_group_get_by_name(context,
                                                           context.project_id,
-                                                          name)
+                                                          name,
+                                                          columns_to_join=cols)
             elif id:
-                return self.db.security_group_get(context, id)
+                return self.db.security_group_get(context, id,
+                                                  columns_to_join=cols)
         except exception.NotFound as exp:
             if map_exception:
                 msg = exp.format_message()
