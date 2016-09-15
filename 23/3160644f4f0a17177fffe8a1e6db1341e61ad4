@@ -1,0 +1,10 @@
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 14 Sep 2016 18:44:50 +0000
+Reviewed-on: https://review.openstack.org/369986
+Project: openstack/deb-nova
+Branch: refs/heads/master
