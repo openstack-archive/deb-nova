@@ -1,0 +1,10 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 16 Sep 2016 13:09:40 +0000
+Reviewed-on: https://review.openstack.org/356496
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
