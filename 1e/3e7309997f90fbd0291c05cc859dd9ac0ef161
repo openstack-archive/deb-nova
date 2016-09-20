@@ -1,0 +1,12 @@
+Verified+1: DB Datasets CI <turbo-hipster@lists.rcbops.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Erik Olof Gunnar Andersson <eandersson@blizzard.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Sep 2016 10:58:11 +0000
+Reviewed-on: https://review.openstack.org/335629
+Project: openstack/deb-nova
+Branch: refs/heads/master

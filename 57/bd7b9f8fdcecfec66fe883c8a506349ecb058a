@@ -1,0 +1,11 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: venkatamahesh <Venkata.Kotha@infinite.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Workflow+1: Andrew Laski <andrew@lascii.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 19 Sep 2016 16:58:29 +0000
+Reviewed-on: https://review.openstack.org/371333
+Project: openstack/deb-nova
+Branch: refs/heads/master
