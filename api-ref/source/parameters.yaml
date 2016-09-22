@@ -651,7 +651,16 @@ server_status_query:
   in: query
   required: false
   type: string
-sort_dir:
+sort_dir_flavor:
+  description: |
+    Sort direction. A valid value is ``asc`` (ascending) or ``desc`` (descending).
+    Default is ``asc``. You can specify multiple pairs of sort key and sort direction
+    query parameters. If you omit the sort direction in a pair, the API uses the natural
+    sorting direction of the direction of the flavor ``sort_key`` attribute.
+  in: query
+  required: false
+  type: string
+sort_dir_server:
   description: |
     Sort direction. A valid value is ``asc`` (ascending) or ``desc`` (descending).
     Default is ``desc``. You can specify multiple pairs of sort key and sort direction
@@ -660,7 +669,16 @@ sort_dir:
   in: query
   required: false
   type: string
-sort_key:
+sort_key_flavor:
+  description: |
+    Sorts by a flavor attribute. Default attribute is ``flavorid``. You can specify
+    multiple pairs of sort key and sort direction query parameters. If you omit the
+    sort direction in a pair, the API uses the natural sorting direction of the flavor
+    ``sort_key`` attribute.
+  in: query
+  required: false
+  type: string
+sort_key_server:
   description: |
     Sorts by a server attribute. Default attribute is ``created``. You can specify
     multiple pairs of sort key and sort direction query parameters. If you omit the
@@ -818,6 +836,12 @@ addresses:
     By default, servers in ``building`` state hide their addresses information.
     See ``nova.conf`` configuration options
     <http://docs.openstack.org/liberty/config-reference/content/list-of-compute-config-options.html>`_.
+  in: body
+  required: true
+  type: object
+addresses_obj:
+  description: |
+    The addresses information for the server.
   in: body
   required: true
   type: object
@@ -1131,14 +1155,14 @@ block_device_mapping_v2:
 
       .. code-block:: javascript
 
-        "block_device_mapping_v2": {
+        "block_device_mapping_v2": [{
             "boot_index": "0",
             "uuid": "ac408821-c95a-448f-9292-73986c790911",
             "source_type": "image",
             "volume_size": "25",
             "destination_type": "volume",
             "delete_on_termination": true,
-            "tag": "disk1" }
+            "tag": "disk1" }]
 
     Starting in microversion 2.32, the tag is an optional, arbitrary attribute
     that can be used to assign a tag to the block device. This tag is then
@@ -1201,6 +1225,18 @@ cidr:
   in: body
   required: true
   type: string
+cloudpipe:
+  description: |
+    The cloudpipe object.
+  in: body
+  required: true
+  type: object
+cloudpipes:
+  description: |
+    The list of cloudpipe objects.
+  in: body
+  required: true
+  type: array
 code:
   description: |
     The HTTP response code for the event. The following codes are currently used:
@@ -1229,6 +1265,12 @@ config_drive_resp:
   in: body
   required: true
   type: boolean
+configure_project_cloudpipe:
+  description: |
+    VPN IP and Port information to configure the cloudpipe instance..
+  in: body
+  required: true
+  type: object
 confirmResize:
   description: |
     The action.
@@ -2489,6 +2531,12 @@ instance_id_body:
   in: body
   required: true
   type: string
+instance_id_cloudpipe:
+  description: |
+    The UUID of the cloudpipe instance.
+  in: body
+  required: true
+  type: string
 instance_name:
   description: |
     The name of the instance.
@@ -2763,7 +2811,7 @@ links:
   description: |
     Links to the resources in question. See `API Guide / Links and
     References
-    <http://docs.openstack.org/developer/nova/v2/links_and_references.html>`_
+    <http://developer.openstack.org/api-guide/compute/links_and_references.html>`_
     for more info.
   in: body
   required: true
@@ -3360,14 +3408,6 @@ personality:
   in: body
   required: false
   type: string
-personality_1:
-  description: |
-    The file path and contents, text only, to inject into the server at launch. The
-    maximum size of the file path data is 255 bytes. The maximum limit is the number
-    of allowed bytes in the decoded, rather than the encoded, data.
-  in: body
-  required: false
-  type: string
 policies:
   description: |
     A list of one or more policy names to associate with the server group. The list
@@ -3644,6 +3684,12 @@ running_vms_total:
   in: body
   required: true
   type: integer
+secgroup_default_rule_id:
+  description: |
+    The security group default rule ID.
+  in: body
+  required: true
+  type: string
 secgroup_rule_cidr:
   description: |
     The CIDR for address range.
@@ -3680,6 +3726,18 @@ security_group_1:
   in: body
   required: true
   type: string
+security_group_default_rule:
+  description: |
+    A ``security_group_default_rule`` object.
+  in: body
+  required: true
+  type: object
+security_group_default_rules:
+  description: |
+    A list of the ``security_group_default_rule`` object.
+  in: body
+  required: true
+  type: object
 security_group_rule:
   description: |
     A ``security_group_rule`` object.
@@ -3795,7 +3853,7 @@ server_groups_list:
     The list of existing server groups.
   in: body
   required: true
-  type: list
+  type: array
 server_groups_quota_details:
   description: |
     The object of detailed server groups, including in_use,
@@ -4330,6 +4388,12 @@ version_id:
   description: >
     A common name for the version in question. Informative only, it
     has no real semantic meaning.
+version_ip:
+  description: |
+    The IP version of the address associated with server.
+  in: body
+  required: true
+  type: integer
 version_max:
   type: string
   in: body
@@ -4465,15 +4529,33 @@ volumes:
   in: body
   required: true
   type: array
-vpn_ip:
+vpn_public_ip:
   description: |
     The VPN IP address.
   in: body
   required: true
   type: string
-vpn_port:
+vpn_public_ip_resp:
+  description: |
+    The VPN public IP address.
+  in: body
+  required: false
+  type: string
+vpn_public_port:
   description: |
     The VPN port.
   in: body
   required: true
+  type: string
+vpn_public_port_resp:
+  description: |
+    The VPN public port.
+  in: body
+  required: false
+  type: string
+vpn_state:
+  description: |
+    The VPN state.
+  in: body
+  required: false
   type: string

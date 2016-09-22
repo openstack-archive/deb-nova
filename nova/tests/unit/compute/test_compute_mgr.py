@@ -1853,6 +1853,72 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertEqual(volumes[new_volume_id]['status'], 'available')
 
     @mock.patch('nova.db.block_device_mapping_get_by_instance_and_volume_id')
+    @mock.patch.object(fake_driver.FakeDriver, 'get_volume_connector',
+                       return_value={})
+    @mock.patch.object(fake_driver.FakeDriver, 'swap_volume')
+    @mock.patch('nova.volume.cinder.API.get')
+    @mock.patch('nova.volume.cinder.API.initialize_connection',
+                return_value={})
+    @mock.patch('nova.volume.cinder.API.terminate_connection')
+    @mock.patch('nova.volume.cinder.API.migrate_volume_completion')
+    @mock.patch('nova.objects.BlockDeviceMapping.update')
+    @mock.patch('nova.objects.BlockDeviceMapping.save')
+    def test_swap_volume_cinder_initiated(self, mock_bdm_save, mock_bdm_update,
+                                          mock_migrate_volume_completion,
+                                          mock_terminate_connection,
+                                          mock_initialize_connection,
+                                          mock_get, mock_swap_volume,
+                                          mock_get_volume_connector,
+                                          mock_bdm_get):
+        # Check whether the 'serial' in new connection info is equal to
+        # the old volume ID in the case that cinder initiated
+        # swapping volumes
+        mock_get.return_value = {'id': uuids.old_volume,
+                                 'display_name': 'old_volume',
+                                 'status': 'detaching',
+                                 'size': 2}
+        fake_bdm = fake_block_device.FakeDbBlockDeviceDict(
+            {'device_name': '/dev/vdb', 'source_type': 'volume',
+             'destination_type': 'volume',
+             'instance_uuid': uuids.instance,
+             'delete_on_termination': True,
+             'connection_info': '{"foo": "bar"}'})
+        mock_bdm_get.return_value = fake_bdm
+        mock_migrate_volume_completion.return_value = {'save_volume_id':
+                                                       uuids.old_volume}
+        instance = fake_instance.fake_instance_obj(self.context,
+                                                   **{'uuid': uuids.instance})
+
+        self.compute.swap_volume(
+            self.context, uuids.old_volume, uuids.new_volume, instance)
+
+        mock_get_volume_connector.assert_called_once_with(instance)
+        mock_get.assert_has_calls(
+            [mock.call(test.MatchType(context.RequestContext),
+                       uuids.old_volume),
+             mock.call(test.MatchType(context.RequestContext),
+                       uuids.new_volume)])
+        mock_initialize_connection.assert_called_once_with(
+            test.MatchType(context.RequestContext), uuids.new_volume, {})
+        mock_swap_volume.assert_called_once_with(
+            {"foo": "bar"}, {'serial': uuids.old_volume}, instance,
+            '/dev/vdb', 0)
+        mock_terminate_connection.assert_called_once_with(
+            test.MatchType(context.RequestContext), uuids.old_volume, {})
+        mock_migrate_volume_completion.assert_called_once_with(
+            test.MatchType(context.RequestContext), uuids.old_volume,
+            uuids.new_volume, error=False)
+        # Check 'serial' in new connection info
+        mock_bdm_update.assert_called_once_with(
+            {'connection_info': jsonutils.dumps({'serial': uuids.old_volume}),
+             'source_type': 'volume',
+             'destination_type': 'volume',
+             'snapshot_id': None,
+             'volume_id': uuids.old_volume,
+             'no_device': None})
+        mock_bdm_save.assert_called_once_with()
+
+    @mock.patch('nova.db.block_device_mapping_get_by_instance_and_volume_id')
     @mock.patch('nova.db.block_device_mapping_update')
     @mock.patch('nova.volume.cinder.API.get')
     @mock.patch('nova.virt.libvirt.LibvirtDriver.get_volume_connector')
@@ -3805,7 +3871,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         mock_notify.assert_has_calls([
             mock.call(self.context, self.instance, 'create.start',
                 extra_usage_info={'image_name': self.image.get('name')}),
-            mock.call(self.context, self.instance, 'create.end',
+            mock.call(self.context, self.instance, 'create.error',
                 fault=exc)])
         mock_build.assert_called_once_with(self.context, self.instance,
             self.requested_networks, self.security_groups)
@@ -3901,6 +3967,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     def test_build_and_run_invalid_disk_info_exception(self):
         self._test_build_and_run_spawn_exceptions(
             exception.InvalidDiskInfo(reason=""))
+
+    def test_build_and_run_invalid_disk_format_exception(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.InvalidDiskFormat(disk_format=""))
 
     def test_build_and_run_signature_verification_error(self):
         self._test_build_and_run_spawn_exceptions(
@@ -4386,10 +4456,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         _check_access_ip()
 
     @mock.patch.object(manager.ComputeManager, '_instance_update')
-    def test_create_end_on_instance_delete(self, mock_instance_update):
+    def test_create_error_on_instance_delete(self, mock_instance_update):
 
         def fake_notify(*args, **kwargs):
-            if args[2] == 'create.end':
+            if args[2] == 'create.error':
                 # Check that launched_at is set on the instance
                 self.assertIsNotNone(args[1].launched_at)
 
@@ -4411,10 +4481,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     self.security_groups, self.block_device_mapping, self.node,
                     self.limits, self.filter_properties)
             expected_call = mock.call(self.context, self.instance,
-                    'create.end', fault=exc)
-            create_end_call = mock_notify.call_args_list[
+                    'create.error', fault=exc)
+            create_error_call = mock_notify.call_args_list[
                     mock_notify.call_count - 1]
-            self.assertEqual(expected_call, create_end_call)
+            self.assertEqual(expected_call, create_error_call)
 
 
 class ComputeManagerMigrationTestCase(test.NoDBTestCase):

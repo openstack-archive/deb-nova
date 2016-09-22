@@ -16,10 +16,14 @@ from oslo_config import cfg
 
 from nova.conf import paths
 
+cloudpipe_group = cfg.OptGroup(
+    name='cloudpipe',
+    title='Cloudpipe options')
+
 cloudpipe_opts = [
-    cfg.StrOpt(
-        'vpn_image_id',
+    cfg.StrOpt('vpn_image_id',
         default='0',
+        deprecated_group='DEFAULT',
         help="""
 Image ID used when starting up a cloudpipe VPN client.
 
@@ -32,9 +36,9 @@ Possible values:
 
 * Any valid ID of a VPN image
 """),
-    cfg.StrOpt(
-        'vpn_flavor',
+    cfg.StrOpt('vpn_flavor',
         default='m1.tiny',
+        deprecated_group='DEFAULT',
         help="""
 Flavor for VPN instances.
 
@@ -42,9 +46,9 @@ Possible values:
 
 * Any valid flavor name
 """),
-    cfg.StrOpt(
-        'boot_script_template',
+    cfg.StrOpt('boot_script_template',
         default=paths.basedir_def('nova/cloudpipe/bootscript.template'),
+        deprecated_group='DEFAULT',
         help="""
 Template for cloudpipe instance boot script.
 
@@ -54,15 +58,16 @@ Possible values:
 
 Related options:
 
-Following options are required to configure cloudpipe-managed
+The following options are required to configure cloudpipe-managed
 OpenVPN server.
+
 * dmz_net
 * dmz_mask
 * cnt_vpn_clients
 """),
-    cfg.IPOpt(
-        'dmz_net',
+    cfg.IPOpt('dmz_net',
         default='10.0.0.0',
+        deprecated_group='DEFAULT',
         help="""
 Network to push into OpenVPN config.
 
@@ -76,11 +81,11 @@ Possible values:
 Related options:
 
 * boot_script_template - dmz_net is pushed into bootscript.template
-to configure cloudpipe-managed OpenVPN server
+  to configure cloudpipe-managed OpenVPN server
 """),
-    cfg.IPOpt(
-        'dmz_mask',
+    cfg.IPOpt('dmz_mask',
         default='255.255.255.0',
+        deprecated_group='DEFAULT',
         help="""
 Netmask to push into OpenVPN config.
 
@@ -91,13 +96,12 @@ Possible values:
 Related options:
 
 * dmz_net - dmz_net and dmz_mask is pushed into bootscript.template
-to configure cloudpipe-managed OpenVPN server
+  to configure cloudpipe-managed OpenVPN server
 * boot_script_template
 """),
-
-    cfg.StrOpt(
-        'vpn_key_suffix',
+    cfg.StrOpt('vpn_key_suffix',
         default='-vpn',
+        deprecated_group='DEFAULT',
         help="""
 Suffix to add to project name for VPN key and secgroups
 
@@ -109,9 +113,9 @@ Possible values:
 
 
 def register_opts(conf):
-    conf.register_opts(cloudpipe_opts)
+    conf.register_group(cloudpipe_group)
+    conf.register_opts(cloudpipe_opts, group=cloudpipe_group)
 
 
 def list_opts():
-    # TODO(siva_krishnan) add opt group
-    return {'DEFAULT': cloudpipe_opts}
+    return {cloudpipe_group: cloudpipe_opts}

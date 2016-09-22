@@ -375,6 +375,19 @@ Possible values:
 * If value is 0, then one attempt is made.
 * Any negative value is treated as 0.
 * For any value > 0, total attempts are (value + 1)
+"""),
+    cfg.IntOpt('sync_power_state_pool_size',
+               default=1000,
+               help="""
+Number of greenthreads available for use to sync power states.
+
+This option can be used to reduce the number of concurrent requests
+made to the hypervisor or system with real instance power states
+for performance reasons, for example, with Ironic.
+
+Possible values:
+
+* Any positive integer representing greenthreads count.
 """)
 ]
 

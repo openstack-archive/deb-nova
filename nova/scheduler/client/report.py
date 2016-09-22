@@ -14,6 +14,7 @@
 #    under the License.
 
 import functools
+import time
 
 from keystoneauth1 import exceptions as ks_exc
 from keystoneauth1 import loading as keystone
@@ -24,9 +25,13 @@ from nova.compute import utils as compute_utils
 import nova.conf
 from nova.i18n import _LE, _LI, _LW
 from nova import objects
+from nova.objects import fields
 
 CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
+VCPU = fields.ResourceClass.VCPU
+MEMORY_MB = fields.ResourceClass.MEMORY_MB
+DISK_GB = fields.ResourceClass.DISK_GB
 
 
 def safe_connect(f):
@@ -207,57 +212,84 @@ class SchedulerReportClient(object):
         return rp
 
     def _compute_node_inventory(self, compute_node):
-        inventories = [
-            {'resource_class': 'VCPU',
-             'total': compute_node.vcpus,
-             'reserved': 0,
-             'min_unit': 1,
-             'max_unit': 1,
-             'step_size': 1,
-             'allocation_ratio': compute_node.cpu_allocation_ratio},
-            {'resource_class': 'MEMORY_MB',
-             'total': compute_node.memory_mb,
-             'reserved': CONF.reserved_host_memory_mb,
-             'min_unit': 1,
-             'max_unit': 1,
-             'step_size': 1,
-             'allocation_ratio': compute_node.ram_allocation_ratio},
-            {'resource_class': 'DISK_GB',
-             'total': compute_node.local_gb,
-             'reserved': CONF.reserved_host_disk_mb * 1024,
-             'min_unit': 1,
-             'max_unit': 1,
-             'step_size': 1,
-             'allocation_ratio': compute_node.disk_allocation_ratio},
-        ]
-        generation = self._resource_providers[compute_node.uuid].generation
+        inventories = {
+            'VCPU': {
+                'total': compute_node.vcpus,
+                'reserved': 0,
+                'min_unit': 1,
+                'max_unit': 1,
+                'step_size': 1,
+                'allocation_ratio': compute_node.cpu_allocation_ratio,
+            },
+            'MEMORY_MB': {
+                'total': compute_node.memory_mb,
+                'reserved': CONF.reserved_host_memory_mb,
+                'min_unit': 1,
+                'max_unit': 1,
+                'step_size': 1,
+                'allocation_ratio': compute_node.ram_allocation_ratio,
+            },
+            'DISK_GB': {
+                'total': compute_node.local_gb,
+                'reserved': CONF.reserved_host_disk_mb * 1024,
+                'min_unit': 1,
+                'max_unit': 1,
+                'step_size': 1,
+                'allocation_ratio': compute_node.disk_allocation_ratio,
+            },
+        }
         data = {
-            'resource_provider_generation': generation,
             'inventories': inventories,
         }
         return data
 
-    @safe_connect
-    def _update_inventory(self, compute_node):
+    def _get_inventory(self, compute_node):
+        url = '/resource_providers/%s/inventories' % compute_node.uuid
+        result = self.get(url)
+        if not result:
+            return {'inventories': {}}
+        return result.json()
+
+    def _update_inventory_attempt(self, compute_node):
         """Update the inventory for this compute node if needed.
 
         :param compute_node: The objects.ComputeNode for the operation
         :returns: True if the inventory was updated (or did not need to be),
                   False otherwise.
         """
-        url = '/resource_providers/%s/inventories' % compute_node.uuid
         data = self._compute_node_inventory(compute_node)
+        curr = self._get_inventory(compute_node)
+
+        # Update our generation immediately, if possible. Even if there
+        # are no inventories we should always have a generation but let's
+        # be careful.
+        server_gen = curr.get('resource_provider_generation')
+        if server_gen:
+            my_rp = self._resource_providers[compute_node.uuid]
+            if server_gen != my_rp.generation:
+                LOG.debug('Updating our resource provider generation '
+                          'from %(old)i to %(new)i',
+                          {'old': my_rp.generation,
+                           'new': server_gen})
+            my_rp.generation = server_gen
+
+        # Check to see if we need to update placement's view
+        if data['inventories'] == curr.get('inventories', {}):
+            return True
+
+        data['resource_provider_generation'] = (
+            self._resource_providers[compute_node.uuid].generation)
+        url = '/resource_providers/%s/inventories' % compute_node.uuid
         result = self.put(url, data)
         if result.status_code == 409:
-            # Generation fail, re-poll and then re-try
-            del self._resource_providers[compute_node.uuid]
-            self._ensure_resource_provider(
-                compute_node.uuid, compute_node.hypervisor_hostname)
-            LOG.info(_LI('Retrying update inventory for %s'),
+            LOG.info(_LI('Inventory update conflict for %s'),
                      compute_node.uuid)
-            # Regenerate the body with the new generation
-            data = self._compute_node_inventory(compute_node)
-            result = self.put(url, data)
+            # Invalidate our cache and re-fetch the resource provider
+            # to be sure to get the latest generation.
+            del self._resource_providers[compute_node.uuid]
+            self._ensure_resource_provider(compute_node.uuid,
+                                           compute_node.hypervisor_hostname)
+            return False
         elif not result:
             LOG.warning(_LW('Failed to update inventory for '
                             '%(uuid)s: %(status)i %(text)s'),
@@ -266,27 +298,39 @@ class SchedulerReportClient(object):
                          'text': result.text})
             return False
 
-        generation = data['resource_provider_generation']
-        if result.status_code == 200:
-            self._resource_providers[compute_node.uuid].generation = (
-                generation + 1)
-            LOG.debug('Updated inventory for %s at generation %i' % (
-                compute_node.uuid, generation))
-            return True
-        elif result.status_code == 409:
-            LOG.info(_LI('Double generation clash updating inventory '
-                         'for %(uuid)s at generation %(gen)i'),
-                     {'uuid': compute_node.uuid,
-                      'gen': generation})
+        if result.status_code != 200:
+            LOG.info(
+                _LI('Received unexpected response code %(code)i while '
+                    'trying to update inventory for compute node %(uuid)s'
+                    ': %(text)s'),
+                {'uuid': compute_node.uuid,
+                 'code': result.status_code,
+                 'text': result.text})
             return False
 
-        LOG.info(_LI('Received unexpected response code %(code)i while '
-                     'trying to update inventory for compute node %(uuid)s '
-                     'at generation %(gen)i: %(text)s'),
-                 {'uuid': compute_node.uuid,
-                  'code': result.status_code,
-                  'gen': generation,
-                  'text': result.text})
+        # Update our view of the generation for next time
+        updated_inventories_result = result.json()
+        new_gen = updated_inventories_result['resource_provider_generation']
+
+        self._resource_providers[compute_node.uuid].generation = new_gen
+        LOG.debug('Updated inventory for %s at generation %i' % (
+            compute_node.uuid, new_gen))
+        return True
+
+    @safe_connect
+    def _update_inventory(self, compute_node):
+        for attempt in (1, 2, 3):
+            if compute_node.uuid not in self._resource_providers:
+                # NOTE(danms): Either we failed to fetch/create the RP
+                # on our first attempt, or a previous attempt had to
+                # invalidate the cache, and we were unable to refresh
+                # it. Bail and try again next time.
+                LOG.warning(_LW(
+                    'Unable to refresh my resource provider record'))
+                return False
+            if self._update_inventory_attempt(compute_node):
+                return True
+            time.sleep(1)
         return False
 
     def update_resource_stats(self, compute_node):
@@ -297,8 +341,7 @@ class SchedulerReportClient(object):
         compute_node.save()
         self._ensure_resource_provider(compute_node.uuid,
                                        compute_node.hypervisor_hostname)
-        if compute_node.uuid in self._resource_providers:
-            self._update_inventory(compute_node)
+        self._update_inventory(compute_node)
 
     def _allocations(self, instance):
         # NOTE(danms): Boot-from-volume instances consume no local disk
@@ -308,50 +351,74 @@ class SchedulerReportClient(object):
                 instance.flavor.swap +
                 instance.flavor.ephemeral_gb)
         return {
-            'MEMORY_MB': instance.flavor.memory_mb,
-            'VCPU': instance.flavor.vcpus,
-            'DISK_GB': disk,
+            MEMORY_MB: instance.flavor.memory_mb,
+            VCPU: instance.flavor.vcpus,
+            DISK_GB: disk,
         }
+
+    def _get_allocations_for_instance(self, compute_node, instance):
+        url = '/allocations/%s' % instance.uuid
+        resp = self.get(url)
+        if not resp:
+            return {}
+        else:
+            # NOTE(cdent): This trims to just the allocations being
+            # used on this compute node. In the future when there
+            # are shared resources there might be other providers.
+            return resp.json()['allocations'].get(
+                compute_node.uuid, {}).get('resources', {})
 
     @safe_connect
     def _allocate_for_instance(self, compute_node, instance):
         url = '/allocations/%s' % instance.uuid
+
+        my_allocations = self._allocations(instance)
+        current_allocations = self._get_allocations_for_instance(compute_node,
+                                                                 instance)
+        if current_allocations == my_allocations:
+            allocstr = ','.join(['%s=%s' % (k, v)
+                                 for k, v in my_allocations.items()])
+            LOG.debug('Instance %(uuid)s allocations are unchanged: %(alloc)s',
+                      {'uuid': instance.uuid, 'alloc': allocstr})
+            return
+
         allocations = {
             'allocations': [
                 {
                     'resource_provider': {
                         'uuid': compute_node.uuid,
                     },
-                    'resources': self._allocations(instance),
+                    'resources': my_allocations,
                 },
             ],
         }
-        LOG.debug('Sending allocation for instance %s: %s' % (
-            instance.uuid, allocations))
+        LOG.debug('Sending allocation for instance %s',
+                  allocations,
+                  instance=instance)
         r = self.put(url, allocations)
-        if not r:
+        if r:
+            LOG.info(_LI('Submitted allocation for instance'),
+                     instance=instance)
+        else:
             LOG.warning(
                 _LW('Unable to submit allocation for instance '
                     '%(uuid)s (%(code)i %(text)s)'),
                 {'uuid': instance.uuid,
                  'code': r.status_code,
                  'text': r.text})
-        else:
-            LOG.info(_LI('Submitted allocation for instance %s'),
-                     instance.uuid)
 
     @safe_connect
-    def _delete_allocation_for_instance(self, instance):
-        url = '/allocations/%s' % instance.uuid
+    def _delete_allocation_for_instance(self, uuid):
+        url = '/allocations/%s' % uuid
         r = self.delete(url)
         if r:
             LOG.info(_LI('Deleted allocation for instance %s'),
-                     instance.uuid)
+                     uuid)
         else:
             LOG.warning(
                 _LW('Unable to delete allocation for instance '
                     '%(uuid)s: (%(code)i %(text)s)'),
-                {'uuid': instance.uuid,
+                {'uuid': uuid,
                  'code': r.status_code,
                  'text': r.text})
 
@@ -359,4 +426,27 @@ class SchedulerReportClient(object):
         if sign > 0:
             self._allocate_for_instance(compute_node, instance)
         else:
-            self._delete_allocation_for_instance(instance)
+            self._delete_allocation_for_instance(instance.uuid)
+
+    @safe_connect
+    def _get_allocations(self, compute_node):
+        url = '/resource_providers/%s/allocations' % compute_node.uuid
+        resp = self.get(url)
+        if not resp:
+            return {}
+        else:
+            return resp.json()['allocations']
+
+    def remove_deleted_instances(self, compute_node, instance_uuids):
+        allocations = self._get_allocations(compute_node)
+        if allocations is None:
+            allocations = {}
+
+        instance_dict = {instance['uuid']: instance
+                         for instance in instance_uuids}
+        removed_instances = set(allocations.keys()) - set(instance_dict.keys())
+
+        for uuid in removed_instances:
+            LOG.warning(_LW('Deleting stale allocation for instance %s'),
+                        uuid)
+            self._delete_allocation_for_instance(uuid)

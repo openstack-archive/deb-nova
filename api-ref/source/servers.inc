@@ -159,8 +159,8 @@ Request
 
   - limit: limit
   - marker: marker
-  - sort_key: sort_key
-  - sort_dir: sort_dir
+  - sort_key: sort_key_server
+  - sort_dir: sort_dir_server
   - changes-since: changes_since_server
   - image: image_query
   - flavor: flavor_query
@@ -221,7 +221,7 @@ request body to boot a server from a volume.
 Include the ``key_name`` parameter in the create request body to add a
 keypair to the server when you create it. To create a keypair, make a
 `create keypair
-<http://developer.openstack.org/api-ref-compute-v2.1.html#createKeypair>`__
+<http://developer.openstack.org/api-ref/compute/#create-or-import-keypair>`__
 request.
 
 .. note:: Starting with microversion 2.37 the ``networks`` field is required.
@@ -290,7 +290,7 @@ Request
   - accessIPv6: accessIPv6_in
   - adminPass: adminPass
   - user_data: user_data
-  - os-availability-zone:availability_zone: os-availability-zone:availability_zone
+  - availability_zone: os-availability-zone:availability_zone
   - networks: networks
   - networks.uuid: network_uuid
   - networks.port: port
@@ -462,8 +462,8 @@ Request
 
   - limit: limit
   - marker: marker
-  - sort_key: sort_key
-  - sort_dir: sort_dir
+  - sort_key: sort_key_server
+  - sort_dir: sort_dir_server
   - changes-since: changes_since_server
   - image: image_query
   - flavor: flavor_query

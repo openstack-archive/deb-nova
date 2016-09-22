@@ -10,6 +10,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from oslo_log import log as logging
 import six
 import sqlalchemy as sa
 from sqlalchemy import func
@@ -19,6 +20,7 @@ from sqlalchemy import sql
 from nova.db.sqlalchemy import api as db_api
 from nova.db.sqlalchemy import api_models as models
 from nova import exception
+from nova.i18n import _LW
 from nova import objects
 from nova.objects import base
 from nova.objects import fields
@@ -26,6 +28,8 @@ from nova.objects import fields
 _ALLOC_TBL = models.Allocation.__table__
 _INV_TBL = models.Inventory.__table__
 _RP_TBL = models.ResourceProvider.__table__
+
+LOG = logging.getLogger(__name__)
 
 
 def _get_current_inventory_resources(conn, rp):
@@ -107,7 +111,10 @@ def _update_inventory_for_provider(conn, rp, inv_list, to_update):
     :param inv_list: InventoryList object
     :param to_update: set() containing resource class IDs to search inv_list
                       for updating in resource provider.
+    :returns: A list of (uuid, class) tuples that have exceeded their
+              capacity after this inventory update.
     """
+    exceeded = []
     for res_class in to_update:
         inv_record = inv_list.find(res_class)
         if inv_record.capacity <= 0:
@@ -121,9 +128,8 @@ def _update_inventory_for_provider(conn, rp, inv_list, to_update):
                 _ALLOC_TBL.c.resource_class_id == res_class))
         allocations = conn.execute(allocation_query).first()
         if allocations and allocations['usage'] > inv_record.capacity:
-            raise exception.InvalidInventoryNewCapacityExceeded(
-                resource_class=fields.ResourceClass.from_index(res_class),
-                resource_provider=rp.uuid)
+            exceeded.append((rp.uuid,
+                             fields.ResourceClass.from_index(res_class)))
         upd_stmt = _INV_TBL.update().where(sa.and_(
                 _INV_TBL.c.resource_provider_id == rp.id,
                 _INV_TBL.c.resource_class_id == res_class)).values(
@@ -138,6 +144,7 @@ def _update_inventory_for_provider(conn, rp, inv_list, to_update):
             raise exception.NotFound(
                 'No inventory of class %s found for update'
                 % fields.ResourceClass.from_index(res_class))
+    return exceeded
 
 
 def _increment_provider_generation(conn, rp):
@@ -184,9 +191,10 @@ def _update_inventory(context, rp, inventory):
     inv_list = InventoryList(objects=[inventory])
     conn = context.session.connection()
     with conn.begin():
-        _update_inventory_for_provider(
+        exceeded = _update_inventory_for_provider(
             conn, rp, inv_list, set([resource_class_id]))
         rp.generation = _increment_provider_generation(conn, rp)
+    return exceeded
 
 
 @db_api.api_context_manager.writer
@@ -211,6 +219,8 @@ def _set_inventory(context, rp, inv_list):
     :param context: Nova RequestContext.
     :param rp: `ResourceProvider` object upon which to set inventory.
     :param inv_list: `InventoryList` object to save to backend storage.
+    :returns: A list of (uuid, class) tuples that have exceeded their
+              capacity after this inventory update.
     :raises nova.exception.ConcurrentUpdateDetected: if another thread updated
             the same resource provider's view of its inventory or allocations
             in between the time when this object was originally read
@@ -229,6 +239,7 @@ def _set_inventory(context, rp, inv_list):
     to_add = these_resources - existing_resources
     to_delete = existing_resources - these_resources
     to_update = these_resources & existing_resources
+    exceeded = []
 
     with conn.begin():
         if to_delete:
@@ -236,7 +247,8 @@ def _set_inventory(context, rp, inv_list):
         if to_add:
             _add_inventory_to_provider(conn, rp, inv_list, to_add)
         if to_update:
-            _update_inventory_for_provider(conn, rp, inv_list, to_update)
+            exceeded = _update_inventory_for_provider(conn, rp, inv_list,
+                                                      to_update)
 
         # Here is where we update the resource provider's generation value.
         # If this update updates zero rows, that means that another
@@ -248,6 +260,8 @@ def _set_inventory(context, rp, inv_list):
         # to retry the inventory save after reverifying any capacity
         # conditions and re-reading the existing inventory information.
         rp.generation = _increment_provider_generation(conn, rp)
+
+    return exceeded
 
 
 @base.NovaObjectRegistry.register
@@ -316,7 +330,11 @@ class ResourceProvider(base.NovaObject):
     @base.remotable
     def set_inventory(self, inv_list):
         """Set all resource provider Inventory to be the provided list."""
-        _set_inventory(self._context, self, inv_list)
+        exceeded = _set_inventory(self._context, self, inv_list)
+        for uuid, rclass in exceeded:
+            LOG.warning(_LW('Resource provider %(uuid)s is now over-'
+                            'capacity for %(resource)s'),
+                        {'uuid': uuid, 'resource': rclass})
         self.obj_reset_changes()
 
     @base.remotable
@@ -325,7 +343,11 @@ class ResourceProvider(base.NovaObject):
 
         Fails if no Inventory of the same class is present.
         """
-        _update_inventory(self._context, self, inventory)
+        exceeded = _update_inventory(self._context, self, inventory)
+        for uuid, rclass in exceeded:
+            LOG.warning(_LW('Resource provider %(uuid)s is now over-'
+                            'capacity for %(resource)s'),
+                        {'uuid': uuid, 'resource': rclass})
         self.obj_reset_changes()
 
     @staticmethod
@@ -685,8 +707,10 @@ def _check_capacity_exceeded(conn, allocs):
             sql.and_(_RP_TBL.c.id == _INV_TBL.c.resource_provider_id,
                      _INV_TBL.c.resource_class_id.in_(res_classes)))
     primary_join = sql.outerjoin(inv_join, usage,
-            _INV_TBL.c.resource_provider_id == usage.c.resource_provider_id)
-
+        sql.and_(
+            _INV_TBL.c.resource_provider_id == usage.c.resource_provider_id,
+            _INV_TBL.c.resource_class_id == usage.c.resource_class_id)
+    )
     cols_in_output = [
         _RP_TBL.c.id.label('resource_provider_id'),
         _RP_TBL.c.uuid,
@@ -707,7 +731,10 @@ def _check_capacity_exceeded(conn, allocs):
     usage_map = {}
     provs_with_inv = set()
     for record in records:
-        usage_map[(record['uuid'], record['resource_class_id'])] = record
+        map_key = (record['uuid'], record['resource_class_id'])
+        if map_key in usage_map:
+            raise KeyError("%s already in usage_map, bad query" % str(map_key))
+        usage_map[map_key] = record
         provs_with_inv.add(record["uuid"])
     # Ensure that all providers have existing inventory
     missing_provs = provider_uuids - provs_with_inv
@@ -727,6 +754,14 @@ def _check_capacity_exceeded(conn, allocs):
         used = usage['used'] or 0
         capacity = (usage['total'] - usage['reserved']) * allocation_ratio
         if capacity < (used + amount_needed):
+            LOG.warning(
+                _LW("Over capacity for %(rc)s on resource provider %(rp)s. "
+                    "Needed: %(needed)s, Used: %(used)s, Capacity: %(cap)s"),
+                {'rc': fields.ResourceClass.from_index(res_class),
+                 'rp': rp_uuid,
+                 'needed': amount_needed,
+                 'used': used,
+                 'cap': capacity})
             raise exception.InvalidAllocationCapacityExceeded(
                 resource_class=fields.ResourceClass.from_index(res_class),
                 resource_provider=rp_uuid)
@@ -836,6 +871,10 @@ class AllocationList(base.ObjectListBase, base.NovaObject):
     def delete_all(self):
         self._delete_allocations(self._context, self.objects)
 
+    def __repr__(self):
+        strings = [repr(x) for x in self.objects]
+        return "AllocationList[" + ", ".join(strings) + "]"
+
 
 @base.NovaObjectRegistry.register
 class Usage(base.NovaObject):
@@ -895,3 +934,7 @@ class UsageList(base.ObjectListBase, base.NovaObject):
     def get_all_by_resource_provider_uuid(cls, context, rp_uuid):
         usage_list = cls._get_all_by_resource_provider_uuid(context, rp_uuid)
         return base.obj_make_list(context, cls(context), Usage, usage_list)
+
+    def __repr__(self):
+        strings = [repr(x) for x in self.objects]
+        return "UsageList[" + ", ".join(strings) + "]"
