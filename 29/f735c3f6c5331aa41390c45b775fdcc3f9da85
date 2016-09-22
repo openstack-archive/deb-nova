@@ -1,0 +1,8 @@
+Code-Review+2: Ivan Udovichenko <iudovichenko@mirantis.com>
+Workflow+1: Ivan Udovichenko <iudovichenko@mirantis.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 22 Sep 2016 18:18:28 +0000
+Reviewed-on: https://review.openstack.org/374608
+Project: openstack/deb-nova
+Branch: refs/heads/debian/newton
