@@ -372,6 +372,11 @@ class InvalidStrTime(Invalid):
     msg_fmt = _("Invalid datetime string: %(reason)s")
 
 
+class InvalidNUMANodesNumber(Invalid):
+    msg_fmt = _("The property 'numa_nodes' cannot be '%(nodes)s'. "
+                "It must be a number greater than 0")
+
+
 class InvalidName(Invalid):
     msg_fmt = _("An invalid 'name' value was provided. "
                 "The name must be: %(reason)s")
@@ -2127,12 +2132,6 @@ class InvalidInventoryCapacity(InvalidInventory):
     msg_fmt = _("Invalid inventory for '%(resource_class)s' on "
                 "resource provider '%(resource_provider)s'. "
                 "The reserved value is greater than or equal to total.")
-
-
-class InvalidInventoryNewCapacityExceeded(InvalidInventory):
-    msg_fmt = _("Invalid inventory for '%(resource_class)s' on "
-                "resource provider '%(resource_provider)s'. The new total "
-                "minus reserved amount is less than the existing used amount.")
 
 
 class InvalidAllocationCapacityExceeded(InvalidInventory):

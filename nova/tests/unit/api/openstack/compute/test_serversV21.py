@@ -2082,11 +2082,12 @@ class ServersControllerUpdateTest(ControllerTest):
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
                           req, FAKE_UUID, body=body)
 
-    def test_update_server_not_found_on_update(self):
+    @mock.patch.object(compute_api.API, 'update_instance')
+    def test_update_server_not_found_on_update(self, mock_update_instance):
         def fake_update(*args, **kwargs):
             raise exception.InstanceNotFound(instance_id='fake')
 
-        self.stub_out('nova.db.instance_update_and_get_original', fake_update)
+        mock_update_instance.side_effect = fake_update
         body = {'server': {'name': 'server_test'}}
         req = self._get_request(body)
         self.assertRaises(webob.exc.HTTPNotFound, self.controller.update,
@@ -2965,6 +2966,23 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create, self.req, body=self.body)
 
+    @mock.patch.object(nova.compute.flavors, 'get_flavor_by_flavor_id',
+                       return_value=objects.Flavor())
+    @mock.patch.object(compute_api.API, 'create')
+    def test_create_instance_with_non_existing_snapshot_id(
+            self, mock_create,
+            mock_get_flavor_by_flavor_id):
+        mock_create.side_effect = exception.SnapshotNotFound(snapshot_id='123')
+
+        self.body['server'] = {'name': 'server_test',
+                               'flavorRef': self.flavor_ref,
+                               'block_device_mapping_v2':
+                                   [{'source_type': 'snapshot',
+                                     'uuid': '123'}]}
+        self.req.body = jsonutils.dump_as_bytes(self.body)
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create, self.req, body=self.body)
+
     def test_create_instance_invalid_flavor_id_empty(self):
         flavor_ref = ""
         self.body['server']['flavorRef'] = flavor_ref
@@ -3234,6 +3252,14 @@ class ServersControllerCreateTest(test.TestCase):
     @mock.patch.object(compute_api.API, 'create',
                        side_effect=exception.InvalidBDMEphemeralSize)
     def test_create_instance_raise_invalid_bdm_ephsize(self, mock_create):
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    @mock.patch.object(compute_api.API, 'create',
+                       side_effect=exception.InvalidNUMANodesNumber(
+                           details=''))
+    def test_create_instance_raise_invalid_numa_nodes(self, mock_create):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create,
                           self.req, body=self.body)
@@ -4522,10 +4548,10 @@ class ServersPolicyEnforcementV21(test.NoDBTestCase):
             FAKE_UUID, body=body)
 
     @mock.patch('nova.api.openstack.compute.views.servers.ViewBuilder.show')
-    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch.object(compute_api.API, 'update_instance')
     @mock.patch.object(common, 'get_instance')
     def test_update_overridden_policy_pass_with_same_project(
-        self, get_instance_mock, save_mock, view_show_mock):
+        self, get_instance_mock, update_instance_mock, view_show_mock):
         instance = fake_instance.fake_instance_obj(
             self.req.environ['nova.context'],
             project_id=self.req.environ['nova.context'].project_id)
@@ -4550,11 +4576,11 @@ class ServersPolicyEnforcementV21(test.NoDBTestCase):
             FAKE_UUID, body=body)
 
     @mock.patch('nova.api.openstack.compute.views.servers.ViewBuilder.show')
-    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch.object(compute_api.API, 'update_instance')
     @mock.patch.object(common, 'get_instance')
     def test_update_overridden_policy_pass_with_same_user(self,
                                                           get_instance_mock,
-                                                          save_mock,
+                                                          update_instance_mock,
                                                           view_show_mock):
         instance = fake_instance.fake_instance_obj(
             self.req.environ['nova.context'],
@@ -4649,12 +4675,15 @@ class ServersPolicyEnforcementV21(test.NoDBTestCase):
                                             instance, '1')
 
     @mock.patch('nova.api.openstack.common.get_instance')
-    def test_rebuild_policy_failed(self, get_instance_mock):
-        get_instance_mock.return_value = (
-            fake_instance.fake_instance_obj(self.req.environ['nova.context']))
+    def test_rebuild_policy_failed_with_other_project(self, get_instance_mock):
+        get_instance_mock.return_value = fake_instance.fake_instance_obj(
+            self.req.environ['nova.context'],
+            project_id=self.req.environ['nova.context'].project_id)
         rule_name = "os_compute_api:servers:rebuild"
-        rule = {rule_name: "project:non_fake"}
+        rule = {rule_name: "project_id:%(project_id)s"}
         body = {'rebuild': {'imageRef': self.image_uuid}}
+        # Change the project_id in request context.
+        self.req.environ['nova.context'].project_id = 'other-project'
         self._common_policy_check(
             rule, rule_name, self.controller._action_rebuild,
             self.req, FAKE_UUID, body=body)

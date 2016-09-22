@@ -112,6 +112,30 @@ class HostManagerTestCase(test.NoDBTestCase):
         exp_filters = {'deleted': False, 'host': [u'host1', u'host2']}
         mock_get_by_filters.assert_called_once_with(mock.ANY, exp_filters)
 
+    @mock.patch.object(nova.objects.InstanceList, 'get_by_filters')
+    @mock.patch.object(nova.objects.ComputeNodeList, 'get_all')
+    def test_init_instance_info_compute_nodes(self, mock_get_all,
+                                              mock_get_by_filters):
+        cn1 = objects.ComputeNode(host='host1')
+        cn2 = objects.ComputeNode(host='host2')
+        inst1 = objects.Instance(host='host1', uuid=uuids.instance_1)
+        inst2 = objects.Instance(host='host1', uuid=uuids.instance_2)
+        inst3 = objects.Instance(host='host2', uuid=uuids.instance_3)
+        mock_get_by_filters.return_value = objects.InstanceList(
+                objects=[inst1, inst2, inst3])
+        hm = self.host_manager
+        hm._instance_info = {}
+        hm._init_instance_info([cn1, cn2])
+        self.assertEqual(len(hm._instance_info), 2)
+        fake_info = hm._instance_info['host1']
+        self.assertIn(uuids.instance_1, fake_info['instances'])
+        self.assertIn(uuids.instance_2, fake_info['instances'])
+        self.assertNotIn(uuids.instance_3, fake_info['instances'])
+        exp_filters = {'deleted': False, 'host': [u'host1', u'host2']}
+        mock_get_by_filters.assert_called_once_with(mock.ANY, exp_filters)
+        # should not be called if the list of nodes was passed explicitly
+        self.assertFalse(mock_get_all.called)
+
     def test_default_filters(self):
         default_filters = self.host_manager.default_filters
         self.assertEqual(1, len(default_filters))
@@ -581,6 +605,43 @@ class HostManagerTestCase(test.NoDBTestCase):
         self.host_manager.get_all_host_states('fake-context')
         host_state = self.host_manager.host_state_map[('fake', 'fake')]
         self.assertEqual([], host_state.aggregates)
+
+    @mock.patch.object(nova.objects.InstanceList, 'get_by_host',
+                       return_value=objects.InstanceList())
+    @mock.patch.object(host_manager.HostState, '_update_from_compute_node')
+    @mock.patch.object(objects.ComputeNodeList, 'get_all')
+    @mock.patch.object(objects.ServiceList, 'get_by_binary')
+    def test_get_all_host_states_corrupt_aggregates_info(self,
+                                                         svc_get_by_binary,
+                                                         cn_get_all,
+                                                         update_from_cn,
+                                                         mock_get_by_host):
+        """Regression test for bug 1605804
+
+        A host can be in multiple host-aggregates at the same time. When a
+        host gets removed from an aggregate in thread A and this aggregate
+        gets deleted in thread B, there can be a race-condition where the
+        mapping data in the host_manager can get out of sync for a moment.
+        This test simulates this condition for the bug-fix.
+        """
+        host_a = 'host_a'
+        host_b = 'host_b'
+        svc_get_by_binary.return_value = [objects.Service(host=host_a),
+                                          objects.Service(host=host_b)]
+        cn_get_all.return_value = [
+            objects.ComputeNode(host=host_a, hypervisor_hostname=host_a),
+            objects.ComputeNode(host=host_b, hypervisor_hostname=host_b)]
+
+        aggregate = objects.Aggregate(id=1)
+        aggregate.hosts = [host_a, host_b]
+        aggr_list = objects.AggregateList()
+        aggr_list.objects = [aggregate]
+        self.host_manager.update_aggregates(aggr_list)
+
+        aggregate.hosts = [host_a]
+        self.host_manager.delete_aggregate(aggregate)
+
+        self.host_manager.get_all_host_states('fake-context')
 
     @mock.patch('nova.objects.ServiceList.get_by_binary')
     @mock.patch('nova.objects.ComputeNodeList.get_all')

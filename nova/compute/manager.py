@@ -512,7 +512,8 @@ class ComputeManager(manager.Manager):
         self.scheduler_client = scheduler_client.SchedulerClient()
         self._resource_tracker_dict = {}
         self.instance_events = InstanceEvents()
-        self._sync_power_pool = eventlet.GreenPool()
+        self._sync_power_pool = eventlet.GreenPool(
+            size=CONF.sync_power_state_pool_size)
         self._syncs_in_progress = {}
         self.send_instance_updates = CONF.scheduler_tracks_instance_changes
         if CONF.max_concurrent_builds != 0:
@@ -1924,7 +1925,7 @@ class ComputeManager(manager.Manager):
                 exception.UnexpectedDeletingTaskStateError) as e:
             with excutils.save_and_reraise_exception():
                 self._notify_about_instance_usage(context, instance,
-                    'create.end', fault=e)
+                    'create.error', fault=e)
         except exception.ComputeResourcesUnavailable as e:
             LOG.debug(e.format_message(), instance=instance)
             self._notify_about_instance_usage(context, instance,
@@ -1962,6 +1963,7 @@ class ComputeManager(manager.Manager):
                 exception.ImageNotActive,
                 exception.ImageUnacceptable,
                 exception.InvalidDiskInfo,
+                exception.InvalidDiskFormat,
                 exception.SignatureVerificationError) as e:
             self._notify_about_instance_usage(context, instance,
                     'create.error', fault=e)
@@ -2000,7 +2002,7 @@ class ComputeManager(manager.Manager):
                 exception.UnexpectedDeletingTaskStateError) as e:
             with excutils.save_and_reraise_exception():
                 self._notify_about_instance_usage(context, instance,
-                    'create.end', fault=e)
+                    'create.error', fault=e)
 
         self._update_scheduler_instance_info(context, instance)
         self._notify_about_instance_usage(context, instance, 'create.end',
@@ -2076,10 +2078,11 @@ class ComputeManager(manager.Manager):
             yield resources
         except Exception as exc:
             with excutils.save_and_reraise_exception() as ctxt:
-                if not isinstance(exc, (exception.InstanceNotFound,
-                    exception.UnexpectedDeletingTaskStateError)):
-                        LOG.exception(_LE('Instance failed to spawn'),
-                                instance=instance)
+                if not isinstance(exc, (
+                        exception.InstanceNotFound,
+                        exception.UnexpectedDeletingTaskStateError)):
+                    LOG.exception(_LE('Instance failed to spawn'),
+                                  instance=instance)
                 # Make sure the async call finishes
                 if network_info is not None:
                     network_info.wait(do_raise=False)
@@ -2795,7 +2798,6 @@ class ComputeManager(manager.Manager):
         instance.save(expected_task_state=[task_states.REBUILDING])
 
         if recreate:
-            # Needed for nova-network, does nothing for neutron
             self.network_api.setup_networks_on_host(
                     context, instance, self.host)
             # For nova-network this is needed to move floating IPs
@@ -4846,9 +4848,8 @@ class ComputeManager(manager.Manager):
                                                           new_volume_id,
                                                           connector)
         old_cinfo = jsonutils.loads(bdm['connection_info'])
-        if old_cinfo and 'serial' not in old_cinfo:
-            old_cinfo['serial'] = old_volume_id
-        new_cinfo['serial'] = old_cinfo['serial']
+        if 'serial' not in new_cinfo:
+            new_cinfo['serial'] = new_volume_id
         return (old_cinfo, new_cinfo)
 
     def _swap_volume(self, context, instance, bdm, connector,
@@ -4905,6 +4906,13 @@ class ComputeManager(manager.Manager):
                                                       old_volume_id,
                                                       new_volume_id,
                                                       error=failed)
+            # If Cinder initiated the swap, the serial of new connection info
+            # is set to old volume ID.
+            if (new_cinfo is not None and
+                new_cinfo['serial'] == new_volume_id and
+                comp_ret['save_volume_id'] == old_volume_id):
+                new_cinfo['serial'] = old_volume_id
+
             LOG.debug("swap_volume: Cinder migrate_volume_completion "
                       "returned: %(comp_ret)s", {'comp_ret': comp_ret},
                       context=context, instance=instance)

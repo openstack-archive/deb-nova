@@ -9,19 +9,16 @@
 #    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 #    License for the specific language governing permissions and limitations
 #    under the License.
-"""WSGI script for Placement API
 
-WSGI handler for running Placement API under Apache2, nginx, gunicorn etc.
-"""
+from sqlalchemy import MetaData
+from sqlalchemy import Table
 
-from nova.api.openstack.placement import deploy
-from nova import conf
-from nova import config
+from nova.db.sqlalchemy import api_models
 
 
-CONFIG_FILE = '/etc/nova/nova.conf'
+def upgrade(migrate_engine):
+    meta = MetaData()
+    meta.bind = migrate_engine
 
-
-config.parse_args([], default_config_files=[CONFIG_FILE])
-
-application = deploy.loadapp(conf.CONF)
+    build_requests = Table('build_requests', meta, autoload=True)
+    build_requests.c.block_device_mappings.alter(type=api_models.MediumText())

@@ -11,6 +11,7 @@
 #    under the License.
 
 
+import mock
 from oslo_db import exception as db_exc
 
 from nova import context
@@ -205,6 +206,53 @@ class ResourceProviderTestCase(ResourceProviderBaseCase):
             self.context, resource_provider.uuid))
         self.assertEqual(33, reloaded_inventories[0].total)
 
+    @mock.patch('nova.objects.resource_provider.LOG')
+    def test_set_inventory_over_capacity(self, mock_log):
+        rp = objects.ResourceProvider(context=self.context,
+                                      uuid=uuidsentinel.rp_uuid,
+                                      name=uuidsentinel.rp_name)
+        rp.create()
+
+        disk_inv = objects.Inventory(
+                resource_provider=rp,
+                resource_class=fields.ResourceClass.DISK_GB,
+                total=1024,
+                reserved=15,
+                min_unit=10,
+                max_unit=100,
+                step_size=10,
+                allocation_ratio=1.0)
+        vcpu_inv = objects.Inventory(
+                resource_provider=rp,
+                resource_class=fields.ResourceClass.VCPU,
+                total=12,
+                reserved=0,
+                min_unit=1,
+                max_unit=12,
+                step_size=1,
+                allocation_ratio=16.0)
+
+        inv_list = objects.InventoryList(objects=[disk_inv, vcpu_inv])
+        rp.set_inventory(inv_list)
+        self.assertFalse(mock_log.warning.called)
+
+        # Allocate something reasonable for the above inventory
+        alloc = objects.Allocation(
+            context=self.context,
+            resource_provider=rp,
+            consumer_id=uuidsentinel.consumer,
+            resource_class='DISK_GB',
+            used=512)
+        alloc.create()
+
+        # Update our inventory to over-subscribe us after the above allocation
+        disk_inv.total = 400
+        rp.set_inventory(inv_list)
+
+        # We should succeed, but have logged a warning for going over on disk
+        mock_log.warning.assert_called_once_with(
+            mock.ANY, {'uuid': rp.uuid, 'resource': 'DISK_GB'})
+
     def test_provider_modify_inventory(self):
         rp = objects.ResourceProvider(context=self.context,
                                       uuid=uuidsentinel.rp_uuid,
@@ -380,7 +428,11 @@ class ResourceProviderTestCase(ResourceProviderBaseCase):
         self.assertIn('No inventory of class DISK_GB found for update',
                       str(error))
 
-    def test_update_inventory_violates_allocation(self):
+    @mock.patch('nova.objects.resource_provider.LOG')
+    def test_update_inventory_violates_allocation(self, mock_log):
+        # Compute nodes that are reconfigured have to be able to set
+        # their inventory to something that violates allocations so
+        # we need to make that possible.
         rp, allocation = self._make_allocation()
         disk_inv = objects.Inventory(resource_provider=rp,
                                      resource_class='DISK_GB',
@@ -390,16 +442,22 @@ class ResourceProviderTestCase(ResourceProviderBaseCase):
         rp.set_inventory(inv_list)
         # attempt to set inventory to less than currently allocated
         # amounts
+        new_total = 1
         disk_inv = objects.Inventory(
             resource_provider=rp,
-            resource_class=fields.ResourceClass.DISK_GB, total=1)
+            resource_class=fields.ResourceClass.DISK_GB, total=new_total)
         disk_inv.obj_set_defaults()
-        error = self.assertRaises(
-            exception.InvalidInventoryNewCapacityExceeded,
-            rp.update_inventory, disk_inv)
-        self.assertIn("Invalid inventory for '%s'"
-                      % fields.ResourceClass.DISK_GB, str(error))
-        self.assertIn("on resource provider '%s'." % rp.uuid, str(error))
+        rp.update_inventory(disk_inv)
+
+        usages = objects.UsageList.get_all_by_resource_provider_uuid(
+            self.context, rp.uuid)
+        self.assertEqual(allocation.used, usages[0].usage)
+
+        inv_list = objects.InventoryList.get_all_by_resource_provider_uuid(
+            self.context, rp.uuid)
+        self.assertEqual(new_total, inv_list[0].total)
+        mock_log.warning.assert_called_once_with(
+            mock.ANY, {'uuid': rp.uuid, 'resource': 'DISK_GB'})
 
     def test_add_invalid_inventory(self):
         rp = objects.ResourceProvider(context=self.context,
@@ -573,6 +631,71 @@ class TestAllocation(ResourceProviderBaseCase):
 
 
 class TestAllocationListCreateDelete(ResourceProviderBaseCase):
+
+    def test_allocation_checking(self):
+        """Test that allocation check logic works with 2 resource classes on
+        one provider.
+
+        If this fails, we get a KeyError at create_all()
+        """
+
+        consumer_uuid = uuidsentinel.consumer
+        consumer_uuid2 = uuidsentinel.consumer2
+
+        # Create one resource provider with 2 classes
+        rp1_name = uuidsentinel.rp1_name
+        rp1_uuid = uuidsentinel.rp1_uuid
+        rp1_class = fields.ResourceClass.DISK_GB
+        rp1_used = 6
+
+        rp2_class = fields.ResourceClass.IPV4_ADDRESS
+        rp2_used = 2
+
+        rp1 = objects.ResourceProvider(
+            self.context, name=rp1_name, uuid=rp1_uuid)
+        rp1.create()
+
+        inv = objects.Inventory(resource_provider=rp1,
+                                resource_class=rp1_class,
+                                total=1024)
+        inv.obj_set_defaults()
+
+        inv2 = objects.Inventory(resource_provider=rp1,
+                                resource_class=rp2_class,
+                                total=255, reserved=2)
+        inv2.obj_set_defaults()
+        inv_list = objects.InventoryList(objects=[inv, inv2])
+        rp1.set_inventory(inv_list)
+
+        # create the allocations for a first consumer
+        allocation_1 = objects.Allocation(resource_provider=rp1,
+                                          consumer_id=consumer_uuid,
+                                          resource_class=rp1_class,
+                                          used=rp1_used)
+        allocation_2 = objects.Allocation(resource_provider=rp1,
+                                          consumer_id=consumer_uuid,
+                                          resource_class=rp2_class,
+                                          used=rp2_used)
+        allocation_list = objects.AllocationList(
+            self.context, objects=[allocation_1, allocation_2])
+        allocation_list.create_all()
+
+        # create the allocations for a second consumer, until we have
+        # allocations for more than one consumer in the db, then we
+        # won't actually be doing real allocation math, which triggers
+        # the sql monster.
+        allocation_1 = objects.Allocation(resource_provider=rp1,
+                                          consumer_id=consumer_uuid2,
+                                          resource_class=rp1_class,
+                                          used=rp1_used)
+        allocation_2 = objects.Allocation(resource_provider=rp1,
+                                          consumer_id=consumer_uuid2,
+                                          resource_class=rp2_class,
+                                          used=rp2_used)
+        allocation_list = objects.AllocationList(
+            self.context, objects=[allocation_1, allocation_2])
+        # If we are joining wrong, this will be a KeyError
+        allocation_list.create_all()
 
     def test_allocation_list_create(self):
         consumer_uuid = uuidsentinel.consumer

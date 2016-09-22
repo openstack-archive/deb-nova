@@ -1356,6 +1356,8 @@ class API(base.Base):
         else:
             hostname = None
 
+        # NOTE(mriedem): This is only here for test simplicity since a server
+        # name is required in the REST API.
         if display_name is None:
             display_name = self._default_display_name(instance.uuid)
             instance.display_name = display_name
@@ -2185,12 +2187,13 @@ class API(base.Base):
                     instance = objects.Instance.get_by_uuid(
                         context, instance_uuid, expected_attrs=expected_attrs)
         else:
-            # This should not happen if we made it past the service_version
-            # check above. But it does not need to be an exception yet.
-            LOG.warning(_LW('No instance_mapping found for instance %s. This '
-                            'should not be happening and will lead to errors '
-                            'in the future. Please open a bug at '
-                            'https://bugs.launchpad.net/nova'), instance_uuid)
+            # This should not happen once a deployment has migrated to cellsv2.
+            # If it happens after that point we handle it gracefully for now
+            # but this will become an exception in the future.
+            # TODO(alaski): Once devstack is setting up cellsv2 by default add
+            # a warning log message that this will become an exception in the
+            # future. The warning message will be conditional upon the
+            # migration having happened, which means a db lookup to check that.
             instance = objects.Instance.get_by_uuid(
                 context, instance_uuid, expected_attrs=expected_attrs)
 
@@ -2397,6 +2400,81 @@ class API(base.Base):
         return objects.InstanceList.get_by_filters(
             context, filters=filters, limit=limit, marker=marker,
             expected_attrs=fields, sort_keys=sort_keys, sort_dirs=sort_dirs)
+
+    def update_instance(self, context, instance, updates):
+        """Updates a single Instance object with some updates dict.
+
+        Returns the updated instance.
+        """
+
+        # NOTE(sbauza): Given we only persist the Instance object after we
+        # create the BuildRequest, we are sure that if the Instance object
+        # has an ID field set, then it was persisted in the right Cell DB.
+        if instance.obj_attr_is_set('id'):
+            instance.update(updates)
+            # Instance has been scheduled and the BuildRequest has been deleted
+            # we can directly write the update down to the right cell.
+            inst_map = self._get_instance_map_or_none(context, instance.uuid)
+            if inst_map and (inst_map.cell_mapping is not None):
+                with nova_context.target_cell(context, inst_map.cell_mapping):
+                    instance.save()
+            else:
+                # If inst_map.cell_mapping does not point at a cell then cell
+                # migration has not happened yet.
+                # TODO(alaski): Make this a failure case after we put in
+                # a block that requires migrating to cellsv2.
+                instance.save()
+        else:
+            # Instance is not yet mapped to a cell, so we need to update
+            # BuildRequest instead
+            # TODO(sbauza): Fix the possible race conditions where BuildRequest
+            # could be deleted because of either a concurrent instance delete
+            # or because the scheduler just returned a destination right
+            # after we called the instance in the API.
+            try:
+                build_req = objects.BuildRequest.get_by_instance_uuid(
+                    context, instance.uuid)
+                instance = build_req.instance
+                instance.update(updates)
+                # FIXME(sbauza): Here we are updating the current
+                # thread-related BuildRequest object. Given that another worker
+                # could have looking up at that BuildRequest in the API, it
+                # means that it could pass it down to the conductor without
+                # making sure that it's not updated, we could have some race
+                # condition where it would missing the updated fields, but
+                # that's something we could discuss once the instance record
+                # is persisted by the conductor.
+                build_req.save()
+            except exception.BuildRequestNotFound:
+                # Instance was mapped and the BuildRequest was deleted
+                # while fetching (and possibly the instance could have been
+                # deleted as well). We need to lookup again the Instance object
+                # in order to correctly update it.
+                # TODO(sbauza): Figure out a good way to know the expected
+                # attributes by checking which fields are set or not.
+                expected_attrs = ['flavor', 'pci_devices', 'numa_topology',
+                                  'tags', 'metadata', 'system_metadata',
+                                  'security_groups', 'info_cache']
+                inst_map = self._get_instance_map_or_none(context,
+                                                          instance.uuid)
+                if inst_map and (inst_map.cell_mapping is not None):
+                    with nova_context.target_cell(context,
+                                                  inst_map.cell_mapping):
+                        instance = objects.Instance.get_by_uuid(
+                            context, instance.uuid,
+                            expected_attrs=expected_attrs)
+                        instance.update(updates)
+                        instance.save()
+                else:
+                    # If inst_map.cell_mapping does not point at a cell then
+                    # cell migration has not happened yet.
+                    # TODO(alaski): Make this a failure case after we put in
+                    # a block that requires migrating to cellsv2.
+                    instance = objects.Instance.get_by_uuid(
+                        context, instance.uuid, expected_attrs=expected_attrs)
+                    instance.update(updates)
+                    instance.save()
+        return instance
 
     # NOTE(melwitt): We don't check instance lock for backup because lock is
     #                intended to prevent accidental change/delete of instances

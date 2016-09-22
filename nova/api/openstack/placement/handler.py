@@ -35,7 +35,7 @@ from nova.api.openstack.placement.handlers import root
 from nova.api.openstack.placement.handlers import usage
 from nova.api.openstack.placement import util
 from nova import exception
-from nova.i18n import _LE
+from nova.i18n import _, _LE
 
 LOG = logging.getLogger(__name__)
 
@@ -70,7 +70,11 @@ ROUTE_DECLARATIONS = {
     '/resource_providers/{uuid}/usages': {
         'GET': usage.list_usages
     },
+    '/resource_providers/{uuid}/allocations': {
+        'GET': allocation.list_for_resource_provider,
+    },
     '/allocations/{consumer_uuid}': {
+        'GET': allocation.list_for_consumer,
         'PUT': allocation.set_allocations,
         'DELETE': allocation.delete_allocations,
     },
@@ -105,7 +109,7 @@ def handle_405(environ, start_response):
     if _methods:
         headers['allow'] = _methods
     raise webob.exc.HTTPMethodNotAllowed(
-        'The method specified is not allowed for this resource.',
+        _('The method specified is not allowed for this resource.'),
         headers=headers, json_formatter=util.json_error_formatter)
 
 
@@ -123,27 +127,6 @@ def make_map(declarations):
     return mapper
 
 
-def format_request_line(environ):
-    """Format a request line for logging from the environment."""
-    base = "%(REMOTE_ADDR)s \"%(REQUEST_METHOD)s %(PATH_INFO)s" % environ
-    if environ.get('QUERY_STRING'):
-        base += "?" + environ.get('QUERY_STRING')
-    base += '"'
-
-    # if there is a response, include status code
-    resp = extract_response(environ)
-    if resp:
-        base += " status: %s len: %s" % (resp.status_int, resp.content_length)
-    return base
-
-
-def extract_response(environ):
-    """Extract the response which is carried around oddly"""
-    attrs = environ.get('webob.adhoc_attrs')
-    if attrs:
-        return attrs['response']
-
-
 class PlacementHandler(object):
     """Serve Placement API.
 
@@ -155,9 +138,6 @@ class PlacementHandler(object):
         self._map = make_map(ROUTE_DECLARATIONS)
 
     def __call__(self, environ, start_response):
-        # TODO(sdague): it would be great to also record the body
-        # here, for completeness.
-        LOG.debug("Starting request: %s" % format_request_line(environ))
         # All requests but '/' require admin.
         # TODO(cdent): We'll eventually want our own auth context,
         # but using nova's is convenient for now.
@@ -172,7 +152,22 @@ class PlacementHandler(object):
             # integrated yet.
             if 'admin' not in context.to_policy_values()['roles']:
                 raise webob.exc.HTTPForbidden(
-                    'admin required',
+                    _('admin required'),
+                    json_formatter=util.json_error_formatter)
+        # Check that an incoming write-oriented request method has
+        # the required content-type header. If not raise a 400. If
+        # this doesn't happen here then webob.dec.wsgify (elsewhere
+        # in the stack) will raise an uncaught KeyError. Since that
+        # is such a generic exception we cannot merely catch it
+        # here, we need to avoid it ever happening.
+        # TODO(cdent): Move this and the auth checking above into
+        # middleware. It shouldn't be here. This is for dispatch not
+        # validation or authorization.
+        request_method = environ['REQUEST_METHOD'].upper()
+        if request_method in ('POST', 'PUT', 'PATCH'):
+            if 'CONTENT_TYPE' not in environ:
+                raise webob.exc.HTTPBadRequest(
+                    _('content-type header required'),
                     json_formatter=util.json_error_formatter)
         try:
             return dispatch(environ, start_response, self._map)
@@ -186,5 +181,3 @@ class PlacementHandler(object):
         except Exception as exc:
             LOG.exception(_LE("Uncaught exception"))
             raise
-        finally:
-            LOG.info(format_request_line(environ))

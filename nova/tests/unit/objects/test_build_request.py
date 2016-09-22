@@ -95,6 +95,7 @@ class _TestBuildRequestObject(object):
         with mock.patch.object(build_request.BuildRequest, '_create_in_db',
                 _test_create_args):
             req_obj.create()
+        self.assertEqual({}, req_obj.obj_get_changes())
 
     def test_create_id_set(self):
         req_obj = build_request.BuildRequest(self.context)
@@ -115,6 +116,22 @@ class _TestBuildRequestObject(object):
 
         destroy_in_db.assert_called_once_with(self.context,
                                               req_obj.instance_uuid)
+
+    @mock.patch.object(build_request.BuildRequest, '_save_in_db')
+    def test_save(self, save_in_db):
+        fake_req = fake_build_request.fake_db_req()
+        save_in_db.return_value = fake_req
+        req_obj = fake_build_request.fake_req_obj(self.context, fake_req)
+        # We need to simulate the BuildRequest object being persisted before
+        # that call.
+        req_obj.id = 1
+        req_obj.obj_reset_changes(recursive=True)
+
+        req_obj.project_id = 'foo'
+        req_obj.save()
+
+        save_in_db.assert_called_once_with(self.context, req_obj.id,
+                                           {'project_id': 'foo'})
 
 
 class TestBuildRequestObject(test_objects._LocalTest,
