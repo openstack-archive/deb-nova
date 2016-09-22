@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Sep 2016 13:28:24 +0000
+Reviewed-on: https://review.openstack.org/371836
+Project: openstack/deb-nova
+Branch: refs/heads/stable/newton
