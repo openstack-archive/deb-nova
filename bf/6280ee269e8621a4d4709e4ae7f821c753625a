@@ -1,0 +1,9 @@
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 21 Sep 2016 20:58:58 +0000
+Reviewed-on: https://review.openstack.org/374213
+Project: openstack/deb-nova
+Branch: refs/heads/master
