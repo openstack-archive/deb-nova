@@ -10,6 +10,7 @@ nova (2:14.0.0~rc1-1) experimental; urgency=medium
   * Added a nova-placement-api package & daemon.
   * Package /usr/bin/nova-policy in nova-common.
   * Added --parallel when running unit tests.
+  * Revised debian/copyright holder list.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 14 Sep 2016 09:40:05 +0200
 

@@ -3,9 +3,70 @@ Upstream-Name: nova
 Source: https://github.com/openstack/nova.git
 
 Files: *
-Copyright: (c) 2010-2011 United States Government as represented by NASA
+Copyright: (c) 2010-2011, United States Government as represented by NASA
            (c) 2010-2016, OpenStack Foundation <openstack-dev@lists.openstack.org>
-           (c) 2010-2016, Others (See individual files for more details)
+           (c) 2012-2015, Hewlett-Packard Development Company, L.P.
+           (c) 2010-2013, Citrix Systems, Inc.
+           (c) 2012-2016, IBM Corp.
+           (c) 2011-2016, Red Hat, Inc.
+           (c) 2011-2014, Nebula, Inc.
+           (c) 2012-2015, NEC Corporation
+           (c) 2011-2012, Justin Santa Barbara
+           (c) 2011-2016, Rackspace
+           (c) 2009-2013, Nicira Networks, Inc.
+           (c) 2015, Ericsson AB
+           (c) 2011-2012, Midokura Japan K.K.
+           (c) 2011, Andrew Bogott for the Wikimedia Foundation
+           (c) 2016, HPE, Inc.
+           (c) 2001-2010, Twisted Matrix Laboratories.
+           (c) 2012-2016, Intel Corporation
+           (c) 2011-2016, NTT DOCOMO, INC.
+           (c) 2011, Denali Systems, Inc.
+           (c) 2013, Akira Yoshiyama <akirayoshiyama at gmail dot com>
+           (c) 2011, Eldar Nugaev
+           (c) 2011, Kirill Shileev
+           (c) 2011, Ilya Alekseyev
+           (c) 2011, University of Southern California
+           (c) 2011-2012, Piston Cloud Computing, Inc.
+           (c) 2011, X.commerce, a business unit of eBay Inc.
+           (c) 2012-2016, Cloudbase Solutions Srl
+           (c) 2011-2012, Grid Dynamics
+           (c) 2012, University Of Minho
+           (c) 2014-2015, Cisco Systems, Inc.
+           (c) 2013, Josh Durgin
+           (c) 2011, Ken Pepple
+           (c) 2011, Isaku Yamahata
+           (c) 2013-2014, The Johns Hopkins University/Applied Physics Laboratory
+           (c) 2012, SINA Inc.
+           (c) 2012 Michael Still
+           (c) 2010-2013, Canonical Inc
+           (c) 2013-2016, Mirantis, Inc.
+           (c) 2011, Ilya Alekseyev
+           (c) 2013, Boris Pavlovic
+           (c) 2013, Metacloud Inc.
+           (c) 2012, Yahoo! Inc.
+           (c) 2015, EMC Corporation
+           (c) 2012-2014, VMware, Inc.
+           (c) 2013, Netease, LLC.
+           (c) 2015, Quobyte Inc.
+           (c) 2015-2016, Huawei Technology corp.
+           (c) 2012, AT&T Labs Inc.
+           (c) 2012, Yun Mao <yunmao@gmail.com>
+           (c) 2016, Kylin Cloud
+           (c) 2012, The Cloudscaling Group, Inc.
+           (c) 2010, Cloud.com, Inc
+           (c) 2015, HGST
+           (c) 2015, Industrial Technology Research Institute.
+           (c) 1999-2002, by Secret Labs AB
+           (c) 2016, TUBITAK BILGEM
+           (c) 2013, UnitedStack Inc.
+           (c) 2012-2013, Pedro Navarro Perez
+           (c) 2015, Wind River Systems Inc.
+           (c) 2012, SUSE LINUX Products GmbH
+           (c) 2013, ISP RAS
+           (c) 2012, B1 Systems GmbH
+           (c) 1999-2002, by Fredrik Lundh
+           (c) 2013, Cloudwatt
 License: Apache-2
 
 Files: debian/*
