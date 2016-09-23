@@ -1,0 +1,13 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+1: Bob Ball <bob.ball@citrix.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 22 Sep 2016 23:11:16 +0000
+Reviewed-on: https://review.openstack.org/289431
+Project: openstack/deb-nova
+Branch: refs/heads/master
