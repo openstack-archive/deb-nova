@@ -1,0 +1,13 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: Citrix XenServer CI
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 26 Sep 2016 09:33:19 +0000
+Reviewed-on: https://review.openstack.org/278810
+Project: openstack/deb-nova
+Branch: refs/heads/master

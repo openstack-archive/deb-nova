@@ -1,0 +1,13 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 23 Sep 2016 11:49:27 +0000
+Reviewed-on: https://review.openstack.org/375037
+Project: openstack/deb-nova
+Branch: refs/heads/master

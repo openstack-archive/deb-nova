@@ -1,0 +1,12 @@
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 26 Sep 2016 10:45:36 +0000
+Reviewed-on: https://review.openstack.org/374955
+Project: openstack/deb-nova
+Branch: refs/heads/master
