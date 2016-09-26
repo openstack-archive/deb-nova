@@ -107,8 +107,8 @@ Build-Depends-Indep: bandit (>= 0.13.2),
                      websockify (>= 0.8.0),
 Build-Conflicts: python-cjson
 Standards-Version: 3.9.8
-Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-nova
-Vcs-Git: https://git.openstack.org/openstack/deb-nova
+Vcs-Browser: https://git.openstack.org/cgit/openstack/deb-nova?h=debian%2Fnewton
+Vcs-Git: https://git.openstack.org/openstack/deb-nova -b debian/newton
 Homepage: http://www.openstack.org/software/openstack-compute/
 
 Package: python-nova
