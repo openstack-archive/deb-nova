@@ -1,0 +1,10 @@
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 28 Sep 2016 10:33:58 +0000
+Reviewed-on: https://review.openstack.org/378049
+Project: openstack/deb-nova
+Branch: refs/heads/stable/newton

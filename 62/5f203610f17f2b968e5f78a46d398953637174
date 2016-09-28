@@ -1,0 +1,14 @@
+Code-Review+1: Andrew Laski <andrew@lascii.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: melanie witt <melwittt@gmail.com>
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 28 Sep 2016 13:18:46 +0000
+Reviewed-on: https://review.openstack.org/378057
+Project: openstack/deb-nova
+Branch: refs/heads/stable/newton
