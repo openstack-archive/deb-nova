@@ -1,0 +1,11 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 29 Sep 2016 03:10:07 +0000
+Reviewed-on: https://review.openstack.org/378070
+Project: openstack/deb-nova
+Branch: refs/heads/master
