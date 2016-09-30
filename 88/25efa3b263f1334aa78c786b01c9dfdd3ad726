@@ -1,0 +1,13 @@
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Takahiro Suzuki <suzuki.thj@ncos.nec.co.jp>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Workflow+1: Tony Breeds <tony@bakeyournoodle.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 30 Sep 2016 02:14:12 +0000
+Reviewed-on: https://review.openstack.org/353851
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
