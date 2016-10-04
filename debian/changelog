@@ -1,4 +1,4 @@
-nova (2:14.0.0~rc2-1) experimental; urgency=medium
+nova (2:14.0.0~rc2-1) unstable; urgency=medium
 
   [ Ondřej Nový ]
   * d/s/options: extend-diff-ignore of .gitreview
@@ -6,6 +6,7 @@ nova (2:14.0.0~rc2-1) experimental; urgency=medium
 
   [ Thomas Goirand ]
   * New upstream release.
+  * Uploading to unstable.
   * Build-Depends on openstack-pkg-tools (>= 53~).
   * Fixed oslotest EPOCH.
   * Debconf translation:
