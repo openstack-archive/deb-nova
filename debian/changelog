@@ -8,6 +8,8 @@ nova (2:14.0.0~rc2-1) experimental; urgency=medium
   * New upstream release.
   * Build-Depends on openstack-pkg-tools (>= 53~).
   * Fixed oslotest EPOCH.
+  * Debconf translation:
+    - it (Closes: #838502).
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Sep 2016 10:05:08 +0200
 

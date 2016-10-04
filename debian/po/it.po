@@ -1,13 +1,13 @@
 # Italian translation of nova debconf messages.
-# Copyright (C) 2012, Beatrice Torracca <beatricet@libero.it>
+# Copyright (C) 2016, nova package copyritght holder
 # This file is distributed under the same license as the nova package.
-# Beatrice Torracca <beatricet@libero.it>, 2012, 2013, 2014.
+# Beatrice Torracca <beatricet@libero.it>, 2012, 2013, 2014, 2016.
 msgid ""
 msgstr ""
 "Project-Id-Version: nova\n"
 "Report-Msgid-Bugs-To: nova@packages.debian.org\n"
 "POT-Creation-Date: 2016-03-29 11:54+0000\n"
-"PO-Revision-Date: 2014-08-02 13:11+0200\n"
+"PO-Revision-Date: 2016-09-21 18:22+0200\n"
 "Last-Translator: Beatrice Torracca <beatricet@libero.it>\n"
 "Language-Team: Italian <debian-l10n-italian@lists.debian.org>\n"
 "Language: it\n"
@@ -260,7 +260,7 @@ msgstr "Specificare la password da usare per connettersi al server RabbitMQ."
 #. Description
 #: ../nova-common.templates:16001
 msgid "Metadata proxy shared secret:"
-msgstr ""
+msgstr "Password condivisa del proxy dei metadati:"
 
 #. Type: password
 #. Description
@@ -270,6 +270,9 @@ msgid ""
 "through the Neutron metadata agent, which serves as a proxy to the Nova "
 "metadata REST API server."
 msgstr ""
+"Le istanze di macchine virtuali che usano Neutron per gestire la rete "
+"recuperano i propri metadati attraverso l'agente di metadati di Neutron che "
+"funge da proxy per il server dell'API REST dei metadati di Nova."
 
 #. Type: password
 #. Description
@@ -280,6 +283,10 @@ msgid ""
 "same shared password should be used when setting up the neutron-metadata-"
 "agent package."
 msgstr ""
+"Inserire la password da usare per proteggere le comunicazioni tra l'agente "
+"proxy per metadati di Neutron e il server di metadati Nova. La stessa "
+"password condivisa deve essere usata quando si configura il pacchetto "
+"neutron-metadata-agent."
 
 #. Type: string
 #. Description
@@ -369,7 +376,6 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:1001
-#, fuzzy
 #| msgid ""
 #| "Note that you will need to have an up and running keystone server on "
 #| "which to connect using the Keystone auth token."
@@ -378,8 +384,10 @@ msgid ""
 "to connect using a known admin project name, admin username and password. "
 "The admin auth token is not used anymore."
 msgstr ""
-"Notare che sarà necessario avere un server keystone in funzione a cui "
-"connettersi usando il token di autorizzazione Keystone."
+"Notare che sarà necessario avere un server Keystone in funzione a cui "
+"connettersi usando un nome di progetto di amministrazione conosciuto, un "
+"nome utente e password di amministratore. Il token di autenticazione di "
+"amministratore non è più usato."
 
 #. Type: string
 #. Description
@@ -401,10 +409,9 @@ msgstr ""
 #. Type: string
 #. Description
 #: ../nova-api.templates:3001
-#, fuzzy
 #| msgid "Neutron admin tenant name:"
 msgid "Keystone admin name:"
-msgstr "Nome del locatario («tenant») per l'amministrazione di Neutron:"
+msgstr "Nome amministratore Keystone:"
 
 #. Type: string
 #. Description
@@ -418,22 +425,23 @@ msgid ""
 "To register the service endpoint, this package needs to know the Admin "
 "login, name, project name, and password to the Keystone server."
 msgstr ""
+"Per registrare il punto terminale del servizio questo pacchetto deve "
+"conoscere il login, il nome, il nome del progetto e la password "
+"dell'amministratore per il server Keystone."
 
 #. Type: string
 #. Description
 #: ../nova-api.templates:4001
-#, fuzzy
 #| msgid "Neutron admin tenant name:"
 msgid "Keystone admin project name:"
-msgstr "Nome del locatario («tenant») per l'amministrazione di Neutron:"
+msgstr "Nome del progetto di amministrazione Keystone:"
 
 #. Type: password
 #. Description
 #: ../nova-api.templates:5001
-#, fuzzy
 #| msgid "Neutron administrator password:"
 msgid "Keystone admin password:"
-msgstr "Password dell'amministratore di Neutron:"
+msgstr "Password amministratore Keystone:"
 
 #. Type: string
 #. Description
@@ -484,15 +492,13 @@ msgstr ""
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
 #| msgid "Set up a database for Nova?"
 msgid "Set up a database for Nova API?"
-msgstr "Impostare un database per Nova?"
+msgstr "Impostare un database per API Nova?"
 
 #. Type: boolean
 #. Description
 #: ../nova-api.templates:8001
-#, fuzzy
 #| msgid ""
 #| "You can change this setting later on by running \"dpkg-reconfigure -plow "
 #| "nova-common\"."
@@ -501,7 +507,7 @@ msgid ""
 "nova-api\"."
 msgstr ""
 "È possibile cambiare questa impostazione successivamente eseguendo \"dpkg-"
-"reconfigure -plow nova-common\"."
+"reconfigure -plow nova-api\"."
 
 #. Type: select
 #. Description
@@ -530,37 +536,3 @@ msgstr ""
 #: ../nova-consoleproxy.templates:1001
 msgid "This can later be edited in /etc/default/nova-consoleproxy."
 msgstr "Può essere modificato in seguito in /etc/default/nova-consoleproxy."
-
-#~ msgid "Keystone Auth Token:"
-#~ msgstr "Token di autenticazione Keystone:"
-
-#~ msgid ""
-#~ "To configure its endpoint in Keystone, nova-api needs the Keystone auth "
-#~ "token."
-#~ msgstr ""
-#~ "Per configurare il proprio punto terminale in Keystone, nova-api ha "
-#~ "bisogno del token di autenticazione Keystone."
-
-#~| msgid "Value for my_ip:"
-#~ msgid "Value for neutron_url:"
-#~ msgstr "Valore per my_ip:"
-
-#~ msgid "Start nova services at boot?"
-#~ msgstr "Far partire i servizi Nova all'avvio?"
-
-#~ msgid ""
-#~ "Please choose whether you want to start Nova services when the machine is "
-#~ "booted up."
-#~ msgstr "Scegliere se far partire i servizi Nova all'avvio della macchina."
-
-#~ msgid ""
-#~ "Enter the IP address that will be set in the rabbitmq_host directive of "
-#~ "nova.conf. If you are installing openstack-proxy-node, then the default "
-#~ "to use 127.0.0.1 is probably fine. If you are installing openstack-"
-#~ "compute-node, then enter the IP address of your proxy-node host."
-#~ msgstr ""
-#~ "Inserire l'indirizzo IP che verrà impostato nella direttiva rabbitmq_host "
-#~ "di nova.conf. Se si sta installando openstack-proxy-node, allora "
-#~ "l'impostazione predefinita che usa 127.0.0.1 va probabilmente bene. Se si "
-#~ "sta installando openstack-compute-node, allora inserire l'indirizzo IP "
-#~ "dell'host proxy-node."
