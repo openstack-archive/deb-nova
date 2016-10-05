@@ -1,0 +1,15 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Ryo Miki <miki.ryo@po.ntts.co.jp>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Code-Review+1: Andrew Laski <andrew@lascii.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 05 Oct 2016 00:57:25 +0000
+Reviewed-on: https://review.openstack.org/375565
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka

@@ -1,0 +1,12 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Muhammad Sagheer <msagheer@plumgrid.com>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Code-Review+1: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 05 Oct 2016 00:13:05 +0000
+Reviewed-on: https://review.openstack.org/379946
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
