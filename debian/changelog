@@ -7,6 +7,7 @@ nova (2:14.0.0~rc1-2) unstable; urgency=medium
   [ Thomas Goirand ]
   * Uploading to unstable.
   * Fixed oslotest EPOCH.
+  * Unblacklist LibvirtConnTestCase.test_spawn_with_config_drive.
 
  -- Thomas Goirand <zigo@debian.org>  Wed, 28 Sep 2016 10:05:08 +0200
 
