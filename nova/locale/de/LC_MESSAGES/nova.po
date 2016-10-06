@@ -13,13 +13,13 @@
 # Andreas Jaeger <jaegerandi@gmail.com>, 2016. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 14.0.0.0b3.dev750\n"
+"Project-Id-Version: nova 14.0.0.0rc2.dev14\n"
 "Report-Msgid-Bugs-To: https://bugs.launchpad.net/openstack-i18n/\n"
-"POT-Creation-Date: 2016-08-25 06:14+0000\n"
+"POT-Creation-Date: 2016-09-26 20:40+0000\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"PO-Revision-Date: 2016-06-03 01:34+0000\n"
+"PO-Revision-Date: 2016-09-26 12:51+0000\n"
 "Last-Translator: Andreas Jaeger <jaegerandi@gmail.com>\n"
 "Language: de\n"
 "Language-Team: German\n"
@@ -349,6 +349,9 @@ msgstr "Versuchte Überschreibung eines vorhandenen Wertes."
 msgid "Attribute not supported: %(attr)s"
 msgstr "Attribut nicht unterstützt: %(attr)s"
 
+msgid "Bad Request - Invalid Parameters"
+msgstr "Fehlerhafte Anfrage - Ungültige Parameter"
+
 #, python-format
 msgid "Bad mac for to_global_ipv6: %s"
 msgstr "Falsche MAC-Adresse für 'to_global_ipv6': %s"
@@ -500,6 +503,33 @@ msgstr "CPU-Nummer %(cpuset)s ist keinem Knoten zugeordnet"
 #, python-format
 msgid "CPU pinning is not supported by the host: %(reason)s"
 msgstr "CPU pinning wird nicht unterstützt vom Host: %(reason)s"
+
+#, python-format
+msgid "CPU set to pin %(requested)s must be a subset of free CPU set %(free)s"
+msgstr ""
+"CPU Set zu pin %(requested)s muss eine Teilmenge freier CPU Sets %(free)s "
+"sein"
+
+#, python-format
+msgid ""
+"CPU set to pin %(requested)s must be a subset of known CPU set %(cpuset)s"
+msgstr ""
+"CPU Set zu pin %(requested)s muss eine Teilmenge bekannter CPU Sets "
+"%(cpuset)s sein"
+
+#, python-format
+msgid ""
+"CPU set to unpin %(requested)s must be a subset of known CPU set %(cpuset)s"
+msgstr ""
+"CPU Set zu unpin %(requested)s muss eine Teilmenge bekannter CPU Sets "
+"%(cpuset)s sein"
+
+#, python-format
+msgid ""
+"CPU set to unpin %(requested)s must be a subset of pinned CPU set %(pinned)s"
+msgstr ""
+"CPU Set zu unpin %(requested)s muss eine Teilmenge der bereits gepinnten CPU "
+"Sets %(pinned)s sein"
 
 msgid "Can not add access to a public flavor."
 msgstr "Kann keinen Zugriff auf eine öffentliche Version herstellen. "
@@ -957,6 +987,10 @@ msgid "Device '%(device)s' not found."
 msgstr "Das Gerät '%(device)s' wurde nicht gefunden."
 
 #, python-format
+msgid "Device detach failed for %(device)s: %(reason)s"
+msgstr "Abhängen des Geräts fehlgeschlagen für %(device)s: %(reason)s"
+
+#, python-format
 msgid ""
 "Device id %(id)s specified is not supported by hypervisor version %(version)s"
 msgstr ""
@@ -1328,6 +1362,10 @@ msgstr "Instanz konnte nicht beendet werden: %(reason)s"
 msgid "Failed to unplug vif %s"
 msgstr "Vif %s konnte nicht entfernt werden."
 
+#, python-format
+msgid "Failed to unplug virtual interface: %(reason)s"
+msgstr "Virtuelle Schnittstelle konnte nicht entfernt werden: %(reason)s"
+
 msgid "Failure prepping block device."
 msgstr "Fehler beim Vorbereiten des Block-Gerätes."
 
@@ -1521,6 +1559,9 @@ msgstr "Floating IP für Host %(host)s nicht gefunden."
 msgid "Floating IP pool not found."
 msgstr "Pool mit Floating IPs nicht gefunden."
 
+msgid "Forbidden"
+msgstr "Verboten"
+
 msgid ""
 "Forbidden to exceed flavor value of number of serial ports passed in image "
 "meta."
@@ -1551,14 +1592,6 @@ msgstr "Nicht eindeutiges Netz für name_label %s gefunden"
 msgid "Free %(type)s %(free).02f %(unit)s < requested %(requested)d %(unit)s"
 msgstr ""
 "Frei %(type)s %(free).02f %(unit)s < angefordert %(requested)d %(unit)s"
-
-#, python-format
-msgid "Glance image %(image_id)s is in unknown state - %(state)s"
-msgstr "Glance-Image '%(image_id)s' ist in unbekanntem Status - %(state)s"
-
-#, python-format
-msgid "Glance image %s is in killed state"
-msgstr "Glance-Image '%s' ist im Status 'killed'"
 
 #, python-format
 msgid "Group not valid. Reason: %(reason)s"
@@ -2016,6 +2049,9 @@ msgstr "Ungültiger Konsolentyp %(console_type)s"
 msgid "Invalid content type %(content_type)s."
 msgstr "Ungültiger Inhaltstyp %(content_type)s."
 
+msgid "Invalid data supplied to HashRing.get_hosts."
+msgstr "Ungültige Daten für HashRing.get_hosts angegeben."
+
 #, python-format
 msgid "Invalid datetime string: %(reason)s"
 msgstr "Falsche Datumszeit-Zeichenkette: %(reason)s"
@@ -2050,6 +2086,9 @@ msgstr "Ungültige feste IP-Adresse %s in der Anforderung"
 #, python-format
 msgid "Invalid floating IP %s in request"
 msgstr "Ungültige dynamische IP-Adresse %s in Anforderung"
+
+msgid "Invalid hosts supplied when building HashRing."
+msgstr "Ungültige Hosts beim Erstellen von HashRing angegeben."
 
 #, python-format
 msgid "Invalid id: %(instance_id)s (expecting \"i-...\")"
@@ -2179,6 +2218,9 @@ msgstr "Ungültige Startzeit. Die Startzeit darf nicht nach der Endzeit liegen."
 msgid "Invalid state of instance files on shared storage"
 msgstr "Ungültiger Status der Instanzdateien im gemeinsam genutzten Speicher"
 
+msgid "Invalid status value"
+msgstr "Ungültiger Status Wert"
+
 msgid "Invalid target_lun"
 msgstr "Ungültige target_lun"
 
@@ -2244,6 +2286,15 @@ msgid ""
 msgstr ""
 "Ironic-Knoten %(id)s konnte nicht überprüft werden. (Implementieren: "
 "%(deploy)s, Netzstrom: '%(power)s')"
+
+#, python-format
+msgid ""
+"Ironic node: %(id)s virtual to physical interface count  mismatch (Vif "
+"count: %(vif_count)d, Pif count: %(pif_count)d)"
+msgstr ""
+"Ironic-Knoten: %(id)s - Abweichung der Anzahl für virtuelle und physische "
+"Schnittstelle (Anzahl für virtuelle Schnittstelle: %(vif_count)d, Anzahl für "
+"physische Schnittstelle: %(pif_count)d)"
 
 msgid "Is the appropriate service running?"
 msgstr "Ist der entsprechende Dienst aktiv?"
@@ -2343,6 +2394,10 @@ msgid ""
 msgstr ""
 "Die Livemigration mit API v2.25 ist erst verfügbar, wenn das Mitaka-Upgrade "
 "vollständig abgeschlossen ist."
+
+#, python-format
+msgid "Malformed JSON: %(error)s"
+msgstr "Fehlerhaftes JSON: %(error)s"
 
 #, python-format
 msgid "Malformed message body: %(reason)s"
@@ -4201,6 +4256,10 @@ msgid "Unknown argument: port"
 msgstr "Unbekanntes Argument: Port"
 
 #, python-format
+msgid "Unknown auth type: %s"
+msgstr "Unbekannter Authentifizierungstyp: %s"
+
+#, python-format
 msgid "Unknown chain: %r"
 msgstr "Unbekannte Kette: %r"
 
@@ -4340,6 +4399,10 @@ msgstr ""
 msgid "Value must be >= 0 for field %s"
 msgstr "Wert muß >= 0 sein für Feld %s"
 
+#, python-format
+msgid "Value must match %s"
+msgstr "Wert muss %s entsprechen"
+
 msgid "Value required for 'scality_sofs_config'"
 msgstr "Wert für 'scality_sofs_config' erforderlich"
 
@@ -4435,6 +4498,12 @@ msgid ""
 msgstr ""
 "Datenträger legt Blockgröße fest, aber der aktuelle libvirt-Hypervisor %s "
 "unterstützt keine angepassten Blockgrößen"
+
+#, python-format
+msgid "Volume sets discard option, qemu %(qemu)s or later is required."
+msgstr ""
+"Datenträger setzt Option zum Verwerfen, qemu ab Version %(qemu)s ist "
+"erforderlich."
 
 #, python-format
 msgid "WARNING: fixed IP %s allocated to missing instance"
