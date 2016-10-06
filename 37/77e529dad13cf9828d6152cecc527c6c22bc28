@@ -1,0 +1,8 @@
+Code-Review+2: Thomas Goirand <thomas@goirand.fr>
+Workflow+1: Thomas Goirand <thomas@goirand.fr>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 09:21:22 +0000
+Reviewed-on: https://review.openstack.org/382780
+Project: openstack/deb-nova
+Branch: refs/heads/debian/newton
