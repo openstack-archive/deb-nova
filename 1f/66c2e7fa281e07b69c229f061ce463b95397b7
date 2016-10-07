@@ -1,0 +1,10 @@
+Verified+1: VMware NSX CI
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Workflow+1: Andrew Laski <andrew@lascii.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 19:54:16 +0000
+Reviewed-on: https://review.openstack.org/382976
+Project: openstack/deb-nova
+Branch: refs/heads/master

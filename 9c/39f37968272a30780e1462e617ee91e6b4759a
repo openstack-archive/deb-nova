@@ -1,0 +1,9 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Workflow+1: Kevin L. Mitchell <klmitch@mit.edu>
+Verified-1: XenProject CI <openstack-ci@xenproject.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 19:42:05 +0000
+Reviewed-on: https://review.openstack.org/383127
+Project: openstack/deb-nova
+Branch: refs/heads/master

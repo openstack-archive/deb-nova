@@ -1,0 +1,13 @@
+Verified+1: VMware NSX CI
+Code-Review+1: Gábor Antal <antal@inf.u-szeged.hu>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Oct 2016 19:51:08 +0000
+Reviewed-on: https://review.openstack.org/382185
+Project: openstack/deb-nova
+Branch: refs/heads/master
