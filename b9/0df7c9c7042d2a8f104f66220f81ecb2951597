@@ -1,0 +1,10 @@
+Code-Review+1: Augustina Ragwitz <auggy@cpan.org>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 07 Oct 2016 20:46:40 +0000
+Reviewed-on: https://review.openstack.org/383524
+Project: openstack/deb-nova
+Branch: refs/heads/master
