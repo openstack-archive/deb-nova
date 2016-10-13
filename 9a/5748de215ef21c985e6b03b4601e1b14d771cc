@@ -1,0 +1,13 @@
+Code-Review+1: Jianghua Wang <jianghua.wang@citrix.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Bob Ball <bob.ball@citrix.com>
+Code-Review+1: Maksim Malchuk <mmalchuk@mirantis.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 10 Oct 2016 12:38:13 +0000
+Reviewed-on: https://review.openstack.org/378491
+Project: openstack/deb-nova
+Branch: refs/heads/master

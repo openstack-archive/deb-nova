@@ -1,0 +1,13 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+1: VMware NSX CI
+Verified+1: Citrix XenServer CI
+Code-Review+1: Chuck Short <chuck.short@canonical.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 12 Oct 2016 22:40:39 +0000
+Reviewed-on: https://review.openstack.org/385499
+Project: openstack/deb-nova
+Branch: refs/heads/master

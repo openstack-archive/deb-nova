@@ -1,0 +1,13 @@
+Verified-1: VMware NSX CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Béla Vancsics <vancsics@inf.u-szeged.hu>
+Code-Review+1: Gábor Antal <antal@inf.u-szeged.hu>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 11 Oct 2016 07:38:43 +0000
+Reviewed-on: https://review.openstack.org/384329
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Verified+1: XenProject CI <openstack-ci@xenproject.org>
+Verified+1: VMware NSX CI
+Code-Review+2: Andrew Laski <andrew@lascii.com>
+Workflow+1: Andrew Laski <andrew@lascii.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 12 Oct 2016 22:21:47 +0000
+Reviewed-on: https://review.openstack.org/314928
+Project: openstack/deb-nova
+Branch: refs/heads/master
