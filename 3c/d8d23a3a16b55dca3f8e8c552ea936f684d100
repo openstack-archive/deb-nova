@@ -1,0 +1,15 @@
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Code-Review+1: Sergey Nikitin <snikitin@mirantis.com>
+Code-Review+1: Lee Yarwood <lyarwood@redhat.com>
+Code-Review+2: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Workflow+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 14 Oct 2016 11:37:06 +0000
+Reviewed-on: https://review.openstack.org/375873
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
