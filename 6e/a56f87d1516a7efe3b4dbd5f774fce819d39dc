@@ -1,0 +1,14 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: VMware NSX CI
+Code-Review-1: Lee Yarwood <lyarwood@redhat.com>
+Code-Review+2: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Workflow+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 14 Oct 2016 20:03:37 +0000
+Reviewed-on: https://review.openstack.org/384697
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka

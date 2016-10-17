@@ -1,0 +1,14 @@
+Verified-1: VMware NSX CI
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Lee Yarwood <lyarwood@redhat.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Chuck Short <chuck.short@canonical.com>
+Workflow+1: Chuck Short <chuck.short@canonical.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 16 Oct 2016 01:22:18 +0000
+Reviewed-on: https://review.openstack.org/383971
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
