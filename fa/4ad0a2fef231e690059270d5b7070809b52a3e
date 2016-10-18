@@ -1,0 +1,13 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Verified+1: VMware NSX CI
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Verified+1: Citrix XenServer CI
+Code-Review+1: sahid <sahid.ferdjaoui@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Oct 2016 02:04:41 +0000
+Reviewed-on: https://review.openstack.org/386145
+Project: openstack/deb-nova
+Branch: refs/heads/master
