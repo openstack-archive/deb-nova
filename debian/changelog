@@ -1,3 +1,10 @@
+nova (2:14.0.0-2) unstable; urgency=medium
+
+  * Patches migration script to clean-up build_requests on upgrades from
+    Mitaka.
+
+ -- Thomas Goirand <zigo@debian.org>  Wed, 19 Oct 2016 14:28:43 +0200
+
 nova (2:14.0.0-1) unstable; urgency=medium
 
   * New upstream release.
