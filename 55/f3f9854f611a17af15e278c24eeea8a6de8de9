@@ -1,0 +1,15 @@
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Code-Review+1: Sivasathurappan Radhakrishnan <siva.radhakrishnan@intel.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Pavel Kholkin <pkholkin@mirantis.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Oct 2016 12:13:09 +0000
+Reviewed-on: https://review.openstack.org/268801
+Project: openstack/deb-nova
+Branch: refs/heads/master
