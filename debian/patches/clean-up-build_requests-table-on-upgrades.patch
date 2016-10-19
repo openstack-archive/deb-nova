@@ -1,0 +1,15 @@
+Description: Clean-up build_requests on upgrades
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2016-10-19
+
+--- nova-14.0.0.orig/nova/db/sqlalchemy/api_migrations/migrate_repo/versions/013_build_request_extended_attrs.py
++++ nova-14.0.0/nova/db/sqlalchemy/api_migrations/migrate_repo/versions/013_build_request_extended_attrs.py
+@@ -48,5 +48,7 @@ def upgrade(migrate_engine):
+     constrs = inspector.get_unique_constraints('build_requests')
+     constr_names = [constr['name'] for constr in constrs]
+     if 'uniq_build_requests0instance_uuid' not in constr_names:
++        sql = ("DELETE from build_requests WHERE instance_uuid='NULL'")
++        migrate_engine.execute(sql)
+         UniqueConstraint('instance_uuid', table=build_requests,
+                 name='uniq_build_requests0instance_uuid').create()
