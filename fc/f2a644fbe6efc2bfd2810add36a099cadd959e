@@ -1,0 +1,20 @@
+Code-Review+1: Ludovic Beliveau <ludovic.beliveau@windriver.com>
+Code-Review+1: Michael Glaser <mg6596@att.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Pavel Kholkin <pkholkin@mirantis.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+1: Peter Hamilton <peter.hamilton@jhuapl.edu>
+Code-Review+1: Sivasathurappan Radhakrishnan <siva.radhakrishnan@intel.com>
+Code-Review+1: Takahiro Suzuki <suzuki.thj@ncos.nec.co.jp>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 19 Oct 2016 11:02:50 +0000
+Reviewed-on: https://review.openstack.org/344254
+Project: openstack/deb-nova
+Branch: refs/heads/master
