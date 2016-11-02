@@ -1,0 +1,13 @@
+Verified+1: VMware NSX CI
+Verified+1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Pavel Kholkin <pkholkin@mirantis.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 01 Nov 2016 16:21:22 +0000
+Reviewed-on: https://review.openstack.org/390852
+Project: openstack/deb-nova
+Branch: refs/heads/master
