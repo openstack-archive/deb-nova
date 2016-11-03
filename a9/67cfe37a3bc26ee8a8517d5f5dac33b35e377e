@@ -1,0 +1,11 @@
+Verified+1: Citrix XenServer CI
+Code-Review+1: Sivasathurappan Radhakrishnan <siva.radhakrishnan@intel.com>
+Code-Review+2: Tony Breeds <tony@bakeyournoodle.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 02 Nov 2016 22:29:10 +0000
+Reviewed-on: https://review.openstack.org/387644
+Project: openstack/deb-nova
+Branch: refs/heads/stable/liberty
