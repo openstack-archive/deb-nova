@@ -1,0 +1,11 @@
+Verified+1: VMware NSX CI
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 03 Nov 2016 17:18:32 +0000
+Reviewed-on: https://review.openstack.org/356383
+Project: openstack/deb-nova
+Branch: refs/heads/master

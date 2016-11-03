@@ -1,0 +1,9 @@
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+1: VMware NSX CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 03 Nov 2016 17:19:54 +0000
+Reviewed-on: https://review.openstack.org/369180
+Project: openstack/deb-nova
+Branch: refs/heads/master
