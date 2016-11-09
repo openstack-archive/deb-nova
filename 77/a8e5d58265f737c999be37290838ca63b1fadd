@@ -1,0 +1,12 @@
+Verified+1: VMware NSX CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 09 Nov 2016 03:18:16 +0000
+Reviewed-on: https://review.openstack.org/388115
+Project: openstack/deb-nova
+Branch: refs/heads/master
