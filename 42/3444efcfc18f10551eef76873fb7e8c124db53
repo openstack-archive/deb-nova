@@ -1,0 +1,12 @@
+Verified+1: Citrix XenServer CI
+Verified+1: VMware NSX CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Code-Review+1: Andreas Jaeger <jaegerandi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 09 Nov 2016 03:30:42 +0000
+Reviewed-on: https://review.openstack.org/389984
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
