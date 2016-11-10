@@ -1,0 +1,8 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 10 Nov 2016 18:44:38 +0000
+Reviewed-on: https://review.openstack.org/344175
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,14 @@
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: Diana Clarke <diana.joan.clarke@gmail.com>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 10 Nov 2016 15:22:25 +0000
+Reviewed-on: https://review.openstack.org/394944
+Project: openstack/deb-nova
+Branch: refs/heads/master
