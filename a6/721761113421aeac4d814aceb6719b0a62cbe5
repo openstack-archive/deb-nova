@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: ChangBo Guo(gcb) <glongwave@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 09 Nov 2016 22:53:22 +0000
+Reviewed-on: https://review.openstack.org/395261
+Project: openstack/deb-nova
+Branch: refs/heads/master
