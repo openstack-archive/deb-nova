@@ -1,0 +1,12 @@
+Verified+1: VMware NSX CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Ihar Hrachyshka <ihrachys@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Workflow+1: Daniel Berrange <berrange@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 12 Nov 2016 05:36:55 +0000
+Reviewed-on: https://review.openstack.org/394669
+Project: openstack/deb-nova
+Branch: refs/heads/master
