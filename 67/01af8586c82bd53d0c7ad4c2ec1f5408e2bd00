@@ -1,0 +1,16 @@
+Verified+1: DB Datasets CI <turbo-hipster@lists.rcbops.com>
+Verified+1: Citrix XenServer CI
+Verified+1: VMware NSX CI
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+1: Eric Brown <browne@vmware.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Radoslav Gerganov <rgerganov@vmware.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 15 Nov 2016 01:35:14 +0000
+Reviewed-on: https://review.openstack.org/303974
+Project: openstack/deb-nova
+Branch: refs/heads/master
