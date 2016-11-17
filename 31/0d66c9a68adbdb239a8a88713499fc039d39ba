@@ -1,0 +1,14 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Verified+1: VMware NSX CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 16 Nov 2016 12:11:57 +0000
+Reviewed-on: https://review.openstack.org/396761
+Project: openstack/deb-nova
+Branch: refs/heads/master
