@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 19 Nov 2016 00:16:47 +0000
+Reviewed-on: https://review.openstack.org/399155
+Project: openstack/deb-nova
+Branch: refs/heads/master
