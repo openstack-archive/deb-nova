@@ -1,3 +1,9 @@
+nova (2:14.0.0-3) UNRELEASED; urgency=medium
+
+  * Bumped debhelper compat version to 10
+
+ -- Ondřej Nový <onovy@debian.org>  Thu, 24 Nov 2016 00:03:13 +0100
+
 nova (2:14.0.0-2) unstable; urgency=medium
 
   * Patches migration script to clean-up build_requests on upgrades from
