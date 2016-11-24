@@ -1,0 +1,15 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Sergey Nikitin <snikitin@mirantis.com>
+Code-Review+1: Vladik Romanovsky <vromanso@redhat.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 24 Nov 2016 21:23:17 +0000
+Reviewed-on: https://review.openstack.org/379624
+Project: openstack/deb-nova
+Branch: refs/heads/master

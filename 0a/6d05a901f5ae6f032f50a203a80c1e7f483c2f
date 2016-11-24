@@ -1,0 +1,13 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+1: Nicolas Bock <nicolasbock@gmail.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 24 Nov 2016 19:37:49 +0000
+Reviewed-on: https://review.openstack.org/379639
+Project: openstack/deb-nova
+Branch: refs/heads/master
