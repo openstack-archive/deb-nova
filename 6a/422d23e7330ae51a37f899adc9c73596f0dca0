@@ -1,0 +1,12 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Verified-1: Citrix XenServer CI
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 25 Nov 2016 21:12:55 +0000
+Reviewed-on: https://review.openstack.org/392321
+Project: openstack/deb-nova
+Branch: refs/heads/master

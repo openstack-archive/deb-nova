@@ -1,0 +1,9 @@
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 28 Nov 2016 10:41:17 +0000
+Reviewed-on: https://review.openstack.org/397871
+Project: openstack/deb-nova
+Branch: refs/heads/master
