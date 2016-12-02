@@ -1,0 +1,9 @@
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 01 Dec 2016 11:15:27 +0000
+Reviewed-on: https://review.openstack.org/405196
+Project: openstack/deb-nova
+Branch: refs/heads/master
