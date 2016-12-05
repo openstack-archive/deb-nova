@@ -1,0 +1,13 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Markus Zoeller (markus_z) <mzoeller@linux.vnet.ibm.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Dec 2016 13:44:07 +0000
+Reviewed-on: https://review.openstack.org/378507
+Project: openstack/deb-nova
+Branch: refs/heads/master
