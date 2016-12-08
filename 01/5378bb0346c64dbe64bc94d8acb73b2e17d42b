@@ -1,0 +1,10 @@
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 06 Dec 2016 16:40:37 +0000
+Reviewed-on: https://review.openstack.org/406580
+Project: openstack/deb-nova
+Branch: refs/heads/master

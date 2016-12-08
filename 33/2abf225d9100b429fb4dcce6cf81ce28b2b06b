@@ -1,0 +1,14 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: Eric Xie <eric_xiett@163.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Maciej Szankin <maciej.szankin@intel.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 06 Dec 2016 16:37:08 +0000
+Reviewed-on: https://review.openstack.org/406062
+Project: openstack/deb-nova
+Branch: refs/heads/master
