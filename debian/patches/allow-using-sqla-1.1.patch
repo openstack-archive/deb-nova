@@ -1,0 +1,16 @@
+Description: Allow using SQLA >= 1.1
+Author: Thomas Goirand <zigo@debian.org>
+Forwarded: no
+Last-Update: 2016-12-09
+
+--- nova-14.0.0.orig/requirements.txt
++++ nova-14.0.0/requirements.txt
+@@ -3,7 +3,7 @@
+ # process, which may cause wedges in the gate later.
+ 
+ pbr>=1.6 # Apache-2.0
+-SQLAlchemy<1.1.0,>=1.0.10 # MIT
++SQLAlchemy>=1.0.10 # MIT
+ boto>=2.32.1 # MIT
+ decorator>=3.4.0 # BSD
+ eventlet!=0.18.3,>=0.18.2 # MIT

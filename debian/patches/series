@@ -3,3 +3,4 @@ Add_nova-idmapshift_to_rootwrap_filters.patch
 Install-missed-files.patch
 fix-requirements.txt.patch
 clean-up-build_requests-table-on-upgrades.patch
+allow-using-sqla-1.1.patch
