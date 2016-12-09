@@ -1,0 +1,11 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Dec 2016 08:52:31 +0000
+Reviewed-on: https://review.openstack.org/403989
+Project: openstack/deb-nova
+Branch: refs/heads/master
