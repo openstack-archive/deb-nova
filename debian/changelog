@@ -1,8 +1,12 @@
-nova (2:14.0.0-3) UNRELEASED; urgency=medium
+nova (2:14.0.0-3) unstable; urgency=medium
 
+  [ Ondřej Nový ]
   * Bumped debhelper compat version to 10
 
- -- Ondřej Nový <onovy@debian.org>  Thu, 24 Nov 2016 00:03:13 +0100
+  [ Thomas Goirand ]
+  * Rebuilt with SQLAlchemy 1.1.4.
+
+ -- Thomas Goirand <zigo@debian.org>  Fri, 09 Dec 2016 17:40:19 +0100
 
 nova (2:14.0.0-2) unstable; urgency=medium
 
