@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: Kashyap Chamarthy <kchamart@redhat.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Dec 2016 16:14:17 +0000
+Reviewed-on: https://review.openstack.org/408668
+Project: openstack/deb-nova
+Branch: refs/heads/master
