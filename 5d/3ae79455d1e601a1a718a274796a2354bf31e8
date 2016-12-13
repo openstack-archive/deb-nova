@@ -1,0 +1,12 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+1: Li Yingjun <yingjun.li@kylin-cloud.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 13 Dec 2016 23:04:48 +0000
+Reviewed-on: https://review.openstack.org/409984
+Project: openstack/deb-nova
+Branch: refs/heads/master

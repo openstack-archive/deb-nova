@@ -1,0 +1,14 @@
+Code-Review+1: sahid <sahid.ferdjaoui@redhat.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 12 Dec 2016 17:13:21 +0000
+Reviewed-on: https://review.openstack.org/396864
+Project: openstack/deb-nova
+Branch: refs/heads/master

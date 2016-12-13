@@ -1,0 +1,10 @@
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 12 Dec 2016 17:17:04 +0000
+Reviewed-on: https://review.openstack.org/408944
+Project: openstack/deb-nova
+Branch: refs/heads/master
