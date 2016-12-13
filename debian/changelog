@@ -5,6 +5,8 @@ nova (2:14.0.0-3) unstable; urgency=medium
 
   [ Thomas Goirand ]
   * Allow using SQLAlchemy >= 1.1.
+  * Fix bug that prevented generating nova-spicehtml5proxy and nova-xenvncproxy
+    .service files.
 
  -- Thomas Goirand <zigo@debian.org>  Fri, 09 Dec 2016 17:40:19 +0100
 

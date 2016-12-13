@@ -22,6 +22,8 @@ if [ -r /etc/default/nova-consoleproxy ] ; then
 else
 	exit 0
 fi
-if ! [ "${NOVA_CONSOLE_PROXY_TYPE}" = "xenvnc" ] ; then
+
+# If SERVICE_FILE is set, we're generating the .service file, and we don't want to exit
+if ! [ "${NOVA_CONSOLE_PROXY_TYPE}" = "xenvnc" ] && [ -z "${SERVICE_FILE}"; then
 	exit 0
 fi
