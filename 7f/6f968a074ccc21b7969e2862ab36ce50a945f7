@@ -1,0 +1,14 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Roman Dobosz <roman.dobosz@intel.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 14 Dec 2016 20:11:43 +0000
+Reviewed-on: https://review.openstack.org/407692
+Project: openstack/deb-nova
+Branch: refs/heads/master
