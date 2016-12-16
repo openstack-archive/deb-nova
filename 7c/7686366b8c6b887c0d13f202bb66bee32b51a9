@@ -1,0 +1,10 @@
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 15 Dec 2016 16:20:50 +0000
+Reviewed-on: https://review.openstack.org/410009
+Project: openstack/deb-nova
+Branch: refs/heads/master

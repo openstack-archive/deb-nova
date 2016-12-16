@@ -1,0 +1,10 @@
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified-1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 15 Dec 2016 18:25:19 +0000
+Reviewed-on: https://review.openstack.org/386093
+Project: openstack/deb-nova
+Branch: refs/heads/master
