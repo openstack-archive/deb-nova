@@ -1,0 +1,12 @@
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Béla Vancsics <vancsics@inf.u-szeged.hu>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 17 Dec 2016 18:14:24 +0000
+Reviewed-on: https://review.openstack.org/398913
+Project: openstack/deb-nova
+Branch: refs/heads/master

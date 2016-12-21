@@ -1,0 +1,12 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: zhaolihui <zhaolh@awcloud.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 19 Dec 2016 15:24:35 +0000
+Reviewed-on: https://review.openstack.org/410847
+Project: openstack/deb-nova
+Branch: refs/heads/master
