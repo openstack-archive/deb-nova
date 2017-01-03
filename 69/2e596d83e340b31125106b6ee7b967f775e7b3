@@ -1,0 +1,10 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 03 Jan 2017 16:53:26 +0000
+Reviewed-on: https://review.openstack.org/408313
+Project: openstack/deb-nova
+Branch: refs/heads/master

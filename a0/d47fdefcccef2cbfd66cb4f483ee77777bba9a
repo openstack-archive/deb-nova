@@ -1,0 +1,14 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 03 Jan 2017 09:55:58 +0000
+Reviewed-on: https://review.openstack.org/412473
+Project: openstack/deb-nova
+Branch: refs/heads/master

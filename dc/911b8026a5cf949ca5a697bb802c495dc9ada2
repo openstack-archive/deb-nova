@@ -1,0 +1,11 @@
+Code-Review+1: Roman Podoliaka <rpodolyaka@mirantis.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 02 Jan 2017 12:10:16 +0000
+Reviewed-on: https://review.openstack.org/415736
+Project: openstack/deb-nova
+Branch: refs/heads/master

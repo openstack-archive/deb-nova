@@ -1,0 +1,13 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: bruce-benjamin <bruce.benjamin@jhuapl.edu>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 25 Dec 2016 18:36:00 +0000
+Reviewed-on: https://review.openstack.org/406363
+Project: openstack/deb-nova
+Branch: refs/heads/master

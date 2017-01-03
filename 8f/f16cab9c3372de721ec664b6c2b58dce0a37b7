@@ -1,0 +1,17 @@
+Code-Review+1: Eric Brown <browne@vmware.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Pavel Kholkin <pkholkin@mirantis.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: yunfeng zhou <zhouyunfeng@inspur.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 26 Dec 2016 14:09:59 +0000
+Reviewed-on: https://review.openstack.org/393664
+Project: openstack/deb-nova
+Branch: refs/heads/master

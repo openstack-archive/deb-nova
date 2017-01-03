@@ -1,0 +1,16 @@
+Code-Review+1: Pavel Gluschak <pglushchak@virtuozzo.com>
+Code-Review+1: Alberto Planas <aplanas@gmail.com>
+Code-Review+1: Nicolas Bock <nicolasbock@gmail.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Maxim Nestratov <mnestratov@virtuozzo.com>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 03 Jan 2017 20:06:41 +0000
+Reviewed-on: https://review.openstack.org/398334
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,14 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: wanghongtaozz <wanghongtaozz@inspur.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 27 Dec 2016 10:55:50 +0000
+Reviewed-on: https://review.openstack.org/323213
+Project: openstack/deb-nova
+Branch: refs/heads/master
