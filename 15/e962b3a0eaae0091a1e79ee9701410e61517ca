@@ -1,0 +1,12 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 04 Jan 2017 16:23:36 +0000
+Reviewed-on: https://review.openstack.org/386788
+Project: openstack/deb-nova
+Branch: refs/heads/master

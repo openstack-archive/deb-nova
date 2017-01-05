@@ -1,0 +1,12 @@
+Verified+1: Intel NFV CI <openstack-nfv-ci@intel.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Jeremy Liu <liujiong@gohighsec.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 04 Jan 2017 16:23:03 +0000
+Reviewed-on: https://review.openstack.org/413431
+Project: openstack/deb-nova
+Branch: refs/heads/master
