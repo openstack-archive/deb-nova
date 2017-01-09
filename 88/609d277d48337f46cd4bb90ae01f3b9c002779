@@ -1,0 +1,12 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Maxim Nestratov <mnestratov@virtuozzo.com>
+Code-Review+1: kangyufei <kangyf@inspur.com>
+Workflow+1: Matt Riedemann <mriedem@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 06 Jan 2017 17:55:46 +0000
+Reviewed-on: https://review.openstack.org/409967
+Project: openstack/deb-nova
+Branch: refs/heads/master

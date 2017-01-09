@@ -1,0 +1,10 @@
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Peter Hamilton <peter.hamilton@jhuapl.edu>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 06 Jan 2017 17:48:22 +0000
+Reviewed-on: https://review.openstack.org/413658
+Project: openstack/deb-nova
+Branch: refs/heads/master
