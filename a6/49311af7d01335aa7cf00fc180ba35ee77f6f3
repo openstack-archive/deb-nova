@@ -1,0 +1,11 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+2: Michael Still <mikal@stillhq.com>
+Workflow+1: Michael Still <mikal@stillhq.com>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Verified-1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 16 Jan 2017 18:30:58 +0000
+Reviewed-on: https://review.openstack.org/420261
+Project: openstack/deb-nova
+Branch: refs/heads/master
