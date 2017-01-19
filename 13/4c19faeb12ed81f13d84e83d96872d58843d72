@@ -1,0 +1,13 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Alex Xu <hejie.xu@intel.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 18 Jan 2017 23:43:43 +0000
+Reviewed-on: https://review.openstack.org/408571
+Project: openstack/deb-nova
+Branch: refs/heads/master
