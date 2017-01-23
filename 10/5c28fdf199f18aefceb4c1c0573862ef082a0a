@@ -1,0 +1,16 @@
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Code-Review+1: Timofey Durakov <tdurakov@mirantis.com>
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+1: chenyingnan <chenyingnan@inspur.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+1: Peter Hamilton <peter.hamilton@jhuapl.edu>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 20 Jan 2017 13:59:29 +0000
+Reviewed-on: https://review.openstack.org/342649
+Project: openstack/deb-nova
+Branch: refs/heads/master
