@@ -1,0 +1,12 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+1: Diana Clarke <diana.joan.clarke@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+1: wanghongtaozz <wanghongtaozz@inspur.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 23 Jan 2017 15:23:11 +0000
+Reviewed-on: https://review.openstack.org/421421
+Project: openstack/deb-nova
+Branch: refs/heads/master
