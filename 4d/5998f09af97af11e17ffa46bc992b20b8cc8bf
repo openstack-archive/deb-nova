@@ -1,0 +1,9 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 31 Jan 2017 19:00:03 +0000
+Reviewed-on: https://review.openstack.org/421436
+Project: openstack/deb-nova
+Branch: refs/heads/master
