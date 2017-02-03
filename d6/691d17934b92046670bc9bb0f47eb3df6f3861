@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 03 Feb 2017 03:43:02 +0000
+Reviewed-on: https://review.openstack.org/428285
+Project: openstack/deb-nova
+Branch: refs/heads/master

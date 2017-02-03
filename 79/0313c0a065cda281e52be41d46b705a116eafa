@@ -1,0 +1,10 @@
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 02 Feb 2017 13:15:13 +0000
+Reviewed-on: https://review.openstack.org/426911
+Project: openstack/deb-nova
+Branch: refs/heads/master
