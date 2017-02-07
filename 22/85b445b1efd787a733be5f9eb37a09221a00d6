@@ -1,0 +1,10 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Ruben Orduz <rubenoz@gmail.com>
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Workflow+1: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 07 Feb 2017 00:10:55 +0000
+Reviewed-on: https://review.openstack.org/429114
+Project: openstack/deb-nova
+Branch: refs/heads/master
