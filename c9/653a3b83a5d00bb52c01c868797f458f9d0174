@@ -1,0 +1,14 @@
+Code-Review+1: garyk <gkotton@vmware.com>
+Code-Review+1: Peter Hamilton <peter.hamilton@jhuapl.edu>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: javeme <javaloveme@gmail.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 08 Feb 2017 23:06:04 +0000
+Reviewed-on: https://review.openstack.org/368383
+Project: openstack/deb-nova
+Branch: refs/heads/master
