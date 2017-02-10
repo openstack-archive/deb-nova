@@ -1,0 +1,9 @@
+Code-Review+2: Matt Riedemann <mriedem@us.ibm.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 10 Feb 2017 00:51:38 +0000
+Reviewed-on: https://review.openstack.org/429396
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
