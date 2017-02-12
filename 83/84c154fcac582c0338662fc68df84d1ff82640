@@ -1,0 +1,10 @@
+Code-Review+1: melanie witt <melwittt@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 10 Feb 2017 18:48:11 +0000
+Reviewed-on: https://review.openstack.org/431736
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
