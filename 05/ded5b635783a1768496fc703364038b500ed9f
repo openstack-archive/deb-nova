@@ -1,0 +1,14 @@
+Code-Review+2: Daniel Berrange <berrange@redhat.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+1: Naohiro Tamura <naohirot.openstack@gmail.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 13 Feb 2017 13:36:37 +0000
+Reviewed-on: https://review.openstack.org/335925
+Project: openstack/deb-nova
+Branch: refs/heads/master
