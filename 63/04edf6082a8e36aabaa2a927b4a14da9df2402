@@ -1,0 +1,10 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+1: Vasyl Saienko <vsaienko@mirantis.com>
+Code-Review+2: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Workflow+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 20 Mar 2017 07:40:19 +0000
+Reviewed-on: https://review.openstack.org/447014
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata

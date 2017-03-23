@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 20 Feb 2017 07:11:58 +0000
+Reviewed-on: https://review.openstack.org/435619
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata

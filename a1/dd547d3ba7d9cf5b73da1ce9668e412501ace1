@@ -1,0 +1,11 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 28 Feb 2017 13:50:28 +0000
+Reviewed-on: https://review.openstack.org/438628
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
