@@ -1,0 +1,11 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified-1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 27 Feb 2017 20:53:11 +0000
+Reviewed-on: https://review.openstack.org/438632
+Project: openstack/deb-nova
+Branch: refs/heads/stable/mitaka
