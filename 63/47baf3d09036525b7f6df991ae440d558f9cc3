@@ -1,0 +1,13 @@
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Daniel Pawlik <daniel.pawlik@corp.ovh.com>
+Code-Review+1: Adam Kijak <adam.kijak@corp.ovh.com>
+Code-Review+1: Michal Pryc <mpryc@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 24 Feb 2017 12:00:52 +0000
+Reviewed-on: https://review.openstack.org/437356
+Project: openstack/deb-nova
+Branch: refs/heads/master

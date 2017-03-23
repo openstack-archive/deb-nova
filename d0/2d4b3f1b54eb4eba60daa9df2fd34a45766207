@@ -1,0 +1,17 @@
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: xurong00037997 <xu.rong@zte.com.cn>
+Code-Review+1: Gábor Antal <antal@inf.u-szeged.hu>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Verified+1: Citrix XenServer CI
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Code-Review+1: ShangXiao <shangxiaobj@inspur.com>
+Code-Review+1: Huangsm <huangsm@awcloud.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 16 Feb 2017 04:43:46 +0000
+Reviewed-on: https://review.openstack.org/389338
+Project: openstack/deb-nova
+Branch: refs/heads/master

@@ -1,0 +1,11 @@
+Code-Review+1: Diana Clarke <diana.joan.clarke@gmail.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 25 Feb 2017 03:31:29 +0000
+Reviewed-on: https://review.openstack.org/437924
+Project: openstack/deb-nova
+Branch: refs/heads/master

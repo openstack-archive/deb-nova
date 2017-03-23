@@ -1,0 +1,11 @@
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Feb 2017 15:42:32 +0000
+Reviewed-on: https://review.openstack.org/436648
+Project: openstack/deb-nova
+Branch: refs/heads/master

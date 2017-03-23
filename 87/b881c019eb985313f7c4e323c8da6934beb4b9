@@ -1,0 +1,12 @@
+Code-Review+1: Pushkar Umaranikar <pushkar.umaranikar@intel.com>
+Code-Review-1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Code-Review+1: Sarafraj Singh <Sarafraj.Singh@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 07 Mar 2017 18:54:53 +0000
+Reviewed-on: https://review.openstack.org/436596
+Project: openstack/deb-nova
+Branch: refs/heads/master

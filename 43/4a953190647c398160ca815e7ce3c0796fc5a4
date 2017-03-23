@@ -1,0 +1,14 @@
+Code-Review+1: Steven Webster <steven.webster@windriver.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Chris Friesen <chris.friesen@windriver.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Eric Xie <eric_xiett@163.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 03 Mar 2017 17:58:16 +0000
+Reviewed-on: https://review.openstack.org/437061
+Project: openstack/deb-nova
+Branch: refs/heads/master

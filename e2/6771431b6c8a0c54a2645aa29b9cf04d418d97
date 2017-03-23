@@ -1,0 +1,11 @@
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 15 Feb 2017 09:59:26 +0000
+Reviewed-on: https://review.openstack.org/431311
+Project: openstack/deb-nova
+Branch: refs/heads/master

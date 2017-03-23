@@ -1,0 +1,13 @@
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Sujitha <sujitha.neti@intel.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Anusha Unnam <anusha.unnam@intel.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 Mar 2017 02:14:56 +0000
+Reviewed-on: https://review.openstack.org/389314
+Project: openstack/deb-nova
+Branch: refs/heads/master

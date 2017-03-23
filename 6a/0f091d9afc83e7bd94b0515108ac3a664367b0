@@ -1,0 +1,8 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Feb 2017 03:39:31 +0000
+Reviewed-on: https://review.openstack.org/434563
+Project: openstack/deb-nova
+Branch: refs/heads/master

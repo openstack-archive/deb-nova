@@ -1,0 +1,9 @@
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 28 Feb 2017 20:13:05 +0000
+Reviewed-on: https://review.openstack.org/342648
+Project: openstack/deb-nova
+Branch: refs/heads/master

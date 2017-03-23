@@ -1,0 +1,10 @@
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Margarita Shakhova <shakhova.margarita@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 21 Mar 2017 14:31:00 +0000
+Reviewed-on: https://review.openstack.org/447466
+Project: openstack/deb-nova
+Branch: refs/heads/master

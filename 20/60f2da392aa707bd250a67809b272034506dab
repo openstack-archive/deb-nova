@@ -1,0 +1,14 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: fengzhr <fengzhr@awcloud.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Code-Review+1: ShangXiao <shangxiaobj@inspur.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 23 Mar 2017 03:55:46 +0000
+Reviewed-on: https://review.openstack.org/448224
+Project: openstack/deb-nova
+Branch: refs/heads/master

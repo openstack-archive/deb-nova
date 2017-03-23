@@ -1,0 +1,15 @@
+Code-Review+1: Mate Lakat <mlakat@suse.com>
+Code-Review+1: lixuehai <lixh@awcloud.com>
+Code-Review+1: ShangXiao <shangxiaobj@inspur.com>
+Code-Review+1: Pavel Kholkin <p.v.holkin@mail.ru>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 25 Feb 2017 14:54:01 +0000
+Reviewed-on: https://review.openstack.org/339341
+Project: openstack/deb-nova
+Branch: refs/heads/master

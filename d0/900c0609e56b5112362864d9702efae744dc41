@@ -1,0 +1,9 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 06 Mar 2017 16:59:14 +0000
+Reviewed-on: https://review.openstack.org/435539
+Project: openstack/deb-nova
+Branch: refs/heads/master
