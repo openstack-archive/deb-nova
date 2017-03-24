@@ -88,10 +88,10 @@ class ResourceClassCache(object):
 
         :param rc_str: The string representation of the resource class to look
                        up a numeric identifier for.
-        :returns integer identifier for the resource class, or None, if no such
+        :returns: integer identifier for the resource class, or None, if no such
                  resource class was found in the list of standard resource
                  classes or the resource_classes database table.
-        :raises `exception.ResourceClassNotFound` if rc_str cannot be found in
+        :raises `exception.ResourceClassNotFound`: if rc_str cannot be found in
                 either the standard classes or the DB.
         """
         # First check the standard resource classes
@@ -116,10 +116,10 @@ class ResourceClassCache(object):
 
         :param rc_id: The numeric representation of the resource class to look
                       up a string identifier for.
-        :returns string identifier for the resource class, or None, if no such
+        :returns: string identifier for the resource class, or None, if no such
                  resource class was found in the list of standard resource
                  classes or the resource_classes database table.
-        :raises `exception.ResourceClassNotFound` if rc_id cannot be found in
+        :raises `exception.ResourceClassNotFound`: if rc_id cannot be found in
                 either the standard classes or the DB.
         """
         # First check the fields.ResourceClass.STANDARD values
