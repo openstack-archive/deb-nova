@@ -1,3 +1,10 @@
+nova (2:14.0.0-4) unstable; urgency=medium
+
+  * Team upload.
+  * Add missing dependency net-tools (Closes: #858710, #858708).
+
+ -- David Rabel <david.rabel@noresoft.com>  Mon, 27 Mar 2017 17:18:49 +0100
+
 nova (2:14.0.0-3) unstable; urgency=medium
 
   [ Ondřej Nový ]
