@@ -1,0 +1,12 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Verified+1: Citrix XenServer CI
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 27 Mar 2017 17:50:10 +0000
+Reviewed-on: https://review.openstack.org/450071
+Project: openstack/deb-nova
+Branch: refs/heads/master
