@@ -1,0 +1,11 @@
+Verified+1: Citrix XenServer CI
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 27 Mar 2017 11:48:02 +0000
+Reviewed-on: https://review.openstack.org/448650
+Project: openstack/deb-nova
+Branch: refs/heads/master
