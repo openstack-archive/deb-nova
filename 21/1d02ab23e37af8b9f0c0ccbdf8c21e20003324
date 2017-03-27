@@ -1,0 +1,10 @@
+Code-Review+1: Juan Antonio Osorio Robles <jaosorior@redhat.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 27 Mar 2017 13:31:27 +0000
+Reviewed-on: https://review.openstack.org/446523
+Project: openstack/deb-nova
+Branch: refs/heads/master
