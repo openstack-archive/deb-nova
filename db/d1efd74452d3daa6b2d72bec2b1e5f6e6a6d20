@@ -1,0 +1,12 @@
+Verified+1: Citrix XenServer CI
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 31 Mar 2017 19:30:48 +0000
+Reviewed-on: https://review.openstack.org/449302
+Project: openstack/deb-nova
+Branch: refs/heads/master
