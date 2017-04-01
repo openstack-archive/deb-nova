@@ -1,9 +1,9 @@
 nova (2:14.0.0-4) unstable; urgency=medium
 
   * Team upload.
-  * Add missing dependency net-tools (Closes: #858710, #858708).
+  * Bump build dependency on openstack-pkg-tools (Closes: #858708, #858710).
 
- -- David Rabel <david.rabel@noresoft.com>  Mon, 27 Mar 2017 17:18:49 +0100
+ -- David Rabel <david.rabel@noresoft.com>  Sat, 01 Apr 2017 12:01:45 +0200
 
 nova (2:14.0.0-3) unstable; urgency=medium
 
