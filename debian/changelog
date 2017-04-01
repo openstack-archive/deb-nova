@@ -1,3 +1,11 @@
+nova (2:14.0.0-5) unstable; urgency=medium
+
+  * Team upload.
+  * Revert net-tools dependency.
+  * Bump build dependency on openstack-pkg-tools (Closes: #858708, #858710).
+
+ -- David Rabel <david.rabel@noresoft.com>  Sat, 01 Apr 2017 12:01:45 +0200
+
 nova (2:14.0.0-4) unstable; urgency=medium
 
   * Team upload.
