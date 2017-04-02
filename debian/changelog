@@ -1,9 +1,13 @@
 nova (2:14.0.0-4) unstable; urgency=medium
 
+  [ David Rabel ]
   * Team upload.
   * Bump build dependency on openstack-pkg-tools (Closes: #858708, #858710).
 
- -- David Rabel <david.rabel@noresoft.com>  Sat, 01 Apr 2017 12:01:45 +0200
+  [ Thomas Goirand ]
+  * CVE-2017-7214: apply upstream patch (Closes: 858568).
+
+ -- Thomas Goirand <zigo@debian.org>  Sun, 02 Apr 2017 12:52:50 +0200
 
 nova (2:14.0.0-3) unstable; urgency=medium
 

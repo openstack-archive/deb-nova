@@ -4,3 +4,4 @@ Install-missed-files.patch
 fix-requirements.txt.patch
 clean-up-build_requests-table-on-upgrades.patch
 allow-using-sqla-1.1.patch
+CVE-2017-7214_do_not_include_context_to_exception_notification.patch
