@@ -1,0 +1,15 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: Eric Fried <efried@us.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: YuYang <yuyangwang1985@gmail.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 10 Apr 2017 16:09:42 +0000
+Reviewed-on: https://review.openstack.org/454889
+Project: openstack/deb-nova
+Branch: refs/heads/master
