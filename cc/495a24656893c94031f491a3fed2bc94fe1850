@@ -1,0 +1,15 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Chuck Short <chuck.short@canonical.com>
+Code-Review+1: James Page <james.page@canonical.com>
+Code-Review+1: Neil Jerram <neil@tigera.io>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Logan V <logan2211@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Matthew Treinish <mtreinish@kortar.org>
+Workflow+1: Matthew Treinish <mtreinish@kortar.org>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 10 Apr 2017 23:12:29 +0000
+Reviewed-on: https://review.openstack.org/448242
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
