@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Zhaokun Fu <fuzk@inspur.com>
+Code-Review+1: Lee Yarwood <lyarwood@redhat.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 23 Apr 2017 23:27:25 +0000
+Reviewed-on: https://review.openstack.org/458834
+Project: openstack/deb-nova
+Branch: refs/heads/master
