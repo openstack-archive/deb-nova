@@ -1,0 +1,9 @@
+Code-Review+2: Lee Yarwood <lyarwood@redhat.com>
+Code-Review+2: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Workflow+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 24 Apr 2017 21:45:17 +0000
+Reviewed-on: https://review.openstack.org/458843
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
