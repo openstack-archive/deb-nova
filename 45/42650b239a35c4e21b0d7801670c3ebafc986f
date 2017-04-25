@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 25 Apr 2017 17:29:09 +0000
+Reviewed-on: https://review.openstack.org/459735
+Project: openstack/deb-nova
+Branch: refs/heads/master
