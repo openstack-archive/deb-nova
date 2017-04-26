@@ -1,0 +1,10 @@
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 26 Apr 2017 12:30:30 +0000
+Reviewed-on: https://review.openstack.org/394738
+Project: openstack/deb-nova
+Branch: refs/heads/master
