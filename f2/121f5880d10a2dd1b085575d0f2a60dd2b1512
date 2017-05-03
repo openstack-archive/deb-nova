@@ -1,0 +1,14 @@
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: lidong <lidongbj@inspur.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 03 May 2017 03:26:50 +0000
+Reviewed-on: https://review.openstack.org/461762
+Project: openstack/deb-nova
+Branch: refs/heads/master
