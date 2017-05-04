@@ -1,0 +1,12 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: chenyingnan <chenyingnan@inspur.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 04 May 2017 11:10:03 +0000
+Reviewed-on: https://review.openstack.org/460305
+Project: openstack/deb-nova
+Branch: refs/heads/master
