@@ -1,0 +1,19 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: dane-fichter <dane.fichter@jhuapl.edu>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Jackie Truong <jacklyn.truong@jhuapl.edu>
+Code-Review+1: Juan Antonio Osorio Robles <jaosorior@redhat.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+1: Brianna Poulos <Brianna.Poulos@jhuapl.edu>
+Code-Review+1: Lee Yarwood <lyarwood@redhat.com>
+Code-Review+1: guang-yee <guang.yee@suse.com>
+Code-Review+1: Dave McCowan <dmccowan@cisco.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 18 May 2017 21:31:55 +0000
+Reviewed-on: https://review.openstack.org/446072
+Project: openstack/deb-nova
+Branch: refs/heads/master
