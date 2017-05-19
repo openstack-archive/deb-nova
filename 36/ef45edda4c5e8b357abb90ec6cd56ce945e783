@@ -1,0 +1,12 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 19 May 2017 04:32:42 +0000
+Reviewed-on: https://review.openstack.org/465903
+Project: openstack/deb-nova
+Branch: refs/heads/master
