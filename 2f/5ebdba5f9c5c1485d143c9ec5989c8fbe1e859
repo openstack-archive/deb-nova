@@ -1,0 +1,9 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 22 May 2017 18:51:27 +0000
+Reviewed-on: https://review.openstack.org/465404
+Project: openstack/deb-nova
+Branch: refs/heads/master
