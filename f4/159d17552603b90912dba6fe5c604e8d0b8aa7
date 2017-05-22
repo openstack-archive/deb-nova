@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified-1: Citrix XenServer CI
+Code-Review+2: Lee Yarwood <lyarwood@redhat.com>
+Workflow+1: Lee Yarwood <lyarwood@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 22 May 2017 13:29:44 +0000
+Reviewed-on: https://review.openstack.org/466420
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
