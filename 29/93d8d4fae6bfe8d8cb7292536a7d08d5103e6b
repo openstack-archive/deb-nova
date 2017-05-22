@@ -1,0 +1,13 @@
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+1: fengzhr <fengzhr@awcloud.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Huan Xie <huan.xie@citrix.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 22 May 2017 17:20:29 +0000
+Reviewed-on: https://review.openstack.org/463361
+Project: openstack/deb-nova
+Branch: refs/heads/master
