@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Jackie Truong <jacklyn.truong@jhuapl.edu>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 23 May 2017 23:31:32 +0000
+Reviewed-on: https://review.openstack.org/466480
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
