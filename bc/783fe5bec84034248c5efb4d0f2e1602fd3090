@@ -1,0 +1,11 @@
+Code-Review+1: Andrew Laski <andrew@lascii.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Eric Fried <efried@us.ibm.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 23 May 2017 23:02:03 +0000
+Reviewed-on: https://review.openstack.org/467284
+Project: openstack/deb-nova
+Branch: refs/heads/master
