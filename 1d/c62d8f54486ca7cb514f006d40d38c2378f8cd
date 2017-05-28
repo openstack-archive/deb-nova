@@ -1,0 +1,12 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Verified+1: Citrix XenServer CI
+Code-Review+1: Matthew Booth <mbooth@redhat.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 28 May 2017 19:14:38 +0000
+Reviewed-on: https://review.openstack.org/443951
+Project: openstack/deb-nova
+Branch: refs/heads/master
