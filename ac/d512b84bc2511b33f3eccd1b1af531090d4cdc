@@ -1,0 +1,11 @@
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+1: Citrix XenServer CI
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 28 May 2017 15:53:51 +0000
+Reviewed-on: https://review.openstack.org/468089
+Project: openstack/deb-nova
+Branch: refs/heads/master
