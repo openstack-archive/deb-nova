@@ -1,0 +1,9 @@
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 30 May 2017 17:28:58 +0000
+Reviewed-on: https://review.openstack.org/468549
+Project: openstack/deb-nova
+Branch: refs/heads/master
