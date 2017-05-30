@@ -1,0 +1,10 @@
+Verified-1: Citrix XenServer CI
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 30 May 2017 19:13:27 +0000
+Reviewed-on: https://review.openstack.org/446239
+Project: openstack/deb-nova
+Branch: refs/heads/master
