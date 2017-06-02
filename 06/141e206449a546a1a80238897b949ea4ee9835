@@ -1,0 +1,11 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Jun 2017 18:37:43 +0000
+Reviewed-on: https://review.openstack.org/467541
+Project: openstack/deb-nova
+Branch: refs/heads/master

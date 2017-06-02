@@ -1,0 +1,10 @@
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 02 Jun 2017 18:30:19 +0000
+Reviewed-on: https://review.openstack.org/455213
+Project: openstack/deb-nova
+Branch: refs/heads/master
