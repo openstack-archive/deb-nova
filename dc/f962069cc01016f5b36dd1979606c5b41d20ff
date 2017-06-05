@@ -1,0 +1,15 @@
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: Huan Xie <huan.xie@citrix.com>
+Code-Review+1: Jianghua Wang <jianghua.wang@citrix.com>
+Code-Review+1: Bob Ball <bob.ball@citrix.com>
+Code-Review+1: Vitaliy Nogin <vnogin@mirantis.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 05 Jun 2017 23:33:27 +0000
+Reviewed-on: https://review.openstack.org/399613
+Project: openstack/deb-nova
+Branch: refs/heads/master
