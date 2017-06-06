@@ -1,0 +1,13 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Code-Review+1: jichenjc <jichenjc@cn.ibm.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+2: Lee Yarwood <lyarwood@redhat.com>
+Workflow+1: Lee Yarwood <lyarwood@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 06 Jun 2017 14:50:24 +0000
+Reviewed-on: https://review.openstack.org/469207
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
