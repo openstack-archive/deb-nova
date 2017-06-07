@@ -1,0 +1,12 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Rajesh Tailor <ratailor@redhat.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Vladyslav Drok <vdrok@mirantis.com>
+Code-Review+2: Dan Smith <dms@danplanet.com>
+Workflow+1: Dan Smith <dms@danplanet.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 07 Jun 2017 15:50:30 +0000
+Reviewed-on: https://review.openstack.org/471487
+Project: openstack/deb-nova
+Branch: refs/heads/master
