@@ -1,0 +1,13 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: sean mooney <sean.k.mooney@intel.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Cyril Lopez <cylopez@redhat.com>
+Code-Review+1: Guil Barros <gbarros@redhat.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 07 Jun 2017 17:38:57 +0000
+Reviewed-on: https://review.openstack.org/441183
+Project: openstack/deb-nova
+Branch: refs/heads/master
