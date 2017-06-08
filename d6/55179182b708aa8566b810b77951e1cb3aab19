@@ -1,0 +1,13 @@
+Code-Review+1: Scott DAngelo <scott.dangelo@gmail.com>
+Code-Review+1: Walter A. Boring IV (hemna) <waboring@hemna.com>
+Code-Review+1: Ildiko Vancsa <ildiko.vancsa@gmail.com>
+Code-Review+1: Sean McGinnis <sean.mcginnis@gmail.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+2: John Garbutt <john@johngarbutt.com>
+Workflow+1: John Garbutt <john@johngarbutt.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 08 Jun 2017 17:57:47 +0000
+Reviewed-on: https://review.openstack.org/469579
+Project: openstack/deb-nova
+Branch: refs/heads/master
