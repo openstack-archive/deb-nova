@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Rajesh Tailor <ratailor@redhat.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 08 Jun 2017 21:18:39 +0000
+Reviewed-on: https://review.openstack.org/471432
+Project: openstack/deb-nova
+Branch: refs/heads/master
