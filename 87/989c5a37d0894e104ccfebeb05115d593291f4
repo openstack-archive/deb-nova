@@ -1,0 +1,13 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review-1: int32bit <krystism@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Jun 2017 16:10:59 +0000
+Reviewed-on: https://review.openstack.org/463148
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
