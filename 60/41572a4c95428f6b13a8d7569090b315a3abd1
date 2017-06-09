@@ -1,0 +1,10 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+2: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Workflow+1: Claudiu Belu <cbelu@cloudbasesolutions.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 09 Jun 2017 13:04:33 +0000
+Reviewed-on: https://review.openstack.org/471790
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
