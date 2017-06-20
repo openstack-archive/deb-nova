@@ -1,0 +1,11 @@
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Jun 2017 21:17:21 +0000
+Reviewed-on: https://review.openstack.org/469047
+Project: openstack/deb-nova
+Branch: refs/heads/master
