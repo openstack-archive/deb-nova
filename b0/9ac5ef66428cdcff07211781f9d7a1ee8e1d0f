@@ -1,0 +1,10 @@
+Code-Review+1: Andrey Volkov <avolkov@mirantis.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Jun 2017 19:41:09 +0000
+Reviewed-on: https://review.openstack.org/466609
+Project: openstack/deb-nova
+Branch: refs/heads/master

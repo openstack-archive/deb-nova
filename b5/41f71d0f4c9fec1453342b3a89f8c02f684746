@@ -1,0 +1,11 @@
+Code-Review+1: Eric Fried <efried@us.ibm.com>
+Code-Review+1: Ruby Loo <ruby.loo@intel.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Jun 2017 18:51:16 +0000
+Reviewed-on: https://review.openstack.org/474723
+Project: openstack/deb-nova
+Branch: refs/heads/master
