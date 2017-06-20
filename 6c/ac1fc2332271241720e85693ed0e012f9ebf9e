@@ -1,0 +1,13 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Code-Review+1: Dou Rui Yuan <rydou@fiberhome.com>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 20 Jun 2017 09:15:19 +0000
+Reviewed-on: https://review.openstack.org/475489
+Project: openstack/deb-nova
+Branch: refs/heads/master
