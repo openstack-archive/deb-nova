@@ -1,0 +1,9 @@
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 21 Jun 2017 19:34:07 +0000
+Reviewed-on: https://review.openstack.org/475512
+Project: openstack/deb-nova
+Branch: refs/heads/master
