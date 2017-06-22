@@ -1,0 +1,11 @@
+Code-Review+1: Pavel Kholkin <p.v.holkin@mail.ru>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 22 Jun 2017 00:05:21 +0000
+Reviewed-on: https://review.openstack.org/347422
+Project: openstack/deb-nova
+Branch: refs/heads/master
