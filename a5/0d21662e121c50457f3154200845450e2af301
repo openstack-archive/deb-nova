@@ -1,0 +1,10 @@
+Code-Review+1: Kien Nguyen <KienNT@vn.fujitsu.com>
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Workflow+1: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 23 Jun 2017 19:43:47 +0000
+Reviewed-on: https://review.openstack.org/476736
+Project: openstack/deb-nova
+Branch: refs/heads/master
