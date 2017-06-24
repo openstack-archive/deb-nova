@@ -1,0 +1,11 @@
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 24 Jun 2017 01:30:23 +0000
+Reviewed-on: https://review.openstack.org/469635
+Project: openstack/deb-nova
+Branch: refs/heads/master
