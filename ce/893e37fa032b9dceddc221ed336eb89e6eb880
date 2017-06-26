@@ -1,0 +1,12 @@
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Alex Szarka <szarka@inf.u-szeged.hu>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 26 Jun 2017 18:26:24 +0000
+Reviewed-on: https://review.openstack.org/402124
+Project: openstack/deb-nova
+Branch: refs/heads/master
