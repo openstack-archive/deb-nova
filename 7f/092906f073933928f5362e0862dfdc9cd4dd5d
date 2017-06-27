@@ -1,0 +1,9 @@
+Code-Review+2: Ken'ichi Ohmichi <ken1ohmichi@gmail.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 27 Jun 2017 10:03:22 +0000
+Reviewed-on: https://review.openstack.org/477439
+Project: openstack/deb-nova
+Branch: refs/heads/master
