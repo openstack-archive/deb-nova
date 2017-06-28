@@ -1,0 +1,10 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Erik Berg <openstack@slipsprogrammor.no>
+Code-Review+2: melanie witt <melwittt@gmail.com>
+Workflow+1: melanie witt <melwittt@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 28 Jun 2017 19:19:48 +0000
+Reviewed-on: https://review.openstack.org/478521
+Project: openstack/deb-nova
+Branch: refs/heads/master
