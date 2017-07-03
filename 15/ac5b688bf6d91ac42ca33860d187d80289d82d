@@ -1,0 +1,17 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Zhenyu Zheng <zhengzhenyu@huawei.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+1: Maciej Kucia <maciej@kucia.net>
+Code-Review+1: Jianghua Wang <jianghua.wang@citrix.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 03 Jul 2017 16:44:54 +0000
+Reviewed-on: https://review.openstack.org/469147
+Project: openstack/deb-nova
+Branch: refs/heads/master
