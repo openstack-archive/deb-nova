@@ -1,0 +1,9 @@
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Code-Review+2: Stephen Finucane <sfinucan@redhat.com>
+Workflow+1: Stephen Finucane <sfinucan@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 04 Jul 2017 13:38:33 +0000
+Reviewed-on: https://review.openstack.org/480162
+Project: openstack/deb-nova
+Branch: refs/heads/master
