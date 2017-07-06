@@ -1,0 +1,11 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Code-Review+1: Ed Leafe <ed@leafe.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 06 Jul 2017 02:08:19 +0000
+Reviewed-on: https://review.openstack.org/460147
+Project: openstack/deb-nova
+Branch: refs/heads/master
