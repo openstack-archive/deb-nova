@@ -1,0 +1,10 @@
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 07 Jul 2017 02:57:03 +0000
+Reviewed-on: https://review.openstack.org/480130
+Project: openstack/deb-nova
+Branch: refs/heads/master
