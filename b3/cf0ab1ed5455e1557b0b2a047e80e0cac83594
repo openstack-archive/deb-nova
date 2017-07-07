@@ -1,0 +1,10 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Fri, 07 Jul 2017 15:27:06 +0000
+Reviewed-on: https://review.openstack.org/459593
+Project: openstack/deb-nova
+Branch: refs/heads/master
