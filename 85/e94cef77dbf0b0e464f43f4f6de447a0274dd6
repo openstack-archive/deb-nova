@@ -1,0 +1,11 @@
+Code-Review+1: Huan Xie <huan.xie@citrix.com>
+Code-Review+1: YuYang <yuyangwang1985@gmail.com>
+Code-Review+2: Stephen Finucane <stephenfin@redhat.com>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 11 Jul 2017 21:59:06 +0000
+Reviewed-on: https://review.openstack.org/481148
+Project: openstack/deb-nova
+Branch: refs/heads/master
