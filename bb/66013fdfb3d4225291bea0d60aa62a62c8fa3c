@@ -1,0 +1,14 @@
+Code-Review+1: Takashi NATSUME <natsume.takashi@lab.ntt.co.jp>
+Code-Review+1: Jianghua Wang <jianghua.wang@citrix.com>
+Code-Review+1: Bob Ball <bob.ball@citrix.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 12 Jul 2017 20:26:31 +0000
+Reviewed-on: https://review.openstack.org/465875
+Project: openstack/deb-nova
+Branch: refs/heads/stable/ocata
