@@ -1,0 +1,11 @@
+Code-Review+2: Stephen Finucane <stephenfin@redhat.com>
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Workflow+1: Sylvain Bauza <sbauza@redhat.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Thu, 13 Jul 2017 12:44:06 +0000
+Reviewed-on: https://review.openstack.org/480469
+Project: openstack/deb-nova
+Branch: refs/heads/master
