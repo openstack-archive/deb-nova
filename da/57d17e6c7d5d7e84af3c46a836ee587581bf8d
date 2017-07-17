@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Chris Dent <cdent@anticdent.org>
+Code-Review+1: Alex Szarka <szarka@inf.u-szeged.hu>
+Code-Review+2: Alex Xu <hejie.xu@intel.com>
+Workflow+1: Alex Xu <hejie.xu@intel.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Mon, 17 Jul 2017 13:18:18 +0000
+Reviewed-on: https://review.openstack.org/483986
+Project: openstack/deb-nova
+Branch: refs/heads/master
