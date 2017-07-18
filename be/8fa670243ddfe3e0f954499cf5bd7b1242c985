@@ -1,0 +1,14 @@
+Code-Review+1: Balazs Gibizer <balazs.gibizer@ericsson.com>
+Code-Review+1: Nguyen Van Trung <trungnv@vn.fujitsu.com>
+Code-Review+1: Chason Chan <chason.chan@foxmail.com>
+Code-Review+2: Sylvain Bauza <sbauza@redhat.com>
+Code-Review+1: xianbin xie <xiexianbin@yovole.com>
+Code-Review+1: zhubingbing <zhu.bingbing@99cloud.net>
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 18 Jul 2017 09:37:37 +0000
+Reviewed-on: https://review.openstack.org/478472
+Project: openstack/deb-nova
+Branch: refs/heads/master
