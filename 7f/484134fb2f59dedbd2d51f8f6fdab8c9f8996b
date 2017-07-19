@@ -1,0 +1,14 @@
+Code-Review+2: Stephen Finucane <stephenfin@redhat.com>
+Code-Review+1: Ghanshyam Mann <ghanshyammann@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: melissaml <ma.lei@99cloud.net>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Code-Review+1: LiuFu <liufu@awcloud.com>
+Code-Review+1: ShangXiao <shangxiaobj@inspur.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 19 Jul 2017 08:45:26 +0000
+Reviewed-on: https://review.openstack.org/478904
+Project: openstack/deb-nova
+Branch: refs/heads/master
