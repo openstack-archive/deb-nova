@@ -1,0 +1,11 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+1: lidong <lidongbj@inspur.com>
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Workflow+1: Matt Riedemann <mriedem.os@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Wed, 19 Jul 2017 05:44:52 +0000
+Reviewed-on: https://review.openstack.org/484935
+Project: openstack/deb-nova
+Branch: refs/heads/master
