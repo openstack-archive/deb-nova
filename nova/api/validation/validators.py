@@ -283,7 +283,7 @@ class _SchemaValidator(object):
                                "Value: %(value)s. %(message)s") % {
                         'path': ex.path.pop(),
                         'value': ex.instance,
-                        'message': ex.message}
+                        'message': six.text_type(ex)}
                 else:
                     # NOTE: Use 'ex.path.popleft()' instead of 'ex.path.pop()',
                     #       due to the structure of query parameters is a dict
@@ -296,9 +296,9 @@ class _SchemaValidator(object):
                                "Value: %(value)s. %(message)s") % {
                         'path': ex.path.popleft(),
                         'value': ex.instance,
-                        'message': ex.message}
+                        'message': six.text_type(ex)}
             else:
-                detail = ex.message
+                detail = six.text_type(ex)
             raise exception.ValidationError(detail=detail)
         except TypeError as ex:
             # NOTE: If passing non string value to patternProperties parameter,
