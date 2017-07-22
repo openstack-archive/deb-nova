@@ -1,0 +1,8 @@
+Code-Review+2: Jay Pipes <jaypipes@gmail.com>
+Workflow+1: Jay Pipes <jaypipes@gmail.com>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sat, 22 Jul 2017 01:16:54 +0000
+Reviewed-on: https://review.openstack.org/486190
+Project: openstack/deb-nova
+Branch: refs/heads/master
