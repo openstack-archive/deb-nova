@@ -1,0 +1,9 @@
+Verified+1: IBM PowerKVM CI <kvmpower@linux.vnet.ibm.com>
+Code-Review+2: Kevin L. Mitchell <klmitch@mit.edu>
+Workflow+1: Kevin L. Mitchell <klmitch@mit.edu>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Sun, 23 Jul 2017 01:39:12 +0000
+Reviewed-on: https://review.openstack.org/486326
+Project: openstack/deb-nova
+Branch: refs/heads/master
