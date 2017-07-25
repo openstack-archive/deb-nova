@@ -1,0 +1,11 @@
+Code-Review+2: Matt Riedemann <mriedem.os@gmail.com>
+Code-Review+1: Tuan Luong-Anh <tuanla@vn.fujitsu.com>
+Code-Review+1: Bertrand Souville <souville@docomolab-euro.com>
+Code-Review+2: Sean Dague <sean@dague.net>
+Workflow+1: Sean Dague <sean@dague.net>
+Verified+2: Jenkins
+Submitted-by: Jenkins
+Submitted-at: Tue, 25 Jul 2017 12:19:12 +0000
+Reviewed-on: https://review.openstack.org/486805
+Project: openstack/deb-nova
+Branch: refs/heads/master
