@@ -1,4 +1,0 @@
----
-upgrade:
-  - The deprecated /os-cloudpipe API endpoint has been removed. Whenever calls
-    are made to that endpoint it now returns a 410 response.

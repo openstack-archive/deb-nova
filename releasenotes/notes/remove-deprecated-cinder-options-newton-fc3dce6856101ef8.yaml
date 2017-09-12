@@ -1,9 +1,0 @@
----
-upgrade:
-  - |
-    The following deprecated configuration options have been removed from the
-    ``cinder`` section of nova.conf: 
-
-      - ca_certificates_file
-      - api_insecure
-      - http_timeout

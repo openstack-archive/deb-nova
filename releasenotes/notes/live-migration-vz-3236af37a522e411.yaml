@@ -1,4 +1,0 @@
----
-features:
-  - Live migration is supported for both Virtuozzo containers
-    and virtual machines when using virt_type=parallels.

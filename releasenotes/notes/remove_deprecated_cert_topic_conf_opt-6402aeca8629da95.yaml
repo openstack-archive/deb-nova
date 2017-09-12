@@ -1,4 +1,0 @@
----
-upgrade:
-  - |
-    The deprecated ``cert_topic`` configuration option has been removed.

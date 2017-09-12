@@ -1,3 +1,0 @@
-features:
-  - Adds reserved_huge_pages option to reserve
-    amount of huge pages used by third party components.

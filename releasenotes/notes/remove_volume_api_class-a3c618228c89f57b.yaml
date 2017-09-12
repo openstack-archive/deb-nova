@@ -1,5 +1,0 @@
----
-upgrade:
-  - The deprecated ``volume_api_class`` config option has been
-    removed. We only have one sensible backend for it, so
-    don't need it anymore.

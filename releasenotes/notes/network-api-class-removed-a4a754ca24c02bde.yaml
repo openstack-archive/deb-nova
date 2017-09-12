@@ -1,4 +1,0 @@
----
-upgrade:
-  - The network_api_class option was deprecated in Mitaka and is removed
-    in Newton. The use_neutron option replaces this functionality.

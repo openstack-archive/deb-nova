@@ -1,6 +1,0 @@
----
-upgrade:
-  - |
-    The ``compute_stats_class`` configuration option was deprecated since the
-    13.0.0 Mitaka release and has been removed. Compute statistics are now always
-    generated from the ``nova.compute.stats.Stats`` class within Nova.

@@ -1,4 +1,0 @@
----
-features:
-  - The versioned_notifications_topic configuration option; This enables one to
-    configure the topics used for versioned notifications.

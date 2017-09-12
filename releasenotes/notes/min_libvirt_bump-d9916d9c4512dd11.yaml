@@ -1,4 +1,0 @@
----
-upgrade:
-  - The minimum required libvirt is now version 0.10.2. The minimum
-    libvirt for the N release has been set to 1.2.1.

@@ -1,4 +1,0 @@
----
-upgrade:
-  - The default value of the ``pointer_model`` configuration option
-    has been set to 'usbtablet'.

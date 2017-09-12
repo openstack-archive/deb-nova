@@ -1,4 +1,0 @@
----
-features:
-  - Add support for allowing Neutron to specify the
-    bridge name for the OVS, Linux Bridge, and vhost-user VIF types.

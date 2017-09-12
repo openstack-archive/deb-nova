@@ -1,5 +1,0 @@
----
-upgrade:
-  - During an upgrade to Mitaka, operators must create and initialize
-    a database for the API service. Configure this in
-    [api_database]/connection, and then run ``nova-manage api_db sync``

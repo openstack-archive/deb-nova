@@ -1,4 +1,0 @@
----
-upgrade:
-  - The 'destroy_after_evacuate' workaround option has been removed as
-    the workaround is no longer necessary.

@@ -1,7 +1,0 @@
----
-upgrade:
-  - To allow access to the versions REST API from diverse origins,
-    CORS support has been added to the 'oscomputeversions' pipeline
-    in '/etc/nova/api-paste.ini'. Existing deployments that wish to
-    enable support should add the 'cors' filter at the start of the
-    'oscomputeversions' pipeline.

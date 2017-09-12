@@ -1,4 +1,0 @@
----
-upgrade:
-  - The ironic driver now requires python-ironicclient>=1.6.0,
-    and requires the ironic service to support API version 1.21.

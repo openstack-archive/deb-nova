@@ -1,3 +1,0 @@
----
-features:
-  - The libvirt compute driver now supports connecting to Veritas HyperScale volume backends.

@@ -1,3 +1,0 @@
----
-features:
-  - Libvirt driver in Nova now supports Cinder DISCO volume driver.

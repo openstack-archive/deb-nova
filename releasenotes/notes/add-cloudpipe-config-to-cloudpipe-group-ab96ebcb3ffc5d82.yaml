@@ -1,4 +1,0 @@
----
-upgrade:
-  - All cloudpipe configuration options have been added to the 'cloudpipe'
-    group. They should no longer be included in the 'DEFAULT' group.

@@ -1,4 +1,0 @@
----
-features:
-  - The XenServer compute driver now supports hot-plugging
-    virtual network interfaces.

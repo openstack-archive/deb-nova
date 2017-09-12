@@ -1,5 +1,0 @@
-{
-    "evacuate": {
-        "adminPass": "%(adminPass)s"
-    }
-}

@@ -1,6 +1,0 @@
----
-upgrade:
-  - The old neutron communication options that were
-    slated for removal in Mitaka are no longer available.
-    This means that going forward communication to neutron
-    will need to be configured using auth plugins.

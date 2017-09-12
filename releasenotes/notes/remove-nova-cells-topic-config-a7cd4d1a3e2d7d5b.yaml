@@ -1,5 +1,0 @@
----
-upgrade:
-  - |
-    The cells topic configuration option has been removed. Please make sure
-    your cells related message queue topic is 'cells'.
